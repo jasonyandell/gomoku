@@ -15,3 +15,8 @@ scratch/
 
 .DS_Store
 .claude/
+
+# app/ (Vite + TS SPA)
+node_modules/
+app/dist/
+.wrangler/
