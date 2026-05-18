@@ -1,9 +1,9 @@
 {
-  "epoch": 85,
-  "total_games": 5440,
+  "epoch": 100,
+  "total_games": 6400,
   "n_filters": 64,
   "n_blocks": 4,
   "n_input_planes": 3,
-  "exported_at": "2026-05-18T02:56:54+00:00",
-  "checkpoint_source": "epoch0085.pt"
+  "exported_at": "2026-05-18T03:46:38+00:00",
+  "checkpoint_source": "epoch0100.pt"
 }
