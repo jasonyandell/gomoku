@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>gomoku</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>gomoku</h1>
+  <nav>
+    <button id="tab-play" class="tab active" data-tab="play">play</button>
+    <button id="tab-replay" class="tab" data-tab="replay">replay</button>
+  </nav>
+  <div class="controls">
+    <label>checkpoint
+      <select id="checkpoint-select"></select>
+    </label>
+    <button id="refresh-checkpoints" title="refresh checkpoint list">↻</button>
+  </div>
+</header>
+
+<main>
+  <section id="board-area">
+    <svg id="board" viewBox="0 0 540 540"></svg>
+    <div id="status"></div>
+  </section>
+
+  <aside id="side-panel">
+    <div id="panel-play" class="panel active">
+      <h3>play</h3>
+      <div class="row">
+        <label>your color
+          <select id="play-color">
+            <option value="black" selected>black (first)</option>
+            <option value="white">white</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>model sims
+          <input id="play-sims" type="number" min="50" max="4000" step="50" value="400">
+        </label>
+      </div>
+      <div class="row">
+        <button id="play-new">new game</button>
+        <button id="play-undo">undo</button>
+        <button id="play-resign">resign</button>
+      </div>
+      <h4>top moves</h4>
+      <ul id="play-top"></ul>
+      <div id="play-eval"></div>
+    </div>
+
+    <div id="panel-replay" class="panel">
+      <h3>replay</h3>
+      <div class="row">
+        <label>sims per move
+          <input id="rep-sims" type="number" min="50" max="4000" step="50" value="400">
+        </label>
+      </div>
+      <div class="row">
+        <label>temperature moves
+          <input id="rep-temp" type="number" min="0" max="20" step="1" value="0"
+                 title="moves with sampling temperature 1.0 at start of game (0 = fully greedy)">
+        </label>
+      </div>
+      <div class="row">
+        <label>dirichlet ε
+          <input id="rep-noise" type="number" min="0" max="0.5" step="0.05" value="0"
+                 title="root exploration noise (0 = clean, 0.25 = AlphaZero training default)">
+        </label>
+      </div>
+      <div class="row">
+        <label>seed
+          <input id="rep-seed" type="number" value="0">
+        </label>
+      </div>
+      <div class="row">
+        <button id="rep-generate">generate</button>
+        <button id="rep-prev">◀</button>
+        <button id="rep-play">▶ play</button>
+        <button id="rep-next">▶</button>
+      </div>
+      <div class="row">
+        <input id="rep-scrub" type="range" min="0" max="0" value="0" step="1">
+        <span id="rep-ply">0 / 0</span>
+      </div>
+      <h4>this move</h4>
+      <ul id="rep-top"></ul>
+      <div id="rep-eval"></div>
+    </div>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
