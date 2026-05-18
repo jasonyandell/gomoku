@@ -11,7 +11,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from gomoku.eval import play_vs_random
+from gomoku.eval import mcts_picker, play_match_pickers
+from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import build_model, load_checkpoint, n_params, save_checkpoint
 from gomoku.replay_buffer import ReplayBuffer
@@ -63,6 +64,37 @@ def train_step(
     }
 
 
+def _baseline_log_key(spec) -> str:
+    """Turn a PlayerSpec into a stable wandb-friendly metric key suffix.
+
+    Examples:
+        random                  -> vs_random
+        heuristic               -> vs_heuristic
+        lookahead:depth=4       -> vs_lookahead4
+        lookahead               -> vs_lookahead
+    """
+    if spec.kind == "lookahead":
+        depth = spec.kwargs.get("depth", "")
+        return f"vs_lookahead{depth}"
+    return f"vs_{spec.kind}"
+
+
+def _parse_specs(s: str) -> list:
+    s = s.strip()
+    if not s:
+        return []
+    out = []
+    for raw in s.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        spec = parse_spec(raw)
+        if spec.kind == "model":
+            raise SystemExit(f"--eval-baselines must not include model specs: {raw!r}")
+        out.append(spec)
+    return out
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
@@ -81,8 +113,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--value-weight", type=float, default=1.0)
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--eval-every", type=int, default=5)
-    p.add_argument("--eval-games", type=int, default=20)
-    p.add_argument("--eval-sims", type=int, default=50)
+    p.add_argument("--eval-sims", type=int, default=50,
+                   help="MCTS sims used by the model during eval matches")
+    p.add_argument("--eval-baselines", type=str,
+                   default="random,heuristic,lookahead:depth=2",
+                   help="comma-separated player specs played every eval cycle")
+    p.add_argument("--eval-baseline-games", type=int, default=16,
+                   help="games per matchup vs each fast baseline")
+    p.add_argument("--eval-baselines-slow", type=str, default="lookahead:depth=4",
+                   help="comma-separated player specs gated by --eval-slow-every (empty to disable)")
+    p.add_argument("--eval-slow-every", type=int, default=4,
+                   help="run --eval-baselines-slow every Nth eval cycle (=Nx eval-every epochs)")
+    p.add_argument("--eval-slow-games", type=int, default=6,
+                   help="games per matchup vs each slow baseline")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--device", type=str, default=None, help="torch device override (e.g. cpu, mps)")
@@ -148,6 +191,14 @@ def main() -> None:
 
     Path(args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
+    # Pre-parse eval baseline specs so misconfiguration fails before the first epoch.
+    fast_specs = _parse_specs(args.eval_baselines)
+    slow_specs = _parse_specs(args.eval_baselines_slow)
+    # Build baseline pickers once (stateless across calls — RNG is passed in).
+    fast_pickers = [(s, build_player(s)) for s in fast_specs]
+    slow_pickers = [(s, build_player(s)) for s in slow_specs]
+    eval_counter = 0
+
     for epoch in range(start_epoch, start_epoch + args.epochs):
         epoch_start = time.time()
         evaluator = make_torch_evaluator(model, device)
@@ -207,19 +258,33 @@ def main() -> None:
 
         # --- eval ---
         if (epoch + 1) % args.eval_every == 0:
+            eval_counter += 1
             eval_start = time.time()
             eval_evaluator = make_torch_evaluator(model, device)
-            res = play_vs_random(
-                eval_evaluator,
-                n_games=args.eval_games,
-                n_simulations=args.eval_sims,
-                c_puct=args.c_puct,
-                seed=args.seed + epoch,
-            )
-            log["eval/vs_random_winrate"] = res.win_rate
-            log["eval/vs_random_wins"] = res.wins
-            log["eval/vs_random_losses"] = res.losses
-            log["eval/vs_random_draws"] = res.draws
+            model_picker = mcts_picker(eval_evaluator,
+                                       n_simulations=args.eval_sims,
+                                       c_puct=args.c_puct)
+
+            run_slow = bool(slow_pickers) and (eval_counter % args.eval_slow_every == 0)
+            batches = [("fast", fast_pickers, args.eval_baseline_games)]
+            if run_slow:
+                batches.append(("slow", slow_pickers, args.eval_slow_games))
+
+            for batch_label, pickers, n_games in batches:
+                for spec_idx, (spec, baseline_picker) in enumerate(pickers):
+                    m_start = time.time()
+                    res = play_match_pickers(
+                        model_picker, baseline_picker,
+                        n_games=n_games,
+                        seed=args.seed + epoch * 1000 + spec_idx,
+                    )
+                    key = _baseline_log_key(spec)
+                    log[f"eval/{key}_winrate"] = res.win_rate
+                    log[f"eval/{key}_wins"] = res.wins
+                    log[f"eval/{key}_losses"] = res.losses
+                    log[f"eval/{key}_draws"] = res.draws
+                    log[f"time/eval_{key}_s"] = time.time() - m_start
+
             log["time/eval_s"] = time.time() - eval_start
 
         epoch_time = time.time() - epoch_start
@@ -234,8 +299,14 @@ def main() -> None:
             f"plies={plies_mean:.1f} "
             f"({epoch_time:.1f}s: gen={gen_time:.1f}s train={train_time:.1f}s)"
         )
-        if "eval/vs_random_winrate" in log:
-            msg += f" wr={log['eval/vs_random_winrate']:.1%}"
+        wr_bits = [
+            f"{key[3:]}={log[f'eval/{key}_winrate']:.0%}"
+            for spec in fast_specs + slow_specs
+            for key in [_baseline_log_key(spec)]
+            if f"eval/{key}_winrate" in log
+        ]
+        if wr_bits:
+            msg += " wr[" + " ".join(wr_bits) + "]"
         print(msg, flush=True)
 
         if run is not None:
