@@ -893,6 +893,46 @@ kze1lcti's e85 heuristic crossing. If it ALSO fails like cell D, then
 the issue isn't worker behavior at all — it's somewhere deeper (code
 regression, FP-arithmetic ordering on dist vs single-MPS, etc.).
 
+### Result: failed target, but with one flicker
+
+| epoch | pl    | vl    | plies | age | heuristic |
+|------:|------:|------:|------:|----:|----------:|
+| 11    | 3.526 | 0.388 | 21.8  |  6  | 0%        |
+| 21    | 3.160 | 0.515 | 20.9  | 12  | 0%        |
+| 31    | 3.116 | 0.568 | 16.6  | 18  | 0%        |
+| 42    | 2.989 | 0.536 | 11.5  | 25  | 0%        |
+| 52    | 2.894 | 0.485 | 10.6  | 32  | 0%        |
+| 63    | 2.829 | 0.451 | 10.6  | 40  | 0%        |
+| 74    | 2.728 | 0.415 | 11.3  | 48  | 0%        |
+| 85    | 2.675 | 0.399 | 10.2  | 56  | 0%        |
+| 100   | 2.622 | 0.393 | 12.5  | 66  | 0%        |
+
+Across 16 eval polls, heuristic = 0% **except for one**: **e65 hit 5W-
+15L-0D = 25%**. That's the first non-zero heuristic eval in any dist run
+(cells C, D, gpc64, gpc16 all flat 0%). Not a sustained crossing — back
+to 0% at e75 — but a real flicker that previous dist runs never showed.
+
+Side-by-side at e100, K=1 buf=500k variants:
+
+| variant                      | plies | vl    | pl    | best heur |
+|------------------------------|------:|------:|------:|----------:|
+| sync (gen-once-per-publish)  | 12.5  | 0.393 | 2.622 | **25%**   |
+| cell D (continuous, gpc32)   |  9.8  | 0.406 | 2.834 | 0%        |
+| gpc=64 (continuous)          | 12.0  | 0.333 | 2.257 | 0%        |
+| gpc=16 (continuous)          | 15.1  | 0.336 | 2.685 | 0%        |
+
+The plies trajectory shows sync collapsed *faster* than cell D in the
+mid-game (e52: 10.6 vs cell D's 15.2) but had marginal recovery later
+(11-12 range vs cell D's 9.8). vl is highest of any dist run at e21
+(0.515) and stayed elevated mid-run — model held more uncertainty.
+
+Conclusion: continuous-gen is NOT the main culprit. The flicker at e65
+hints sync is *slightly* less bad, but the same ceiling — fast-attack
+mode in 100 epochs. Hypothesis dies, but the data semantics fix is
+worth keeping for future runs (clean per-version stratification
+costs nothing and lets us reason about the buffer precisely).
+
+
 
 This kills the publish-frequency theory. What's left to explain why
 kze1lcti beat heuristic at e85 while the entire dist family hasn't:
