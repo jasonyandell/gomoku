@@ -1,19 +1,27 @@
-"""9x9 free-style gomoku: first to 5-in-a-row wins, no opening restrictions.
+"""Free-style gomoku: first to 5-in-a-row wins, no opening restrictions.
 
 State is stored as two boolean planes (current-player stones, opponent stones).
 After every move we flip perspective so the side-to-move is always plane 0.
 This canonical form is what gets fed to the network and the MCTS tree.
+
+AlphaZero-style history: the `to_planes()` output includes `HISTORY_PLY` past
+canonical board snapshots per side, so the network can see threats forming
+across multiple plies — defense is much easier to learn when "opponent just
+placed a 3rd stone in a row" is visible directly rather than inferred from a
+static snapshot.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 BOARD_SIZE = 9
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE
 WIN_LEN = 5
+HISTORY_PLY = 8                                  # past plies of each side in the input
+N_INPUT_PLANES = 2 * HISTORY_PLY + 1             # 8 me-hist + 8 opp-hist + 1 const = 17
 
 # 4 line directions (the other 4 are their negatives, so 4 covers both ways)
 _DIRS = ((0, 1), (1, 0), (1, 1), (1, -1))
@@ -21,17 +29,27 @@ _DIRS = ((0, 1), (1, 0), (1, 1), (1, -1))
 
 @dataclass
 class GameState:
-    """Canonical: plane 0 = side-to-move's stones, plane 1 = opponent's stones."""
+    """Canonical: plane 0 = side-to-move's stones, plane 1 = opponent's stones.
 
-    board: np.ndarray  # (2, 9, 9) bool
+    `history` holds up to `HISTORY_PLY - 1` past canonical boards, most-recent
+    first. Each entry is a (2, BOARD_SIZE, BOARD_SIZE) bool array that was the
+    canonical `board` immediately before that move's apply() flipped perspective.
+    """
+
+    board: np.ndarray              # (2, N, N) bool
     move_count: int
+    history: tuple = field(default_factory=tuple)  # tuple of (2, N, N) bool arrays
 
     @classmethod
     def initial(cls) -> "GameState":
-        return cls(board=np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=bool), move_count=0)
+        return cls(
+            board=np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=bool),
+            move_count=0,
+            history=(),
+        )
 
     def legal_mask(self) -> np.ndarray:
-        """Return (81,) bool — True where empty (legal to place)."""
+        """Return (N_ACTIONS,) bool — True where empty (legal to place)."""
         occupied = self.board[0] | self.board[1]
         return ~occupied.reshape(-1)
 
@@ -41,16 +59,25 @@ class GameState:
     def apply(self, action: int) -> "GameState":
         """Place a stone for the side-to-move at action, then flip perspective.
 
-        The returned state has perspective = the next player to move.
+        The returned state has perspective = the next player to move. The pre-flip
+        canonical board (`board` BEFORE the perspective flip but AFTER placing the
+        stone — i.e. the position from the mover's view at the moment they moved)
+        is pushed onto the head of `history`.
         """
         r, c = divmod(action, BOARD_SIZE)
         if self.board[0, r, c] or self.board[1, r, c]:
             raise ValueError(f"illegal move {action} on occupied square")
         new_board = self.board.copy()
         new_board[0, r, c] = True
+        # Snapshot the position-as-mover-saw-it AFTER placement, BEFORE flip.
+        snapshot = new_board.copy()
         # Flip planes so plane 0 is now the next side-to-move.
         new_board = new_board[::-1].copy()
-        return GameState(board=new_board, move_count=self.move_count + 1)
+        # Push snapshot; keep at most HISTORY_PLY - 1 (current frame is `board`).
+        new_history = (snapshot,) + self.history[: HISTORY_PLY - 1]
+        return GameState(
+            board=new_board, move_count=self.move_count + 1, history=new_history
+        )
 
     def is_terminal(self) -> tuple[bool, float]:
         """Check for terminal state.
@@ -71,46 +98,54 @@ class GameState:
         return False, 0.0
 
     def to_planes(self) -> np.ndarray:
-        """Return (3, 9, 9) float32 input for the network.
+        """Return (N_INPUT_PLANES, N, N) float32 input for the network.
 
-        Plane 0: side-to-move's stones.
-        Plane 1: opponent's stones.
-        Plane 2: constant 1.0 (acts as a bias / side-to-move indicator slot —
-                 kept here so the model has somewhere to learn "always full" features).
+        Layout (mirrors AlphaZero Go, scaled down to HISTORY_PLY plies):
+          0           : my stones at t   (= side-to-move's stones, current frame)
+          1..H-1      : my stones at t-1, t-2, ..., t-(H-1)
+          H           : opp stones at t
+          H+1..2H-1   : opp stones at t-1, ..., t-(H-1)
+          2H          : constant 1.0
+
+        For history step k (1..H-1) the *meaning* of "my" rotates because the
+        perspective flipped each ply: at step k the canonical mover was the same
+        side as now iff k is even, opposite iff k is odd. So we read the matching
+        plane out of `history[k-1]`.
         """
-        out = np.zeros((3, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        H = HISTORY_PLY
+        out = np.zeros((N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
         out[0] = self.board[0]
-        out[1] = self.board[1]
-        out[2] = 1.0
+        out[H] = self.board[1]
+        for k, past_board in enumerate(self.history, start=1):
+            if k >= H:
+                break
+            if k % 2 == 0:
+                # Same parity → past mover same side as now → past_board[0] == my color
+                out[k] = past_board[0]
+                out[H + k] = past_board[1]
+            else:
+                # Opposite parity → swap
+                out[k] = past_board[1]
+                out[H + k] = past_board[0]
+        out[2 * H] = 1.0
         return out
 
 
 def _has_five_in_a_row(plane: np.ndarray) -> bool:
-    for dr, dc in _DIRS:
-        if _has_five_in_dir(plane, dr, dc):
-            return True
-    return False
-
-
-def _has_five_in_dir(plane: np.ndarray, dr: int, dc: int) -> bool:
-    # Slide a length-5 window along (dr, dc) and AND across the 5 shifts.
-    n = BOARD_SIZE
-    for r0 in range(n):
-        for c0 in range(n):
-            if not plane[r0, c0]:
-                continue
-            r_end = r0 + dr * (WIN_LEN - 1)
-            c_end = c0 + dc * (WIN_LEN - 1)
-            if not (0 <= r_end < n and 0 <= c_end < n):
-                continue
-            ok = True
-            for k in range(1, WIN_LEN):
-                if not plane[r0 + dr * k, c0 + dc * k]:
-                    ok = False
-                    break
-            if ok:
-                return True
-    return False
+    # Vectorized: AND together 5 shifted views along each direction. ~2× faster
+    # than the Python-loop variant on a 9×9 board.
+    p = plane
+    h = p[:, :-4] & p[:, 1:-3] & p[:, 2:-2] & p[:, 3:-1] & p[:, 4:]
+    if h.any():
+        return True
+    v = p[:-4, :] & p[1:-3, :] & p[2:-2, :] & p[3:-1, :] & p[4:, :]
+    if v.any():
+        return True
+    d = p[:-4, :-4] & p[1:-3, 1:-3] & p[2:-2, 2:-2] & p[3:-1, 3:-1] & p[4:, 4:]
+    if d.any():
+        return True
+    a = p[:-4, 4:] & p[1:-3, 3:-1] & p[2:-2, 2:-2] & p[3:-1, 1:-3] & p[4:, :-4]
+    return bool(a.any())
 
 
 # ----- 8-fold symmetry for data augmentation -----

@@ -214,6 +214,113 @@ def run_batched_mcts(
             _backprop(p.path, float(value))
 
 
+# ---------------- Wave-batched MCTS (virtual loss) ----------------
+#
+# Inspired by mk5-main/forge/zeb/{mcts.py,batched_mcts.py}. Instead of evaluating
+# one leaf per game per sim, we collect a "wave" of K leaves per game with virtual
+# loss applied along each path, then batch-evaluate all G*K leaves in a single
+# evaluator call. The total number of evaluator calls per move drops by ~K, which
+# is the big win on MPS (where per-call sync dominates).
+#
+# Trade-off: within a wave, the W stats are stale (only N is incremented via
+# virtual loss until the eval comes back). Larger waves => more staleness =>
+# slightly noisier MCTS targets. Empirically wave_size 8–32 is a sweet spot at
+# n_simulations=100.
+
+
+def _select_one_vloss(root: Node, c_puct: float) -> _PendingLeaf:
+    """Like _select_one but applies virtual loss (N += 1) along the path.
+
+    Caller MUST backprop with `_backprop_value_only` (W only) since N has
+    already been incremented here.
+    """
+    node = root
+    path: list[tuple[Node, int]] = []
+    while True:
+        if node.is_terminal:
+            return _PendingLeaf(leaf=node, path=path)
+        if not node.expanded:
+            return _PendingLeaf(leaf=node, path=path)
+        a = _select_action(node, c_puct)
+        if a not in node.children:
+            child_state = node.state.apply(a)
+            child = Node(state=child_state, parent=node, parent_action=a)
+            _init_node(child)
+            node.children[a] = child
+        path.append((node, a))
+        node.N[a] += 1  # virtual loss — keep subsequent wave picks off this path
+        node = node.children[a]
+
+
+def _backprop_value_only(path: list[tuple[Node, int]], leaf_value: float) -> None:
+    """Update W along path; N already incremented by virtual loss in selection."""
+    v = leaf_value
+    for parent, action in reversed(path):
+        v = -v
+        parent.W[action] += v
+
+
+def run_batched_mcts_waves(
+    games: list[MCTSGame],
+    evaluator: Evaluator,
+    *,
+    n_simulations: int,
+    wave_size: int = 16,
+    add_root_noise: bool = True,
+) -> None:
+    """Wave-batched MCTS: per round, collect `wave_size` leaves per game with
+    virtual loss, then one batched evaluator call for all G*wave_size leaves.
+
+    Equivalent to `run_batched_mcts` when wave_size == 1.
+    """
+    if wave_size < 1:
+        raise ValueError(f"wave_size must be >= 1, got {wave_size}")
+
+    # 1. Expand unexpanded roots (one shared batched call).
+    unexpanded = [g for g in games if not g.root.expanded and not g.root.is_terminal]
+    if unexpanded:
+        states = [g.root.state for g in unexpanded]
+        priors, _ = evaluator(states)
+        for g, p in zip(unexpanded, priors):
+            _set_priors(g.root, p)
+            g.root.expanded = True
+            if add_root_noise:
+                _add_dirichlet_noise(g.root, g.dirichlet_alpha, g.dirichlet_eps, g.rng)
+
+    sims_done = [0] * len(games)
+    while True:
+        # How many sims to do this round, per game (cap at wave_size).
+        wave_counts = [min(wave_size, n_simulations - sims_done[i]) for i in range(len(games))]
+        if not any(wave_counts):
+            break
+
+        wave_pending: list[_PendingLeaf] = []
+        for g_idx, g in enumerate(games):
+            for _ in range(wave_counts[g_idx]):
+                wave_pending.append(_select_one_vloss(g.root, g.c_puct))
+
+        # Split terminal vs to-evaluate.
+        to_eval: list[_PendingLeaf] = []
+        for p in wave_pending:
+            if p.leaf.is_terminal:
+                _backprop_value_only(p.path, p.leaf.terminal_value)
+            else:
+                to_eval.append(p)
+
+        # Single batched evaluator call across all games in this wave.
+        if to_eval:
+            states = [p.leaf.state for p in to_eval]
+            priors, values = evaluator(states)
+            for p, prior, value in zip(to_eval, priors, values):
+                if not p.leaf.expanded:
+                    _set_priors(p.leaf, prior)
+                    p.leaf.expanded = True
+                _backprop_value_only(p.path, float(value))
+
+        for i, w in enumerate(wave_counts):
+            sims_done[i] += w
+
+
 def policy_from_visits(root: Node, temperature: float) -> np.ndarray:
     """Return MCTS visit-based policy over actions.
 
@@ -256,7 +363,17 @@ def make_torch_evaluator(
             if fp16:
                 t = t.half()
             logits, values = model(t)
-            return logits.float().cpu().numpy(), values.float().cpu().numpy()
+            B = t.shape[0]
+            # One device->host transfer is much cheaper than two on MPS:
+            # each .cpu() forces a stream sync, and the data is tiny (~20KB)
+            # so syncs dominate over bandwidth. Pack logits + values into a
+            # single 1-D tensor, transfer once, then split.
+            combo = torch.cat(
+                [logits.reshape(B * N_ACTIONS).float(), values.reshape(B).float()]
+            ).cpu().numpy()
+            priors = combo[: B * N_ACTIONS].reshape(B, N_ACTIONS)
+            vals = combo[B * N_ACTIONS:]
+            return priors, vals
         finally:
             if was_training:
                 model.train()

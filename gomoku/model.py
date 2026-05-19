@@ -12,12 +12,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gomoku.game import BOARD_SIZE, N_ACTIONS
+from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES
 
 
 @dataclass
 class ModelConfig:
-    n_input_planes: int = 3
+    n_input_planes: int = N_INPUT_PLANES
     n_filters: int = 64
     n_blocks: int = 4
     policy_filters: int = 2
