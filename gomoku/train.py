@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -366,7 +367,7 @@ def main() -> None:
         doesn't match {latest.pt, worker_weights.pt, epochNNNN.pt} gets removed.
         Catches interrupted writes and leftover artifacts from killed runs."""
         cutoff = time.time() - args.orphan_sweep_age_sec
-        protected = {"latest.pt", "latest.pt.tmp"}
+        protected = {"latest.pt", "latest.pt.tmp", "eval_results.jsonl"}
         if worker_weights_path:
             protected.add(os.path.basename(worker_weights_path))
         ck_dir = Path(args.checkpoint_dir)
@@ -398,6 +399,51 @@ def main() -> None:
                         f.unlink()
                 except OSError:
                     pass
+
+    # Eval JSONL: when running with --no-eval, an out-of-process gomoku.eval_worker
+    # appends one JSON line per pass to <checkpoint_dir>/eval_results.jsonl.
+    # The trainer is the SOLE wandb writer (two processes calling wandb.init for the
+    # same run id silently drops one writer's logs), so we tail this file and merge
+    # any new eval rows into the current cycle's log dict.
+    eval_jsonl_path = Path(args.checkpoint_dir) / "eval_results.jsonl"
+    eval_jsonl_offset = 0
+    if eval_jsonl_path.exists():
+        # Don't replay rows that predate this trainer run.
+        eval_jsonl_offset = eval_jsonl_path.stat().st_size
+
+    def _consume_eval_jsonl() -> dict:
+        """Read new lines appended to eval_results.jsonl since last consumed.
+        Returns the merged metric dict (later rows win on key collision)."""
+        nonlocal eval_jsonl_offset
+        if not eval_jsonl_path.exists():
+            return {}
+        try:
+            cur_size = eval_jsonl_path.stat().st_size
+        except OSError:
+            return {}
+        if cur_size <= eval_jsonl_offset:
+            return {}
+        merged: dict = {}
+        try:
+            with open(eval_jsonl_path, "r") as f:
+                f.seek(eval_jsonl_offset)
+                new = f.read()
+                eval_jsonl_offset = f.tell()
+        except OSError:
+            return {}
+        for line in new.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for k, v in rec.items():
+                if k == "ts":
+                    continue
+                merged[k] = v
+        return merged
 
     # Initial weight publication + orphan sweep, if applicable.
     _publish_worker_weights()
@@ -518,7 +564,12 @@ def main() -> None:
             **buffer.shape_stats(),
         }
 
-        # --- eval ---
+        # --- forward any new eval_worker results into wandb ---
+        ext_eval = _consume_eval_jsonl()
+        if ext_eval:
+            log.update(ext_eval)
+
+        # --- in-trainer eval (only when --no-eval not passed) ---
         if args.eval_in_trainer and (epoch + 1) % args.eval_every == 0:
             eval_counter += 1
             eval_start = time.time()
@@ -569,6 +620,11 @@ def main() -> None:
             for key in [_baseline_log_key(spec)]
             if f"eval/{key}_winrate" in log
         ]
+        # Also surface any eval/* keys forwarded from eval_worker that aren't in our fast/slow lists.
+        seen = {f"eval/{_baseline_log_key(s)}_winrate" for s in (fast_specs + slow_specs)}
+        for k, v in log.items():
+            if k.startswith("eval/") and k.endswith("_winrate") and k not in seen:
+                wr_bits.append(f"{k[len('eval/'):-len('_winrate')]}={v:.0%}")
         if wr_bits:
             msg += " wr[" + " ".join(wr_bits) + "]"
         print(msg, flush=True)

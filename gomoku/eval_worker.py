@@ -1,9 +1,10 @@
-"""Eval worker: polls a checkpoint file and logs strength baselines to wandb.
+"""Eval worker: polls a checkpoint file and writes baseline results to JSONL.
 
 Decouples eval from the training loop so generation+training stays at full
-speed. The trainer publishes `worker_weights.pt` after every save cycle (with
-the wandb run id embedded); this worker mtime-polls that file, runs n=N games
-vs each baseline, and posts results to the same wandb run.
+speed. The trainer publishes `worker_weights.pt` after every save cycle; this
+worker mtime-polls that file, runs n=N games vs each baseline, and appends
+each pass to `<output-dir>/eval_results.jsonl`. The trainer tails that file
+and forwards the metrics into its own wandb run, so wandb stays single-writer.
 
 Defaults to CPU so it doesn't fight the trainer for MPS. With CPU + n=20 games
 at 100 sims, a full pass (random + heuristic + lookahead:depth=2) typically
@@ -12,16 +13,19 @@ finishes in well under a minute, depending on how aggressive the model is.
 Usage::
 
     python -m gomoku.eval_worker \\
-        --checkpoint-path checkpoints_az_mini_9x9_fresh/worker_weights.pt \\
-        --baselines random,heuristic,lookahead:depth=2 \\
+        --checkpoint-path checkpoints/worker_weights.pt \\
+        --output-dir   checkpoints/ \\
+        --baselines    random,heuristic,lookahead:depth=2 \\
         --n-games 20 --sims 100 --device cpu
 
-If --wandb-run-id is not given, it is read from the checkpoint's payload (the
-trainer embeds its run id in `worker_weights.pt`).
+Why a JSONL handoff: two processes calling wandb.init(id=..., resume="allow")
+for the same run id silently drops the second writer's metrics. The trainer
+is the sole wandb writer; this worker just produces eval rows.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -33,7 +37,7 @@ from gomoku.eval import mcts_picker, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import load_checkpoint
-from gomoku.util import load_wandb_key_from_keychain, pick_device
+from gomoku.util import pick_device
 
 
 def _baseline_log_key(spec) -> str:
@@ -47,7 +51,10 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint-path", type=str, required=True,
                    help="Path to mtime-poll. The trainer publishes worker_weights.pt "
-                        "here after every save cycle (state_dict + wandb_run_id).")
+                        "here after every save cycle (state_dict + run metadata).")
+    p.add_argument("--output-dir", type=str, default=None,
+                   help="Where to append eval_results.jsonl. Defaults to the dir "
+                        "containing --checkpoint-path so the trainer finds it.")
     p.add_argument("--baselines", type=str, default="random,heuristic,lookahead:depth=2",
                    help="Comma-separated player specs. No model:... allowed.")
     p.add_argument("--n-games", type=int, default=20,
@@ -55,15 +62,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sims", type=int, default=100,
                    help="MCTS sims for the model side of each eval game.")
     p.add_argument("--c-puct", type=float, default=1.5)
-    p.add_argument("--random-opening-moves", type=int, default=0,
-                   help="Random plies before MCTS, to diversify deterministic games. "
-                        "Each baseline gets the same RNG seed per-cell so results stay "
-                        "comparable across polls.")
     p.add_argument("--device", type=str, default="cpu",
                    help="Default cpu so the eval doesn't fight training for MPS.")
-    p.add_argument("--wandb-project", type=str, default="gomoku")
-    p.add_argument("--wandb-run-id", type=str, default=None,
-                   help="Resume this run id. If omitted, read from the checkpoint payload.")
     p.add_argument("--poll-sec", type=float, default=2.0,
                    help="Sleep this long between mtime polls.")
     p.add_argument("--max-cycles", type=int, default=0,
@@ -98,36 +98,19 @@ def main() -> None:
     if not specs:
         raise SystemExit("no baselines configured")
     baseline_pickers = [(s, build_player(s)) for s in specs]
+    out_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint_path).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_path = out_dir / "eval_results.jsonl"
     print(f"[eval] device={device} specs={[s.label() for s in specs]} "
-          f"n_games={args.n_games} sims={args.sims}", flush=True)
+          f"n_games={args.n_games} sims={args.sims} jsonl={jsonl_path}", flush=True)
 
-    # Bootstrap: load once to discover the wandb run id, then init wandb.
     _wait_for_checkpoint(args.checkpoint_path, args.poll_sec)
     model, payload = load_checkpoint(args.checkpoint_path, device=device)
     model.eval()
     last_mtime = os.path.getmtime(args.checkpoint_path)
 
-    run_id = args.wandb_run_id or payload.get("wandb_run_id")
-    if not run_id:
-        raise SystemExit(
-            "no wandb_run_id available — pass --wandb-run-id or have the trainer "
-            "publish weights with its run id embedded"
-        )
-
-    key = load_wandb_key_from_keychain()
-    if not key:
-        print("[eval] warning: no WANDB_API_KEY available", flush=True)
-    import wandb
-    run = wandb.init(
-        project=args.wandb_project,
-        id=run_id,
-        resume="allow",
-    )
-    print(f"[eval] attached to wandb run id={run_id}", flush=True)
-
     cycle_n = 0
     while True:
-        # Run a pass on the currently-loaded model.
         epoch_tag = int(payload.get("epoch", 0))
         evaluator = make_torch_evaluator(model, device)
         model_picker = mcts_picker(evaluator, n_simulations=args.sims, c_puct=args.c_puct)
@@ -155,7 +138,10 @@ def main() -> None:
                 flush=True,
             )
         log["time/eval_pass_s"] = time.perf_counter() - t_pass_0
-        run.log(log)
+        # Atomic-append to JSONL so a partial line never leaves the file.
+        line = json.dumps({"ts": time.time(), **log}) + "\n"
+        with open(jsonl_path, "a") as f:
+            f.write(line)
         cycle_n += 1
 
         if args.max_cycles > 0 and cycle_n >= args.max_cycles:
