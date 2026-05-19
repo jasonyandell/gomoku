@@ -780,21 +780,91 @@ generalizes.
 Cell E = K=2, buf=500k. This is exactly what fresh-dist already ran for
 552 epochs. Don't re-run; treat fresh-dist as cell E's evidence.
 
-## kze-recipe-K1-open6 (2026-05-18 23:00 — slope-hypothesis test)
+## kze-recipe-K1-open6 (launched then aborted — 2026-05-18 23:00)
 
-Direct test of Jason's slope insight. Same recipe as kze1lcti (which
-actually beat heuristic at e85): `--size medium --games-per-epoch 64
---n-simulations 800 --training-steps 64 --batch-size 512 --lr 1e-3
---replay-buffer-size 500000 --dirichlet-alpha 0.13 --dirichlet-eps 0.25
---temperature-moves 10` — single-process, K=1 static, no workers.
+Launched the slope-hypothesis variant (`--random-opening-moves 6` on
+kze's recipe, single-process, K=1) but killed it before any milestones.
+Pivoted to a cleaner narrative: first replicate kze straight, *then*
+test the +openings variant once we know the baseline reproduces.
 
-**One thing changed:** `--random-opening-moves 6` added. This forces the
-first 6 plies of every self-play game to be uniform-random legal moves;
-MCTS only takes over from ply 7. Hypothesis: the minimum-plies floor
-prevents the buffer-fill curve from concaving, the buffer stays fresh,
-the model gets out of the fast-attack attractor.
+## 9x9-kze-recipe-K1-pure (launched then aborted — 2026-05-18 23:01)
 
-Target: hit heuristic ≥ 50% sustained before epoch 100. Reference: kze
-needed e85 *without* opening moves; this should be faster if the
-hypothesis is right.
+Pure replication of kze1lcti's recipe (single-process, K=1 static via
+`--training-steps 64`, 64 g/cycle, no openings). Killed before any
+milestones in favor of the next-up question: did dist infra alone break
+us? Reframing to **use the new infra at K=1** to isolate "dist or not"
+as the variable.
+
+## 9x9-dist-K1-gpc64 (2026-05-18 23:09, wandb shvsohef) — FAILED
+
+Our new dist infra (4 workers + eval-as-gauge), K=1 static, **games/
+cycle=64** (matching kze's batch). Per-cell unique dirs, JSONL eval
+handoff working — first run where wandb dashboard actually shows
+`eval/*` curves live.
+
+| epoch | pl    | vl    | plies | age | heuristic |
+|------:|------:|------:|------:|----:|----------:|
+| 10    | 3.685 | 0.510 | 23.5  |  5  | 0%        |
+| 20    | 3.389 | 0.500 | 15.1  | 12  | 0%        |
+| 30    | 3.146 | 0.447 | 12.1  | 18  | 0%        |
+| 40    | 3.034 | 0.422 | 12.9  | 25  | 0%        |
+| 51    | 2.917 | 0.400 | 11.3  | 33  | 0%        |
+| 61    | 2.845 | 0.377 | 10.6  | 39  | 0%        |
+| 71    | 2.651 | 0.389 | 13.6  | 40  | 0%        |
+| 91    | 2.360 | 0.356 | 12.6  | 40  | 0%        |
+| 100   | 2.257 | 0.333 | 12.0  | 39  | 0%        |
+
+Failed target — heuristic = 0% across all 16 eval polls. Collapsed
+*faster* than cell D (gpc=32) at the same epoch (e51: plies 11.3 vs
+14.2). So **matching kze's games/cycle on dist did not reproduce kze's
+behavior** — opposite direction, actually. Surprising.
+
+Hypothesis (untested): on dist, more games per publish = fewer weight
+versions represented in the buffer per unit wall-clock → less opponent
+diversity → faster collapse. Smaller cycles publish weights more often
+→ workers see fresher weights more often → more strata.
+
+## 9x9-dist-K1-gpc16 (2026-05-19 ~00:00, wandb d2svpgk3) — LIVE
+
+Pushing the publish-frequency theory further: same dist+K=1+buf=500k
+setup but games/cycle=16. Weights published 4× more often than gpc=64
+for the same data throughput.
+
+Snapshot (live):
+
+| epoch | pl    | vl    | plies | gpc=32 (cell D) plies | gpc=64 plies |
+|------:|------:|------:|------:|----------------------:|-------------:|
+| 12    | 3.903 | 0.369 | 24.4  | (e10:) ~23.5          | (e10:) 23.5  |
+| 25    | 3.495 | 0.395 | 19.4  | 21.6                  | (e20:) 15.1  |
+| 35    | 3.327 | 0.445 | 20.5  | 17.2                  | (e30:) 12.1  |
+| 46    | 3.149 | 0.414 | 15.9  | 15.8                  | (e40:) 12.9  |
+| 59    | 2.995 | 0.365 | 15.6  | 15.2                  | (e51:) 11.3  |
+| 72    | 2.891 | 0.343 | 19.2  | —                     | (e71:) 13.6  |
+| 82    | 2.787 | 0.322 | 12.5  | —                     | (e81:) 11.9  |
+
+Negative result emerging: **games/cycle in [16, 32, 64] doesn't
+fundamentally change the collapse trajectory**. gpc=16 ran roughly
+parallel to gpc=32 from e35 onward; gpc=64 was a bit worse. The slope
+question is not about how often we publish; it's about something
+upstream.
+
+This kills the publish-frequency theory. What's left to explain why
+kze1lcti beat heuristic at e85 while the entire dist family hasn't:
+
+- **Hardware vs gradient interaction**: single-process MPS may produce
+  different floating-point ordering / accumulation than 4-worker dist.
+  Implausible but cheap to verify by running kze recipe straight (now
+  on the queue properly).
+- **Worker mtime-lag**: workers always run slightly stale weights
+  between mtime polls. Single-process always has up-to-the-second
+  weights. Could be a small bias toward "stale opponent" games.
+- **Some package or code regression**: maybe one of the post-kze
+  changes (history planes? wave-batched MCTS?) interacts badly with
+  the dynamics. Hardest to test.
+
+Next move (probable, pending live read): once gpc=16 finishes, run
+a real pure kze replication (K=1 static, single-process, no opening
+moves) on the same modern code. If it crosses heuristic, the
+differentiator is single-process. If it doesn't, code regression is
+strongly implicated.
 
