@@ -80,6 +80,13 @@ def parse_args() -> argparse.Namespace:
                    help="Stop after this many batches (0 = run forever).")
     p.add_argument("--weights-poll-sec", type=float, default=1.0,
                    help="Sleep this long if the weights file isn't ready yet on startup.")
+    p.add_argument("--gen-once-per-publish", action="store_true",
+                   help="Generate exactly one batch per weight publish. After "
+                        "writing a batch, sleep on the weights mtime until it "
+                        "advances. Makes the dist setup semantically equivalent "
+                        "to single-process: each cycle's games are produced by "
+                        "exactly one model version. Trades worker idle-time for "
+                        "clean per-version data stratification.")
     return p.parse_args()
 
 
@@ -133,6 +140,9 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     out_dir = Path(args.output_dir)
     batch_n = 0
+    # In gen-once-per-publish mode we track the mtime we LAST generated against,
+    # so we only emit one batch per published weight version.
+    last_gen_mtime = 0.0
 
     while True:
         # 1) reload weights if newer (cheap mtime check)
@@ -150,6 +160,12 @@ def main() -> None:
             except Exception as e:
                 # Trainer might be mid-write; try again next loop.
                 print(f"[{args.worker_id}] reload failed ({e}); retrying", flush=True)
+
+        # In gen-once-per-publish mode, only generate when the weights mtime has
+        # advanced since our last batch. Otherwise sleep and re-poll.
+        if args.gen_once_per_publish and cur_mtime <= last_gen_mtime:
+            time.sleep(args.weights_poll_sec)
+            continue
 
         # 2) generate a batch of games
         t0 = time.perf_counter()
@@ -192,6 +208,7 @@ def main() -> None:
             "gen_s": dt,
         })
         batch_n += 1
+        last_gen_mtime = weights_mtime
         print(
             f"[{args.worker_id}] batch {batch_n}: {n_games}g {n_examples}ex "
             f"{dt:.1f}s ({dt/n_games*1000:.0f} ms/game) -> {path.name}",

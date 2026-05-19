@@ -851,6 +851,49 @@ parallel to gpc=32 from e35 onward; gpc=64 was a bit worse early.
 None ever beat heuristic. The slope question is not about how often we
 publish; it's about something upstream.
 
+## The single-process vs dist semantic difference
+
+Jason asked the sharp question: in single-process, what model generated
+what data? Answer (precise, because it's serial):
+
+- Each cycle: trainer's current model generates exactly N games, all of
+  one version → SGD → new version → next cycle uses the new version.
+- The buffer at any time has a strictly-ordered FIFO of "layer N = N
+  games tagged version N." Stratification is exact, no overlap.
+
+In our dist setup, workers run **continuously**. Between weight publishes
+they keep generating with whatever weights they had last polled. The
+trainer ingests these games and tags them with the trainer's *current*
+version, which can be 1-2 cycles ahead of the actual gen-time version.
+So:
+
+- Per "version" there can be a variable, drift-y count of games — some
+  workers finished a batch right before a publish, others finished
+  right after, and the trainer can't tell them apart by version.
+- The buffer is NOT cleanly stratified — it's jumbled.
+
+This is the only structural difference between kze1lcti's setup
+(single-process, worked at e85) and the dist family (continuous-gen
+workers, all failed at e100). The K-axis tests killed publish-frequency
+as the cure. Continuous-gen is the last untested axis.
+
+## 9x9-dist-sync-K1-gpc32 (2026-05-19 ~01:00, wandb nox388ow) — LIVE
+
+Tests the continuous-gen hypothesis by adding `--gen-once-per-publish`
+to `gomoku.selfplay_worker`. After writing a batch, the worker sleeps
+on the weights mtime until it advances; only then does it generate
+again. Trades worker idle-time for clean per-version data stratification
+that matches single-process.
+
+Setup: same as cell D otherwise (dist, K=1, gpc=32, buf=500k, 4 workers
+× 8 g/batch). The only knob changed is sync behavior.
+
+Prediction: if continuous-gen was the culprit, this should reproduce
+kze1lcti's e85 heuristic crossing. If it ALSO fails like cell D, then
+the issue isn't worker behavior at all — it's somewhere deeper (code
+regression, FP-arithmetic ordering on dist vs single-MPS, etc.).
+
+
 This kills the publish-frequency theory. What's left to explain why
 kze1lcti beat heuristic at e85 while the entire dist family hasn't:
 
