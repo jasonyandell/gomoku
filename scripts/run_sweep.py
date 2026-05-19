@@ -114,7 +114,7 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         "--keep-last-n", str(cell.keep_last_n),
         "--no-eval",
         "--wandb", "--wandb-project", "gomoku",
-        "--run-name", f"sweep-{cell.name}",
+        "--run-name", f"9x9-sweep-{cell.name}",
         *cell.extra_train_args,
     ]
 
