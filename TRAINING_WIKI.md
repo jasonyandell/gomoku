@@ -932,6 +932,66 @@ mode in 100 epochs. Hypothesis dies, but the data semantics fix is
 worth keeping for future runs (clean per-version stratification
 costs nothing and lets us reason about the buffer precisely).
 
+## The real reframe: 100 epochs was just too few
+
+After chasing the "regression," a subagent investigation flagged a bug
+in `game.py:apply()` (snapshot taken AFTER stone placement instead of
+BEFORE, making history planes redundant with the current frame). Pulled
+the actual kze1lcti training log to verify and discovered the bigger
+story:
+
+| epoch | kze1lcti plies | kze heuristic (n=4) |
+|------:|---------------:|--------------------:|
+|     5 |          28.3  |        0%           |
+|    20 |          16.2  |        0%           |
+|    50 |          16.9  |        0%           |
+|    75 |          13.2  |        50% ← noise spike (2/4) |
+|    80 |          —     |        0%           |
+|   100 |          12.9  |        **0%**       |
+|   150 |          11.4  |        50% (2/4)    |
+
+**kze1lcti at e100 also had heuristic=0%.** And plies at e100 = 12.9 —
+basically identical to our "failed" runs (cell D: 9.8, gpc=64: 12.0,
+sync: 12.5, diag-A: 14.6). The "kze hit heuristic at e85" claim that
+drove this whole investigation was n=4 eval noise (2/4 wins = "50%").
+
+The genuine signal comes from later checkpoints. kze1lcti's saved e176
+checkpoint scores **15W-15L-0D vs heuristic at n=30 = real 50%**.
+fresh-dist's e552 checkpoint scores 35% at n=30. Both are competitive
+but neither crushes the heuristic.
+
+**Conclusion: there is no regression.** Our 100-epoch runs at n=20 give
+truer 0% readings; kze's "success" was n=4 noise. The pipeline genuinely
+needs ~150-300+ epochs (and probably 800-sims-medium) to reach
+heuristic-competitive play.
+
+### Fix shipped anyway: history snapshot taken BEFORE placement
+
+While investigating, found that `GameState.apply()` snapshots the board
+AFTER placing the stone (before the flip). That means `history[0]` from
+the next state's perspective is effectively identical to the current
+frame, just from the previous player's view — i.e. plane 1 (my t-1)
+duplicates plane 0 (my t), and plane H+1 duplicates plane H.
+
+Fix: move the snapshot to BEFORE `new_board[0,r,c] = True`. Each
+history slot now encodes "the board the mover observed when deciding,"
+giving the network a real past observation per slot. Verified with a
+trace: at s3 after a0,b0,a1 sequence, B's t-2 plane now correctly
+shows empty (B had nothing before playing b0), where the bug had it
+showing {b0}.
+
+Not the regression (same code was present during kze1lcti — which
+also hit collapse, just slower to be detected with n=4 evals), but the
+representation is genuinely now correct, and the model gets distinct
+history signal instead of redundant copies.
+
+## Next: long-run baseline (500 epochs)
+
+Pick best-looking config (TBD: probably dist+K=1+gpc=32+sync, or
+single-process kze recipe) and run 300-500 epochs. The honest target
+is "approximately match kze1lcti's e176 head-to-head strength at the
+end." Compare via direct match against `kze-e176` checkpoint at n=40.
+
 
 
 This kills the publish-frequency theory. What's left to explain why

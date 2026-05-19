@@ -59,18 +59,21 @@ class GameState:
     def apply(self, action: int) -> "GameState":
         """Place a stone for the side-to-move at action, then flip perspective.
 
-        The returned state has perspective = the next player to move. The pre-flip
-        canonical board (`board` BEFORE the perspective flip but AFTER placing the
-        stone — i.e. the position from the mover's view at the moment they moved)
-        is pushed onto the head of `history`.
+        The returned state has perspective = the next player to move. The pre-move
+        canonical board (`board` BEFORE the stone was placed and BEFORE the flip —
+        i.e. what the mover *observed* when deciding) is pushed onto the head of
+        `history`. That way each history slot encodes a real past observation
+        distinct from the current frame.
         """
         r, c = divmod(action, BOARD_SIZE)
         if self.board[0, r, c] or self.board[1, r, c]:
             raise ValueError(f"illegal move {action} on occupied square")
+        # Snapshot the state-as-the-mover-observed-it: BEFORE we place their stone
+        # and BEFORE we flip. Each ply produces a distinct snapshot of "what did
+        # the player see when they made this decision."
+        snapshot = self.board.copy()
         new_board = self.board.copy()
         new_board[0, r, c] = True
-        # Snapshot the position-as-mover-saw-it AFTER placement, BEFORE flip.
-        snapshot = new_board.copy()
         # Flip planes so plane 0 is now the next side-to-move.
         new_board = new_board[::-1].copy()
         # Push snapshot; keep at most HISTORY_PLY - 1 (current frame is `board`).
