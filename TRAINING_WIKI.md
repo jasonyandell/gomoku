@@ -625,10 +625,16 @@ The dist run sat **below the prior run's "breakthrough vl"** for ~100+
 epochs before heuristic moved. So `vl` is not predictive of strength
 across runs — buffer character is. The likely differences:
 
-- **Train:gen ratio.** kze1lcti = 1:1 (400 SGD steps per 64 games ≈ 6
-  steps/game). oo53qzvf is K=2 SGD-per-game by design = 2 steps/game.
-  Lower SGD-per-game means weights move slower per data point → buffer
-  rolls over with a flatter learning slope (gentler opponent gradient).
+- **Train:gen ratio.** kze1lcti = K=1 (64 SGD steps per 64 games via
+  `--training-steps 64` static). oo53qzvf is K=2 SGD-per-game by design
+  (64 steps for 32 games). The dist run actually trains *harder* per game
+  seen, not softer — opposite of what I had originally written here. The
+  real difference is staleness, not gradient density.
+
+  **Correction (2026-05-18 23:00):** an earlier version of this entry
+  claimed kze was K≈6 ("400 steps / 64 games"). That was wrong — kze's
+  wandb-captured args show `--training-steps 64`. K=1 for kze, K=2 for
+  fresh-dist.
 - **Opponent freshness.** Single-process generates with up-to-the-second
   weights. Workers run lagged weights between mtime polls + last ~30s of
   generation, so the buffer's "opponent strength" stratifies more.
@@ -710,4 +716,85 @@ small buffer combo. vl=0.065 by e100 (took fresh-dist 500+ epochs to
 reach 0.08); plies *shrunk* 20→12 across the run. More SGD-per-game
 amplified self-bait specialization rather than learning generalization.
 Suggests next cell should swing opposite: low K + big buffer (cell D).
+
+### Cell D result (2026-05-18 21:15, wandb sweep-D-K1-buf500k)
+
+**Failed target too.** K=1, buf=500k = opposite corner from C. Across 11
+eval polls, heuristic = **0/20 every single time**, same as C.
+
+| epoch | pl    | vl    | plies | buffer age (p50) | heuristic |
+|------:|------:|------:|------:|-----------------:|----------:|
+| 20    | 3.428 | 0.499 | 23.9  | 11               | 0%        |
+| 41    | 3.215 | 0.504 | 16.6  | 24               | 0%        |
+| 61    | 3.032 | 0.476 | 14.4  | 37               | 0%        |
+| 83    | 2.912 | 0.439 | 10.5  | 53               | 0%        |
+| 100   | 2.834 | 0.406 |  9.8  | 65               | 0%        |
+
+Slower-burn version of C: same destination (plies 24→10), different
+speed. Both K=1 and K=4 collapse identically along the K axis. Confirms
+**neither K nor buffer-size is the upstream cause** of the failure.
+
+## The slope insight (Jason, watching the buffer_size chart)
+
+Looking at buffer_size across runs in wandb, the failing runs (D, fresh-
+dist) produce visibly *concave* fill curves — slope decreasing over
+epochs. A healthier "K2-shape" reference run shows a straight (constant-
+derivative) line at roughly 2× the fill rate of D / fresh-dist by e51.
+
+**Buffer-fill slope = games-per-cycle × average plies-per-game.** The
+games-per-cycle term is fixed by config. The plies term is the variable.
+When plies collapse from ~30 → ~12 (fast-attack mode), the slope drops
+~2.5× and the buffer-fill curve bends downward.
+
+**Concavity in buffer_size IS the rate of collapse**, visible in real
+time. It's a leading indicator that beats waiting for heuristic eval to
+confirm the model is stuck. A straight buffer_size line = stable game
+length = no collapse. A bowing line = active collapse, every cycle.
+
+The K × buffer-size axes don't touch plies-per-game. That's why we
+spent six cells getting identical failures: we were tuning the wrong
+plane.
+
+Things that DO move the slope:
+- **`--random-opening-moves N`** — forces a minimum-plies floor (model
+  can't end before move N+something), keeps fresh-data injection
+  rate constant.
+- Higher `--dirichlet-eps`, longer `--temperature-moves` — exploration.
+- `--opponent-mix-random P` — opponent diversity stretches games.
+- Structural fixes (renju overline ban, opening books) — future work.
+
+### Cell C ↔ Cell D head-to-head probe (after stops)
+
+Quick aside: we ran fresh-e552 (oo53qzvf) vs kze-e176 (kze1lcti dist)
+n=40 with 4 random opening plies. Result: fresh-e552 wins **39-1
+(97.5%)**. But against the heuristic at n=30, fresh-e552 = 35% while
+kze-e176 = 50%. Non-transitive in the strict gomoku-style sense: the
+"newer, more refined" model crushes its sibling but loses worse to an
+external attacker. Head-to-head between same-lineage checkpoints
+measures local mutual specialization, not absolute strength. Vs a fixed
+external opponent (heuristic, lookahead) is the only signal that
+generalizes.
+
+## Sweep cell E result (skipped — equivalent to fresh-dist)
+
+Cell E = K=2, buf=500k. This is exactly what fresh-dist already ran for
+552 epochs. Don't re-run; treat fresh-dist as cell E's evidence.
+
+## kze-recipe-K1-open6 (2026-05-18 23:00 — slope-hypothesis test)
+
+Direct test of Jason's slope insight. Same recipe as kze1lcti (which
+actually beat heuristic at e85): `--size medium --games-per-epoch 64
+--n-simulations 800 --training-steps 64 --batch-size 512 --lr 1e-3
+--replay-buffer-size 500000 --dirichlet-alpha 0.13 --dirichlet-eps 0.25
+--temperature-moves 10` — single-process, K=1 static, no workers.
+
+**One thing changed:** `--random-opening-moves 6` added. This forces the
+first 6 plies of every self-play game to be uniform-random legal moves;
+MCTS only takes over from ply 7. Hypothesis: the minimum-plies floor
+prevents the buffer-fill curve from concaving, the buffer stays fresh,
+the model gets out of the fast-attack attractor.
+
+Target: hit heuristic ≥ 50% sustained before epoch 100. Reference: kze
+needed e85 *without* opening moves; this should be faster if the
+hypothesis is right.
 
