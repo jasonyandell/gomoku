@@ -39,9 +39,10 @@ def test_checkpoint_roundtrip(tmp_path):
 
 
 def test_to_planes_dtype():
+    from gomoku.game import N_INPUT_PLANES, BOARD_SIZE
     s = GameState.initial()
     x = s.to_planes()
     assert x.dtype == np.float32
-    assert x.shape == (3, 9, 9)
+    assert x.shape == (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE)
     # Last plane is the side-to-move indicator (all ones).
-    assert (x[2] == 1.0).all()
+    assert (x[-1] == 1.0).all()

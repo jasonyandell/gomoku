@@ -22,8 +22,10 @@ from typing import Callable
 
 from gomoku.baselines import (
     Player,
+    defensive_player,
     heuristic_player,
     lookahead_player,
+    pacifist_blocker,
     random_player,
 )
 from gomoku.eval import MatchResult, mcts_picker, play_match_pickers
@@ -57,7 +59,7 @@ def parse_spec(s: str) -> PlayerSpec:
     else:
         kind, kwargs = s.strip(), {}
     kind = kind.strip().lower()
-    if kind not in ("random", "heuristic", "lookahead", "model"):
+    if kind not in ("random", "heuristic", "defensive", "pacifist", "lookahead", "model"):
         raise SystemExit(f"unknown player kind {kind!r}")
     return PlayerSpec(raw=s, kind=kind, kwargs=kwargs)
 
@@ -71,6 +73,13 @@ def build_player(spec: PlayerSpec) -> Player:
         return random_player
     if spec.kind == "heuristic":
         return heuristic_player
+    if spec.kind == "defensive":
+        return defensive_player
+    if spec.kind == "pacifist":
+        max_own = int(spec.kwargs.get("max_own_line", "3"))
+        def _picker(state, rng, *, _m=max_own):
+            return pacifist_blocker(state, rng, max_own_line=_m)
+        return _picker
     if spec.kind == "lookahead":
         depth = int(spec.kwargs.get("depth", "4"))
         return lookahead_player(depth=depth)

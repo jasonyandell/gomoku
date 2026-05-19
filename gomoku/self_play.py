@@ -6,12 +6,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gomoku.game import GameState, augment
+from gomoku.game import GameState, N_ACTIONS, augment
 from gomoku.mcts import (
     Evaluator,
     MCTSGame,
     policy_from_visits,
     run_batched_mcts,
+    run_batched_mcts_waves,
 )
 
 
@@ -22,8 +23,8 @@ class SelfPlayExample:
     All three are from the SAME side-to-move perspective (canonical).
     """
 
-    planes: np.ndarray   # (3, 9, 9) float32
-    pi: np.ndarray       # (81,) float32, sums to 1 over legal actions
+    planes: np.ndarray   # (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE) float32
+    pi: np.ndarray       # (N_ACTIONS,) float32, sums to 1 over legal actions
     z: float             # value in [-1, 1]
 
 
@@ -45,6 +46,34 @@ def _sample_action(pi: np.ndarray, rng: np.random.Generator) -> int:
     return int(rng.choice(len(pi), p=pi))
 
 
+def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameState, int]:
+    """Play `n_moves` uniform-random legal moves from an empty board, then return
+    the resulting state and the ply count (= n_moves, unless the random play hit
+    terminal first — in which case we restart from empty).
+
+    Used by generate_games / generate_games_vs_baseline to inject opening diversity.
+    """
+    if n_moves <= 0:
+        return GameState.initial(), 0
+    while True:
+        state = GameState.initial()
+        plies = 0
+        for _ in range(n_moves):
+            legal = state.legal_actions()
+            if len(legal) == 0:
+                break
+            action = int(rng.choice(legal))
+            state = state.apply(action)
+            plies += 1
+            done, _ = state.is_terminal()
+            if done:
+                # Unlucky — random play accidentally ended the game. Try again.
+                break
+        else:
+            return state, plies
+        # restart from scratch
+
+
 def generate_games(
     n_games: int,
     evaluator: Evaluator,
@@ -54,21 +83,42 @@ def generate_games(
     temperature_moves: int = 8,
     dirichlet_alpha: float = 0.3,
     dirichlet_eps: float = 0.25,
-    max_plies: int = 81,
+    max_plies: int | None = None,
     rng: np.random.Generator | None = None,
     augment_symmetries: bool = True,
+    wave_size: int = 1,
+    random_opening_moves: int = 0,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
     All games advance in lockstep: at each ply we batch-MCTS across active games,
     sample an action per game, apply it, and remove any games that ended.
+
+    `wave_size` > 1 enables zeb-style wave-batched MCTS with virtual loss:
+    each round collects `wave_size` leaves per game in one batched evaluator
+    call. wave_size=1 reduces to the original per-sim batching.
+
+    `random_opening_moves` > 0 starts each game with that many uniform-random
+    legal moves played (alternating sides); MCTS only takes over after that.
+    No training examples are recorded for the random opening — only for moves
+    chosen by MCTS. Breaks the "always-same-opening" collapse mode by forcing
+    the model to learn from a diverse set of starting positions.
     """
     rng = rng or np.random.default_rng()
+    if max_plies is None:
+        max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
 
-    games = [MCTSGame(GameState.initial(), c_puct=c_puct,
-                      dirichlet_alpha=dirichlet_alpha, dirichlet_eps=dirichlet_eps,
-                      rng=np.random.default_rng(rng.integers(0, 2**31)))
-             for _ in range(n_games)]
+    games: list[MCTSGame] = []
+    initial_plies: list[int] = []
+    for _ in range(n_games):
+        if random_opening_moves > 0:
+            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+        else:
+            start_state, opening_plies = GameState.initial(), 0
+        games.append(MCTSGame(start_state, c_puct=c_puct,
+                              dirichlet_alpha=dirichlet_alpha, dirichlet_eps=dirichlet_eps,
+                              rng=np.random.default_rng(rng.integers(0, 2**31))))
+        initial_plies.append(opening_plies)
 
     # Per-game trajectory of (planes, pi, side_to_move_at_that_ply)
     # side_to_move is encoded as 0 for the player who moved first ("black"), 1 for the other.
@@ -79,20 +129,32 @@ def generate_games(
     ply = 0
     while active and ply < max_plies:
         active_games = [games[i] for i in active]
-        run_batched_mcts(
-            active_games,
-            evaluator,
-            n_simulations=n_simulations,
-            add_root_noise=True,
-        )
+        if wave_size > 1:
+            run_batched_mcts_waves(
+                active_games,
+                evaluator,
+                n_simulations=n_simulations,
+                wave_size=wave_size,
+                add_root_noise=True,
+            )
+        else:
+            run_batched_mcts(
+                active_games,
+                evaluator,
+                n_simulations=n_simulations,
+                add_root_noise=True,
+            )
 
         next_active: list[int] = []
         for slot_idx, g_idx in enumerate(active):
             g = active_games[slot_idx]
             tau = 1.0 if ply < temperature_moves else 0.0
             pi = policy_from_visits(g.root, tau)
-            # Whose move was this? Plies are 0-indexed; even ply = "black" (first mover).
-            side = ply % 2
+            # Total moves played so far in THIS game = initial_plies[g_idx] (random
+            # opening) + ply (MCTS moves applied so far). The side ABOUT to move
+            # at this point has parity = total_moves % 2.
+            n_initial = initial_plies[g_idx]
+            side = (n_initial + ply) % 2
             trajectories[g_idx].append((g.root.state.to_planes(), pi.copy(), side))
 
             action = _sample_action(pi, rng)
@@ -108,16 +170,17 @@ def generate_games(
                     outcome_for_black = 1.0 if winner_side == 0 else -1.0
                 else:
                     outcome_for_black = 0.0
-                completed.append((g_idx, outcome_for_black, ply + 1))
+                completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
             else:
                 next_active.append(g_idx)
 
         active = next_active
         ply += 1
 
-    # Any games still active at max_plies are scored as draws.
+    # Any games still active at max_plies are scored as draws. Total plies is
+    # the MCTS-loop ply plus the per-game random opening prefix.
     for g_idx in active:
-        completed.append((g_idx, 0.0, ply))
+        completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     # Build records, applying symmetry augmentation.
     records: list[GameRecord] = []
@@ -132,5 +195,137 @@ def generate_games(
             else:
                 examples.append(SelfPlayExample(planes, pi, z))
         records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
+
+    return records
+
+
+def generate_games_vs_baseline(
+    n_games: int,
+    evaluator: Evaluator,
+    opponent_picker,
+    *,
+    n_simulations: int = 100,
+    c_puct: float = 1.5,
+    temperature_moves: int = 8,
+    dirichlet_alpha: float = 0.3,
+    dirichlet_eps: float = 0.25,
+    max_plies: int | None = None,
+    rng: np.random.Generator | None = None,
+    augment_symmetries: bool = True,
+    wave_size: int = 1,
+    model_first_frac: float = 0.5,
+    random_opening_moves: int = 0,
+) -> list[GameRecord]:
+    """Generate games where the model plays a fixed opponent picker.
+
+    The model uses MCTS (with the same `wave_size` / `dirichlet` / `c_puct` knobs
+    as self-play). The opponent uses `opponent_picker(state, rng)` directly —
+    no MCTS, no examples recorded for opponent moves. Training examples come
+    only from the model's plies, with `z` set to the game's outcome from the
+    model's perspective.
+
+    `model_first_frac` is the fraction of games where the model plays the first
+    move (side 0); the rest the model plays second. Default 0.5 so the model
+    sees both sides equally.
+
+    `GameRecord.outcome` is from the MODEL's perspective (+1 win, -1 loss, 0 draw)
+    rather than first-mover's.
+    """
+    rng = rng or np.random.default_rng()
+    if max_plies is None:
+        max_plies = N_ACTIONS
+
+    games: list[MCTSGame] = []
+    initial_plies: list[int] = []
+    for _ in range(n_games):
+        if random_opening_moves > 0:
+            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+        else:
+            start_state, opening_plies = GameState.initial(), 0
+        games.append(MCTSGame(start_state, c_puct=c_puct,
+                              dirichlet_alpha=dirichlet_alpha, dirichlet_eps=dirichlet_eps,
+                              rng=np.random.default_rng(rng.integers(0, 2**31))))
+        initial_plies.append(opening_plies)
+    # side the model plays in each game: 0 = first mover, 1 = second
+    model_side = np.where(rng.random(n_games) < model_first_frac, 0, 1).astype(np.int8)
+
+    trajectories: list[list[tuple[np.ndarray, np.ndarray]]] = [[] for _ in range(n_games)]
+    active: list[int] = list(range(n_games))
+    completed: list[tuple[int, float, int]] = []  # (game_idx, outcome_for_model, plies)
+
+    # initial_plies is constant across games (always == random_opening_moves), so
+    # all games share the same `side_to_move` at any loop ply.
+    n_initial = random_opening_moves
+    ply = 0
+    while active and ply < max_plies:
+        side_to_move = (n_initial + ply) % 2
+        model_turn = [i for i in active if model_side[i] == side_to_move]
+        opp_turn = [i for i in active if model_side[i] != side_to_move]
+
+        # Model: batched MCTS on its subset of games.
+        if model_turn:
+            mcts_games = [games[i] for i in model_turn]
+            if wave_size > 1:
+                run_batched_mcts_waves(
+                    mcts_games, evaluator,
+                    n_simulations=n_simulations, wave_size=wave_size,
+                    add_root_noise=True,
+                )
+            else:
+                run_batched_mcts(
+                    mcts_games, evaluator,
+                    n_simulations=n_simulations, add_root_noise=True,
+                )
+            for slot_idx, g_idx in enumerate(model_turn):
+                g = mcts_games[slot_idx]
+                tau = 1.0 if ply < temperature_moves else 0.0
+                pi = policy_from_visits(g.root, tau)
+                trajectories[g_idx].append((g.root.state.to_planes(), pi.copy()))
+                action = _sample_action(pi, rng)
+                g.advance_root(action)
+
+        # Opponent: just call picker per game.
+        for g_idx in opp_turn:
+            g = games[g_idx]
+            action = int(opponent_picker(g.root.state, rng))
+            g.advance_root(action)
+
+        # Terminal check (same for both subsets).
+        next_active: list[int] = []
+        for g_idx in active:
+            g = games[g_idx]
+            done, term_val = g.root.state.is_terminal()
+            if done:
+                # The player who just moved is `side_to_move`. If term_val == -1
+                # at the new root (whose side is the player who DIDN'T move),
+                # the mover just won.
+                if term_val == -1.0:
+                    winner_side = side_to_move
+                    outcome_for_model = 1.0 if winner_side == int(model_side[g_idx]) else -1.0
+                else:
+                    outcome_for_model = 0.0
+                completed.append((g_idx, outcome_for_model, n_initial + ply + 1))
+            else:
+                next_active.append(g_idx)
+        active = next_active
+        ply += 1
+
+    # Max-plies fallthrough = draw.
+    for g_idx in active:
+        completed.append((g_idx, 0.0, n_initial + ply))
+
+    records: list[GameRecord] = []
+    for g_idx, outcome_for_model, plies in sorted(completed):
+        examples: list[SelfPlayExample] = []
+        for planes, pi in trajectories[g_idx]:
+            # planes are canonical (plane 0 = side-to-move = model at the moment
+            # the example was recorded), so z is directly outcome_for_model.
+            z = outcome_for_model
+            if augment_symmetries:
+                for aug_planes, aug_pi in augment(planes, pi):
+                    examples.append(SelfPlayExample(aug_planes, aug_pi.astype(np.float32), z))
+            else:
+                examples.append(SelfPlayExample(planes, pi, z))
+        records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_model))
 
     return records

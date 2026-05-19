@@ -7,9 +7,12 @@ dist/
 build/
 
 checkpoints/
+checkpoints_*/
 wandb/
 runs/
 scratch/
+sweep_runs/
+sweep_logs/
 *.pt
 *.ckpt
 

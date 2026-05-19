@@ -226,6 +226,106 @@ def heuristic_player(state: GameState, rng: np.random.Generator) -> int:
     return _argmax_with_tiebreak(legal, all_scores[legal], rng)
 
 
+def defensive_player(state: GameState, rng: np.random.Generator) -> int:
+    """Defense-only variant: blocks opponent threats; ignores own offense.
+
+    Use as a self-play opponent to force the MODEL to learn how to break
+    through resistance and convert its own threats — the defensive player
+    never builds its own attack, so when it loses, it's because the model
+    actually constructed a 5-in-a-row against constant blocking pressure.
+
+    1) Block an immediate opp winning move if any.
+    2) Else play the move that maximally neutralises the opp's strongest
+       remaining threats (defense term only from `_score_all_moves`).
+    """
+    mine, opp = _flat_planes(state)
+    legal = state.legal_actions()
+
+    # 1) Immediate win for opponent? Must block.
+    opp_wins = _find_immediate_wins(opp, mine, legal)
+    if opp_wins.size > 0:
+        # Tiebreak among blocking moves by which one cuts the most other threats.
+        defense_scores = _defense_only_scores(mine, opp)
+        return _argmax_with_tiebreak(opp_wins, defense_scores[opp_wins], rng)
+
+    # 2) Argmax of defense-only score over legal moves.
+    defense_scores = _defense_only_scores(mine, opp)
+    return _argmax_with_tiebreak(legal, defense_scores[legal], rng)
+
+
+def _max_own_window_after(mine: np.ndarray, _opp: np.ndarray) -> np.ndarray:
+    """For each cell, returns the maximum # of my stones in any 5-window
+    THROUGH that cell, AFTER placing one of my stones there.
+
+    Used by `pacifist_blocker` to avoid moves that grow its own line to 4+.
+    """
+    mw = mine[_WINDOWS].sum(axis=1)
+    cell_my = mw[_DENSE_WIN_BY_CELL]
+    cell_my_after = (cell_my + 1)
+    # Cells not in any valid window: pretend they're 0 so they don't dominate.
+    cell_my_after = np.where(_DENSE_WIN_MASK, cell_my_after, 0)
+    return cell_my_after.max(axis=1)
+
+
+def pacifist_blocker(state: GameState, rng: np.random.Generator,
+                     *, max_own_line: int = 3) -> int:
+    """Like `defensive_player` but refuses to grow its own line beyond
+    `max_own_line` (default 3 — never threatens an open four).
+
+    The intent: force the MODEL to actually finish a 5-in-a-row against
+    constant defensive pressure that won't accidentally win first. When
+    `defensive_player` ends up forming its own 5 (50% of games against the
+    e50 model), `pacifist_blocker` will reject those moves.
+
+    Priority order:
+    1) If opponent has an immediate 5 threat: must block (overriding the
+       self-line cap is fine here; that move would have been forced anyway).
+    2) Among legal moves whose placement keeps my longest window ≤ max_own_line,
+       pick argmax defense.
+    3) If no such move exists (board crowded with my stones), fall back to
+       the legal move with the smallest own-line after, breaking ties by
+       defense score.
+    """
+    mine, opp = _flat_planes(state)
+    legal = state.legal_actions()
+
+    opp_wins = _find_immediate_wins(opp, mine, legal)
+    if opp_wins.size > 0:
+        defense_scores = _defense_only_scores(mine, opp)
+        return _argmax_with_tiebreak(opp_wins, defense_scores[opp_wins], rng)
+
+    own_after = _max_own_window_after(mine, opp)
+    defense_scores = _defense_only_scores(mine, opp)
+
+    pacifist_mask = own_after[legal] <= max_own_line
+    if pacifist_mask.any():
+        cands = legal[pacifist_mask]
+        return _argmax_with_tiebreak(cands, defense_scores[cands], rng)
+
+    # No safe move — find the legal move with the smallest own-line, break
+    # ties by defense.
+    own_for_legal = own_after[legal]
+    smallest = own_for_legal.min()
+    candidates = legal[own_for_legal == smallest]
+    return _argmax_with_tiebreak(candidates, defense_scores[candidates], rng)
+
+
+def _defense_only_scores(mine: np.ndarray, opp: np.ndarray) -> np.ndarray:
+    """Pure defense: per-cell score equals how much opp-threat the placement kills.
+    Computed using the same window infrastructure as `_score_all_moves`, but
+    drops the offensive term entirely.
+    """
+    mw = mine[_WINDOWS].sum(axis=1)
+    ow = opp[_WINDOWS].sum(axis=1)
+    cell_my = mw[_DENSE_WIN_BY_CELL]
+    cell_opp = ow[_DENSE_WIN_BY_CELL]
+    # Defensive: windows where I had 0 stones pre-placement and entry is valid.
+    opp_threat = (cell_my == 0) & _DENSE_WIN_MASK
+    opp_clipped = np.minimum(cell_opp, WIN_LEN)
+    def_w = _OPP_W[opp_clipped]
+    return np.where(opp_threat, def_w, 0.0).sum(axis=1)
+
+
 def _argmax_with_tiebreak(actions: np.ndarray, scores: np.ndarray, rng: np.random.Generator) -> int:
     m = scores.max()
     winners = actions[scores == m]
