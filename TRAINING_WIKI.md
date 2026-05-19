@@ -824,13 +824,11 @@ versions represented in the buffer per unit wall-clock → less opponent
 diversity → faster collapse. Smaller cycles publish weights more often
 → workers see fresher weights more often → more strata.
 
-## 9x9-dist-K1-gpc16 (2026-05-19 ~00:00, wandb d2svpgk3) — LIVE
+## 9x9-dist-K1-gpc16 (2026-05-19 ~00:00, wandb d2svpgk3) — FAILED
 
 Pushing the publish-frequency theory further: same dist+K=1+buf=500k
 setup but games/cycle=16. Weights published 4× more often than gpc=64
 for the same data throughput.
-
-Snapshot (live):
 
 | epoch | pl    | vl    | plies | gpc=32 (cell D) plies | gpc=64 plies |
 |------:|------:|------:|------:|----------------------:|-------------:|
@@ -841,12 +839,17 @@ Snapshot (live):
 | 59    | 2.995 | 0.365 | 15.6  | 15.2                  | (e51:) 11.3  |
 | 72    | 2.891 | 0.343 | 19.2  | —                     | (e71:) 13.6  |
 | 82    | 2.787 | 0.322 | 12.5  | —                     | (e81:) 11.9  |
+| 100   | 2.685 | 0.336 | 15.1  | (e100:) 9.8           | (e100:) 12.0 |
 
-Negative result emerging: **games/cycle in [16, 32, 64] doesn't
-fundamentally change the collapse trajectory**. gpc=16 ran roughly
-parallel to gpc=32 from e35 onward; gpc=64 was a bit worse. The slope
-question is not about how often we publish; it's about something
-upstream.
+Heuristic = **0% across all 8 eval polls**. Buffer never filled (final
+size 238k/500k = 48%) because gpc=16 with K=1 is genuinely data-starved
+— only 16 games × ~16 plies = ~256 positions per cycle going in.
+
+**Negative result confirmed: games/cycle in [16, 32, 64] doesn't
+fundamentally change the collapse trajectory.** gpc=16 ran roughly
+parallel to gpc=32 from e35 onward; gpc=64 was a bit worse early.
+None ever beat heuristic. The slope question is not about how often we
+publish; it's about something upstream.
 
 This kills the publish-frequency theory. What's left to explain why
 kze1lcti beat heuristic at e85 while the entire dist family hasn't:
