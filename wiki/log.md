@@ -175,3 +175,25 @@ consistent heading so future sessions can scan recent changes with simple tools.
   TRAINING_WIKI.md until the current run finishes; re-assess with the
   current run's full data in hand. Next-run config should be picked
   with a specific question in mind, not "improve everything."
+
+## [2026-05-20] synthesis | az-at-scale-vs-laptop topic page
+
+- Added [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md)
+  capturing Jason's framing observation that "steady progress is what
+  makes [AZ] learn, and this one has been learning despite the chaos."
+- The page documents three structural reasons our laptop setup wrinkles
+  (exploration arcs, plies swings, age oscillations) don't exist at
+  Google scale: (1) per-version concentration because 8 workers can't
+  smooth across thousands of parallel games, (2) short freestyle gomoku
+  games give 10-40× less signal per game than Go's 200-250 move games,
+  (3) restart artifacts that thousand-machine continuous runs don't have.
+- Key framing argument: when reading our wandb metrics, the *default
+  interpretation* of swings should be "laptop-scale transient, model is
+  doing something interesting," not "training is broken." Failure
+  diagnosis requires extra evidence (NaN, dying processes, OR sustained
+  multi-arc degradation).
+- This argues *against* twitchy interventions (each restart costs 100+
+  epochs of buffer re-equilibration) and *for* big-buffer + lockstep +
+  many-games-per-version next-run config (the Next-run sketches in
+  TRAINING_WIKI.md address exactly these scale-effect items).
+- Updated [index.md](index.md) Start Here to surface the new topic.

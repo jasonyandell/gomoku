@@ -14,6 +14,7 @@ history.
 | [log.md](log.md) | Chronological wiki maintenance log. |
 | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
 | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and aren't. Don't re-port "v2 storage" — we're already there. |
+| [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | Why the wrinkles in our run (exploration arcs, plies swings, age oscillations) are laptop-scale artifacts, not training bugs. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
 
 ## Current Synthesis
