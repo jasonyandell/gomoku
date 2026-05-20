@@ -1890,3 +1890,76 @@ already informs every choice above with real data. Pick the next-run
 config with a specific question in mind ("is medium model better at this
 strength level?" or "does lockstep+bigger buffer break the self-play
 attack ceiling?") rather than a generic "improve everything."
+
+## Buffer-composition feedback hypothesis — Jason's prediction at ~e4252 (2026-05-20)
+
+After watching three full exploration arcs (e3041, e3441, e4093) each
+peak-then-consolidate at successively-stronger floors, Jason flagged a
+deeper concern: each arc *changes the shape of the buffer history* in a
+way that the recovery has to fight against.
+
+### The mechanism
+
+During an exploration arc, the model plays short aggressive-attack
+games (plies drops 50 → 35). The buffer ingests positions from those
+short games. The recent buffer slice is increasingly dominated by:
+
+- short-game opening positions (only the first ~10-15 plies appear
+  often, mid-/end-game positions disappear)
+- one-shot attack motifs the current arc found
+- z = +1 / -1 outcomes (decisive games), few z = 0 draws
+
+When the arc's exploration ends and the model tries to consolidate
+toward longer defensive play, **it's training against a buffer that
+disproportionately rewards what it just did**. The positive feedback
+isn't just policy-target → action, it's also action → buffer
+composition → next-cycle policy targets.
+
+So far each arc has recovered. But each arc puts more short-game
+positions into the buffer cumulatively. Eventually a consolidation
+might not escape the bias.
+
+### The prediction
+
+> "I think it's going to keep bouncing off of these low vl/pl numbers.
+> It plateaus, learns, plateaus, learns. What really bothers me is that
+> while it is learning, we're changing the shape of the history (small
+> games fill up buffer) so when it gets off, we're nudging it even
+> more off balance. It is recovering for now, but sooner or later it'll
+> tank. Prediction for next half hour: cl/pl will climb again, then go
+> down again, and this will be the cycle in this recipe on this
+> computer ... until eventually it doesn't recover (normal)."
+>
+> — Jason, 2026-05-20 at e4252
+
+### Why constant-age doesn't fully address this
+
+The constant-age ingest fix shipped at commit 85eeccc keeps buffer
+*turnover rate* constant regardless of plies. It does NOT change WHAT'S
+in the buffer at any given moment. During exploration, new positions
+added are still short-game positions — there are just more of them per
+cycle.
+
+The genuine mitigations are deferred-decision items #5 (random opening
+moves) and #6 (past-checkpoint opponent mix) — both inject NON-current-
+arc content into self-play, diversifying the buffer's composition away
+from "whatever the current arc is doing." Larger buffer (item already
+in the next-run sketch) helps too — slower turnover means older,
+pre-arc positions linger longer.
+
+### Testing the prediction
+
+The current run will either:
+- Bounce as predicted (pl climbs, plateaus, climbs again, eventually
+  fails to recover): validates the buffer-composition-feedback theory,
+  argues strongly for items #5-#6 next run.
+- Continue tightening (pl approaches an asymptotic floor with smaller
+  and smaller arcs): suggests the recovery dynamic is robust enough
+  that the buffer-shape concern was over-stated at this scale.
+
+Cron check-ins over the next several hours will track this.
+
+Connecting to [topics/az-at-scale-vs-laptop.md](wiki/topics/az-at-scale-vs-laptop.md):
+this is the laptop-scale failure mode the topic page predicts — short
+games + per-version concentration combining to make exploration arcs
+self-reinforcing in a way Google's scale would smooth over.

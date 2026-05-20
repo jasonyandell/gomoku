@@ -197,3 +197,24 @@ consistent heading so future sessions can scan recent changes with simple tools.
   many-games-per-version next-run config (the Next-run sketches in
   TRAINING_WIKI.md address exactly these scale-effect items).
 - Updated [index.md](index.md) Start Here to surface the new topic.
+
+## [2026-05-20] notebook | Jason's buffer-composition-feedback prediction
+
+- After observing three arcs and the constant-age math, Jason articulated
+  a deeper failure mode than the surface-metric swings: each exploration
+  arc *changes the shape of the buffer's history* by ingesting short-game
+  positions, so the consolidation phase is fighting against the very
+  data it's training on. Eventually one consolidation will fail.
+- Prediction (e4252): pl/vl will climb again over the next half hour, then
+  drop again — same plateau-learn-plateau-learn cycle until eventually
+  it doesn't recover.
+- Filed in [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "Buffer-composition
+  feedback hypothesis" section. Notes that the constant-age fix shipped
+  earlier (85eeccc) keeps turnover stable but does NOT change buffer
+  composition during exploration — the genuine mitigations are random
+  opening moves and past-checkpoint opponent mix (deferred decisions #5
+  and #6 in the Next-run sketches).
+- Cron check-ins continue tracking. The prediction is falsifiable in two
+  ways: (a) bounces as predicted, eventually fails to recover → validates
+  the theory and argues strongly for items #5-#6; (b) tightens
+  asymptotically with smaller arcs → theory over-stated at this scale.
