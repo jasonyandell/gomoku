@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from gomoku.eval import mcts_picker, play_match_pickers
+from gomoku.eval import mcts_picker, play_match_parallel, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import load_checkpoint
@@ -74,6 +74,14 @@ def parse_args() -> argparse.Namespace:
                    help="Sleep this long between mtime polls.")
     p.add_argument("--max-cycles", type=int, default=0,
                    help="Stop after this many evals (0 = run forever).")
+    p.add_argument("--n-workers", type=int, default=1,
+                   help="If > 1, play eval games in parallel via multiprocessing. "
+                        "Each worker process loads the model from --checkpoint-path "
+                        "and plays games independently. Aggregate W/L/D counts are "
+                        "equivalent to sequential; per-game RNG is independent per "
+                        "worker. Speed scales ~linearly up to # of CPU cores. With "
+                        "spawn-start pool overhead ~0.5-1s per cycle, worth it for "
+                        "n_games >= ~8 or when adding higher lookahead depths.")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
@@ -100,10 +108,13 @@ def _wait_for_checkpoint(path: str, poll_sec: float) -> None:
 def main() -> None:
     args = parse_args()
     device = pick_device(args.device)
+    # Keep the raw spec string alongside the parsed spec — parallel mode needs
+    # to ship the string to worker processes for picker reconstruction.
+    raw_specs = [s.strip() for s in args.baselines.split(",") if s.strip()]
     specs = _parse_specs(args.baselines)
     if not specs:
         raise SystemExit("no baselines configured")
-    baseline_pickers = [(s, build_player(s)) for s in specs]
+    baseline_pickers = [(raw, s, build_player(s)) for raw, s in zip(raw_specs, specs)]
     out_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint_path).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = out_dir / "eval_results.jsonl"
@@ -127,13 +138,28 @@ def main() -> None:
         # the baselines we have anchor Elos for. Fed to implied_elo at the end
         # of the cycle.
         elo_matches: list[tuple[float, float, int]] = []
-        for spec_idx, (spec, baseline_picker) in enumerate(baseline_pickers):
+        for spec_idx, (raw_spec, spec, baseline_picker) in enumerate(baseline_pickers):
             t0 = time.perf_counter()
-            res = play_match_pickers(
-                model_picker, baseline_picker,
-                n_games=args.n_games,
-                seed=args.seed + epoch_tag * 1000 + spec_idx,
-            )
+            match_seed = args.seed + epoch_tag * 1000 + spec_idx
+            if args.n_workers > 1:
+                # Parallel: spawn pool, each worker reloads model from disk
+                # and reconstructs the opponent picker from `raw_spec`.
+                res = play_match_parallel(
+                    checkpoint_path=args.checkpoint_path,
+                    opp_spec=raw_spec,
+                    n_games=args.n_games,
+                    seed=match_seed,
+                    n_workers=args.n_workers,
+                    sims=args.sims,
+                    c_puct=args.c_puct,
+                    device=str(device),
+                )
+            else:
+                res = play_match_pickers(
+                    model_picker, baseline_picker,
+                    n_games=args.n_games,
+                    seed=match_seed,
+                )
             dt = time.perf_counter() - t0
             key_ = _baseline_log_key(spec)
             log[f"eval/{key_}_winrate"] = res.win_rate
