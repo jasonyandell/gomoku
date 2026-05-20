@@ -218,3 +218,24 @@ consistent heading so future sessions can scan recent changes with simple tools.
   ways: (a) bounces as predicted, eventually fails to recover → validates
   the theory and argues strongly for items #5-#6; (b) tightens
   asymptotically with smaller arcs → theory over-stated at this scale.
+
+## [2026-05-20] notebook | az-recipe-160k run ended at e5000
+
+- Run stopped by user-requested kill at exactly e5000 (early from natural
+  e8560 endpoint — data was already conclusive). Final state: pl=0.293,
+  vl=0.035, plies=59.2, model_elo bouncing 1290-1519 in the last 5 evals.
+- 5 explore-then-consolidate arcs across e3041-e4924. Peak model_elo
+  1718 at e3881 (perfect sweep of random + heuristic + lookahead2).
+- Jason's "buffer-composition feedback causes arcs" hypothesis partially
+  validated: arcs DID happen, DID broaden over time (5th arc the
+  broadest weakness, heuristic-specific lineage drift visible), but the
+  "eventually doesn't recover" branch did NOT materialize — every arc
+  recovered, even the broadest one.
+- Filed full run-end SUMMARY in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) with arc table, validated/
+  refuted/partially-supported hypotheses, and the case for the next run's
+  design choices. Most informative single next-run experiment: lockstep
+  + 5M buffer + random opening moves (the three changes most directly
+  aimed at the failure mechanisms we observed).
+- Deleted the 15-min check-in cron (job 43ad02e9). Next session that
+  spawns a check-in cron should start fresh.

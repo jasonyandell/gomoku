@@ -1963,3 +1963,142 @@ Connecting to [topics/az-at-scale-vs-laptop.md](wiki/topics/az-at-scale-vs-lapto
 this is the laptop-scale failure mode the topic page predicts — short
 games + per-version concentration combining to make exploration arcs
 self-reinforcing in a way Google's scale would smooth over.
+
+## Run end: az-recipe-160k stopped at e5000 (2026-05-20)
+
+Run `9x9-sweep-az-recipe-160k` (wandb id `sppjo3z5`) stopped by
+user-requested kill at exactly e5000 — early termination from the
+natural e8560 end-point because the data was already conclusive.
+
+### Final-state metrics
+
+```
+epoch        : 5000 / 8560     (stopped early per Jason)
+games        : 160,000         (effectively 159,968 since e0-3559 were resumed from)
+wall-clock   : ~22 hours total run time
+final pl     : 0.293           ← just above run's all-time floor of 0.27 (e3984)
+final vl     : 0.035           ← just above floor of 0.027
+final plies  : 59.2            ← long-game regime
+final age    : 48              ← steady-state equilibrium
+```
+
+### Final eval sweep (e4990, last full cycle before kill)
+
+| baseline | result | anchor |
+|---|---|---:|
+| random | 100% (20W-0L-0D) | 0 |
+| heuristic | 60% (10W-6L-4D) | 800 |
+| lookahead:depth=2 | 80% | 1200 |
+| lookahead:depth=4 | 40% (with some losses) | 1500 |
+| **model_elo** | **1290** (post-arc dip cycle) | |
+
+Best eval of the run was e3881 with model_elo=1718 (perfect sweep of
+random + heuristic + lookahead2, only 1 loss to lookahead4). The model
+visited that peak twice and consolidated near it three times.
+
+### The full arc story (5 explore-then-consolidate cycles)
+
+| arc | epoch range | peak pl | peak vl | consolidation result | post-arc model_elo |
+|----:|---|---:|---:|---|---:|
+| 1st | e3041-e3265 | 0.58 | 0.094 | back to floor 0.36, plies recovered | 1665 |
+| 2nd | e3441-e3500 | 0.55 | 0.094 | back to floor 0.27, plies recovered | **1718** (peak) |
+| 3rd | e4093-e4150 | 0.41 | 0.056 | back to floor 0.27, plies recovered | 1555 |
+| 4th | e4252-e4468 | **0.59** | 0.094 | back to ~0.30, plies recovered | 1531 |
+| 5th | e4664-e4924 | 0.47 (stalled) | 0.080 | back to **0.293**, plies recovered | 1290-1444 |
+
+### What this run validates / refutes
+
+**Validated:**
+- AlphaZero recipe (τ_final=0.1, log-PUCT, 1.5M buffer, dirichlet α=0.13)
+  reliably breaks fast-attack collapse and learns real 9×9 freestyle
+  gomoku from scratch. First time in this project.
+- Eval setup (n=20 vs 4 fixed-Elo anchors + multiprocess parallel) gives
+  a usable single-number strength signal (`model_elo`) that scales with
+  real model strength.
+- The cross-game BFS-vectorized MCTS descent (Exp 9 / commit `64551c8`)
+  is the right perf architecture for our scale.
+- Jason's calibration that cycle time scales super-linearly with plies
+  played out exactly as predicted, twice (during defense learning, then
+  again across each arc).
+
+**Refuted / weakened:**
+- The subagent's "2-3× speedup from 1 worker × big batch + torch.compile"
+  estimate. Production parallelism dominated the bench-projected numbers.
+  Lesson banked in `project_perf_bench_lesson` + the
+  `mcts-perf-ceiling` 2026-05-20 update.
+- The hypothesis that exploration arcs would shrink asymptotically (4th
+  and 5th arcs were as deep as the 1st — the model is bouncing in a
+  band, not converging to a fixed strength).
+- The "eventually it doesn't recover" half of Jason's prediction — the
+  5th arc was the broadest weakness (heuristic + lookahead2 losses,
+  model_elo dipped to 1215) but the model fully recovered to pl=0.29
+  by e5000. Five for five on consolidations.
+
+**Partially supported:**
+- Buffer-composition feedback IS a real mechanism (the arcs DID happen,
+  they DID broaden over time, heuristic-specific lineage drift WAS
+  observed), but it didn't break training catastrophically at this run
+  length. The system has more robustness budget than the worst-case
+  hypothesis predicted.
+
+### Strength signal: was the model actually strong by the end?
+
+The last few eval cycles (e4965-e4990) show:
+- random: 100% across all five cycles
+- heuristic: 57-75% with 0-6 losses (variance high)
+- lookahead2: 68-92% (varies between perfect-sweep cycles and high-draw cycles)
+- lookahead4: 40-82% (high variance, sometimes the model wins big, sometimes loses)
+- model_elo: 1290-1519 band (wider than the mid-run 1500-1700 peak band)
+
+By the end, the model is **noisier but not weaker** than its mid-run
+peak. The arcs widened the variance envelope. Individual checkpoints
+near e3881 (model_elo=1718) are probably stronger than the e5000 final
+state — recommend retaining `epoch3881.pt` if it's still in checkpoints,
+otherwise use the model_elo wandb chart to identify the highest-elo
+saved checkpoint.
+
+### What this run argues for in the next-run config
+
+Re-stating from the [Next-run config sketches](#next-run-config-sketches---collected-for-re-assessment-2026-05-20)
+section above, with run-end data as evidence:
+
+1. **Lockstep + 5M buffer**: directly addresses the buffer-composition
+   feedback that caused the arcs. The 5th arc happening *broader* than
+   the 4th suggests we'd see continued widening of the variance
+   envelope if we kept this recipe running. Lockstep + bigger buffer
+   are the laptop-scale approximations of Google's per-version
+   smoothing.
+2. **Random opening moves**: would break the lineage-drift toward
+   heuristic-loss specialization. The recurring "heuristic takes losses
+   while lookahead2 stays strong" pattern is direct evidence the model
+   is specializing AWAY from naive opponents.
+3. **Past-checkpoint opponent mix**: same purpose — inject non-current-
+   arc content into self-play.
+4. **Larger model (medium 1.06M vs current small 324k)**: the small
+   model may simply be at its capacity. With current recipe at floor
+   pl=0.27 it has nowhere lower to go without overfitting. Medium has
+   more room for strategy encoding.
+5. **Sims 800 vs 400**: would give MCTS time to look further during
+   exploration arcs, possibly tightening the consolidation depth.
+
+The most informative single experiment for the next run would probably
+be **lockstep + 5M buffer + random opening moves** — the three changes
+most directly aimed at the failure mechanism we observed. Add medium
+model + sims=800 if compute budget allows.
+
+### Checkpoints worth retaining
+
+- `epoch3881.pt` (if still on disk): the model_elo=1718 peak — best
+  single checkpoint of the run by eval. Likely overwritten by the
+  --keep-last-n=3 policy by now; check `sweep_runs/az-recipe-160k/
+  checkpoints/` for what survives.
+- `latest.pt`: the e5000 final state (pl=0.293) — embeds the replay
+  buffer for resume, useful evidence for the next-run buffer-warm-start
+  experiment.
+- `worker_weights.pt`: lean inference-only copy of the e5000 model.
+- HF backup at `https://huggingface.co/jasonyandell/gomoku-9x9` has
+  `az-recipe-160k-e3409-perf-checkpoint.pt` — pre-perf-detour snapshot.
+
+Backup directory `sweep_runs/az-recipe-160k.bak-20260520-0921/` also
+preserves the e3409 state. Can be deleted once we're confident the
+next run isn't going to need a fallback.
