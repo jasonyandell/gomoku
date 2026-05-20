@@ -15,6 +15,7 @@ history.
 | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
 | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and aren't. Don't re-port "v2 storage" — we're already there. |
 | [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | Why the wrinkles in our run (exploration arcs, plies swings, age oscillations) are laptop-scale artifacts, not training bugs. |
+| [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | Next run's design: per-version uniformity via wave-of-lockstep + greedy fill. Implementation plan and held-back levers. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
 
 ## Current Synthesis

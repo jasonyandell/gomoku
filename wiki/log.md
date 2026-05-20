@@ -239,3 +239,19 @@ consistent heading so future sessions can scan recent changes with simple tools.
   aimed at the failure mechanisms we observed).
 - Deleted the 15-min check-in cron (job 43ad02e9). Next session that
   spawns a check-in cron should start fresh.
+
+## [2026-05-20] design | wave-of-lockstep design page added
+
+- Jason and I talked through the next-run design. Locked-in choices:
+  8 workers × 8 games per worker per wave, greedy-fill barrier with
+  finish-on-old-model semantics, K=1 SGD step per wave, 5M buffer,
+  natural openings (no randomization), temperature unchanged from
+  `az-recipe-160k`.
+- Filed full design at
+  [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md):
+  hypothesis, architecture diagram, property invariants, implementation
+  plan (trainer barrier, worker greedy-fill state machine, new Cell
+  WL1, W&B metrics), throughput expectations, held-back levers.
+- Indexed from [index.md](index.md) under "Start Here".
+- Next session picks this up to implement. Sanity test on 50 epochs / 4
+  workers before launching full WL1 run.
