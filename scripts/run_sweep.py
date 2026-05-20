@@ -75,6 +75,11 @@ CELLS: dict[str, Cell] = {
     "D": Cell("D-K1-buf500k",  sgd_per_game=1.0, buffer_size=500_000),
     "E": Cell("E-K2-buf500k",  sgd_per_game=2.0, buffer_size=500_000),
     "F": Cell("F-K4-buf500k",  sgd_per_game=4.0, buffer_size=500_000),
+    # AZ-recipe long run: K=1 + 1.5M buffer + stem_padding=3 + tau_final=0.1
+    # + AGZ log-PUCT (all defaults in train.py post-recipe-import). Target is
+    # 160k SGD steps; at K=1 and worker_min_games=32 that's 5000 cycles.
+    "Z": Cell("az-recipe-160k", sgd_per_game=1.0, buffer_size=1_500_000,
+              lr=5e-4, epochs=5000),
 }
 
 
