@@ -108,7 +108,7 @@ CELLS: dict[str, Cell] = {
     "Z": Cell("az-recipe-160k", sgd_per_game=1.0, buffer_size=1_500_000,
               size="small", stem_padding=1, n_simulations=400,
               lr=5e-4, epochs=5000,
-              n_workers=4, wave_size=64, games_per_batch=8,
+              n_workers=8, wave_size=64, games_per_batch=8,
               compile_workers=False),
     # AZ-recipe long run with constant-age ingest. Same recipe as Z but uses
     # positions-based ingest + SGD so buffer turnover stays stable when
