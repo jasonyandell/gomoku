@@ -254,6 +254,17 @@ def parse_args() -> argparse.Namespace:
                         "Recommended value: target_games * mean_plies * 8 augs "
                         "(e.g. 32 * 50 * 8 = 12800 for the AZ-mini recipe). "
                         "Overrides --worker-min-games when set (> 0).")
+    p.add_argument("--wave-mode", action="store_true",
+                   help="Distributed wave-lockstep mode. Workers write records under "
+                        "worker-input-dir/v{version}/{worker}/ and the trainer waits "
+                        "for --wave-games-per-worker games from each --wave-workers "
+                        "worker before advancing to the next model version.")
+    p.add_argument("--wave-workers", type=int, default=0,
+                   help="Expected worker count for --wave-mode. Workers are assumed "
+                        "to be named w0..w{N-1}, matching scripts/run_sweep.py.")
+    p.add_argument("--wave-games-per-worker", type=int, default=0,
+                   help="Per-worker barrier size for --wave-mode. Defaults to "
+                        "--worker-min-games / --wave-workers when possible.")
     p.add_argument("--worker-poll-sec", type=float, default=0.5,
                    help="Sleep this long between dir scans when waiting for workers.")
     p.add_argument("--device", type=str, default=None, help="torch device override (e.g. cpu, mps)")
@@ -359,7 +370,20 @@ def main() -> None:
     worker_input_dir = Path(args.worker_input_dir) if args.worker_input_dir else None
     if worker_input_dir is not None:
         worker_input_dir.mkdir(parents=True, exist_ok=True)
-        if args.worker_min_positions > 0:
+        if args.wave_mode:
+            if args.wave_workers <= 0:
+                raise SystemExit("--wave-mode requires --wave-workers > 0")
+            if args.wave_games_per_worker <= 0:
+                target_games = args.worker_min_games or args.games_per_epoch
+                if target_games <= 0 or target_games % args.wave_workers != 0:
+                    raise SystemExit("--wave-mode requires --wave-games-per-worker, "
+                                     "or an even --worker-min-games/--games-per-epoch "
+                                     "split across --wave-workers")
+                args.wave_games_per_worker = target_games // args.wave_workers
+            print(f"distributed wave mode: ingest from {worker_input_dir} "
+                  f"(barrier {args.wave_games_per_worker} games x "
+                  f"{args.wave_workers} workers per model version)")
+        elif args.worker_min_positions > 0:
             print(f"distributed mode: ingest from {worker_input_dir} "
                   f"(target {args.worker_min_positions} positions/epoch — constant-age mode)")
         else:
@@ -426,6 +450,179 @@ def main() -> None:
                 if target_positions <= 0 and target_games > 0 and n_games >= target_games:
                     return out_records
 
+    def _normalize_wave_worker_id(raw: object) -> str:
+        """Normalize path/payload worker ids to the run_sweep style: w0, w1, ..."""
+        wid = str(raw)
+        if wid.startswith("worker"):
+            wid = wid[len("worker"):]
+        if wid.isdigit():
+            wid = f"w{wid}"
+        return wid
+
+    def _wave_version_from_dir(path: Path) -> int | None:
+        name = path.name
+        if not name.startswith("v"):
+            return None
+        try:
+            return int(name[1:])
+        except ValueError:
+            return None
+
+    def _wave_files_for_version(version: int) -> list[Path]:
+        """Return finalized worker payloads for a model-version tile."""
+        version_dir = worker_input_dir / f"v{version}"
+        if not version_dir.exists():
+            return []
+        return sorted(
+            (p for p in version_dir.rglob("*.pt") if p.is_file()),
+            key=lambda p: (p.stat().st_mtime, str(p)),
+        )
+
+    def _load_wave_payload(path: Path) -> dict | None:
+        """Load a wave payload, tolerating a just-renamed file briefly."""
+        try:
+            return torch.load(path, map_location="cpu", weights_only=False)
+        except (OSError, EOFError, RuntimeError):
+            return None
+
+    def _delete_wave_payload(path: Path) -> None:
+        try:
+            path.unlink()
+        except OSError:
+            return
+        # Trim now-empty worker/version dirs so stale scans stay cheap.
+        for parent in (path.parent, path.parent.parent):
+            if parent == worker_input_dir:
+                break
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+
+    def _records_from_wave_payload(data: dict) -> list:
+        recs = data.get("records", [])
+        return list(recs)
+
+    def _summarize_wave_payloads(payloads: dict[Path, dict]) -> tuple[dict[str, int], int, int]:
+        """Return games-per-worker, total games, and total training examples."""
+        counts: dict[str, int] = {}
+        total_games = 0
+        total_positions = 0
+        for path, data in payloads.items():
+            wid = _normalize_wave_worker_id(data.get("worker_id", path.parent.name))
+            recs = _records_from_wave_payload(data)
+            n_games = int(data.get("n_games", len(recs)))
+            n_examples = int(data.get("n_examples", sum(len(r.examples) for r in recs)))
+            counts[wid] = counts.get(wid, 0) + n_games
+            total_games += n_games
+            total_positions += n_examples
+        return counts, total_games, total_positions
+
+    def _drain_wave_version(version: int, payloads: dict[Path, dict] | None = None
+                            ) -> tuple[list, list[tuple[int, list]], int, int]:
+        """Ingest all currently visible files for one version and delete them.
+
+        Returns flat records, version-tagged record groups, game count, and
+        position count. The caller is responsible for adding groups to the
+        replay buffer with the returned version tag.
+        """
+        payloads = dict(payloads or {})
+        for path in _wave_files_for_version(version):
+            if path not in payloads:
+                data = _load_wave_payload(path)
+                if data is not None:
+                    payloads[path] = data
+        out_records: list = []
+        out_groups: list[tuple[int, list]] = []
+        total_games = 0
+        total_positions = 0
+        for path, data in sorted(payloads.items(), key=lambda item: str(item[0])):
+            recs = _records_from_wave_payload(data)
+            if recs:
+                out_records.extend(recs)
+                out_groups.append((version, recs))
+            total_games += int(data.get("n_games", len(recs)))
+            total_positions += int(data.get("n_examples", sum(len(r.examples) for r in recs)))
+            _delete_wave_payload(path)
+        return out_records, out_groups, total_games, total_positions
+
+    def _drain_stale_wave_versions(current_version: int) -> tuple[list, list[tuple[int, list]], dict]:
+        """Drain late greedy extras from older version dirs without blocking."""
+        if worker_input_dir is None or not worker_input_dir.exists():
+            return [], [], {}
+        out_records: list = []
+        out_groups: list[tuple[int, list]] = []
+        late_games = 0
+        late_positions = 0
+        versions: list[int] = []
+        for path in worker_input_dir.iterdir():
+            if not path.is_dir():
+                continue
+            version = _wave_version_from_dir(path)
+            if version is not None and version < current_version:
+                versions.append(version)
+        for version in sorted(versions):
+            recs, groups, n_games, n_positions = _drain_wave_version(version)
+            out_records.extend(recs)
+            out_groups.extend(groups)
+            late_games += n_games
+            late_positions += n_positions
+        metrics = {
+            "wave/late_games_ingested": late_games,
+            "wave/late_positions_ingested": late_positions,
+        }
+        return out_records, out_groups, metrics
+
+    def _ingest_worker_wave(version: int) -> tuple[list, list[tuple[int, list]], dict]:
+        """Block until the current version has enough games from every worker."""
+        if args.wave_workers <= 0 or args.wave_games_per_worker <= 0:
+            raise ValueError("wave mode requires wave worker count and games per worker")
+        expected = [f"w{i}" for i in range(args.wave_workers)]
+        payloads: dict[Path, dict] = {}
+        first_done_at: float | None = None
+        wait_start = time.time()
+        counts = {wid: 0 for wid in expected}
+        total_games = 0
+        total_positions = 0
+
+        while True:
+            for path in _wave_files_for_version(version):
+                if path in payloads:
+                    continue
+                data = _load_wave_payload(path)
+                if data is not None:
+                    payloads[path] = data
+
+            counts, total_games, total_positions = _summarize_wave_payloads(payloads)
+            done = [counts.get(wid, 0) >= args.wave_games_per_worker for wid in expected]
+            if any(done) and first_done_at is None:
+                first_done_at = time.time()
+            if all(done):
+                break
+            time.sleep(args.worker_poll_sec)
+
+        wait_done = time.time()
+        records, groups, drained_games, drained_positions = _drain_wave_version(version, payloads)
+        total_games = drained_games
+        total_positions = drained_positions
+        per_worker_values = [counts.get(wid, 0) for wid in expected]
+        metrics = {
+            "wave/version": version,
+            "wave/games_in_tile": total_games,
+            "wave/positions_in_tile": total_positions,
+            "wave/games_per_worker_min": min(per_worker_values) if per_worker_values else 0,
+            "wave/games_per_worker_max": max(per_worker_values) if per_worker_values else 0,
+            "wave/games_per_worker_mean": float(np.mean(per_worker_values)) if per_worker_values else 0.0,
+            "wave/greedy_extras_count": max(0, total_games - args.wave_workers * args.wave_games_per_worker),
+            "wave/wait_for_slowest_s": (
+                wait_done - first_done_at if first_done_at is not None else 0.0
+            ),
+            "wave/total_s": wait_done - wait_start,
+        }
+        for wid in expected:
+            metrics[f"wave/games_per_worker/{wid}"] = counts.get(wid, 0)
+        return records, groups, metrics
+
     def _sweep_orphans() -> None:
         """Delete stale .tmp files and unrecognized .pt files in checkpoint dir
         + worker_input_dir. Anything older than --orphan-sweep-age-sec that
@@ -451,7 +648,7 @@ def main() -> None:
             except OSError:
                 pass
         if worker_input_dir is not None and worker_input_dir.exists():
-            for f in worker_input_dir.iterdir():
+            for f in worker_input_dir.rglob("*"):
                 if not f.is_file():
                     continue
                 # In the records dir, the only valid live files are *.pt batches
@@ -519,8 +716,16 @@ def main() -> None:
 
         # --- self-play (in-process) or ingest (workers) ---
         gen_start = time.time()
+        record_groups: list[tuple[int, list]] = []
+        wave_metrics: dict = {}
         if worker_input_dir is not None:
-            if args.worker_min_positions > 0:
+            if args.wave_mode:
+                stale_records, stale_groups, stale_metrics = _drain_stale_wave_versions(epoch)
+                wave_records, wave_groups, wave_metrics = _ingest_worker_wave(epoch)
+                records = stale_records + wave_records
+                record_groups = stale_groups + wave_groups
+                wave_metrics = {**stale_metrics, **wave_metrics}
+            elif args.worker_min_positions > 0:
                 records = _ingest_worker_batches(target_positions=args.worker_min_positions)
             else:
                 records = _ingest_worker_batches(
@@ -563,8 +768,15 @@ def main() -> None:
         gen_time = time.time() - gen_start
 
         n_examples_new = sum(len(r.examples) for r in records)
-        for r in records:
-            buffer.add(r.examples)
+        if record_groups:
+            for version, group_records in record_groups:
+                buffer.set_weight_version(version)
+                for r in group_records:
+                    buffer.add(r.examples)
+            buffer.set_weight_version(epoch)
+        else:
+            for r in records:
+                buffer.add(r.examples)
 
         plies_mean = float(np.mean([r.plies for r in records])) if records else 0.0
         # Plies-distribution percentiles for the new records — quick check on
@@ -643,6 +855,7 @@ def main() -> None:
                 steps_this_cycle / n_positions_this_cycle if n_positions_this_cycle else 0.0
             ),
             "train/positions_this_cycle": n_positions_this_cycle,
+            **wave_metrics,
             **train_metrics,
             # Buffer-shape snapshot: distribution over n_stones buckets + z mix.
             # Computed every cycle so wandb shows shape evolution over time.
@@ -699,6 +912,14 @@ def main() -> None:
             f"age={log.get('buffer/age_p50', 0):.0f} "
             f"({epoch_time:.1f}s: gen={gen_time:.1f}s train={train_time:.1f}s)"
         )
+        if args.wave_mode and wave_metrics:
+            msg += (
+                f" wave[v{wave_metrics.get('wave/version', epoch)} "
+                f"tile={wave_metrics.get('wave/games_in_tile', 0)} "
+                f"workers={wave_metrics.get('wave/games_per_worker_min', 0)}-"
+                f"{wave_metrics.get('wave/games_per_worker_max', 0)} "
+                f"extras={wave_metrics.get('wave/greedy_extras_count', 0)}]"
+            )
         wr_bits = [
             f"{key[3:]}={log[f'eval/{key}_winrate']:.0%}"
             for spec in fast_specs + slow_specs

@@ -2102,3 +2102,89 @@ model + sims=800 if compute budget allows.
 Backup directory `sweep_runs/az-recipe-160k.bak-20260520-0921/` also
 preserves the e3409 state. Can be deleted once we're confident the
 next run isn't going to need a fallback.
+
+## 2026-05-20 — WL1 implementation smoke
+
+Implemented the wave-of-lockstep plumbing in worktree `codex/wl1-lockstep`.
+This is an implementation receipt, not a strength claim.
+
+Changes:
+- Trainer now has `--wave-mode`, `--wave-workers`, and
+  `--wave-games-per-worker`. In wave mode it scans
+  `worker-input-dir/v{version}/worker{worker_id}/*.pt`, waits until every
+  expected worker has at least `G` completed games for the current version,
+  ingests the whole visible tile, then advances the model version.
+- Worker now has `--wave-mode`. It reads the checkpoint `epoch` as
+  `model_version`, writes one file per completed game under the versioned
+  outbox path, generates the first `G = --games-per-batch` games for a
+  version, then greedily fills one extra game at a time until newer weights
+  are available. It only reloads at game boundaries.
+- `scripts/run_sweep.py` has Cell `WL1`:
+  `WL1-wave-lockstep-5M-buffer`, small model, 400 sims, stem padding 3,
+  8 workers x 8 games, 5M replay buffer, AGZ PUCT/Dirichlet defaults,
+  temperature drop at move 30, `temperature_final=0.1`, and
+  `sgd_per_position=0.0025`.
+
+Smoke test:
+- Command shape: 50 epochs, 4 workers, wave mode, `G=8`, tiny model,
+  CPU, `n_simulations=1`, `wave_size=1`, 1 SGD step per wave, replay
+  buffer capacity 1.3M so all version tags would survive to `latest.pt`.
+- Artifact paths:
+  `sweep_logs/wl1-smoke-50x4-fullbuffer/trainer.log` and
+  `sweep_runs/wl1-smoke-50x4-fullbuffer/checkpoints/latest.pt`.
+- Barrier receipt: 50 wave lines parsed, versions `0..49` all present.
+  Minimum visible tile size was 38 games, maximum was 54 games, total
+  greedy extras across the smoke were 685. Every parsed wave had worker
+  minimum >= 8, so the barrier did not slip.
+- Replay-buffer tag receipt: final replay buffer size was 1,153,416
+  positions; `weight_version` contained all versions `0..49` with 50
+  unique tags. Per-version position counts ranged from 17,904 to 25,976.
+
+Verification:
+- `python -m py_compile gomoku/train.py gomoku/selfplay_worker.py scripts/run_sweep.py`
+- `python -m gomoku.train --help`
+- `python -m gomoku.selfplay_worker --help`
+- `python scripts/run_sweep.py --list`
+- `git diff --check`
+- `pytest` -> 60 passed in 17.82s
+
+## 2026-05-20 — WL1 matched-throughput read
+
+After the implementation smoke, we ran a short apples-to-apples throughput
+check against the previous `az-recipe-160k` generation config:
+`small`, `stem_padding=1`, 400 sims, `wave_size=64`, MPS, 8 workers.
+This used wave mode for only 3 epochs, so it is a throughput sanity check,
+not a run-quality result.
+
+Matched WL1 benchmark:
+- Artifact path: `sweep_logs/wl1-apples-zconfig-3epoch/trainer.log`.
+- Epochs: 3.
+- Games ingested: 250.
+- Generation time: 31.9s.
+- Generation throughput: 7.84 games/s.
+- Wall throughput: 6.36 games/s.
+- Mean plies: 29.2.
+- Approximate training-position throughput: 1,817 positions/s.
+- Average visible tile: 72.7 games with greedy extras.
+
+`az-recipe-160k` comparison:
+- First 100 epochs: 12.73 games/s, but games were much shorter at 17.4
+  plies; approximate training-position throughput was 1,773 positions/s.
+- First 3 epochs: 4.29 games/s, 30.7 plies, approximate
+  training-position throughput 1,051 positions/s.
+- Last 50 epochs: 2.37 games/s, 60.2 plies, approximate
+  training-position throughput 1,141 positions/s.
+
+Interpretation:
+- By positions/s, wave-lockstep under the old Z-style generation config
+  appears comparable to, or slightly faster than, the previous continuous
+  setup. The barrier itself did not show a meaningful throughput tax.
+- This strengthens the WL1 hypothesis operationally: the next run can test
+  cleaner per-version buffer tiles without paying an obvious coordination
+  penalty.
+- What remains unproven is the training-dynamics claim: whether cleaner
+  per-version tiles reduce the exploration/consolidation arcs and improve
+  fixed-baseline strength.
+- If WL1 still arcs despite clean tiles, the next suspects should move away
+  from raw per-version under-sampling and toward opening monoculture,
+  capacity, search depth, or greedy-extra bias.

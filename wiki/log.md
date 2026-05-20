@@ -255,3 +255,36 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Indexed from [index.md](index.md) under "Start Here".
 - Next session picks this up to implement. Sanity test on 50 epochs / 4
   workers before launching full WL1 run.
+
+## [2026-05-20] implementation | WL1 wave-lockstep landed and smoked
+
+- Implemented the trainer wave barrier (`--wave-mode --wave-workers
+  --wave-games-per-worker`) and worker greedy-fill state machine
+  (`--wave-mode`) in worktree `codex/wl1-lockstep`.
+- Added `WL1` to [../scripts/run_sweep.py](../scripts/run_sweep.py):
+  small model, 400 sims, stem padding 3, 8 workers x 8 games, 5M buffer,
+  AGZ PUCT/Dirichlet defaults, temperature drop at move 30, and
+  `sgd_per_position=0.0025`.
+- Smoke-tested 50 epochs / 4 workers with `G=8` and a 1.3M replay buffer.
+  Parsed 50 wave tiles for versions `0..49`; each wave met worker minimum
+  >= 8, tile sizes ranged 38-54 games, and final replay-buffer
+  `weight_version` tags contained all versions `0..49`.
+- Filed the detailed receipt in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) under "2026-05-20 — WL1
+  implementation smoke".
+
+## [2026-05-20] benchmark | WL1 matched-throughput read
+
+- Ran a short apples-to-apples throughput check with the previous
+  `az-recipe-160k` generation config: small model, stem padding 1, 400
+  sims, wave size 64, MPS, 8 workers.
+- The 3-epoch wave-mode check ingested 250 games in 31.9s of generation
+  time: 7.84 games/s, 1,817 approximate training positions/s, average
+  visible tile 72.7 games with greedy extras.
+- Compared against `az-recipe-160k`, this is comparable by positions/s
+  to the early continuous run (1,773 positions/s over first 100 epochs)
+  and stronger than the first-3-epoch and late-run slices. The barrier
+  itself did not show a meaningful throughput tax.
+- Filed the interpretation in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) under "2026-05-20 — WL1
+  matched-throughput read".

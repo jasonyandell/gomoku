@@ -54,9 +54,12 @@ class Cell:
     batch_size: int = 512
     lr: float = 1e-3
     size: str = "medium"
+    c_puct: float = 1.25
+    c_puct_base: float = 19652.0
     dirichlet_alpha: float = 0.13
     dirichlet_eps: float = 0.25
     temperature_moves: int = 10
+    temperature_final: float = 0.1
     n_workers: int = 4
     epochs: int = 100
     save_every: int = 1
@@ -75,6 +78,10 @@ class Cell:
     # (4 procs share one MPS stream → no parallel speedup; 1 proc × N games
     # is faster than N procs × 1 game for the same data).
     games_per_batch: int = 8
+    # Wave-lockstep mode is a per-version tile barrier: workers generate a
+    # tile against one published model, the trainer ingests that tile, then
+    # publishes the next model. Only cells that opt in should receive the flag.
+    wave_mode: bool = False
     # Apply torch.compile to worker models (eval-only). ~1.3-1.5x forward
     # speedup at batch>=32 for the small model on MPS.
     compile_workers: bool = False
@@ -121,6 +128,21 @@ CELLS: dict[str, Cell] = {
                buffer_size=1_500_000, size="small", stem_padding=1,
                n_simulations=400, lr=5e-4, epochs=5000,
                worker_min_positions=12800, sgd_per_position=0.0025),
+    # WL1: wave-lockstep, 5M buffer. First test of the per-version uniformity
+    # hypothesis from wiki/topics/wave-of-lockstep-design.md: 8 workers each
+    # produce an 8-game tile against one model version, then the trainer steps
+    # and publishes the next version. Existing sgd_per_position convention is
+    # K=1 per game at ~50 plies with D4 augmentation:
+    #   64 games * 50 plies * 8 aug = 25,600 positions/tile
+    #   64 SGD steps / 25,600 positions = 0.0025
+    "WL1": Cell("WL1-wave-lockstep-5M-buffer", sgd_per_game=1.0,
+                buffer_size=5_000_000, games_per_epoch=64,
+                size="small", stem_padding=3, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025),
 }
 
 
@@ -148,9 +170,12 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         "--batch-size", str(cell.batch_size),
         "--lr", str(cell.lr),
         "--replay-buffer-size", str(cell.buffer_size),
+        "--c-puct", str(cell.c_puct),
+        "--c-puct-base", str(cell.c_puct_base),
         "--dirichlet-alpha", str(cell.dirichlet_alpha),
         "--dirichlet-eps", str(cell.dirichlet_eps),
         "--temperature-moves", str(cell.temperature_moves),
+        "--temperature-final", str(cell.temperature_final),
         "--worker-input-dir", str(dirs["records_dir"]),
         "--worker-weights-path", str(dirs["worker_weights"]),
         "--worker-min-games", str(cell.games_per_epoch),
@@ -169,6 +194,12 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         cmd += ["--worker-min-positions", str(cell.worker_min_positions)]
     if cell.sgd_per_position is not None:
         cmd += ["--sgd-per-position", str(cell.sgd_per_position)]
+    if cell.wave_mode:
+        cmd += [
+            "--wave-mode",
+            "--wave-workers", str(cell.n_workers),
+            "--wave-games-per-worker", str(cell.games_per_batch),
+        ]
     return cmd
 
 
@@ -181,12 +212,17 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
         "--games-per-batch", str(cell.games_per_batch),
         "--n-simulations", str(cell.n_simulations),
         "--wave-size", str(cell.wave_size),
+        "--c-puct", str(cell.c_puct),
+        "--c-puct-base", str(cell.c_puct_base),
         "--temperature-moves", str(cell.temperature_moves),
+        "--temperature-final", str(cell.temperature_final),
         "--dirichlet-alpha", str(cell.dirichlet_alpha),
         "--dirichlet-eps", str(cell.dirichlet_eps),
         "--seed", str(seed),
         *cell.extra_worker_args,
     ]
+    if cell.wave_mode:
+        cmd += ["--wave-mode"]
     if cell.compile_workers:
         cmd += ["--compile"]
     return cmd

@@ -94,6 +94,13 @@ def parse_args() -> argparse.Namespace:
                         "to single-process: each cycle's games are produced by "
                         "exactly one model version. Trades worker idle-time for "
                         "clean per-version data stratification.")
+    p.add_argument("--wave-mode", action="store_true",
+                   help="Wave-lockstep greedy-fill mode. Write one file per game "
+                        "under output-dir/v{version}/worker{worker_id}/game{seq}.pt, "
+                        "generate --games-per-batch games for each loaded version, "
+                        "then keep filling extra games on that version until newer "
+                        "published weights are available. Supersedes "
+                        "--gen-once-per-publish when set.")
     p.add_argument("--compile", action="store_true",
                    help="Apply torch.compile to the loaded model (eval-only). "
                         "Measured ~1.3-1.5x forward-pass speedup at batch sizes "
@@ -121,13 +128,13 @@ def _maybe_compile(model: torch.nn.Module, enabled: bool, worker_id: str) -> tor
         return model
 
 
-def _load_model(weights_path: str, device: torch.device) -> tuple[torch.nn.Module, float]:
-    """Return (model, weights_mtime)."""
+def _load_model(weights_path: str, device: torch.device) -> tuple[torch.nn.Module, float, int]:
+    """Return (model, weights_mtime, version)."""
     while not os.path.exists(weights_path):
         time.sleep(1.0)
-    model, _ = load_checkpoint(weights_path, device=device)
+    model, payload = load_checkpoint(weights_path, device=device)
     model.eval()
-    return model, os.path.getmtime(weights_path)
+    return model, os.path.getmtime(weights_path), int(payload.get("epoch", 0))
 
 
 def _atomic_save(out_dir: Path, worker_id: str, payload: dict) -> Path:
@@ -141,16 +148,82 @@ def _atomic_save(out_dir: Path, worker_id: str, payload: dict) -> Path:
     return final
 
 
+def _worker_dir_name(worker_id: str) -> str:
+    return f"worker{worker_id}"
+
+
+def _next_wave_seq(out_dir: Path, version: int, worker_id: str) -> int:
+    worker_dir = out_dir / f"v{version}" / _worker_dir_name(worker_id)
+    max_seq = 0
+    for path in worker_dir.glob("game*.pt"):
+        stem = path.stem
+        seq_s = stem.removeprefix("game")
+        if seq_s.isdigit():
+            max_seq = max(max_seq, int(seq_s))
+    return max_seq + 1
+
+
+def _atomic_save_wave_game(
+    out_dir: Path,
+    worker_id: str,
+    version: int,
+    seq: int,
+    payload: dict,
+) -> Path:
+    worker_dir = out_dir / f"v{version}" / _worker_dir_name(worker_id)
+    worker_dir.mkdir(parents=True, exist_ok=True)
+    final = worker_dir / f"game{seq:06d}.pt"
+    tmp = worker_dir / f"game{seq:06d}.pt.tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, final)
+    return final
+
+
+def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_games: int):
+    if opp_picker is None:
+        return generate_games(
+            n_games, evaluator,
+            n_simulations=args.n_simulations,
+            c_puct=args.c_puct,
+            c_puct_base=args.c_puct_base,
+            temperature_moves=args.temperature_moves,
+            temperature_final=args.temperature_final,
+            dirichlet_alpha=args.dirichlet_alpha,
+            dirichlet_eps=args.dirichlet_eps,
+            rng=rng,
+            wave_size=args.wave_size,
+            random_opening_moves=args.random_opening_moves,
+        )
+    return generate_games_vs_baseline(
+        n_games, evaluator, opp_picker,
+        n_simulations=args.n_simulations,
+        c_puct=args.c_puct,
+        c_puct_base=args.c_puct_base,
+        temperature_moves=args.temperature_moves,
+        temperature_final=args.temperature_final,
+        dirichlet_alpha=args.dirichlet_alpha,
+        dirichlet_eps=args.dirichlet_eps,
+        rng=rng,
+        wave_size=args.wave_size,
+        model_first_frac=args.model_first_frac,
+        random_opening_moves=args.random_opening_moves,
+    )
+
+
 def main() -> None:
     args = parse_args()
     device = pick_device(args.device)
     print(f"[{args.worker_id}] device={device}", flush=True)
     print(f"[{args.worker_id}] weights={args.weights_path} output={args.output_dir}", flush=True)
 
-    model, weights_mtime = _load_model(args.weights_path, device)
+    model, weights_mtime, model_version = _load_model(args.weights_path, device)
     model = _maybe_compile(model, args.compile, args.worker_id)
     evaluator = make_torch_evaluator(model, device)
-    print(f"[{args.worker_id}] initial weights mtime={weights_mtime:.0f}", flush=True)
+    print(
+        f"[{args.worker_id}] initial weights version={model_version} "
+        f"mtime={weights_mtime:.0f}",
+        flush=True,
+    )
 
     # Opponent picker (None for pure self-play, like train.py does).
     opp_picker = None
@@ -176,6 +249,83 @@ def main() -> None:
     # so we only emit one batch per published weight version.
     last_gen_mtime = 0.0
 
+    if args.wave_mode:
+        games_on_version = 0
+        next_seq = _next_wave_seq(out_dir, model_version, args.worker_id)
+        print(
+            f"[{args.worker_id}] wave-mode G={args.games_per_batch} "
+            f"version={model_version} next_seq={next_seq}",
+            flush=True,
+        )
+
+        while True:
+            # Wave mode reloads only at generation boundaries. Before the
+            # worker has produced its G-game tile, keep filling the current
+            # version even if a newer file appears unexpectedly.
+            try:
+                cur_mtime = os.path.getmtime(args.weights_path)
+            except OSError:
+                cur_mtime = weights_mtime
+            if games_on_version >= args.games_per_batch and cur_mtime > weights_mtime:
+                try:
+                    model, payload = load_checkpoint(args.weights_path, device=device)
+                    model.eval()
+                    model = _maybe_compile(model, args.compile, args.worker_id)
+                    evaluator = make_torch_evaluator(model, device)
+                    weights_mtime = cur_mtime
+                    model_version = int(payload.get("epoch", model_version + 1))
+                    games_on_version = 0
+                    next_seq = _next_wave_seq(out_dir, model_version, args.worker_id)
+                    print(
+                        f"[{args.worker_id}] wave reload version={model_version} "
+                        f"mtime={weights_mtime:.0f} next_seq={next_seq}",
+                        flush=True,
+                    )
+                except Exception as e:
+                    print(f"[{args.worker_id}] wave reload failed ({e}); retrying", flush=True)
+                    time.sleep(args.weights_poll_sec)
+                    continue
+
+            target_games = max(args.games_per_batch - games_on_version, 1)
+            t0 = time.perf_counter()
+            records = _generate_records(args, evaluator, opp_picker, rng, target_games)
+            dt = time.perf_counter() - t0
+            batch_n += 1
+
+            n_examples = sum(len(r.examples) for r in records)
+            paths: list[Path] = []
+            for record in records:
+                seq = next_seq
+                next_seq += 1
+                games_on_version += 1
+                payload = {
+                    "records": [record],
+                    "worker_id": args.worker_id,
+                    "weights_mtime": weights_mtime,
+                    "model_version": model_version,
+                    "version": model_version,
+                    "game_seq": seq,
+                    "n_games": 1,
+                    "n_examples": len(record.examples),
+                    "gen_s": dt / max(len(records), 1),
+                    "batch_gen_s": dt,
+                }
+                paths.append(
+                    _atomic_save_wave_game(out_dir, args.worker_id, model_version, seq, payload)
+                )
+
+            print(
+                f"[{args.worker_id}] wave batch {batch_n}: v{model_version} "
+                f"{len(records)}g {n_examples}ex {dt:.1f}s "
+                f"seq {paths[0].stem if paths else '-'}..{paths[-1].stem if paths else '-'} "
+                f"tile_count={games_on_version}",
+                flush=True,
+            )
+
+            if args.max_batches > 0 and batch_n >= args.max_batches:
+                print(f"[{args.worker_id}] hit max-batches={args.max_batches}, exiting", flush=True)
+                return
+
     while True:
         # 1) reload weights if newer (cheap mtime check)
         try:
@@ -184,12 +334,17 @@ def main() -> None:
             cur_mtime = weights_mtime  # file might be mid-rename
         if cur_mtime > weights_mtime:
             try:
-                model, _ = load_checkpoint(args.weights_path, device=device)
+                model, payload = load_checkpoint(args.weights_path, device=device)
                 model.eval()
                 model = _maybe_compile(model, args.compile, args.worker_id)
                 evaluator = make_torch_evaluator(model, device)
                 weights_mtime = cur_mtime
-                print(f"[{args.worker_id}] reloaded weights mtime={weights_mtime:.0f}", flush=True)
+                model_version = int(payload.get("epoch", model_version + 1))
+                print(
+                    f"[{args.worker_id}] reloaded weights version={model_version} "
+                    f"mtime={weights_mtime:.0f}",
+                    flush=True,
+                )
             except Exception as e:
                 # Trainer might be mid-write; try again next loop.
                 print(f"[{args.worker_id}] reload failed ({e}); retrying", flush=True)
@@ -202,35 +357,7 @@ def main() -> None:
 
         # 2) generate a batch of games
         t0 = time.perf_counter()
-        if opp_picker is None:
-            records = generate_games(
-                args.games_per_batch, evaluator,
-                n_simulations=args.n_simulations,
-                c_puct=args.c_puct,
-                c_puct_base=args.c_puct_base,
-                temperature_moves=args.temperature_moves,
-                temperature_final=args.temperature_final,
-                dirichlet_alpha=args.dirichlet_alpha,
-                dirichlet_eps=args.dirichlet_eps,
-                rng=rng,
-                wave_size=args.wave_size,
-                random_opening_moves=args.random_opening_moves,
-            )
-        else:
-            records = generate_games_vs_baseline(
-                args.games_per_batch, evaluator, opp_picker,
-                n_simulations=args.n_simulations,
-                c_puct=args.c_puct,
-                c_puct_base=args.c_puct_base,
-                temperature_moves=args.temperature_moves,
-                temperature_final=args.temperature_final,
-                dirichlet_alpha=args.dirichlet_alpha,
-                dirichlet_eps=args.dirichlet_eps,
-                rng=rng,
-                wave_size=args.wave_size,
-                model_first_frac=args.model_first_frac,
-                random_opening_moves=args.random_opening_moves,
-            )
+        records = _generate_records(args, evaluator, opp_picker, rng, args.games_per_batch)
         dt = time.perf_counter() - t0
 
         # 3) atomic write
@@ -240,6 +367,8 @@ def main() -> None:
             "records": records,
             "worker_id": args.worker_id,
             "weights_mtime": weights_mtime,
+            "model_version": model_version,
+            "version": model_version,
             "n_games": n_games,
             "n_examples": n_examples,
             "gen_s": dt,
