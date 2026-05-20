@@ -1403,3 +1403,106 @@ but the most-likely culprits ranked by prior probability:
 The most informative ablation, if we wanted to know: re-run with
 τ_final=0 (greedy after warm-up) keeping everything else. If it
 collapses back to offense-only, τ_final is the magic knob.
+
+### UPDATE (2026-05-19 ~e2179 / +600 epochs) — regime change consolidated, ETA blowout confirmed
+
+The previous UPDATE flagged that plies were starting to grow but the
+mean still lagged the p90. ~600 epochs later the mean has fully caught
+up: **self-play games are now playing through to ~27-32 plies on average,
+the same range as the untrained e1 baseline — but for the opposite reason.**
+At e1, both sides were random and couldn't end games; at e2179, both sides
+defend well so games go deep.
+
+| epoch | plies_mean | cycle_s | what's happening |
+|------:|-----------:|--------:|:------------------|
+|     1 | 31.7 | 11s | untrained, nobody can win |
+|    51 | 15.5 |  3s | collapsed to fast-attack |
+|  1285 | 11-14 | 1-3s | floor of fast-attack mode |
+|  1565 | 14-18 | 2-5s | starting to put up a fight (p90 spiking 60-80) |
+|  **2179** | **27-32** | **11-21s** | real defense in self-play; mean = untrained-rate, for opposite reason |
+
+Loss trajectory across the regime change:
+
+```
+e=1   pl=4.22 vl=0.69  plies=31.7   (cold start)
+e=51  pl=~4.0 vl=0.55  plies=15.5   (collapse)
+e=1285 pl=1.65 vl=0.16  plies=11-14
+e=1565 pl=~1.5 vl=0.10  plies=14-18
+e=2179 pl=0.76 vl=0.08  plies=27-32  ← model very confident + games long
+```
+
+### Elo eval shipped — first live model_elo readings
+
+`gomoku/rating.py` + `gomoku.eval_worker` integration deployed at e1854.
+Per-cycle MLE Elo from `(opponent_anchor, score, n_games)` triples,
+anchored at random=0, heuristic=800 (default), lookahead2=1200 (default).
+
+Live readings (n=20 noise, ~±50 Elo SE):
+
+| epoch | heuristic | lookahead2 | model_elo |
+|------:|----------:|-----------:|----------:|
+| 1854 | 70% | 55% (2W-0L-18D) | 1121 |
+| 2148 | — | — | 1085 |
+| 2159 | 62% | 75% (10W-0L-10D) | **1183** |
+| 2167 | 60% | 60% (5W-1L-14D) | 1097 |
+
+Stable around **1100-1150**, between heuristic (800) and lookahead2 (1200).
+That maps to "competent attacker with solid defense" — qualitatively
+matches the eval evidence and the self-play game lengths.
+
+Calibration script (`scripts/calibrate_anchor_elos.py`) is running in the
+background to replace the seeded anchor Elos with measured ones from
+round-robin matches between random / heuristic / lookahead{2,3,4,5}.
+When it finishes, ANCHOR_ELOS gets updated and the live readings will
+re-anchor accordingly. Currently the model_elo trajectory is informative
+in shape regardless because anchors are consistent across cycles.
+
+### ETA blowout — confirmed exactly as Jason calibrated
+
+The previous UPDATE quoted the lower/upper bound:
+
+> Lower-bound ETA (~2h remaining, no defense): already invalid
+> Upper-bound ETA (~8-13h remaining, real defense)
+
+Reality at 2:47h in (e2179): cycle time has grown ~6× (2s → 15s mean).
+Remaining 2821 cycles × 15s ≈ **11.8h remaining**. Total projected
+**~14.6h** vs the original 10h estimate. The interesting outcome (real
+defense learned) was always the one that costs wall-clock. Saved
+[feedback_self_play_eta.md][] memory now has two confirming data points.
+
+### What the trainer is still doing right
+
+- `vl` keeps decreasing (0.69 → 0.08): value head is sharper than ever.
+  This is the OPPOSITE of the prior "collapsed to z=0 / z=-1" failure
+  mode where vl trivially crashed.
+- `pl` keeps decreasing (4.22 → 0.76): policy distribution is matching
+  MCTS visit-counts well; the τ_final=0.1 soft-target hypothesis from
+  the previous UPDATE is consistent with this (one-hot targets would
+  hit a floor higher than 0.76).
+- `buffer/age_p50 ≈ 88` (was 246 at the diagnostic-resolution checkpoint):
+  positions in the buffer are ~88 epochs old at median. The ring is
+  rolling faster because cycle time is up but training_steps/cycle is
+  fixed at 32. That means each "weight version" lives in the buffer for
+  ~88 epochs of training_steps worth of decay.
+
+### Where this leaves the picture
+
+The az-recipe-160k run has demonstrated, in roughly 2.8 wall-clock
+hours and 70k self-play games, that the fast-attack collapse the wiki
+spent 600+ lines documenting is not a fundamental property of our
+codebase. With the right recipe (τ_final=0.1, log-PUCT, 1.5M buffer,
+adequate buffer-fill before SGD heat builds up), 9×9 freestyle gomoku
+self-play CAN cross into real defense. The recipe replicates.
+
+Remaining ~12h will tell us:
+
+1. Does heuristic plateau at 70-80% or push higher?
+2. Does lookahead2 plateau at 60-75% or push higher?
+3. Does model_elo climb past lookahead2's anchor (~1200)?
+4. Head-to-head against `kze-e176` once done: is this lineage
+   transitively stronger, or just locally specialized?
+5. Cycle time growth: does it stabilize around 15-20s or keep climbing
+   as plies grow further? (Wiki Exp data: 53% more plies → 111% more
+   cycle, super-linear.)
+
+[feedback_self_play_eta.md]: ~/.claude/projects/-Users-jason-code-gomoku/memory/feedback_self_play_eta.md

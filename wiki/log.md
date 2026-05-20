@@ -65,3 +65,23 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Speculation on what made the difference: most likely τ_final=0.1
   (soft policy targets instead of degenerate one-hot), then AGZ
   log-PUCT, then 1.5M replay. A τ_final=0 ablation would resolve it.
+
+## [2026-05-19] notebook | az-recipe-160k e2179 checkpoint — full regime change
+
+- At e2179 (43% complete, 2:47h wall-clock), the self-play plies have
+  fully regrown to 27-32 mean — the same range as the e1 untrained
+  baseline, but for the opposite reason: defense, not random play.
+- Loss/policy down to 0.76 from 4.22 at e1. Loss/value at 0.08 — model
+  is very confident. No sign of value-head collapse to z=0/-1 (the
+  classic failure mode from earlier runs).
+- Elo eval shipped at e1854 (commit fa656b9); model_elo bouncing
+  1085-1183 across e1854/2148/2159/2167. Stable around 1100-1150,
+  between heuristic (anchor 800) and lookahead2 (anchor 1200).
+- ETA blowout exactly as Jason's calibration predicted: cycle time
+  grew 2s → 15s as plies regrew. Total projected ~14.6h vs original
+  10h estimate. The interesting outcome (real defense) was always the
+  one that costs wall-clock.
+- Anchor Elo calibration script running in background to replace the
+  seeded ANCHOR_ELOS with measured values from a round-robin between
+  random + heuristic + lookahead{2,3,4,5}. Will update rating.py when
+  calibration finishes.
