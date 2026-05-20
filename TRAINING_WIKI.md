@@ -3,6 +3,12 @@
 Live log of training runs, performance characteristics, experiments, and outcomes.
 Append-only style — don't rewrite history, add a new entry at the bottom.
 
+This file is the chronological training notebook inside the broader wiki. Start
+from `wiki/index.md` for navigation and from `AGENTS.md` for the maintenance
+schema. Use this file for experiment evidence, dated corrections, and changes to
+the working theory; use topic pages under `wiki/topics/` when a reusable
+synthesis deserves a stable home outside the long run log.
+
 ## Setup
 
 - Board: **9×9** free-style gomoku (was 13×13 from 2026-05-17 23:46 through
@@ -1013,4 +1019,3 @@ a real pure kze replication (K=1 static, single-process, no opening
 moves) on the same modern code. If it crosses heuristic, the
 differentiator is single-process. If it doesn't, code regression is
 strongly implicated.
-

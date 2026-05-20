@@ -1,15 +1,36 @@
 # Gomoku Agent Orientation
 
-Start with the wiki.
+Start with the wiki index: `wiki/index.md`.
 
-`TRAINING_WIKI.md` is the living source of truth for this repo. It records the
-training story, failed hypotheses, W&B run IDs, checkpoint meanings,
-performance findings, and current interpretation of the learning dynamics.
-Read it before making claims about why training is working or failing.
+This repo follows the LLM-wiki pattern: raw evidence stays stable, the wiki is
+the maintained synthesis layer, and this file is the schema that tells future
+agents how to work. Do not treat the wiki as a prettier transcript. Treat it as
+a compounding project artifact that should make each session smarter than the
+last.
 
-The wiki is intentionally append-only. Do not rewrite old conclusions to make
-the story cleaner. If new evidence contradicts an older note, add a new dated
-entry that explains the correction and points to the evidence.
+After the index, read `TRAINING_WIKI.md`. It is the main chronological training
+notebook and records the training story, failed hypotheses, W&B run IDs,
+checkpoint meanings, performance findings, and current interpretation of the
+learning dynamics. Read it before making claims about why training is working or
+failing.
+
+The training notebook is intentionally append-oriented. Do not rewrite old
+conclusions to make the story cleaner. If new evidence contradicts an older
+note, add a new dated entry that explains the correction and points to the
+evidence.
+
+## Wiki Architecture
+
+- `wiki/index.md` is the content-oriented entry point. Keep it current when new
+  durable pages appear or when the current synthesis materially changes.
+- `wiki/log.md` is the chronological maintenance log. Append entries when wiki
+  structure or maintained synthesis changes.
+- `wiki/sources/` holds source records for external references and other
+  evidence that should be stable.
+- `wiki/topics/` holds maintained synthesis pages that are too reusable to leave
+  buried in chat or a long run log.
+- `TRAINING_WIKI.md` remains the training lab notebook. Use it for experiment
+  history, dated corrections, run evidence, and working-theory changes.
 
 ## Shape Of The Repo
 
@@ -35,8 +56,14 @@ entry that explains the correction and points to the evidence.
 
 ## Working Rules
 
-- Wiki first, then W&B/logs/checkpoints, then code. The training dynamics are
-  subtle enough that code inspection alone is usually misleading.
+- Wiki index first, then the training notebook, then W&B/logs/checkpoints, then
+  code. The training dynamics are subtle enough that code inspection alone is
+  usually misleading.
+- File reusable answers back into the wiki. If a question produces a useful
+  synthesis, add a topic page or update the index/log so the next session does
+  not rediscover it from scratch.
+- Keep evidence and synthesis separate. Do not overwrite raw artifacts or clean
+  away local run evidence unless the user explicitly asks.
 - Prefer fixed external baselines such as heuristic/lookahead for strength
   claims. Head-to-head between sibling checkpoints can be non-transitive and can
   mostly measure mutual specialization.

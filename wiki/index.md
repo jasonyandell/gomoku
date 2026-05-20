@@ -1,0 +1,57 @@
+# Gomoku Wiki Index
+
+This wiki is the maintained synthesis layer for the Gomoku training project.
+It should compound what we learn from experiments instead of forcing each new
+session to rediscover the same story from W&B runs, checkpoints, logs, and chat
+history.
+
+## Start Here
+
+| Page | Role |
+|---|---|
+| [AGENTS.md](../AGENTS.md) | Schema for agents: wiki rules, repo map, and working conventions. |
+| [TRAINING_WIKI.md](../TRAINING_WIKI.md) | Primary training notebook: run history, hypotheses, results, and corrections. |
+| [log.md](log.md) | Chronological wiki maintenance log. |
+| [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
+| [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
+
+## Current Synthesis
+
+The central project question is not just "can the code run faster?" It is "what
+training loop reliably teaches 9x9 AlphaZero-style Gomoku to defend, not merely
+to imitate fast attacks from its own search?"
+
+Current evidence lives in [TRAINING_WIKI.md](../TRAINING_WIKI.md). The high-level
+read is:
+
+- Local throughput work succeeded; distributed self-play made iteration much
+  faster.
+- The main training failure mode is fast-attack collapse: policy targets sharpen
+  around attacks, self-play opponents fail to punish missing defense, and fixed
+  heuristic/lookahead opponents expose the gap.
+- Short evals are noisy. Strength claims need fixed baselines, enough games, and
+  clear checkpoint/run IDs.
+- The next useful additions to the wiki should preserve evidence: command,
+  config, W&B run ID, checkpoint path, metrics, and the working-theory change.
+
+## Layers
+
+- **Evidence sources**: W&B histories, local logs, checkpoint files, match
+  outputs, scripts, raw command output, and external source records under
+  [sources/](sources/).
+- **Maintained synthesis**: this index, topic pages under [topics/](topics/),
+  and the training notebook.
+- **Schema**: [AGENTS.md](../AGENTS.md), which tells future sessions how to
+  maintain and use the wiki.
+
+## Maintenance Rules
+
+- Read this index first, then drill into the pages it names.
+- Keep source records and artifacts immutable unless the user explicitly asks
+  for cleanup.
+- Keep the training notebook append-oriented. When a conclusion changes, add a
+  dated correction with evidence instead of polishing the old entry.
+- File useful answers back into the wiki when they would save a future session
+  from recomputing the same synthesis.
+- Update [log.md](log.md) whenever the wiki structure, index, or synthesis pages
+  change in a meaningful way.
