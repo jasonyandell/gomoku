@@ -47,3 +47,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
   the eval table, plies puzzle, and open questions to resolve as the run
   continues (does heuristic hold, does lookahead2 climb, do plies
   regrow, head-to-head vs kze-e176).
+
+## [2026-05-19] notebook | az-recipe-160k diagnostics resolved: real defense
+
+- ~280 epochs after the SUMMARY was written, every "open question"
+  diagnostic resolved in favor of real defense being learned, not
+  offense-only. lookahead:depth=2 climbed from 12% (e1119) to 55%
+  (e1507). selfplay/plies_p90 spikes to 60-80 at e1.5k+, eval times
+  doubled-to-tripled as games got longer.
+- Jason flagged the **selfplay/plies_p90** chart as the leading
+  indicator before it showed up in the mean. Filed as a tactical note
+  in the wiki: when the model is in transition between offense-only
+  and real-play, p90 is more sensitive than mean because the
+  distribution is bimodal (short attack wins + long defense games).
+- This recipe + cutback combo is the first in the wiki to break the
+  fast-attack collapse: no prior dist run crossed lookahead2 above 25%.
+- Speculation on what made the difference: most likely τ_final=0.1
+  (soft policy targets instead of degenerate one-hot), then AGZ
+  log-PUCT, then 1.5M replay. A τ_final=0 ablation would resolve it.

@@ -1337,3 +1337,69 @@ launch                : python scripts/run_sweep.py --cell Z
    `kze-e176 vs heuristic = 50%`. Same non-transitivity might bite
    here — sibling-vs-sibling measures mutual specialization, not
    absolute strength.
+
+### UPDATE (2026-05-19, ~e1565 / +280 epochs) — diagnostics resolved: real defense
+
+In the ~280 epochs since the SUMMARY was written, every "open question"
+diagnostic resolved in favor of the **hidden-defense (real defense
+learned)** hypothesis, not the offense-only read:
+
+| diagnostic from previous entry | evidence at e1565 | verdict |
+|---|---|---|
+| lookahead2 stays floor-pinned 10-15% → offense-only | **55% at e1507** (from 0% at e779, 12% at e1119, 25-45% bouncing through e1300, 40-55% sustained e1400+) | refuted — real defense |
+| plies regrow toward 50+ → real defense | **selfplay/plies_p90 spiking to 60-80** at e1.5k+, mean creeping 11→16-18 | confirmed — real defense |
+| heuristic plateaus or reverts | **80% at e1507**, still rising | rejected — climbing past noise |
+| eval times grow as games get longer | `time/eval_vs_lookahead2_s` went **10s → 100s**, `time/eval_vs_heuristic_s` went **12s → 35s** | confirmed |
+
+The "fight" became visible in the **selfplay/plies_p90** chart before
+it showed up cleanly in the mean. That's the right indicator for a
+bimodal "fast attack + occasional long defense game" distribution —
+the p90 captures the long-game tail that the mean averages over. Jason
+flagged this on the wandb dashboard with "it's starting to put up a
+fight." Worth keeping in mind: when the model is in transition between
+offense-only and real-play regimes, **p90 is more sensitive than mean**.
+
+### What this looks like in absolute terms at e1565
+
+```
+training:   pl 1.65   vl 0.087   plies 14-18   cycle 1.5-7.8s
+eval:       random 100%   heuristic 80%   lookahead2 55%
+buffer:     1.5M filled, age_p50 ≈ 215 epochs back
+selfplay:   plies_mean 14-18, plies_p90 spiking to 60-80
+```
+
+**No prior run in this wiki has crossed lookahead:depth=2 above 25%
+sustained.** We're at 55% and rising past e1500. This recipe + this
+small/padding=1/sims=400 cutback combo is the first to break the
+fast-attack collapse mode that every other run got stuck in.
+
+ETA implication (per `feedback_self_play_eta.md` memory): the
+lower-bound estimate (~2h remaining, plies stays at 12) is already
+invalid — cycle times have started climbing as predicted. Realistic
+remaining: **4-6 hours** based on the current rate of plies growth
+and the cycle-time-grows-superlinearly-with-plies relationship. The
+wall-clock blow-out is the predicted cost of the desired outcome.
+
+### What's *probably* happening to make this recipe work
+
+We can't isolate which knob made the difference without ablations,
+but the most-likely culprits ranked by prior probability:
+
+1. **τ_final=0.1 instead of greedy.** All prior runs sampled τ=0
+   after warm-up, making policy targets one-hot and degenerate as
+   cross-entropy targets. Soft targets carry distribution information
+   that may have been the missing signal for defense.
+2. **AGZ log-PUCT instead of constant c_puct.** Effective exploration
+   constant rises slowly with parent visits, letting MCTS expand
+   defensive subtrees at deep nodes that constant c_puct under-explored.
+3. **Replay buffer 1.5M instead of 50-500k.** Buffer-fill rate
+   amortized across ~250 epochs of fill (e0-e500). When the buffer is
+   full, samples come from a much wider time window of opponents —
+   may be what diversifies the policy gradient enough to learn
+   defense.
+4. **dirichlet α=0.13 (9×9-scaled).** Carried over from kze1lcti
+   recipe; was already correct, so probably not the difference.
+
+The most informative ablation, if we wanted to know: re-run with
+τ_final=0 (greedy after warm-up) keeping everything else. If it
+collapses back to offense-only, τ_final is the magic knob.
