@@ -52,12 +52,23 @@ class Node:
         return int(self.N.sum())
 
 
-def _select_action(node: Node, c_puct: float) -> int:
-    """PUCT selection over legal actions only."""
+def _select_action(node: Node, c_puct_init: float, c_puct_base: float) -> int:
+    """PUCT selection over legal actions only.
+
+    AlphaGo Zero log-schedule:
+
+        pb_c = log((1 + N_parent + c_puct_base) / c_puct_base) + c_puct_init
+
+    pb_c replaces the constant c_puct in the standard PUCT formula. At small
+    N_parent it equals c_puct_init; as the parent accumulates visits it grows
+    slowly, tilting toward more exploration. With c_puct_base=19652 it's nearly
+    constant for the typical sims-per-move budget but matches the AGZ recipe.
+    """
     total = node.total_visits()
+    pb_c = float(np.log((1.0 + total + c_puct_base) / c_puct_base) + c_puct_init)
     sqrt_total = np.sqrt(total + 1e-8)
     Q = np.where(node.N > 0, node.W / np.maximum(node.N, 1), 0.0)
-    U = c_puct * node.P * sqrt_total / (1.0 + node.N)
+    U = pb_c * node.P * sqrt_total / (1.0 + node.N)
     score = Q + U
     # Mask illegal moves to -inf so they're never selected.
     score = np.where(node.legal_mask, score, -np.inf)
@@ -100,7 +111,7 @@ class _PendingLeaf:
     path: list[tuple[Node, int]]  # (parent, action_from_parent) for backprop
 
 
-def _select_one(root: Node, c_puct: float) -> _PendingLeaf:
+def _select_one(root: Node, c_puct_init: float, c_puct_base: float) -> _PendingLeaf:
     """Descend tree until we reach either an unexpanded node or a terminal."""
     node = root
     path: list[tuple[Node, int]] = []
@@ -109,7 +120,7 @@ def _select_one(root: Node, c_puct: float) -> _PendingLeaf:
             return _PendingLeaf(leaf=node, path=path)
         if not node.expanded:
             return _PendingLeaf(leaf=node, path=path)
-        a = _select_action(node, c_puct)
+        a = _select_action(node, c_puct_init, c_puct_base)
         if a not in node.children:
             # Lazy child creation
             child_state = node.state.apply(a)
@@ -137,18 +148,25 @@ def _backprop(path: list[tuple[Node, int]], leaf_value: float) -> None:
 
 
 class MCTSGame:
-    """Per-game MCTS state. Reused across multiple `search()` calls as the game progresses."""
+    """Per-game MCTS state. Reused across multiple `search()` calls as the game progresses.
+
+    The `c_puct` parameter is the c_puct_init term of the AGZ log schedule (see
+    `_select_action`). `c_puct_base` controls how fast pb_c grows with parent
+    visits; the AGZ default 19652 makes it nearly constant for our sim budgets.
+    """
 
     def __init__(
         self,
         state: GameState,
         *,
-        c_puct: float = 1.5,
+        c_puct: float = 1.25,
+        c_puct_base: float = 19652.0,
         dirichlet_alpha: float = 0.3,
         dirichlet_eps: float = 0.25,
         rng: np.random.Generator | None = None,
     ):
-        self.c_puct = c_puct
+        self.c_puct = c_puct  # acts as c_puct_init in the AGZ log schedule
+        self.c_puct_base = c_puct_base
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_eps = dirichlet_eps
         self.rng = rng or np.random.default_rng()
@@ -192,7 +210,7 @@ def run_batched_mcts(
         # We do NOT backprop the root's own value; the root is not a leaf in the AlphaZero sense.
 
     for _ in range(n_simulations):
-        pending = [_select_one(g.root, g.c_puct) for g in games]
+        pending = [_select_one(g.root, g.c_puct, g.c_puct_base) for g in games]
 
         # Split into terminal (no eval needed) and to-evaluate.
         to_eval: list[_PendingLeaf] = []
@@ -228,8 +246,16 @@ def run_batched_mcts(
 # n_simulations=100.
 
 
-def _select_one_vloss(root: Node, c_puct: float) -> _PendingLeaf:
+def _select_one_vloss(root: Node, c_puct_init: float, c_puct_base: float) -> _PendingLeaf:
     """Like _select_one but applies virtual loss (N += 1) along the path.
+
+    Soft virtual loss: we only increment N, not W. Within a wave, that drops
+    Q = W/N (toward 0 from above) and U via the (1+N) denominator, which
+    discourages reselecting the same action. AGZ-style strong vloss would also
+    do `W -= 1` to push Q toward -1 more aggressively; we don't, partly because
+    our wave-size-16/32 benchmarks already match wave=1 in outcomes, partly
+    because soft vloss is forgiving when terminal leaves cause the path to be
+    re-credited without a paired eval.
 
     Caller MUST backprop with `_backprop_value_only` (W only) since N has
     already been incremented here.
@@ -241,7 +267,7 @@ def _select_one_vloss(root: Node, c_puct: float) -> _PendingLeaf:
             return _PendingLeaf(leaf=node, path=path)
         if not node.expanded:
             return _PendingLeaf(leaf=node, path=path)
-        a = _select_action(node, c_puct)
+        a = _select_action(node, c_puct_init, c_puct_base)
         if a not in node.children:
             child_state = node.state.apply(a)
             child = Node(state=child_state, parent=node, parent_action=a)
@@ -260,6 +286,94 @@ def _backprop_value_only(path: list[tuple[Node, int]], leaf_value: float) -> Non
         parent.W[action] += v
 
 
+def _bfs_descend_one_per_game(
+    games_subset: list[MCTSGame],
+) -> list[_PendingLeaf]:
+    """BFS-vectorized descent: one descent per game in `games_subset`,
+    all advanced in lockstep level-by-level with vectorized PUCT.
+
+    At each BFS level we collect every still-descending game's current node,
+    stack their (W, N, P, legal_mask) into (P, N_ACTIONS) arrays, and do ONE
+    batched argmax instead of P individual `_select_action` calls. Per-game
+    soft virtual loss (N += 1) is applied as we descend, matching the
+    sequential `_select_one_vloss` behavior.
+
+    Trees are independent across games, so this is byte-for-byte equivalent
+    to calling `_select_one_vloss` for each game serially under any RNG.
+
+    Returns one `_PendingLeaf` per input game, in the same order.
+    """
+    if not games_subset:
+        return []
+
+    # Per-descent state, indexed by position in games_subset.
+    nodes: list[Node] = [g.root for g in games_subset]
+    paths: list[list[tuple[Node, int]]] = [[] for _ in games_subset]
+    leaves: list[_PendingLeaf | None] = [None] * len(games_subset)
+    c_puct_init = np.array([g.c_puct for g in games_subset], dtype=np.float64)
+    c_puct_base = np.array([g.c_puct_base for g in games_subset], dtype=np.float64)
+
+    # Active indices into games_subset.
+    active = list(range(len(games_subset)))
+
+    while active:
+        # Partition: terminal / unexpanded → leaf; otherwise → still descending.
+        still: list[int] = []
+        for i in active:
+            node = nodes[i]
+            if node.is_terminal or not node.expanded:
+                leaves[i] = _PendingLeaf(leaf=node, path=paths[i])
+            else:
+                still.append(i)
+        if not still:
+            break
+
+        # Stack current-node action arrays for the still-going descents.
+        N_stack = np.stack([nodes[i].N for i in still])               # (P, 81) int32
+        W_stack = np.stack([nodes[i].W for i in still])               # (P, 81) float32
+        P_stack = np.stack([nodes[i].P for i in still])               # (P, 81) float32
+        L_stack = np.stack([nodes[i].legal_mask for i in still])      # (P, 81) bool
+        cpi = c_puct_init[still]                                       # (P,)
+        cpb = c_puct_base[still]                                       # (P,)
+
+        # Vectorized PUCT scoring (one np.argmax across all still-going descents).
+        totals = N_stack.sum(axis=1, dtype=np.float64)                # (P,)
+        pb_c = np.log((1.0 + totals + cpb) / cpb) + cpi               # (P,)
+        sqrt_totals = np.sqrt(totals + 1e-8)                          # (P,)
+        denom = 1.0 + N_stack                                         # (P, 81)
+        Q = np.where(N_stack > 0, W_stack / np.maximum(N_stack, 1), 0.0)
+        U = (pb_c * sqrt_totals)[:, None] * P_stack / denom           # (P, 81)
+        score = np.where(L_stack, Q + U, -np.inf)
+        actions = np.argmax(score, axis=1)                            # (P,) int
+
+        # Descend each still-going descent by one level, applying soft vloss.
+        next_active: list[int] = []
+        for j, i in enumerate(still):
+            a = int(actions[j])
+            node = nodes[i]
+            if a not in node.children:
+                child_state = node.state.apply(a)
+                child = Node(state=child_state, parent=node, parent_action=a)
+                _init_node(child)
+                node.children[a] = child
+            paths[i].append((node, a))
+            node.N[a] += 1  # virtual loss — same as _select_one_vloss
+            nodes[i] = node.children[a]
+            next_active.append(i)
+        active = next_active
+
+    # Anything still in `active` after the loop has been written into `leaves`.
+    # Anything finished above is already in `leaves`. Just collect.
+    out: list[_PendingLeaf] = []
+    for i in range(len(games_subset)):
+        if leaves[i] is not None:
+            out.append(leaves[i])
+        else:
+            # Shouldn't happen (every descent terminates at a leaf or terminal).
+            out.append(_PendingLeaf(leaf=nodes[i], path=paths[i]))
+    return out
+
+
 def run_batched_mcts_waves(
     games: list[MCTSGame],
     evaluator: Evaluator,
@@ -272,6 +386,12 @@ def run_batched_mcts_waves(
     virtual loss, then one batched evaluator call for all G*wave_size leaves.
 
     Equivalent to `run_batched_mcts` when wave_size == 1.
+
+    Implementation note: within a wave we iterate wave-slots sequentially (slot
+    0 of all games, then slot 1, …) so each slot's descent in a given game sees
+    the cumulative virtual loss from prior slots — this matches the original
+    sequential ordering. Within each slot we BFS-descend one descent per game
+    in lockstep, vectorizing PUCT across games (see `_bfs_descend_one_per_game`).
     """
     if wave_size < 1:
         raise ValueError(f"wave_size must be >= 1, got {wave_size}")
@@ -294,10 +414,15 @@ def run_batched_mcts_waves(
         if not any(wave_counts):
             break
 
+        # Iterate wave-slots sequentially. At each slot, BFS-descend one
+        # descent per game (only games that still need this slot).
+        max_slots = max(wave_counts)
         wave_pending: list[_PendingLeaf] = []
-        for g_idx, g in enumerate(games):
-            for _ in range(wave_counts[g_idx]):
-                wave_pending.append(_select_one_vloss(g.root, g.c_puct))
+        for slot in range(max_slots):
+            slot_games = [games[i] for i in range(len(games)) if slot < wave_counts[i]]
+            if not slot_games:
+                continue
+            wave_pending.extend(_bfs_descend_one_per_game(slot_games))
 
         # Split terminal vs to-evaluate.
         to_eval: list[_PendingLeaf] = []

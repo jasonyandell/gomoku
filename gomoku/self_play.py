@@ -79,8 +79,10 @@ def generate_games(
     evaluator: Evaluator,
     *,
     n_simulations: int = 100,
-    c_puct: float = 1.5,
+    c_puct: float = 1.25,
+    c_puct_base: float = 19652.0,
     temperature_moves: int = 8,
+    temperature_final: float = 0.1,
     dirichlet_alpha: float = 0.3,
     dirichlet_eps: float = 0.25,
     max_plies: int | None = None,
@@ -115,7 +117,7 @@ def generate_games(
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
             start_state, opening_plies = GameState.initial(), 0
-        games.append(MCTSGame(start_state, c_puct=c_puct,
+        games.append(MCTSGame(start_state, c_puct=c_puct, c_puct_base=c_puct_base,
                               dirichlet_alpha=dirichlet_alpha, dirichlet_eps=dirichlet_eps,
                               rng=np.random.default_rng(rng.integers(0, 2**31))))
         initial_plies.append(opening_plies)
@@ -148,7 +150,7 @@ def generate_games(
         next_active: list[int] = []
         for slot_idx, g_idx in enumerate(active):
             g = active_games[slot_idx]
-            tau = 1.0 if ply < temperature_moves else 0.0
+            tau = 1.0 if ply < temperature_moves else temperature_final
             pi = policy_from_visits(g.root, tau)
             # Total moves played so far in THIS game = initial_plies[g_idx] (random
             # opening) + ply (MCTS moves applied so far). The side ABOUT to move
@@ -205,8 +207,10 @@ def generate_games_vs_baseline(
     opponent_picker,
     *,
     n_simulations: int = 100,
-    c_puct: float = 1.5,
+    c_puct: float = 1.25,
+    c_puct_base: float = 19652.0,
     temperature_moves: int = 8,
+    temperature_final: float = 0.1,
     dirichlet_alpha: float = 0.3,
     dirichlet_eps: float = 0.25,
     max_plies: int | None = None,
@@ -242,7 +246,7 @@ def generate_games_vs_baseline(
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
             start_state, opening_plies = GameState.initial(), 0
-        games.append(MCTSGame(start_state, c_puct=c_puct,
+        games.append(MCTSGame(start_state, c_puct=c_puct, c_puct_base=c_puct_base,
                               dirichlet_alpha=dirichlet_alpha, dirichlet_eps=dirichlet_eps,
                               rng=np.random.default_rng(rng.integers(0, 2**31))))
         initial_plies.append(opening_plies)
@@ -278,7 +282,7 @@ def generate_games_vs_baseline(
                 )
             for slot_idx, g_idx in enumerate(model_turn):
                 g = mcts_games[slot_idx]
-                tau = 1.0 if ply < temperature_moves else 0.0
+                tau = 1.0 if ply < temperature_moves else temperature_final
                 pi = policy_from_visits(g.root, tau)
                 trajectories[g_idx].append((g.root.state.to_planes(), pi.copy()))
                 action = _sample_action(pi, rng)

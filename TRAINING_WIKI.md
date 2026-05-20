@@ -1019,3 +1019,160 @@ a real pure kze replication (K=1 static, single-process, no opening
 moves) on the same modern code. If it crosses heuristic, the
 differentiator is single-process. If it doesn't, code regression is
 strongly implicated.
+
+## SUMMARY (2026-05-19, morning — michaelnny/alpha_zero recipe import)
+
+After surveying https://github.com/michaelnny/alpha_zero (which ships a working
+9×9 + 13×13 gomoku training recipe in PyTorch), confirmed our structure is
+basically identical — same 17-plane input (`2*num_stack+1`, num_stack=8), same
+ResNet trunk, same file-broadcast multi-worker pipeline, same wave-batched
+MCTS + virtual loss. The interesting deltas are in stem padding, replay size,
+temperature schedule, PUCT formula, and how long they train (their successful
+runs are ~140–200k SGD steps, i.e. roughly 5–10× longer than ours).
+
+### What we ported (worktree `worktree-alpha-zero-recipe`)
+
+1. **Stem conv padding 1 → 3** (`model.py`). Their explicit "agent fails to
+   block on edge cases" fix for gomoku. With kernel=3 and padding=3 the stem
+   output grows from 9×9 to 13×13, giving the network a "virtual padding
+   zone." The residual tower preserves that shape; the policy/value FC layers
+   pick up the new spatial size automatically via `spatial = BOARD_SIZE +
+   2*stem_padding - 2`. Added a `stem_padding` field on `ModelConfig` (default
+   3). `load_checkpoint` defaults missing `stem_padding` to 1 so older
+   checkpoints still load.
+
+   Param-count impact (medium): ~1.04M → ~1.06M; tiny: ~37k → ~75k.
+
+2. **τ=0.1 after warm-up plies, not greedy** (`self_play.py`). Previous
+   default was `tau = 1.0 if ply < temperature_moves else 0.0`. New:
+   `tau = 1.0 if ply < temperature_moves else temperature_final` with
+   `temperature_final` defaulting to 0.1. Stays sharp but not one-hot — the
+   policy training target is now a real soft distribution (one-hot CE was
+   degenerate), and a tiny amount of whole-game exploration keeps the model
+   away from total-determinism collapses. New CLI flag `--temperature-final`.
+
+3. **Replay buffer default 50k → 1.5M** (`train.py`). Matches their gomoku
+   capacity. With our preallocated tensor buffer at 17 planes / 9×9 this is
+   ~8.5 GB on the device — fine on the M5 Max's unified memory, but worth
+   noting; downstream workers don't allocate this, only the trainer.
+
+4. **AlphaGo Zero log-schedule PUCT** (`mcts.py`):
+
+   ```
+   pb_c = log((1 + N_parent + c_puct_base) / c_puct_base) + c_puct_init
+   ```
+
+   Replaces our constant `c_puct`. Defaults: `c_puct_init=1.25` (AGZ),
+   `c_puct_base=19652` (AGZ). At our sim budgets (200–800/move) pb_c is
+   nearly constant (~1.25–1.30), so this is mostly a recipe-faithfulness
+   change, not a numerics shift. CLI flags: `--c-puct` (now interpreted as
+   c_puct_init), `--c-puct-base`. Threaded through `MCTSGame`,
+   `generate_games`, `generate_games_vs_baseline`, and `selfplay_worker`.
+
+5. **Virtual-loss sign audit (correctness check, no change)** (`mcts.py`).
+   Walked through `_select_one_vloss` → `_backprop_value_only`. Our impl
+   does N-only virtual loss (no `W -= 1`), which is a soft variant of AGZ's
+   strong vloss. The accounting is correct: N gets the visit credited up
+   front, W gets the real value added when the eval comes back, total
+   counts agree at end-of-wave. The wave=1 path matches the sequential
+   path byte-for-byte under fixed seed (verified). Documented the soft
+   choice with a comment.
+
+### Things we deliberately did NOT port
+
+- **α=0.03 Dirichlet.** That's their default but it's AGZ's Go-19 value.
+  Our 0.13 (scaled to 9×9 branching) is correct; keep it.
+- **One-of-5 random-transform augmentation at 50%.** Their sample-time
+  augmentation is strictly weaker than our store-all-8 D4 expansion.
+- **No gradient clipping.** They omit it; we keep ours.
+- **Single-game eval vs prev-checkpoint with no gating, always-black.** Useless
+  signal in gomoku where first-move advantage is huge; we keep alternating-
+  colors + fixed external baselines.
+
+### What's still on the deck (deferred)
+
+6. **numpy-array MCTS storage (port `mcts_v2.py` idea).** Parent stores
+   `child_N`, `child_W`, `child_P` as `float32[N_ACTIONS]` arrays instead of
+   per-Node fields with a `children: dict`. Their docs claim large speedups;
+   we'd expect 2–3× on top of our wave batching. Skipped this pass — non-
+   trivial refactor and `_select_action` is already vectorized; the win is
+   in cutting the Python dict/Node-object overhead in `_select_one`. Worth
+   a separate dedicated experiment.
+
+7. **Pro-games policy-match eval.** Their `eval_on_pro_games` computes top-k
+   policy match + entropy + value MSE on a fixed dataset; zero-variance per
+   checkpoint. Would fix our n=4 noise floor problem (the kze "heuristic e85
+   crossing" turned out to be 2/4 = "50%" noise). Need to track down a free-
+   style gomoku game database; deferred to after this run.
+
+### Compute-horizon calibration (the big takeaway)
+
+Their README admits 9×9 Go peaked at 140–200k training steps before
+collapsing — and they emit one checkpoint per 5000 games. Our "failed"
+runs at 100 epochs × 64 games = 6400 games are roughly **20–30× shorter
+than their successful phase.** Many of our "collapses" may just be
+undertrained, with fast-attack mode being a transient state the model
+trains through if given enough cycles.
+
+### Exp 9: Cross-game BFS-vectorized MCTS descent (deployed)
+
+After surveying michaelnny's `mcts_v2.py` discovered our `Node` already owns
+per-action arrays (N, W, P), so the agent's claimed "2-3× from porting v2
+storage" was a misread — we were already at v2-equivalent layout. The actual
+high-leverage refactor is **vectorizing PUCT across games at each
+tree-descent level** within a wave (Exp 3 action #1 from the original
+backlog).
+
+Implementation in `mcts.py:_bfs_descend_one_per_game`:
+
+- Within a wave, iterate wave-slots sequentially (slot 0 across all games,
+  then slot 1, …) so within-game VL ordering is preserved.
+- At each slot, BFS-descend one descent per game in lockstep. At every BFS
+  level we stack the still-going descents' `(W, N, P, legal_mask)` arrays
+  into `(P, N_ACTIONS)` and do ONE `np.argmax` instead of P individual
+  calls. Soft virtual loss (N += 1) is applied as we descend, matching the
+  sequential path.
+
+Verified byte-for-byte against the sequential reference under fixed seed
+(see `tests/test_mcts.py::test_wave_bfs_matches_sequential_byte_for_byte`,
+covers wave∈{1,8,16}, sims∈{20,64}, 4 games × 3 seeds).
+
+**Clean bench (medium model on MPS, 3-trial median):**
+
+| n_games | sims | wave | seq    | bfs    | speedup | savings |
+|--------:|-----:|-----:|-------:|-------:|--------:|--------:|
+| 32      | 200  | 16   | 0.407s | 0.324s | **1.26×** | 20.4% |
+| 32      | 200  | 32   | 0.343s | 0.301s | 1.14×   | 12.4% |
+| 16      | 400  | 16   | 0.388s | 0.365s | 1.06×   | 5.8%  |
+| 32      | 100  | 8    | 0.129s | 0.111s | 1.16×   | 13.8% |
+
+The speedup scales with G (games per wave-call) and inversely with
+wave_size (larger wave = fewer wave iterations to amortize over). In dist
+mode with 4 workers × 8 g/batch (G=8 per wave), expected win ≈ 5–10%.
+In single-process mode with G=32 and wave=16, expected win ≈ 20%.
+
+**Honest take vs prior estimate.** I had pitched this as ~20% gen savings
+across the board; the data shows that's right at the high-G end but
+modest at our dist-worker config. The 160k-step run would gain maybe 30–60
+minutes total, not the couple of hours I'd hoped. Still positive, still
+worth keeping — and the code is structurally cleaner.
+
+**The bigger lesson.** Reviewing michaelnny/alpha_zero we'd been pitched a
+2-3× from "porting their `mcts_v2` storage layout." That estimate was wrong
+*for our codebase*: our `Node` already owns per-action `N`/`W`/`P` arrays
+and `_select_action` is already vectorized. We were structurally at the
+"mcts_v2" layout the entire time — the agent comparison was implicitly
+against their `mcts_v1`, not against what we actually have. Filed the
+finding as a synthesis page so a future session doesn't promise the same
+2-3× again: see [wiki/topics/mcts-perf-ceiling.md](wiki/topics/mcts-perf-ceiling.md).
+The genuine "next 2×" needs structural work (batched `state.apply` on
+tensor, C-extension `_init_node`, multi-device gen/train split), not a
+numpy reshuffle.
+
+### Next: long run on the new recipe
+
+Plan to kick off a fresh run with all five recipe fixes plus the
+cross-game vectorized descent: pure self-play, ~160k SGD steps,
+K=1 dynamic, medium model with stem_padding=3, 800 sims, τ_final=0.1,
+1.5M replay buffer, AGZ log-PUCT, on the dist setup with 4 workers.
+Eval gauge as a side process so the trainer doesn't block on baselines.

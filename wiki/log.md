@@ -13,3 +13,16 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Updated [../AGENTS.md](../AGENTS.md) and [../TRAINING_WIKI.md](../TRAINING_WIKI.md)
   so future sessions treat the wiki as a compounding synthesis layer, not just a
   large experiment transcript.
+
+## [2026-05-19] synthesis | MCTS perf ceiling topic page
+
+- Added [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) capturing
+  the finding that our `gomoku/mcts.py` is already at the AGZ "mcts_v2"
+  storage layout that other AZ codebases advertise as a big upgrade. Ports
+  of that design are a no-op for us.
+- The cross-game BFS-vectorized descent (Exp 9 in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md)) is real but small: 1.26× at
+  G=32 / wave=16, ~1.05–1.10× at our dist G=8 / wave=32 config. The next
+  2× requires batched `state.apply` on tensor, C-extension `_init_node`,
+  or multi-device gen-vs-train split — not numpy reshuffling.
+- Updated [index.md](index.md) Start Here table to surface the new topic.

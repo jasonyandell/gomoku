@@ -23,6 +23,11 @@ class ModelConfig:
     policy_filters: int = 2
     value_filters: int = 1
     value_hidden: int = 64
+    # Stem-conv padding. michaelnny/alpha_zero uses padding=3 with a 3x3 kernel
+    # for gomoku ("agent fails to block on edge cases" fix). That expands the
+    # feature map from BOARD_SIZE to BOARD_SIZE+4 after the stem, giving the
+    # network a "virtual padding zone" around the real board.
+    stem_padding: int = 3
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -53,22 +58,28 @@ class GomokuNet(nn.Module):
         self.cfg = cfg
         c = cfg.n_filters
 
+        # 3x3 conv with padding=cfg.stem_padding. Output H/W after the stem is
+        # BOARD_SIZE + 2*stem_padding - 2. The residual tower preserves that shape.
+        kernel = 3
+        spatial = BOARD_SIZE + 2 * cfg.stem_padding - kernel + 1
+
         self.stem = nn.Sequential(
-            nn.Conv2d(cfg.n_input_planes, c, 3, padding=1, bias=False),
+            nn.Conv2d(cfg.n_input_planes, c, kernel, padding=cfg.stem_padding, bias=False),
             nn.BatchNorm2d(c),
             nn.ReLU(inplace=True),
         )
         self.tower = nn.Sequential(*[ResBlock(c) for _ in range(cfg.n_blocks)])
 
-        # Policy head: 1x1 conv -> flatten -> linear to 81
+        # Policy head: 1x1 conv -> flatten -> linear to BOARD_SIZE^2.
+        # Note the FC input uses the post-stem spatial size, not BOARD_SIZE.
         self.policy_conv = nn.Conv2d(c, cfg.policy_filters, 1, bias=False)
         self.policy_bn = nn.BatchNorm2d(cfg.policy_filters)
-        self.policy_fc = nn.Linear(cfg.policy_filters * BOARD_SIZE * BOARD_SIZE, N_ACTIONS)
+        self.policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, N_ACTIONS)
 
         # Value head: 1x1 conv -> flatten -> linear -> linear(1) -> tanh
         self.value_conv = nn.Conv2d(c, cfg.value_filters, 1, bias=False)
         self.value_bn = nn.BatchNorm2d(cfg.value_filters)
-        self.value_fc1 = nn.Linear(cfg.value_filters * BOARD_SIZE * BOARD_SIZE, cfg.value_hidden)
+        self.value_fc1 = nn.Linear(cfg.value_filters * spatial * spatial, cfg.value_hidden)
         self.value_fc2 = nn.Linear(cfg.value_hidden, 1)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -123,7 +134,10 @@ def load_checkpoint(
     device: torch.device | str = "cpu",
 ) -> tuple[GomokuNet, dict]:
     payload = torch.load(path, map_location=device, weights_only=False)
-    cfg = ModelConfig(**payload["model_config"])
+    saved_cfg = dict(payload["model_config"])
+    # Pre-AZ-recipe checkpoints predate stem_padding; default to 1 so they load.
+    saved_cfg.setdefault("stem_padding", 1)
+    cfg = ModelConfig(**saved_cfg)
     model = GomokuNet(cfg).to(device)
     model.load_state_dict(payload["model_state_dict"])
     return model, payload

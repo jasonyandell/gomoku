@@ -60,8 +60,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--games-per-batch", type=int, default=16)
     p.add_argument("--n-simulations", type=int, default=800)
     p.add_argument("--wave-size", type=int, default=32)
-    p.add_argument("--c-puct", type=float, default=1.5)
+    p.add_argument("--c-puct", type=float, default=1.25,
+                   help="c_puct_init in the AGZ log-schedule PUCT formula.")
+    p.add_argument("--c-puct-base", type=float, default=19652.0,
+                   help="c_puct_base in the AGZ log-schedule PUCT formula.")
     p.add_argument("--temperature-moves", type=int, default=10)
+    p.add_argument("--temperature-final", type=float, default=0.1,
+                   help="Sampling temperature after the warm-up plies. 0.1 matches "
+                        "michaelnny/alpha_zero — sharp but not greedy, keeps the policy "
+                        "training target a real soft distribution.")
     p.add_argument("--dirichlet-alpha", type=float, default=0.13)
     p.add_argument("--dirichlet-eps", type=float, default=0.25)
     p.add_argument("--random-opening-moves", type=int, default=0)
@@ -174,7 +181,9 @@ def main() -> None:
                 args.games_per_batch, evaluator,
                 n_simulations=args.n_simulations,
                 c_puct=args.c_puct,
+                c_puct_base=args.c_puct_base,
                 temperature_moves=args.temperature_moves,
+                temperature_final=args.temperature_final,
                 dirichlet_alpha=args.dirichlet_alpha,
                 dirichlet_eps=args.dirichlet_eps,
                 rng=rng,
@@ -186,7 +195,9 @@ def main() -> None:
                 args.games_per_batch, evaluator, opp_picker,
                 n_simulations=args.n_simulations,
                 c_puct=args.c_puct,
+                c_puct_base=args.c_puct_base,
                 temperature_moves=args.temperature_moves,
+                temperature_final=args.temperature_final,
                 dirichlet_alpha=args.dirichlet_alpha,
                 dirichlet_eps=args.dirichlet_eps,
                 rng=rng,

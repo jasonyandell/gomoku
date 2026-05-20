@@ -1,0 +1,112 @@
+# MCTS Perf Ceiling
+
+Synthesis page on where gen-time wins are and aren't in `gomoku/mcts.py`. The
+goal is to stop re-discovering, every few sessions, that "porting v2 storage
+from some upstream AZ codebase" is a no-op for us.
+
+## TL;DR
+
+Our `Node` already owns per-action arrays (`N`, `W`, `P`) of size `N_ACTIONS`,
+`_select_action` is a single vectorized `np.argmax` over 81 elements, and no
+dict iteration happens in the PUCT hot path. **Structurally we are already at
+the "AGZ mcts_v2" layout** that other gomoku/AZ READMEs advertise as a big win
+over their "mcts_v1." That refactor is therefore a no-op for us.
+
+Real production constraint: the gen path is bounded by `state.apply` (board
+copy + history snapshot, Python), `_init_node` (terminal check + legal mask,
+Python), and the MPS forward + sync. None of those is a "vectorize-with-numpy"
+win — closing the gap further requires real structural work, not a refactor.
+
+## What is already in the tree
+
+- **Per-action numpy arrays on each `Node`.** `N`, `W`, `P` are `(81,)`
+  arrays. Selection is one `np.argmax` over masked-legal scores.
+- **Wave-batched MCTS with soft virtual loss.** See `run_batched_mcts_waves`
+  and `_select_one_vloss`. Soft vloss (`N += 1`, no `W` change) verified
+  byte-for-byte against sequential descent under fixed seed.
+- **Cross-game BFS-vectorized descent.** `_bfs_descend_one_per_game` stacks
+  current-level nodes from all games into `(P, 81)` arrays and does one
+  batched PUCT-`argmax` per BFS level. Within-game wave-slot ordering is
+  preserved, so output is identical to the pre-refactor sequential wave
+  under any RNG.
+- **AlphaGo Zero log-schedule PUCT.** `pb_c = log((1 + N + c_puct_base) /
+  c_puct_base) + c_puct_init`, with AGZ defaults 19652 / 1.25.
+- **Combined `.cpu()` evaluator transfer** to halve MPS syncs.
+- **Vectorized terminal check** (`_has_five_in_a_row` directional ANDs).
+
+## Things that do NOT work as a quick win
+
+- **Porting michaelnny/alpha_zero `mcts_v2.py` storage.** We are already at
+  that layout. The fact that other codebases advertise a 2-3× speedup from
+  "porting v2" is comparing to their previous per-Node-field design, which
+  we never had.
+- **fp16 evaluator on MPS.** 17% *slower* in our bench (see
+  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 4).
+- **Async gen+train in one process on one MPS device.** MPS is single-stream
+  per process, so forward (gen) and forward+backward (train) serialize and
+  the train step ballooned 7× (Exp 2). Async only helps with multiple GPUs
+  or genuinely CPU-bound paths.
+
+## What the cross-game BFS descent actually buys (Exp 9)
+
+Measured median of 3 trials, medium model on MPS:
+
+| n_games | sims | wave | seq    | bfs    | speedup | savings |
+|--------:|-----:|-----:|-------:|-------:|--------:|--------:|
+| 32      | 200  | 16   | 0.407s | 0.324s | **1.26×** | 20.4% |
+| 32      | 200  | 32   | 0.343s | 0.301s | 1.14×   | 12.4% |
+| 16      | 400  | 16   | 0.388s | 0.365s | 1.06×   | 5.8%  |
+| 32      | 100  | 8    | 0.129s | 0.111s | 1.16×   | 13.8% |
+
+Pattern: win scales with **G** (games-per-wave-call) and shrinks as
+**wave_size** grows (fewer BFS calls per wave to amortize Python dispatch
+overhead).
+
+In our dist worker config (4 workers × 8 games/batch ⇒ G=8 per wave call) the
+realized win is in the 5–10% range. In single-process at G=32 with wave=16
+it's ~20%. Verified byte-for-byte against the sequential reference, see
+`tests/test_mcts.py::test_wave_bfs_matches_sequential_byte_for_byte`.
+
+## Where the next 2× actually lives (all real work)
+
+In rough leverage order:
+
+1. **Batched `state.apply` on GPU.** Today every newly-visited child does a
+   board-copy + history-snapshot in Python. If state can be encoded as a
+   tensor and `apply` becomes a batched op, the per-child Python overhead
+   disappears. Big refactor — affects `game.py`, `mcts.py`, `replay_buffer.py`.
+2. **C/Cython `_init_node`.** Terminal check + legal-mask construction per
+   new child. Probably 5–10% wall-clock standalone.
+3. **Multi-device gen-vs-train split.** Async pipelining only helps when the
+   two workloads run on different devices; this is the right answer on a
+   CUDA cluster, not on one MPS device.
+4. **Strong virtual loss (W -= 1 with explicit revert).** Marginal — would
+   make waves more diverse but our wave=32 already matches wave=1 in plies.
+
+## How to reason about MCTS perf claims in the future
+
+When some upstream AZ repo claims a big speedup from a refactor:
+
+1. **Grep our own `gomoku/mcts.py` first** for the named technique. We've
+   already vectorized PUCT selection, cached terminal info, vectorized
+   five-in-a-row, batched `.cpu()` transfers, and BFS-vectorized descent.
+2. **Look at our profile, not theirs.** From wiki Exp 3: `_select_action`
+   was 35% of gen but already vectorized, so the win there is at most the
+   Python dispatch overhead, ~5-10%. `evaluate` (MPS forward + .cpu()) was
+   47%, attacked by combined-`.cpu()` and wave batching.
+3. **Estimate the realized win on our dominant config** before committing
+   to the refactor. The dist mode with G=8 per wave is the right baseline
+   for "would this help during a real training run?" — not a microbench at
+   G=32.
+
+## References
+
+- [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 9 — the cross-game BFS
+  descent: implementation, bench, and the "agent's 2-3× claim was wrong"
+  finding.
+- [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 3, 6, 7, 8 — earlier perf
+  work (profiling, combined `.cpu()`, vectorized terminal, wave-batched
+  MCTS).
+- `gomoku/mcts.py` — current implementation, `_bfs_descend_one_per_game`
+  for the BFS path.
+- `tests/test_mcts.py` — byte-for-byte correctness check on the BFS path.

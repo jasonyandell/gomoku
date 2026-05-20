@@ -13,6 +13,7 @@ history.
 | [TRAINING_WIKI.md](../TRAINING_WIKI.md) | Primary training notebook: run history, hypotheses, results, and corrections. |
 | [log.md](log.md) | Chronological wiki maintenance log. |
 | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
+| [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and aren't. Don't re-port "v2 storage" — we're already there. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
 
 ## Current Synthesis

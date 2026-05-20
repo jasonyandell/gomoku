@@ -128,11 +128,27 @@ def parse_args() -> argparse.Namespace:
                         "MCTS only takes over after that, and no training examples are "
                         "recorded for the random opening. Breaks the 'always-same-opening' "
                         "collapse by forcing the model to learn from diverse positions.")
-    p.add_argument("--c-puct", type=float, default=1.5)
+    p.add_argument("--c-puct", type=float, default=1.25,
+                   help="c_puct_init in the AGZ log-schedule PUCT formula. Effective "
+                        "exploration constant at N_parent=0. Default 1.25 = AGZ value.")
+    p.add_argument("--c-puct-base", type=float, default=19652.0,
+                   help="c_puct_base in the AGZ log-schedule PUCT formula. Controls "
+                        "how fast the effective exploration grows with parent visits. "
+                        "AGZ default 19652 keeps it nearly constant at our sim budgets.")
     p.add_argument("--temperature-moves", type=int, default=8)
+    p.add_argument("--temperature-final", type=float, default=0.1,
+                   help="After the warm-up plies (--temperature-moves), sample MCTS "
+                        "actions at this temperature instead of fully greedy (tau=0). "
+                        "Default 0.1 matches michaelnny/alpha_zero — sharp but not "
+                        "one-hot, preserves a tiny amount of whole-game exploration "
+                        "and keeps the policy training target as a real distribution.")
     p.add_argument("--dirichlet-alpha", type=float, default=0.3)
     p.add_argument("--dirichlet-eps", type=float, default=0.25)
-    p.add_argument("--replay-buffer-size", type=int, default=50000)
+    p.add_argument("--replay-buffer-size", type=int, default=1_500_000,
+                   help="Capacity of the replay ring buffer. Default 1.5M matches "
+                        "michaelnny/alpha_zero's gomoku config — much larger than our "
+                        "earlier 500k runs, which gives the network more diverse "
+                        "opponent-version exposure before old positions evict.")
     p.add_argument("--training-steps", type=int, default=400,
                    help="SGD steps per epoch. Static unless --sgd-per-game is set.")
     p.add_argument("--sgd-per-game", type=float, default=None,
@@ -463,7 +479,9 @@ def main() -> None:
                 evaluator,
                 n_simulations=args.n_simulations,
                 c_puct=args.c_puct,
+                c_puct_base=args.c_puct_base,
                 temperature_moves=args.temperature_moves,
+                temperature_final=args.temperature_final,
                 dirichlet_alpha=args.dirichlet_alpha,
                 dirichlet_eps=args.dirichlet_eps,
                 rng=rng,
@@ -478,7 +496,9 @@ def main() -> None:
                 opponent_picker,
                 n_simulations=args.n_simulations,
                 c_puct=args.c_puct,
+                c_puct_base=args.c_puct_base,
                 temperature_moves=args.temperature_moves,
+                temperature_final=args.temperature_final,
                 dirichlet_alpha=args.dirichlet_alpha,
                 dirichlet_eps=args.dirichlet_eps,
                 rng=rng,
