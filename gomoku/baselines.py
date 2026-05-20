@@ -395,7 +395,38 @@ def _negamax(state: GameState, depth: int, alpha: float, beta: float) -> float:
         return 0.0  # draw
 
     if depth == 0:
-        return evaluate_position(state)
+        # 1-ply quiescence: if our opponent (the side that just moved) has any
+        # immediate winning threat (a 4-in-a-row completable to 5 next move),
+        # we are forced to block one of those squares before evaluating.
+        # Without this, the static `evaluate_position` over-credits the
+        # just-moved side's "live 4" — there's no distinction between an
+        # open four (actually mate) and a half-open four (trivially blocked).
+        # That hallucinated-threat bias is what made odd-depth lookahead
+        # weaker than even-depth in our calibration tournament: at odd depth
+        # the searcher gets the last move and builds a threat the opponent
+        # never gets to refute before the eval.
+        mine, opp = _flat_planes(state)
+        legal = state.legal_actions()
+        opp_wins = _find_immediate_wins(opp, mine, legal)
+        if opp_wins.size == 0:
+            return evaluate_position(state)
+        # Forced-reply: try blocking each of opp's winning squares and take
+        # the best resulting evaluation. Bounded at ~5 moves in practice
+        # since multi-way threats end games quickly.
+        best_q = -np.inf
+        for a in opp_wins:
+            child = state.apply(int(a))
+            done2, v2 = child.is_terminal()
+            if done2 and v2 < 0:
+                # Our block itself won (shouldn't happen given opp_wins is
+                # opp's threats, but covers the corner case).
+                return _MATE
+            # evaluate_position returns from current-side perspective; after
+            # we block, side flips to opp, so we negate to get back to ours.
+            q = -evaluate_position(child)
+            if q > best_q:
+                best_q = q
+        return best_q
 
     candidates = _candidate_moves(state)
     # Move ordering: try moves with higher static score first to maximise alpha-beta cuts.

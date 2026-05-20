@@ -1506,3 +1506,85 @@ Remaining ~12h will tell us:
    cycle, super-linear.)
 
 [feedback_self_play_eta.md]: ~/.claude/projects/-Users-jason-code-gomoku/memory/feedback_self_play_eta.md
+
+## Anchor Elo calibration + lookahead-depth-3 bug (2026-05-20, while live run continues)
+
+### Calibrated baseline Elos (n=50 round-robin, anchor=random=0)
+
+|         | Elo  | notes |
+|---------|-----:|:------|
+| random  |    0 | anchor |
+| heuristic | **591** | reference for "strong greedy without lookahead" |
+| lookahead:depth=2 | **604** | essentially equal to heuristic (50W-0L-50D vs heuristic) |
+| lookahead:depth=3 | **249** | **broken — weaker than heuristic** (see bug below) |
+| lookahead:depth=4 | **629** | slightly above d=2 / heuristic |
+| lookahead:depth=5 | **711** | strongest of the fixed baselines |
+
+The real spread is much tighter than the seeded `ANCHOR_ELOS` (which had
+heuristic=800, lookahead2=1200, lookahead4=1500). Keeping seeded values
+in code for now per Jason's call: lookahead2 and heuristic playing equal
+strength is a *result style* coincidence, not a meaningful similarity,
+and re-anchoring to the calibration would compress the model_elo
+trajectory misleadingly.
+
+### Bug: odd-depth lookahead has a horizon-effect static eval flaw
+
+Investigated by a subagent. Empirical pattern from the calibration above
+is decisive — depth=3 (249) is the weakest depth>1 baseline; even depth=5
+(711) only beats d=4 (629) by a small margin despite searching deeper.
+
+**Root cause:** `evaluate_position` in `gomoku/baselines.py:105-116`
+credits "4 stones in a window with 0 opp stones" with weight `_OPP_W[4]
+= 22500` without distinguishing **open-fours** (actually unblockable) from
+**half-open fours** (trivially blocked). At odd search depths, the
+searcher's last move sits just before the leaf, builds such a threat,
+and the search ends before the opponent's forced block — the static
+eval reports the threat as if it'll resolve into a 5-in-a-row. At even
+depths the opponent always gets a final move and naturally refutes the
+hallucinated threat before the eval is taken.
+
+Concrete trace (verified): position after `e5,f5,f4,d6,e4,d4,e6,e3`
+(B to move). Heuristic and d=2 both pick `e7` (defensive). d=3 picks
+`g4` because its 3-ply search builds a fake "live 4" the static eval
+scores at +22350. After fix: d=3 still slightly prefers g4 (1976) over
+e7 (1171) in this position, suggesting **the eval also over-credits
+open-3 patterns** (3 stones in a window with both ends open), not
+just live-fours. The fix below only catches the live-four case.
+
+### Partial fix shipped: depth=0 quiescence for immediate-win threats
+
+`gomoku/baselines.py:_negamax` now applies a 1-ply quiescence at
+`depth==0`: if the opponent (just-moved side) has an immediate winning
+move (a 4-in-a-row completable to 5), play the forced block before
+calling `evaluate_position`. ~25 lines. O(81) max additional work per
+leaf, only fires when needed.
+
+**Empirical effect (regression tests in `tests/test_lookahead_quiescence.py`):**
+
+|                          | pre-fix | post-fix |
+|--------------------------|--------:|---------:|
+| d=3 vs heuristic n=30    | 0% (heur wins all 50/50 in calib) | **83% (d=3 wins 25/30)** |
+| d=3 vs d=2 n=30          | 5% (calib showed 5/50 d=3 wins) | 0% (still loses all 30) |
+| d=2 vs heuristic n=30    | 50% (all draws)               | 35% (slight shift, within noise) |
+| d=4 vs heuristic n=30    | ~37%                           | 45% (modest improvement) |
+| Quiescence leaf vs raw   | raw=-23615 (hallucinated threat) | quiesce=+316 (post-block reality) |
+
+**What remains broken:** d=3 still loses to d=2 100% of the time. The
+gap is likely from the same eval flaw extended to open-3 patterns (the
+eval credits any 3-stones-in-a-5-window without checking whether the
+ends are blocked). Fixing that requires either a more nuanced static
+eval (open-vs-half-open detection) or deeper quiescence (2-ply rollout
+for live-three threats). Filed as a known limitation, not blocking
+current work since we only use depth=2 in live eval and were planning
+to add depth=4 (both even, unaffected by the odd-depth flaw).
+
+### Why this bug doesn't affect the model's training
+
+`heuristic_player` uses `_score_all_moves` + `_find_immediate_wins`
+short-circuit (`baselines.py:202-226`), not `evaluate_position`.
+Model training uses the network's value head, not `evaluate_position`.
+So the static-eval horizon flaw only manifests in negamax lookahead
+opponents we play against in eval. Live eval uses lookahead:depth=2
+(unaffected). Calibration evidence here shows lookahead:depth=4 is
+also unaffected. The bug is real, the fix is partial, but neither bites
+our current training pipeline.

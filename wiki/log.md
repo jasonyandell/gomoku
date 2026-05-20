@@ -85,3 +85,26 @@ consistent heading so future sessions can scan recent changes with simple tools.
   seeded ANCHOR_ELOS with measured values from a round-robin between
   random + heuristic + lookahead{2,3,4,5}. Will update rating.py when
   calibration finishes.
+
+## [2026-05-20] notebook | lookahead-depth-3 bug diagnosed + partial fix
+
+- Calibration finished. The Elo spread among baselines is much tighter
+  than seeded: heuristic=591, depth=2=604 (≡heuristic, all-draws), depth=4=629,
+  depth=5=711. Anchored at random=0.
+- Per Jason's call, **NOT re-anchoring** ANCHOR_ELOS in code: heuristic and
+  depth=2 being equal-Elo is a style coincidence, not a meaningful collapse.
+- depth=3 came in at **Elo=249** (weaker than heuristic). Subagent investigated;
+  it's a horizon-effect bug in the static `evaluate_position` — credits "live
+  4" patterns without distinguishing open-fours (unblockable) from half-open
+  fours (trivially blocked). At odd depths the searcher builds a hallucinated
+  threat the opponent never gets to refute before the leaf.
+- Shipped **partial fix** in `gomoku/baselines.py:_negamax` adding depth=0
+  1-ply quiescence for immediate-win threats. Effect: depth=3 vs heuristic
+  goes from 0% (all losses) to 83% (d=3 wins majority). depth=3 vs depth=2
+  unchanged (still 0%) — remaining bug likely in open-3 pattern credit, not
+  just live-fours. Regression test in `tests/test_lookahead_quiescence.py`
+  pins the corrected leaf value.
+- The bug doesn't affect model training (uses network value head, not
+  `evaluate_position`) or the live eval pipeline (we use depth=2, which is
+  even and unaffected). Filed the remaining open-3 issue as a known
+  limitation, not blocking the current run.
