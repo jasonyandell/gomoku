@@ -1176,3 +1176,164 @@ cross-game vectorized descent: pure self-play, ~160k SGD steps,
 K=1 dynamic, medium model with stem_padding=3, 800 sims, τ_final=0.1,
 1.5M replay buffer, AGZ log-PUCT, on the dist setup with 4 workers.
 Eval gauge as a side process so the trainer doesn't block on baselines.
+
+## SUMMARY (2026-05-19, evening — az-recipe-160k LIVE, uncharted territory)
+
+Run is live. wandb id `sppjo3z5`, name `9x9-sweep-az-recipe-160k`. This
+section is a snapshot at e1285 (~50 min in); update as the run progresses.
+
+### What changed from "medium + padding=3 + 800 sims" to "what's actually running"
+
+Smoke run with the full AZ-recipe config (medium, stem_padding=3,
+sims=800, wave=32, K=1, 4 workers + eval_worker on MPS) benched at
+**~30 s/cycle** steady-state. Extrapolating, the 160k-SGD target =
+5000 cycles = ~46 hours wall-clock. Root cause: stem_padding=3 grows the
+post-stem feature map from 9×9 → 13×13, so every ResBlock does
+(13/9)² ≈ 2.1× more conv work. Medium under this scheme is ~2× the
+FLOPs/forward of the old 9×9-internal medium, and 4 workers contending
+on one MPS device get no parallel speedup (single-stream).
+
+To keep the run inside a multi-day budget on the M5 Max laptop, accepted
+three cutbacks (cell Z in `scripts/run_sweep.py`):
+
+| knob | recipe default | cell Z | impact |
+|---|---|---|---|
+| model size | medium (~1.06M) | **small (~324k)** | ~3× cheaper forward |
+| stem_padding | 3 (AGZ edge-fix) | **1** (legacy 9×9 internal) | ~2× cheaper forward |
+| n_simulations | 800 | **400** | ~2× fewer sims/move |
+
+Other recipe knobs unchanged: K=1, 1.5M replay buffer, τ_final=0.1,
+AGZ log-PUCT (c_puct_init=1.25, c_puct_base=19652), dirichlet α=0.13,
+wave_size=32, batch_size=512, lr=5e-4. Added a `--stem-padding` CLI
+override in `train.py` so the knob is now adjustable per-cell.
+
+### Throughput — much faster than smoke suggested, but for a reason
+
+Smoke (cold start, buffer filling) hit ~6.8 s/cycle. Steady-state in the
+live run (after the buffer hit 1.5M cap around e1000) is **~1-3 s/cycle**:
+
+| epoch | plies | cycle_s | notes |
+|------:|------:|--------:|:------|
+|     1 | 31.7  | 11.10   | cold start, untrained models = long games |
+|    51 | 15.5  |  2.80   | already collapsed to fast-attack |
+|   501 | 11.4  |  1.20   | steady state |
+|  1001 | 14.2  |  0.90   | buffer at cap, gen ≈ pure ingest |
+|  1285 | 11.2  |  0.6-3  | current |
+
+**Jason's calibration:** the cycle time is *artificially low* while
+games are short. Gen scales super-linearly with mean plies (wiki Exp:
+e122→e125 saw plies 34.5→52.8 grow gen 48.5s→102.5s — 53% more plies
+but 111% more wall-clock). If the model genuinely learns defense,
+plies regrow toward 50–80 and cycle time blows out. So:
+
+- **Lower-bound ETA** (plies stays ~12, no defense): remaining ≈ 3700 × 2 s = ~2 h
+- **Upper-bound ETA** (plies → 50-80, real defense): remaining ≈ 3700 × 8-13 s = ~8-13 h
+
+The interesting outcome (defense learned) is the one that costs
+wall-clock. **The run getting slower mid-flight is a positive signal,
+not a problem.** Saved as a calibration in user memory so we don't
+re-extrapolate naively.
+
+### Eval crossings — never seen in dist mode before
+
+Through e730 the model was the standard "beats random, gets crushed by
+heuristic and lookahead" failure pattern. Then it broke:
+
+| epoch | random | heuristic | lookahead:depth=2 |
+|------:|-------:|----------:|------------------:|
+|   0   |   95%  |    0%     |        0%         |
+| 730   |  100%  |    0%     |        0%         |
+| **779** | 100% |  **10%**  |        0%         | ← first non-zero
+| **831** | 100% |  **45%**  |      **25%**      | ← first real crossing
+| 879   |  100%  |   25%     |        5%         |
+| 1027  |  100%  |   35%     |       10%         |
+| 1077  |  100%  |   30%     |       10%         |
+| **1119**| 100% |  **68%**  |       12%         | ← climbing
+| 1179  |  100%  |   50%     |        2%         |
+| **1227**| 100% |  **70%**  |       10%         | ← latest
+
+n=20 per eval, so noise floor ≈ 5%. 50-70% sustained over 400+ epochs
+is **signal, not noise**. The wiki has never seen a dist run cross
+heuristic this hard:
+
+- `kze1lcti` (single-process, AZ-mini-history-800sims): heuristic 50%
+  at n=30 only at the e176 checkpoint, with n=4 wandb noise spikes
+  earlier that we treated as "crossings" but weren't.
+- `oo53qzvf` (fresh-dist, K=2): first real crossing at e315, plateaued
+  ~35% by e552.
+- All other dist cells (C, D, gpc16, gpc64, sync_gpc32): **0% heuristic
+  every eval, 100 epochs each.**
+
+This run is at **e1227 / heuristic 70%** and the trajectory is still
+rising. lookahead2 stays low (2-12%), so the model is well short of
+"actually strong" — but it's clearly doing something the prior recipes
+couldn't.
+
+### The plies puzzle
+
+Despite the heuristic crossings, **plies have never recovered** from
+the e51 collapse: 31.7 → 15.5 → 11-14 ever since. The eval crossings
+happen *without* plies growing back. Two reads:
+
+1. **Offense-only (Jason's working hypothesis):** the model is winning
+   by attacking *better*, not blocking better. Heuristic plays simple
+   greedy threats; if model's attack is faster/more accurate, model
+   wins in fewer plies. No real defense learned. Predicts: lookahead2
+   stays low; heuristic eventually plateaus around 70-80%; plies
+   stay floor-pinned.
+
+2. **Hidden-defense (alternative):** the model has learned to make
+   threats that force the heuristic into defensive moves, then wins
+   the race. In this read, plies stay short because the model dictates
+   tempo. Predicts: lookahead2 starts climbing as this matures; plies
+   start growing once it faces another strong attacker.
+
+`vl` has dropped to ~0.11 (from 0.69 at e1) — model is very confident
+in its evaluation. Combined with stable low plies + heuristic 50-70%,
+this looks more like (1) than (2), but (2) isn't ruled out.
+
+**Diagnostics to resolve it:**
+- If plies climb in the next few hundred epochs → (2)
+- If lookahead2 stays floor-pinned at 10-15% even as heuristic climbs → (1)
+- Head-to-head against `kze-e176` once this run finishes will tell us
+  whether this lineage is actually stronger or just better at exploiting
+  the heuristic's specific weaknesses (recall fresh-dist beat kze 97.5%
+  but lost worse to heuristic — same lineage non-transitivity may apply)
+
+### Run hyperparameters as actually deployed
+
+```
+size                  : small (324,570 params, stem_padding=1)
+sims                  : 400
+wave_size             : 32
+games_per_cycle       : 32 (4 workers × 8 g/batch)
+batch_size            : 512
+lr                    : 5e-4 (AdamW)
+sgd_per_game (K)      : 1.0
+replay_buffer         : 1,500,000
+dirichlet_alpha       : 0.13
+dirichlet_eps         : 0.25
+temperature_moves     : 10
+temperature_final     : 0.1   ← new
+c_puct (init)         : 1.25  ← AGZ log-PUCT
+c_puct_base           : 19652 ← AGZ log-PUCT
+wave bfs descent      : on    ← new
+target                : 5000 cycles = 160,000 SGD steps
+infra                 : 4 dist workers + eval_worker on CPU
+checkpoint_dir        : sweep_runs/az-recipe-160k/checkpoints/
+launch                : python scripts/run_sweep.py --cell Z
+```
+
+### Open questions to resolve as the run continues
+
+1. Does heuristic 70% hold or revert? Check at e2000, e3000, e4000.
+2. Does lookahead2 ever climb above 25%? If yes, real defense.
+3. Do plies regrow toward 50+ as the model gets stronger? Same signal.
+4. Where does heuristic plateau — 70%, 85%, 100%?
+5. Does the wall-clock prediction hold? Lower-bound (~2h remaining)
+   ⇒ offense-only; upper-bound (~8-13h remaining) ⇒ real defense.
+6. Head-to-head vs kze-e176 once done. The wiki found `fresh-e552 vs
+   kze-e176 = 97.5%-2.5%` but `fresh-e552 vs heuristic = 35%` while
+   `kze-e176 vs heuristic = 50%`. Same non-transitivity might bite
+   here — sibling-vs-sibling measures mutual specialization, not
+   absolute strength.
