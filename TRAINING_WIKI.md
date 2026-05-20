@@ -1588,3 +1588,95 @@ opponents we play against in eval. Live eval uses lookahead:depth=2
 (unaffected). Calibration evidence here shows lookahead:depth=4 is
 also unaffected. The bug is real, the fix is partial, but neither bites
 our current training pipeline.
+
+## SUMMARY (2026-05-20, ~e3500 — perf detour, GPU reality, white_wins → 0)
+
+While the run continued from e3400 to e3500+, three things happened that
+are worth recording. Run id `sppjo3z5`, az-recipe-160k.
+
+### Perf detour: 1-worker × 32 games + compile was a regression
+
+A subagent profiled the live setup, claimed 2-3× speedup available via
+"collapse 4 workers × 8 games to 1 worker × 32 games + torch.compile"
+based on the model "MPS is single-stream per process so 4 workers don't
+parallelize." Shipped as cell Z reconfig at commit 05a2425. Backed up
+checkpoint dir (`sweep_runs/az-recipe-160k.bak-20260520-0921`) + HF
+push of worker_weights at e3410 before deploying.
+
+**Result: slower, not faster.**
+
+| config | cycle_s steady | games/sec | model_elo band |
+|---|---:|---:|---:|
+| 4w × 8g × wave=32 (pre-detour) | ~33 | 0.97 | 1400-1665 |
+| 1w × 32g × wave=64 + compile | 36→63 (growing) | 0.5-0.9 | 1280-1530 |
+| 4w × 8g × wave=64 (rollback, keep wave) | ~22 | 1.45 | recovered |
+| 8w × 8g × wave=64 (Jason's "8 workers" call) | ~17 | 1.88 | sustained |
+
+Lessons banked in [wiki/topics/mcts-perf-ceiling.md](wiki/topics/mcts-perf-ceiling.md)
+2026-05-20 update section: per-process bench under-counts cross-process
+MPS parallelism; `torch.compile` doesn't pay off when workers reload
+weights every cycle; at this model size more workers > bigger batches.
+
+Also re-added `lookahead:depth=4` to default eval baselines (had been
+dropped during the launcher cycle); restored model_elo MLE precision.
+
+### GPU underutilization is structural
+
+8 workers running, Activity Monitor shows GPU at ~30-40%. Each MPS
+forward call on the small (324k param) model is ~2ms regardless of
+batch size 1-256. The Python tree-walk between calls
+(`_bfs_descend_one_per_game`, `state.apply`, `_init_node`) is larger
+than the GPU call itself. **No worker count can fix this** — the
+kernels are individually too small to saturate ~5120 GPU cores; more
+parallel callers just queue more 2ms calls.
+
+The "real next 2×" remains structural: batched `state.apply` on tensor
++ C-extension `_init_node` to move Python work off the critical path so
+the GPU can be fed continuously. Filed as pending — not blocking the
+current run.
+
+### `selfplay/white_wins → 0`: first-mover-advantage signal
+
+Around the time the buffer age dropped from ~250 to ~75 (= the buffer
+finishing its post-restart rollover into the current weight regime),
+self-play white wins fell to near zero. Black wins ~all games now.
+
+This is the natural endpoint of freestyle 9×9 gomoku self-play —
+with no opening restrictions and both sides being the same model,
+black's first-move initiative becomes decisive once the model finds
+strong enough attacks. The asymptotic state of perfect freestyle
+self-play is **black always wins**.
+
+Implications:
+- The value head's signal degrades for white-side positions (almost
+  always z=-1, trivially predictable). Some of the ongoing pl/vl uptick
+  may reflect this — the model is exploring policies in a regime where
+  the value target is too easy to fit.
+- Per-cycle Elo from fixed-baseline eval is the more informative
+  metric now; self-play winrate is saturated.
+- If we want to break the asymmetry deliberately:
+  1. `--random-opening-moves N` (already in the CLI; decouples first-
+     mover identity from the model's preferred attack opening)
+  2. Opponent-mix (white plays as a past checkpoint occasionally)
+  3. We're committed to freestyle rules — renju-style opening
+     restrictions are off the table
+
+For now, accept the signal. Strength-by-eval is still climbing. If
+training stability degrades further (pl > 0.6 sustained, or value
+trivially collapses to ±1), revisit then.
+
+### Other small wins shipped during this phase
+
+- `--worker-min-positions` + `--sgd-per-position` ingest mode
+  (commit 85eeccc). Wasn't deployed for the current run but the code
+  exists. Solves the "buffer age varies with mean plies" problem the
+  trainer otherwise has. See [feedback_self_play_eta.md][] memory.
+- Eval-side parallelism (commit d913447): `play_match_parallel` via
+  multiprocessing.Pool. ~2× eval-cycle speedup, lets us include
+  lookahead:depth=4 in the live anchor set without blowing the
+  eval-budget per cycle.
+- Lookahead:depth=3 horizon-fix quiescence in `_negamax` depth=0
+  (commit c491d80, partial — fixes the immediate-win-completable-4
+  case, leaves open-3 patterns as remaining d=3-vs-d=2 weakness).
+
+[feedback_self_play_eta.md]: ~/.claude/projects/-Users-jason-code-gomoku/memory/feedback_self_play_eta.md

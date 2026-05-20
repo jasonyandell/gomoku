@@ -108,3 +108,31 @@ consistent heading so future sessions can scan recent changes with simple tools.
   `evaluate_position`) or the live eval pipeline (we use depth=2, which is
   even and unaffected). Filed the remaining open-3 issue as a known
   limitation, not blocking the current run.
+
+## [2026-05-20] notebook | perf detour, GPU reality, white_wins → 0 (e3500+)
+
+- Tried a subagent-proposed perf change: 1 worker × 32 games × wave=64 +
+  torch.compile, expected 2-3× speedup. **Regression** — cycle time grew
+  from 33s (4-worker baseline) to 36→63s on the 1-worker path. Rolled
+  back to 4 workers, kept wave=64 (the real win from the bench), dropped
+  torch.compile. Net: ~22s/cycle, +50% vs the original baseline.
+- Jason flagged the 1-worker setup as "kinda crazy" and predicted GPU
+  underutilization — right on both counts. Bumped to 8 workers per his
+  call: ~17s/cycle, ~94% over baseline. GPU still at 30-40% though —
+  the structural ceiling is small kernels (2ms regardless of batch) on
+  a tiny 324k-param model, not parallelism.
+- Updated [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) with a
+  2026-05-20 section: lessons on per-process bench vs production parallelism,
+  compile-vs-reload-cadence, why more workers > bigger batches at this
+  model size. Memory `project_perf_bench_lesson` mirrors this for cross-
+  session recall.
+- Observed `selfplay/white_wins → 0` once buffer/age_p50 rolled from 250
+  to ~75. This is the first-mover-advantage signal in freestyle 9×9:
+  asymptotic state of perfect self-play has black always winning. Value
+  head signal degrades for white-side positions (always z=-1, trivially
+  fittable), which probably explains some of the ongoing pl/vl uptick.
+  Recorded in TRAINING_WIKI.md as a strength-signal observation, not a
+  bug. `--random-opening-moves` would break the asymmetry if desired.
+- Also pushed: `--worker-min-positions` + `--sgd-per-position` ingest mode
+  (commit 85eeccc, not yet deployed live), eval-side `play_match_parallel`
+  via mp.Pool (commit d913447, lets lookahead:depth=4 fit in eval budget).

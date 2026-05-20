@@ -110,3 +110,66 @@ When some upstream AZ repo claims a big speedup from a refactor:
 - `gomoku/mcts.py` — current implementation, `_bfs_descend_one_per_game`
   for the BFS path.
 - `tests/test_mcts.py` — byte-for-byte correctness check on the BFS path.
+
+## 2026-05-20 update — the 1-worker collapse and the GPU-saturation reality
+
+Mid-run perf intervention attempt. A subagent measurement of the live
+checkpoint concluded:
+- workers are CPU-bound (~80% on Python tree-traversal between MPS calls)
+- per-MPS-call latency is ~2ms regardless of batch 1-256 (kernel dispatch
+  dominates compute; the small 324k-param model can't fill the device)
+- claim: 4 workers on one MPS device serialize on the per-process stream,
+  so collapsing to 1 worker × big batches would unlock 2-3× throughput
+
+We deployed the change as `cell Z` reconfig + torch.compile: 1 worker × 32
+games × wave=64 + compile. **Result was a regression, not a win.**
+
+| config | cycle_s | games/sec | notes |
+|---|---:|---:|---|
+| 4w × 8g × wave=32 (pre-detour) | ~33 | 0.97 | baseline |
+| 1w × 32g × wave=64 + compile | 36-63 (growing) | 0.5-0.9 | **slower** |
+| 4w × 8g × wave=64 (rollback + kept wave win) | ~22 | 1.45 | **+50% over baseline** |
+| 8w × 8g × wave=64 (more parallel) | ~17 | 1.88 | +94% over baseline; **GPU only 30-40%** |
+
+Lessons:
+
+1. **The "MPS serializes processes" claim is overstated.** macOS + MPS
+   queue kernels across processes well enough that 4 small workers achieve
+   significant device-time overlap. The single-worker config doesn't
+   inherit that — it leaves the GPU idle during its long Python phases.
+2. **`torch.compile` doesn't pay off when workers reload weights every
+   cycle.** The compile cache is per-process, partly invalidated on weight
+   reload, and the 1-cycle reload cadence pays compile-warmup repeatedly.
+   Combined cycle time GREW (36→63s) over a few cycles rather than
+   amortizing.
+3. **At our model size, more workers > bigger batches.** Each MPS call is
+   2ms whether the batch is 32 or 1024 samples. The win comes from having
+   more processes queue calls in parallel, not from saturating any single
+   call. Practical ceiling ~8-12 workers before process-contention and
+   file-IO overheads eat into the gain.
+4. **GPU underutilization is structural, not a tuning problem.** Activity
+   Monitor showing 30% even at 8 workers means each call is ~2ms but the
+   gaps between calls (Python tree-walk in `_bfs_descend_one_per_game` and
+   `state.apply`/`_init_node`) are larger. The model is genuinely too small
+   to saturate ~5120 GPU cores. No worker count fixes this. **The actual
+   "next 2×" is batched `state.apply` on tensor + C-extension
+   `_init_node`** — moves the Python-side work off the critical path so
+   the GPU can be fed continuously.
+
+### How to avoid this kind of misread
+
+When estimating production speedup from an isolated bench:
+
+- A single-process bench under-counts the OS-scheduled cross-process
+  parallelism that multi-worker setups achieve. Always re-measure with the
+  same number of competing processes the production setup uses, or
+  estimate from production logs (which already reflect real wall-clock).
+- `torch.compile` benefits assume long-lived models. If your workers
+  reload weights more often than the compile-amortization window, compile
+  is net-negative.
+- "GPU isn't saturated" doesn't always mean "throw more parallelism at
+  it." If the kernels are individually too small, more parallel callers
+  just queue more 2ms calls — same total GPU time, more CPU spent
+  dispatching.
+
+Saved as memory `project_perf_bench_lesson` for cross-session recall.
