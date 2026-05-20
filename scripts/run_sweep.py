@@ -62,6 +62,7 @@ class Cell:
     save_every: int = 1
     save_buffer_every: int = 20
     keep_last_n: int = 3
+    stem_padding: int | None = None  # None = use train.py default (3, AGZ edge-fix)
     extra_train_args: list[str] = field(default_factory=list)
     extra_worker_args: list[str] = field(default_factory=list)
 
@@ -75,10 +76,13 @@ CELLS: dict[str, Cell] = {
     "D": Cell("D-K1-buf500k",  sgd_per_game=1.0, buffer_size=500_000),
     "E": Cell("E-K2-buf500k",  sgd_per_game=2.0, buffer_size=500_000),
     "F": Cell("F-K4-buf500k",  sgd_per_game=4.0, buffer_size=500_000),
-    # AZ-recipe long run: K=1 + 1.5M buffer + stem_padding=3 + tau_final=0.1
-    # + AGZ log-PUCT (all defaults in train.py post-recipe-import). Target is
-    # 160k SGD steps; at K=1 and worker_min_games=32 that's 5000 cycles.
+    # AZ-recipe long run, tuned for laptop wall-clock: small model + padding=1
+    # + sims=400. Trades the stem-padding edge-fix and some sim quality for ~4x
+    # the per-cycle throughput, so a 160k-step run fits in a multi-day budget
+    # rather than 2+ days. K=1, 1.5M buffer, tau_final=0.1, AGZ log-PUCT all
+    # stay from the recipe imports.
     "Z": Cell("az-recipe-160k", sgd_per_game=1.0, buffer_size=1_500_000,
+              size="small", stem_padding=1, n_simulations=400,
               lr=5e-4, epochs=5000),
 }
 
@@ -95,7 +99,7 @@ def cell_dirs(cell: Cell) -> dict:
 
 
 def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
-    return [
+    cmd = [
         PYTHON, "-u", "-m", "gomoku.train",
         "--size", cell.size,
         "--epochs", str(cell.epochs),
@@ -122,6 +126,9 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         "--run-name", f"9x9-sweep-{cell.name}",
         *cell.extra_train_args,
     ]
+    if cell.stem_padding is not None:
+        cmd += ["--stem-padding", str(cell.stem_padding)]
+    return cmd
 
 
 def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:

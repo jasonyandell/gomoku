@@ -100,6 +100,10 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     p.add_argument("--size", type=str, default="small", help="tiny / small / medium / large")
+    p.add_argument("--stem-padding", type=int, default=None,
+                   help="Override ModelConfig.stem_padding (default 3 = michaelnny's "
+                        "edge-fix). Set to 1 for the legacy 9x9 internal feature map, "
+                        "which is ~2x cheaper per forward but loses the edge-blocking fix.")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--games-per-epoch", type=int, default=64)
     p.add_argument("--n-simulations", type=int, default=100)
@@ -258,7 +262,7 @@ def main() -> None:
             optimizer.load_state_dict(payload["optimizer_state_dict"])
         print(f"resumed from {args.resume} @ epoch {start_epoch}, total_games={total_games}")
     else:
-        model = build_model(args.size).to(device)
+        model = build_model(args.size, stem_padding=args.stem_padding).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         print(f"fresh {args.size} model: {n_params(model):,} params")
 

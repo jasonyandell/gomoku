@@ -94,10 +94,14 @@ class GomokuNet(nn.Module):
         return p, v
 
 
-def build_model(size: str = "small") -> GomokuNet:
+def build_model(size: str = "small", *, stem_padding: int | None = None) -> GomokuNet:
     if size not in SIZE_PRESETS:
         raise ValueError(f"unknown size {size!r}; options: {list(SIZE_PRESETS)}")
-    return GomokuNet(SIZE_PRESETS[size])
+    cfg = SIZE_PRESETS[size]
+    if stem_padding is not None:
+        from dataclasses import replace
+        cfg = replace(cfg, stem_padding=stem_padding)
+    return GomokuNet(cfg)
 
 
 def n_params(model: nn.Module) -> int:
