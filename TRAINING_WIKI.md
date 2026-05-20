@@ -1680,3 +1680,92 @@ trivially collapses to ±1), revisit then.
   case, leaves open-3 patterns as remaining d=3-vs-d=2 weakness).
 
 [feedback_self_play_eta.md]: ~/.claude/projects/-Users-jason-code-gomoku/memory/feedback_self_play_eta.md
+
+## Lockstep vs continuous worker orchestration — trade-off analysis (2026-05-20)
+
+Jason raised the question: would going back to `--gen-once-per-publish`
+(lockstep) help, possibly in a "2 waves of 4" staggered design? Recording
+the analysis here so we don't re-derive it.
+
+### What "lockstep" means in this codebase
+
+The `gomoku.selfplay_worker --gen-once-per-publish` flag (commit 519fd0c,
+2026-05-18) makes a worker: produce one batch → wait for the weights file's
+mtime to advance → produce the next batch. The result is that each cycle
+of trainer-ingested games comes from exactly ONE weight version, instead
+of a smear of recent versions that continuous-mode workers produce when
+they poll mtime less often than the trainer publishes.
+
+### What "model does better with lockstep" actually says
+
+Wiki history claim came from the 2026-05-19 `nox388ow` run ("9x9-dist-sync-K1-gpc32")
+where sync mode produced the first non-zero heuristic crossing at e65 in
+a 100-epoch window where every dist config otherwise failed. The wiki's
+own honest read of that run: "the same ceiling — fast-attack mode in 100
+epochs. Hypothesis dies, but the data semantics fix is worth keeping for
+future runs." So the empirical evidence is "slightly less bad / earlier
+flicker," not a documented training-strength gain at convergence. Re-litigate
+at our current model_elo 1400-1600 strength would be a controlled A/B, not
+a slam-dunk improvement.
+
+### The "2 waves of 4 in lockstep" idea has a hard dependency wall
+
+Intuitive design: split 8 workers into Group A (w0-w3) and Group B (w4-w7).
+A locks to publish K, produces games. While A produces, B locks to publish
+K+1 and produces concurrently. Keeps both groups busy, no idle, clean
+stratification.
+
+**This doesn't work** because publish K+1 doesn't exist until the trainer
+consumes K's games and trains. So B has to wait for A to finish, then
+wait for the trainer cycle, *then* it can produce for K+1. The "staggered
+overlap" collapses to serial: only one group is producing for a real
+publish at any time. Effective throughput = 4 workers, not 8.
+
+The only way to get true concurrent production with lockstep semantics is
+to accept *some* smear — Group B starts producing with the current weights
+while the trainer is still consuming Group A's batch. But that's literally
+what continuous mode (with mtime polling) does today.
+
+### Realistic lockstep deployment at our scale
+
+If you want to try lockstep, the right experiment is `--gen-once-per-publish`
+on **all 8 workers** + `worker_min_games=64` (or `worker_min_positions=20_000`
+if pairing with the constant-age fix). At our current 30s/batch worker speed
+vs ~10s trainer-cycle, workers are already the bottleneck — they don't idle
+in continuous mode, so lockstep adds zero idle cost. The buffer becomes
+genuinely per-version stratified. The cost is 2× SGD steps per cycle (K=1
+× 64 games instead of 32) and ~½ the buffer age (more positions per cycle
+= faster turnover).
+
+### Trade-off summary
+
+| dimension | continuous (today) | pure lockstep | "2 waves of 4" |
+|---|---|---|---|
+| throughput at our 30s/batch | bottlenecked by workers (max) | same (workers still bottleneck) | **lower** — collapses to 4-worker serial |
+| buffer stratification | smeared, ~1-2 versions per cycle | clean, 1 version per cycle | clean per group, but throughput half |
+| training cost per cycle | 32 SGD (K=1 × 32 games) | 64 SGD (K=1 × 64 games) | 32 SGD |
+| buffer age | ~75 (steady state) | ~37 (halved) | ~75 (unchanged) |
+| code complexity | none — default | add `--gen-once-per-publish` flag | non-trivial — needs new launcher logic |
+| empirical evidence for training benefit | baseline | "slightly less bad" at one early-phase data point | none (not yet tested) |
+
+### Why lockstep won't help GPU utilization
+
+The 30-40% GPU utilization is structural — each MPS forward call on a
+324k-param model is ~2ms regardless of how many workers are calling it.
+Lockstep aligns *which weight version* workers use; it doesn't change
+per-call latency. The "real next 2×" is still in batched `state.apply`
+on tensor + C-extension `_init_node` per
+[wiki/topics/mcts-perf-ceiling.md](wiki/topics/mcts-perf-ceiling.md).
+
+### Conclusion
+
+Lockstep is a *training-side* lever, not a perf lever. The case for trying
+it is "we want cleaner per-version buffer composition for training
+stability arguments and the empirical sync-mode flicker hint." The case
+against is "it's an A/B without strong evidence, costs 2× SGD per cycle,
+and the existing continuous mode is producing strong results (model_elo
+1400-1600)."
+
+Not deploying today. If we see training-stability problems (pl > 0.6
+sustained, value collapse, oscillating eval), revisit as the natural
+next intervention. Filed as a known available option.

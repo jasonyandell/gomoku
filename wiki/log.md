@@ -136,3 +136,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Also pushed: `--worker-min-positions` + `--sgd-per-position` ingest mode
   (commit 85eeccc, not yet deployed live), eval-side `play_match_parallel`
   via mp.Pool (commit d913447, lets lookahead:depth=4 fit in eval budget).
+
+## [2026-05-20] notebook | lockstep vs continuous orchestration analysis
+
+- Jason raised the lockstep question — would `--gen-once-per-publish` mode
+  help, possibly in a "2 waves of 4" staggered design?
+- Filed full trade-off analysis in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "Lockstep vs continuous"
+  section. Key findings: (1) at our 30s-batch / 10s-cycle ratio, workers
+  are already the bottleneck so lockstep adds zero idle cost; (2) the
+  "2 waves of 4" staggered overlap collapses to serial because publish
+  K+1 has a hard dependency on K being consumed first; (3) the "model
+  does better with lockstep" intuition cites one heuristic flicker at
+  e65 in `nox388ow` — slightly-less-bad, not a documented training win;
+  (4) lockstep is a training-side lever, not a perf lever (GPU
+  utilization is bound by per-call kernel size, not worker alignment).
+- Decision: not deploying today. Realistic deployment recipe documented
+  as the natural next intervention if training-stability problems
+  emerge (pl > 0.6 sustained, value collapse).
