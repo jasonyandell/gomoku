@@ -1769,3 +1769,124 @@ and the existing continuous mode is producing strong results (model_elo
 Not deploying today. If we see training-stability problems (pl > 0.6
 sustained, value collapse, oscillating eval), revisit as the natural
 next intervention. Filed as a known available option.
+
+## Next-run config sketches — collected for re-assessment (2026-05-20)
+
+Holding pen for ideas to evaluate when the current az-recipe-160k run
+finishes. Jason: "for the next run, I really want a full buffer and this
+flat AND a bunch of games-per-model, rather than some-games-across-a-
+spread-of-models."
+
+### Observation: `buffer/age_mean` trajectory of the current run
+
+From wandb chart, full run e1 → e4200:
+- e1-1000: rapid climb to ~250 as buffer fills with "old" weight tags
+- e1000-2500: long descent as ingest-per-cycle caught up with buffer size
+  (defense learned → longer games → more positions per cycle → faster
+  buffer turnover → age drops)
+- e2500-3000: plateau ~50-60 (steady-state equilibrium with current
+  ingest/buffer ratio)
+- e3000-3700: bumps to 100-130 — those are the restart-induced transients
+  (--resume from latest.pt loads an old-version-tagged buffer, age climbs
+  until ingest of new positions evicts the loaded slots)
+- e3700+: back to ~50-60 equilibrium
+
+### The age-vs-buffer-vs-ingest math
+
+```
+median_age (cycles) ≈ buffer_size / (2 × positions_per_cycle)
+positions_per_cycle = games_per_cycle × mean_plies × D4_aug_factor (= 8)
+```
+
+Pick any two, the third follows. The current az-recipe-160k run has:
+- buffer_size = 1.5M
+- games_per_cycle = 32, mean_plies ~50, D4 = 8
+- positions_per_cycle = 12,800
+- → median_age = 1.5M / (2 × 12800) = **58** ← matches observed equilibrium
+
+To hit Jason's target of age ≈ 200-250 with a stable model playing
+50-plies games:
+
+| games/cycle | needed buffer | memory at 17×9×9 f32 |
+|---:|---:|---:|
+| 16 | 2.5M | ~14 GB |
+| **32** | **5.1M** | **~28 GB** ← practical sweet spot |
+| 64 | 10M | ~57 GB ← upper limit before CPU-buffered |
+
+M5 Max with 64-128 GB unified memory can hold 5M comfortably. 10M is
+the ceiling before we'd need CPU-resident buffer with on-demand GPU
+transfer.
+
+### Proposed cell `Zlock` (lockstep + bigger buffer)
+
+Combines the lockstep analysis above with the bigger-buffer math:
+
+```
+size:                  small (or medium — see below)
+stem_padding:          1 (or 3 — see below)
+n_simulations:         400 (or 800 if we have wall-clock budget)
+wave_size:             64 (kept from current best)
+games_per_batch:       8
+n_workers:             4 (lockstep)
+games_per_epoch:       32 (= 4 × 8, all from one weight version)
+worker_min_positions:  ~12_800 (the constant-age fix from commit 85eeccc)
+sgd_per_position:      0.0025 (K=1 SGD per game at this ingest)
+batch_size:            512
+lr:                    5e-4
+buffer_size:           5_000_000           ← 3× current
+dirichlet_alpha:       0.13
+dirichlet_eps:         0.25
+temperature_moves:     10
+temperature_final:     0.1
+c_puct / c_puct_base:  1.25 / 19652 (AGZ defaults)
+epochs:                ? (TBD per total budget)
+EXTRA worker arg:      --gen-once-per-publish
+```
+
+Effect:
+- Each cycle's 32 games all come from one weight version (lockstep)
+- 32 × 50 × 8 = 12,800 positions per cycle
+- 5M buffer rolls every 5M / 12.8k = 391 cycles
+- median_age ≈ 195 — close to Jason's 200-250 target
+- Pairs cleanly with the constant-age positions-based ingest fix
+
+### Other decisions to re-assess when the current run finishes
+
+These are knobs we've been deferring; the next-run config decision is a
+good time to reconsider each:
+
+1. **stem_padding 1 vs 3.** Current run uses 1 (legacy 9×9 internal), which
+   was a wall-clock cutback. With more compute headroom we could try 3
+   (michaelnny's edge-fix). Cost: ~2× compute per forward.
+2. **model size small (324k) vs medium (1.06M).** Medium would give the
+   model more capacity to encode the strategies we've seen it discover.
+   Probably worth trying once we've banked the perf improvements.
+3. **sims 400 vs 800.** 800 is AZ-faithful; 400 was a wall-clock cutback.
+   Could go to 800 if compute allows.
+4. **K (sgd-per-game / sgd-per-position).** Currently 1.0; could try 2.0
+   for more "per-version training depth" since the buffer is bigger.
+5. **Random opening moves** (`--random-opening-moves N`). Would break the
+   `white_wins ≈ 0` asymmetry by decoupling first-mover identity from the
+   model's preferred attack opening. Useful if we want to keep training a
+   more robust player past the freestyle-attack ceiling.
+6. **Past-checkpoint opponent mix.** A fraction of self-play games where
+   white plays as an older checkpoint. Same goal as #5 — diversify the
+   training signal beyond pure self-play attack-only converged state.
+7. **Lookahead bug structural fix** (the open-3 pattern issue from the
+   2026-05-20 calibration). Currently lookahead:depth=3/5 are weaker than
+   their parity-paired even depths. Would let us add depth=5 as a stronger
+   anchor in eval without horizon-effect bias. Investigation deferred per
+   2026-05-20 partial-fix commit c491d80.
+8. **Structural perf: batched `state.apply` on tensor + C-extension
+   `_init_node`.** The "real next 2×" from
+   [wiki/topics/mcts-perf-ceiling.md](wiki/topics/mcts-perf-ceiling.md).
+   Would let bigger model + bigger sims fit in same wall-clock.
+
+### How this collection should be used
+
+When the current run finishes (currently projected ~e8560), don't just
+relaunch with the same config — pause and re-assess. The current run
+already informs every choice above with real data. Pick the next-run
+config with a specific question in mind ("is medium model better at this
+strength level?" or "does lockstep+bigger buffer break the self-play
+attack ceiling?") rather than a generic "improve everything."

@@ -154,3 +154,24 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Decision: not deploying today. Realistic deployment recipe documented
   as the natural next intervention if training-stability problems
   emerge (pl > 0.6 sustained, value collapse).
+
+## [2026-05-20] notebook | next-run config sketches collected
+
+- Jason flagged buffer/age_mean as an under-utilized knob: "for the next
+  run, I really want a full buffer and this flat AND a bunch of games-
+  per-model, rather than some-games-across-a-spread-of-models."
+- Captured the math (`median_age ≈ buffer_size / (2 × positions/cycle)`)
+  + the chart interpretation (buffer age climbed to 250 e1-1000, fell to
+  steady-state 50-60 as games lengthened, restart-induced transients
+  visible at e3000-3700).
+- Drafted cell Zlock as a candidate next-run config: 4 workers in
+  lockstep (--gen-once-per-publish), 5M buffer, positions-based ingest.
+  Gives age ~195 — close to Jason's 200-250 target.
+- Also listed 8 decisions to re-assess when the current run finishes
+  (stem_padding 1 vs 3, model size, sims 400 vs 800, K, random-opening
+  moves, past-checkpoint opponent mix, lookahead bug structural fix,
+  the structural perf "real next 2×").
+- Decision: NOT pre-registering the cell. Hold the collection in
+  TRAINING_WIKI.md until the current run finishes; re-assess with the
+  current run's full data in hand. Next-run config should be picked
+  with a specific question in mind, not "improve everything."
