@@ -69,6 +69,15 @@ class Cell:
     # self-play game length (which swings between attack and defense regimes).
     worker_min_positions: int = 0
     sgd_per_position: float | None = None
+    # Per-worker games-per-batch. Bigger batches give MCTS more leaves per
+    # evaluator call (better MPS saturation) but fewer worker-publish
+    # synchronizations. Pair with smaller n_workers to avoid MPS contention
+    # (4 procs share one MPS stream → no parallel speedup; 1 proc × N games
+    # is faster than N procs × 1 game for the same data).
+    games_per_batch: int = 8
+    # Apply torch.compile to worker models (eval-only). ~1.3-1.5x forward
+    # speedup at batch>=32 for the small model on MPS.
+    compile_workers: bool = False
     extra_train_args: list[str] = field(default_factory=list)
     extra_worker_args: list[str] = field(default_factory=list)
 
@@ -87,9 +96,17 @@ CELLS: dict[str, Cell] = {
     # the per-cycle throughput, so a 160k-step run fits in a multi-day budget
     # rather than 2+ days. K=1, 1.5M buffer, tau_final=0.1, AGZ log-PUCT all
     # stay from the recipe imports.
+    #
+    # Perf wins (2026-05-20 mid-run): single worker × 32 games × wave=64 +
+    # torch.compile. Yields ~2-3× throughput vs the original 4-worker / 8-game
+    # / wave=32 config because MPS is single-stream per process (4 workers
+    # didn't actually parallelize) and small batches were kernel-launch-bound.
+    # Subagent measurement confirmed; backup taken before deploying.
     "Z": Cell("az-recipe-160k", sgd_per_game=1.0, buffer_size=1_500_000,
               size="small", stem_padding=1, n_simulations=400,
-              lr=5e-4, epochs=5000),
+              lr=5e-4, epochs=5000,
+              n_workers=1, wave_size=64, games_per_batch=32,
+              compile_workers=True),
     # AZ-recipe long run with constant-age ingest. Same recipe as Z but uses
     # positions-based ingest + SGD so buffer turnover stays stable when
     # self-play game length swings (which Z's run showed it does — plies
@@ -153,12 +170,12 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
 
 
 def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
-    return [
+    cmd = [
         PYTHON, "-u", "-m", "gomoku.selfplay_worker",
         "--weights-path", str(dirs["worker_weights"]),
         "--output-dir", str(dirs["records_dir"]),
         "--worker-id", worker_id,
-        "--games-per-batch", "8",
+        "--games-per-batch", str(cell.games_per_batch),
         "--n-simulations", str(cell.n_simulations),
         "--wave-size", str(cell.wave_size),
         "--temperature-moves", str(cell.temperature_moves),
@@ -167,6 +184,9 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
         "--seed", str(seed),
         *cell.extra_worker_args,
     ]
+    if cell.compile_workers:
+        cmd += ["--compile"]
+    return cmd
 
 
 def eval_cmd(cell: Cell, dirs: dict) -> list[str]:
@@ -200,7 +220,7 @@ def clean_cell(cell: Cell) -> None:
         base.rmdir()
 
 
-def launch_cell(cell: Cell, foreground: bool) -> None:
+def launch_cell(cell: Cell, foreground: bool, resume_path: str | None = None) -> None:
     dirs = cell_dirs(cell)
     dirs["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
     dirs["records_dir"].mkdir(parents=True, exist_ok=True)
@@ -222,7 +242,11 @@ def launch_cell(cell: Cell, foreground: bool) -> None:
         print(f"  spawned {label} pid={p.pid} -> {log_path}")
 
     print(f"=== launching cell {cell.name} ===")
-    spawn("trainer", trainer_cmd(cell, dirs))
+    t_cmd = trainer_cmd(cell, dirs)
+    if resume_path:
+        t_cmd += ["--resume", str(resume_path)]
+        print(f"  trainer resuming from {resume_path}")
+    spawn("trainer", t_cmd)
     # Give the trainer a head start so workers find the initial weights file.
     time.sleep(2.0)
     for i in range(cell.n_workers):
@@ -260,6 +284,11 @@ def main() -> None:
     p.add_argument("--clean", action="store_true",
                    help="delete the cell's checkpoint+log dirs (does not stop a running cell)")
     p.add_argument("--epochs", type=int, default=None, help="override cell.epochs")
+    p.add_argument("--resume", type=str, default=None,
+                   help="Path to a checkpoint (.pt) to resume the trainer from. "
+                        "Passes through as --resume to gomoku.train. wandb run id "
+                        "embedded in the checkpoint will continue the same wandb "
+                        "timeline. Useful for swapping perf configs mid-run.")
     args = p.parse_args()
 
     if args.list or not args.cell:
@@ -276,7 +305,7 @@ def main() -> None:
         clean_cell(cell)
         return
 
-    launch_cell(cell, foreground=args.foreground)
+    launch_cell(cell, foreground=args.foreground, resume_path=args.resume)
 
 
 if __name__ == "__main__":
