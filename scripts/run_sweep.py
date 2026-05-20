@@ -190,13 +190,20 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
 
 
 def eval_cmd(cell: Cell, dirs: dict) -> list[str]:
+    # Lookahead:depth=4 is included as a 4th anchor: with depth=4 anchored at
+    # 1500 Elo the implied_elo MLE doesn't saturate against lookahead2 (1200),
+    # so the model_elo trajectory shows real strength changes instead of
+    # ceiling-clamping when the model crushes the lower-rated baselines.
+    # n_workers=4 keeps the multi-baseline eval cycle under ~3min via parallel
+    # game-playing (see gomoku/eval.py:play_match_parallel).
     return [
         PYTHON, "-u", "-m", "gomoku.eval_worker",
         "--checkpoint-path", str(dirs["worker_weights"]),
-        "--baselines", "random,heuristic,lookahead:depth=2",
+        "--baselines", "random,heuristic,lookahead:depth=2,lookahead:depth=4",
         "--n-games", "20",
         "--sims", "100",
         "--device", "cpu",
+        "--n-workers", "4",
         "--poll-sec", "2.0",
     ]
 
