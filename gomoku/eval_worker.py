@@ -37,6 +37,12 @@ from gomoku.eval import mcts_picker, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import load_checkpoint
+from gomoku.rating import (
+    ANCHOR_ELOS,
+    baseline_spec_to_anchor_key,
+    implied_elo,
+    score_from_match,
+)
 from gomoku.util import pick_device
 
 
@@ -117,6 +123,10 @@ def main() -> None:
 
         log: dict = {"eval_worker/epoch_evaluated": epoch_tag}
         t_pass_0 = time.perf_counter()
+        # Per-cycle Elo evidence: list of (anchor_rating, score, n_games) for
+        # the baselines we have anchor Elos for. Fed to implied_elo at the end
+        # of the cycle.
+        elo_matches: list[tuple[float, float, int]] = []
         for spec_idx, (spec, baseline_picker) in enumerate(baseline_pickers):
             t0 = time.perf_counter()
             res = play_match_pickers(
@@ -131,13 +141,33 @@ def main() -> None:
             log[f"eval/{key_}_losses"] = res.losses
             log[f"eval/{key_}_draws"] = res.draws
             log[f"time/eval_{key_}_s"] = dt
+            anchor_key = baseline_spec_to_anchor_key(spec)
+            anchor_elo = ANCHOR_ELOS.get(anchor_key) if anchor_key else None
+            anchor_str = f" anchor={anchor_elo:.0f}" if anchor_elo is not None else ""
             print(
                 f"[eval] e={epoch_tag} {spec.label():<20} "
                 f"{res.wins}W-{res.losses}L-{res.draws}D ({res.win_rate:.0%}) "
-                f"in {dt:.1f}s",
+                f"in {dt:.1f}s{anchor_str}",
                 flush=True,
             )
+            if anchor_elo is not None:
+                score, n_games = score_from_match(res.wins, res.losses, res.draws)
+                elo_matches.append((anchor_elo, score, n_games))
+                log[f"eval/{key_}_anchor_elo"] = anchor_elo
         log["time/eval_pass_s"] = time.perf_counter() - t_pass_0
+
+        # Maximum-likelihood implied Elo from this cycle's evidence. Stateless
+        # per cycle — plotted over time it gives a single-number strength
+        # trajectory that composes across anchors instead of forcing you to
+        # eyeball three winrates separately.
+        if elo_matches:
+            model_elo = implied_elo(elo_matches)
+            log["eval/model_elo"] = model_elo
+            print(
+                f"[eval] e={epoch_tag} model_elo={model_elo:.0f} "
+                f"(from {len(elo_matches)} anchors)",
+                flush=True,
+            )
         # Atomic-append to JSONL so a partial line never leaves the file.
         line = json.dumps({"ts": time.time(), **log}) + "\n"
         with open(jsonl_path, "a") as f:

@@ -651,6 +651,11 @@ def main() -> None:
                 wr_bits.append(f"{k[len('eval/'):-len('_winrate')]}={v:.0%}")
         if wr_bits:
             msg += " wr[" + " ".join(wr_bits) + "]"
+        # eval_worker forwards a maximum-likelihood model_elo per cycle when
+        # at least one baseline matches an anchor in gomoku.rating.ANCHOR_ELOS.
+        # Surface it in the epoch print line for quick reading.
+        if "eval/model_elo" in log:
+            msg += f" elo={log['eval/model_elo']:.0f}"
         print(msg, flush=True)
 
         if run is not None:
