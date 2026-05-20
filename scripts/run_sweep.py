@@ -97,16 +97,19 @@ CELLS: dict[str, Cell] = {
     # rather than 2+ days. K=1, 1.5M buffer, tau_final=0.1, AGZ log-PUCT all
     # stay from the recipe imports.
     #
-    # Perf wins (2026-05-20 mid-run): single worker × 32 games × wave=64 +
-    # torch.compile. Yields ~2-3× throughput vs the original 4-worker / 8-game
-    # / wave=32 config because MPS is single-stream per process (4 workers
-    # didn't actually parallelize) and small batches were kernel-launch-bound.
-    # Subagent measurement confirmed; backup taken before deploying.
+    # Production-proven config: 4 workers × 8 games × wave=64. The 4-worker
+    # setup keeps MPS busy via OS-scheduled kernel interleaving across
+    # processes — single-worker × big-batch hurts GPU utilization because
+    # the GPU sits idle during Python tree-traversal between forward calls
+    # (subagent's "MPS serializes processes" claim turned out wrong in
+    # practice). wave=64 is the genuine win from the bench (1.71× per-worker
+    # vs wave=32 with no plies regression). torch.compile dropped — gains
+    # don't survive the per-cycle weight-reload recompiles.
     "Z": Cell("az-recipe-160k", sgd_per_game=1.0, buffer_size=1_500_000,
               size="small", stem_padding=1, n_simulations=400,
               lr=5e-4, epochs=5000,
-              n_workers=1, wave_size=64, games_per_batch=32,
-              compile_workers=True),
+              n_workers=4, wave_size=64, games_per_batch=8,
+              compile_workers=False),
     # AZ-recipe long run with constant-age ingest. Same recipe as Z but uses
     # positions-based ingest + SGD so buffer turnover stays stable when
     # self-play game length swings (which Z's run showed it does — plies
