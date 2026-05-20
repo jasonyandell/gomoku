@@ -63,6 +63,12 @@ class Cell:
     save_buffer_every: int = 20
     keep_last_n: int = 3
     stem_padding: int | None = None  # None = use train.py default (3, AGZ edge-fix)
+    # Constant-age ingest: when set, ingest by positions instead of games. Pairs
+    # with sgd_per_position so SGD steps also scale with positions. Together
+    # they keep buffer turnover + training intensity stable regardless of
+    # self-play game length (which swings between attack and defense regimes).
+    worker_min_positions: int = 0
+    sgd_per_position: float | None = None
     extra_train_args: list[str] = field(default_factory=list)
     extra_worker_args: list[str] = field(default_factory=list)
 
@@ -84,6 +90,17 @@ CELLS: dict[str, Cell] = {
     "Z": Cell("az-recipe-160k", sgd_per_game=1.0, buffer_size=1_500_000,
               size="small", stem_padding=1, n_simulations=400,
               lr=5e-4, epochs=5000),
+    # AZ-recipe long run with constant-age ingest. Same recipe as Z but uses
+    # positions-based ingest + SGD so buffer turnover stays stable when
+    # self-play game length swings (which Z's run showed it does — plies
+    # dropped from ~60 to ~38 mid-run and broke training-loss stability).
+    # Target: 32 games * 50 mean plies * 8 D4 aug = 12800 positions/cycle,
+    # 32 SGD steps/cycle = 0.0025 SGD/position. Matches Z's effective rate
+    # at the 50-plies baseline.
+    "Zc": Cell("az-recipe-160k-constage", sgd_per_game=1.0,
+               buffer_size=1_500_000, size="small", stem_padding=1,
+               n_simulations=400, lr=5e-4, epochs=5000,
+               worker_min_positions=12800, sgd_per_position=0.0025),
 }
 
 
@@ -128,6 +145,10 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
     ]
     if cell.stem_padding is not None:
         cmd += ["--stem-padding", str(cell.stem_padding)]
+    if cell.worker_min_positions > 0:
+        cmd += ["--worker-min-positions", str(cell.worker_min_positions)]
+    if cell.sgd_per_position is not None:
+        cmd += ["--sgd-per-position", str(cell.sgd_per_position)]
     return cmd
 
 

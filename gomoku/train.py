@@ -162,11 +162,22 @@ def parse_args() -> argparse.Namespace:
                         "--training-steps. Keeps SGD intensity in lockstep with "
                         "actual gen throughput from the workers — if they speed up "
                         "or slow down, training scales with them. K ≈ 1.0 matches "
-                        "the AZ recipe (1 SGD step per game played).")
+                        "the AZ recipe (1 SGD step per game played). NOTE: when "
+                        "game length varies (model swings between attack and defense), "
+                        "this knob also varies the per-cycle SGD count and the buffer "
+                        "turnover rate. Prefer --sgd-per-position for stable runs.")
+    p.add_argument("--sgd-per-position", type=float, default=None,
+                   help="Position-based version of --sgd-per-game. Each cycle "
+                        "computes training_steps = max(--min-training-steps, "
+                        "round(K * positions_ingested_this_cycle)). Keeps SGD "
+                        "intensity proportional to fresh training examples, not "
+                        "fresh games. Pair with --worker-min-positions to also "
+                        "fix the ingest side, otherwise buffer turnover still "
+                        "varies with game length. Overrides --sgd-per-game when set.")
     p.add_argument("--min-training-steps", type=int, default=16,
-                   help="When --sgd-per-game is set, never do fewer than this "
-                        "many SGD steps in a cycle (keeps the trainer moving "
-                        "even if workers stall briefly).")
+                   help="When --sgd-per-game / --sgd-per-position is set, never do "
+                        "fewer than this many SGD steps in a cycle (keeps the "
+                        "trainer moving even if workers stall briefly).")
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--value-weight", type=float, default=1.0)
@@ -227,7 +238,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--worker-min-games", type=int, default=0,
                    help="When using --worker-input-dir, ingest at least this many "
                         "new games before starting an SGD cycle. 0 = use "
-                        "--games-per-epoch as the target.")
+                        "--games-per-epoch as the target. NOTE: when game length "
+                        "varies (attack vs defense regimes), positions-per-cycle "
+                        "varies too, which changes the replay buffer turnover rate "
+                        "and biases what each weight version contributes. Prefer "
+                        "--worker-min-positions for runs where game length is "
+                        "expected to swing.")
+    p.add_argument("--worker-min-positions", type=int, default=0,
+                   help="Position-based version of --worker-min-games. Ingest until "
+                        "at least this many training positions (game records' "
+                        "expanded examples) have arrived this cycle. Keeps buffer "
+                        "turnover rate constant regardless of self-play game "
+                        "length, so each weight version contributes a stable "
+                        "footprint to the buffer's training distribution. "
+                        "Recommended value: target_games * mean_plies * 8 augs "
+                        "(e.g. 32 * 50 * 8 = 12800 for the AZ-mini recipe). "
+                        "Overrides --worker-min-games when set (> 0).")
     p.add_argument("--worker-poll-sec", type=float, default=0.5,
                    help="Sleep this long between dir scans when waiting for workers.")
     p.add_argument("--device", type=str, default=None, help="torch device override (e.g. cpu, mps)")
@@ -333,8 +359,13 @@ def main() -> None:
     worker_input_dir = Path(args.worker_input_dir) if args.worker_input_dir else None
     if worker_input_dir is not None:
         worker_input_dir.mkdir(parents=True, exist_ok=True)
-        target_games = args.worker_min_games or args.games_per_epoch
-        print(f"distributed mode: ingest from {worker_input_dir} (target {target_games} games/epoch)")
+        if args.worker_min_positions > 0:
+            print(f"distributed mode: ingest from {worker_input_dir} "
+                  f"(target {args.worker_min_positions} positions/epoch — constant-age mode)")
+        else:
+            target_games = args.worker_min_games or args.games_per_epoch
+            print(f"distributed mode: ingest from {worker_input_dir} "
+                  f"(target {target_games} games/epoch — buffer age will vary with plies)")
     worker_weights_path = args.worker_weights_path
     if worker_weights_path:
         print(f"workers will read weights from {worker_weights_path}")
@@ -354,12 +385,22 @@ def main() -> None:
                         wandb_run_id=wandb_run_id)
         os.replace(tmp, worker_weights_path)
 
-    def _ingest_worker_batches(target_games: int) -> list:
-        """Block until at least `target_games` worth of records have arrived in
-        the input dir. Returns a flat list of GameRecord, files deleted."""
+    def _ingest_worker_batches(target_games: int = 0, target_positions: int = 0) -> list:
+        """Block until either `target_games` games OR `target_positions` positions
+        have arrived in the input dir (whichever quota is set; if both, the first
+        one reached wins). Returns a flat list of GameRecord, files deleted.
+
+        target_positions counts the expanded training examples per game record
+        (post-D4-augmentation). Using positions keeps buffer turnover rate
+        constant regardless of self-play game length — when games are short,
+        more games are ingested per cycle to hit the target; when long, fewer.
+        """
+        if target_games <= 0 and target_positions <= 0:
+            raise ValueError("must set target_games > 0 or target_positions > 0")
         out_records: list = []
-        n_games_collected = 0
-        while n_games_collected < target_games:
+        n_games = 0
+        n_positions = 0
+        while True:
             files = sorted(
                 (p for p in worker_input_dir.glob("*.pt")),
                 key=lambda p: p.stat().st_mtime,
@@ -370,16 +411,20 @@ def main() -> None:
             for f in files:
                 try:
                     data = torch.load(f, map_location="cpu", weights_only=False)
-                    out_records.extend(data["records"])
-                    n_games_collected += int(data.get("n_games", len(data["records"])))
+                    recs = data["records"]
+                    out_records.extend(recs)
+                    n_games += int(data.get("n_games", len(recs)))
+                    n_positions += int(data.get("n_examples", sum(len(r.examples) for r in recs)))
                 finally:
                     try:
                         f.unlink()
                     except OSError:
                         pass
-                if n_games_collected >= target_games:
-                    break
-        return out_records
+                # Stop when whichever quota is set (positions wins if both set).
+                if target_positions > 0 and n_positions >= target_positions:
+                    return out_records
+                if target_positions <= 0 and target_games > 0 and n_games >= target_games:
+                    return out_records
 
     def _sweep_orphans() -> None:
         """Delete stale .tmp files and unrecognized .pt files in checkpoint dir
@@ -475,7 +520,12 @@ def main() -> None:
         # --- self-play (in-process) or ingest (workers) ---
         gen_start = time.time()
         if worker_input_dir is not None:
-            records = _ingest_worker_batches(args.worker_min_games or args.games_per_epoch)
+            if args.worker_min_positions > 0:
+                records = _ingest_worker_batches(target_positions=args.worker_min_positions)
+            else:
+                records = _ingest_worker_batches(
+                    target_games=args.worker_min_games or args.games_per_epoch,
+                )
         elif opponent_picker is None:
             evaluator = make_torch_evaluator(model, device)
             records = generate_games(
@@ -531,11 +581,18 @@ def main() -> None:
         draws = sum(1 for o in outcomes if o == 0)
 
         # --- training ---
-        # Decide how many SGD steps this cycle. If --sgd-per-game is set, scale
-        # with games actually ingested so the trainer self-balances against the
-        # worker pool's throughput. Otherwise use the static --training-steps.
+        # Decide how many SGD steps this cycle. Priority (highest first):
+        #   1. --sgd-per-position * positions_ingested  (constant-age recipe)
+        #   2. --sgd-per-game * games_ingested          (legacy K-based)
+        #   3. --training-steps                          (static fallback)
         n_games_this_cycle = len(records)
-        if args.sgd_per_game is not None and n_games_this_cycle > 0:
+        n_positions_this_cycle = sum(len(r.examples) for r in records)
+        if args.sgd_per_position is not None and n_positions_this_cycle > 0:
+            steps_this_cycle = max(
+                args.min_training_steps,
+                round(args.sgd_per_position * n_positions_this_cycle),
+            )
+        elif args.sgd_per_game is not None and n_games_this_cycle > 0:
             steps_this_cycle = max(
                 args.min_training_steps,
                 round(args.sgd_per_game * n_games_this_cycle),
@@ -582,6 +639,10 @@ def main() -> None:
             "train/actual_sgd_per_game": (
                 steps_this_cycle / n_games_this_cycle if n_games_this_cycle else 0.0
             ),
+            "train/actual_sgd_per_position": (
+                steps_this_cycle / n_positions_this_cycle if n_positions_this_cycle else 0.0
+            ),
+            "train/positions_this_cycle": n_positions_this_cycle,
             **train_metrics,
             # Buffer-shape snapshot: distribution over n_stones buckets + z mix.
             # Computed every cycle so wandb shows shape evolution over time.
