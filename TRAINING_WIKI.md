@@ -2319,3 +2319,103 @@ Read:
 - The 10-epoch WL1 launch estimate from this read is roughly 11 games/sec while
   games are in the 25-30 ply early-training range. As usual, expect wall time to
   grow if the model learns defense and plies climb toward 50-80.
+
+## WL1 live run log (2026-05-20, wandb l8mbntcm)
+
+Live tracking for the WL1 wave-of-lockstep run launched 2026-05-20 20:53.
+This section is appended-to as the run progresses; older entries are
+preserved with their epoch + wall-clock so the trajectory is auditable.
+
+**Setup**
+- wandb: `l8mbntcm` (https://wandb.ai/jasonyandell-forge42/gomoku/runs/l8mbntcm)
+- cell: `WL1` = wave-lockstep, 1.5M buffer, native MCTS, 8w × 8g, AGZ recipe (small,
+  stem_padding=1, sims=400, τ=1.0→0.1 at move 30, AGZ PUCT/Dirichlet)
+- baseline: `Z` = az-recipe-160k (wandb `sppjo3z5`); same model/MCTS recipe,
+  continuous (not wave) self-play, python MCTS
+- worker bug at launch: see "WL1 first launch + worker race fix" entry below
+
+**Hypothesis under test** (cross-ref:
+[wiki/topics/wave-of-lockstep-design.md](wiki/topics/wave-of-lockstep-design.md),
+"Buffer-composition feedback hypothesis" section above):
+Jason's prediction was that the explore-consolidate arcs Z showed were
+driven by *per-version concentration* in the buffer — each version's small
+biased slice of self-play trained the next version, amplifying drift.
+Wave-of-lockstep makes every model version contribute a uniformly-sized
+tile, removing that feedback loop.
+
+**Live milestones**
+
+| epoch | wall   | pl   | vl    | plies | elo  | h%  | la2% | la4% | note |
+|------:|:------:|-----:|------:|------:|-----:|----:|-----:|-----:|------|
+| 1     | 00:07  | 4.31 | 0.67  | 34.1  | —    | —   | —    | —    | start |
+| 113   | 04:00  | 2.61 | 0.61  | 14.8  | 389  | 0   | 0    | 0    | first eval shipped, fast-attack regime |
+| 146   | ~05:30 | 2.33 | 0.58  | 13.4  | 776  | 30  | 25   | 0    | **first heuristic crossing** — bouncy, not sustained |
+| 263   | ~10:00 | 1.91 | 0.40  | 12.9  | 937  | 70  | 20   | 0    | heuristic 70%, value head accelerating |
+| 360   | ~13:30 | 1.80 | 0.13  | 11.2  | 1271 | 80  | 48   | 48   | **arc 1 peak**, la4 hit 48% (Z barely reached this even at e3881) |
+| 499   | ~18:30 | 1.78 | 0.05  | 10.3  | 1281 | 55  | 70   | 52   | la2 sustained 70%, la4 still high |
+| 524   | ~19:30 | 1.79 | 0.04  | 11.0  | 1110 | 65  | 50   | 18   | la4 collapse — consolidation begins |
+| 592   | ~22:30 | 1.78 | 0.03  | 10.3  | 1041 | 40  | 55   | 20   | arc 1 trough, ~80 epochs after peak |
+
+Will update as new evals land.
+
+**Wall-clock vs Z calibration** (rough):
+
+| signal | Z (az-recipe-160k) | WL1 (live) | ratio |
+|---|---|---|---|
+| first heuristic crossing | e1119 (~7h wall) | e146 (~5min wall) | **~8× faster epoch, ~80× faster wall** |
+| vl ≈ 0.08 | e2179 (~2:47h wall, "full regime change") | e360 (~13min wall) | ~6× faster epoch |
+| la4 ever > 30% sustained | only briefly near peak e3881 | already hit 52% at e360 | qualitatively further along |
+| arc wavelength | ~800-1000 epochs | ~80-100 epochs | ~10× compression |
+
+The wall-clock ratios combine *two* speedups: native MCTS (~1.7× per
+trial-bench measurement) and the per-epoch convergence speedup from
+wave-lockstep. Disentangling them requires running WL1 with
+`GOMOKU_DISABLE_NATIVE_MCTS=1` for an apples-to-apples comparison; not in
+scope today.
+
+**Open questions for the run**
+1. Does WL1's plies regrow? At e605 plies are still 10-11 — fast-attack
+   regime persists. Z's plies regrew at e2179, signaling the defense
+   regime. WL1's value loss already matches Z's e2179 value loss, but
+   policy loss + plies haven't yet.
+2. Does the next arc consolidation fully recover? Z had 5 arcs in 5000
+   epochs; if WL1's arcs are at 100-epoch wavelength, we'd expect ~50
+   total. Most useful signal: do *later* arcs broaden or remain tight?
+3. Does the run plateau or keep climbing? Z plateaued around elo 1100-1500
+   for its last 1000 epochs.
+
+## WL1 first launch + worker race fix (2026-05-20)
+
+WL1 was launched twice on 2026-05-20:
+
+**Attempt 1 (wandb `wo9py6m4`, killed at e97):** trainer worked fine, but
+worker w6 crashed at e96. Root cause: greedy-fill race in
+`gomoku/selfplay_worker.py::_atomic_save_wave_game`. Worker mkdir'd
+`_records/v{N}/workerw6/` for a greedy-extra game; trainer ingested v{N}
+and `rm -rf`'d the dir; worker then crashed on `torch.save` inside the
+deleted directory. The dead worker blocked the wave barrier (which
+requires all 8 workers ≥ 8 games), so the other 7 workers greedy-filled
+~3,500 games each into a v97 tile that would never be consumed. ~25k
+games of junk piled up before manual kill.
+
+The wave-of-lockstep design doc had flagged this as an open question
+("Should we add a barrier timeout? Probably yes, with a loud W&B
+warning."), which wasn't shipped.
+
+**Fix (commit `0d2c106`):** `_atomic_save_wave_game` catches
+`FileNotFoundError | OSError | RuntimeError`, logs a one-liner, returns
+None. The save loop drops the game (1 game of MCTS work wasted) and the
+outer wave loop picks up new weights on its next iteration. Worker
+survives; barrier eventually fires.
+
+**Attempt 2 (wandb `l8mbntcm`, live):** same launch, fix in place. Has
+seen 3 race-drops in 600+ epochs, all recovered cleanly. Barrier firing
+every cycle.
+
+**Why no buffer ingest of the 5M-buffer attempt's data:** an earlier
+`WL1-wave-lockstep-5M-buffer` attempt (commit pre-`bd28670`, wandb
+`i2pek12v`) crashed on `MPSGraph does not support tensor dims larger
+than INT_MAX` because the 5M buffer × 17 planes × 81 cells (= 6.9B
+elements) exceeded the MPS dim-product limit. Cell renamed to
+`WL1-wave-lockstep-1p5M-buffer` and buffer dropped to 1.5M (matches Z,
+max-under-INT_MAX). Per Jason: 5M was arbitrary; 1.5M is fine.

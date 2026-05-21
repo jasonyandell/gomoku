@@ -342,3 +342,27 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Python-MCTS fallback at 8 workers x 8 games was 1,863 wall pos/s, so native
   is a 1.28x production-shaped wall-throughput win even though the single-process
   microbench showed a larger 2.8-3.1x jump.
+
+## [2026-05-20] notebook | WL1 live run — buffer-mix hypothesis showing positive early signal
+
+- WL1 launched 20:53 as wandb `l8mbntcm` (commit `0d2c106`). First-attempt
+  worker race + 5M-buffer MPS crash both diagnosed and fixed pre-launch;
+  see [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL1 first launch + worker
+  race fix" for the receipts.
+- At e605 (~35 min wall), the run is well ahead of Z's e605 by every
+  fixed-baseline measure: first heuristic crossing happened at e146 (Z:
+  e1119), elo hit 1271 at e360 (Z: ~e1854 reaches similar), la4 sustained
+  52% at e499 (Z barely reached this even at e3881 peak).
+- Arc behavior is compressed: WL1's first explore-consolidate arc had a
+  ~80-100 epoch wavelength vs Z's 800-1000 epoch arcs. First consolidation
+  dip in progress at e605, recovering to elo 1041 (the trough is still
+  Z-e1854-class strength).
+- Wall-clock advantage combines native MCTS perf (~1.7×) and per-epoch
+  convergence speedup. To disentangle requires WL1 with
+  `GOMOKU_DISABLE_NATIVE_MCTS=1`; not in scope today.
+- Started a live training log section in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL1 live run log" — milestone
+  table updates as new evals land.
+- Open question still ahead: do plies regrow (defense regime) on a
+  similarly accelerated schedule? At e605 plies still 10-11, value head
+  already at Z-e2179 levels.
