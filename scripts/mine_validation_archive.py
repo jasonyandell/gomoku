@@ -22,7 +22,9 @@ Buckets populated:
     high_kl
         — top-K WL4 buffer positions by KL(p_net || pi_mcts) under the WL4 model.
 
-Run with GOMOKU_DEVICE=cpu to keep this script sequential and ~30 min wall.
+Uses the in-process batched self-play API (`generate_games`,
+`generate_games_vs_baseline`) so MCTS is batched across many concurrent games
+and the evaluator runs on MPS — typical end-to-end wall is a few minutes.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from gomoku.baselines import heuristic_player, lookahead_player, random_player  
 from gomoku.game import BOARD_SIZE, GameState, N_ACTIONS, N_INPUT_PLANES  # noqa: E402
 from gomoku.mcts import MCTSGame, make_torch_evaluator, policy_from_visits, run_batched_mcts  # noqa: E402
 from gomoku.model import load_checkpoint  # noqa: E402
+from gomoku.self_play import generate_games, generate_games_vs_baseline  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,6 +62,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", type=str, default=None,
                    help="torch device. Default reads GOMOKU_DEVICE or cpu.")
+    p.add_argument("--batch-games", type=int, default=64,
+                   help="Number of games run concurrently per batched MCTS round.")
+    p.add_argument("--wave-size", type=int, default=8,
+                   help="MCTS wave size passed to run_batched_mcts_waves.")
+    p.add_argument("--max-rounds", type=int, default=20,
+                   help="Per-bucket cap on how many batches of size --batch-games to play.")
     return p.parse_args()
 
 
@@ -71,163 +80,125 @@ def _pick_device(arg: str | None) -> str:
     return "cpu"
 
 
-def _mcts_label(state: GameState, evaluator, *, n_sims: int, c_puct: float,
-                rng: np.random.Generator) -> np.ndarray:
-    """Run a single-game MCTS at `state` and return the visit-count policy at tau=1."""
-    g = MCTSGame(state, c_puct=c_puct, rng=rng)
-    run_batched_mcts([g], evaluator, n_simulations=n_sims, add_root_noise=False)
-    return policy_from_visits(g.root, temperature=1.0)
+def _score_kl(model, device, examples: list) -> np.ndarray:
+    """For each SelfPlayExample, compute KL(p_net || pi_mcts). Higher = net's
+    prior disagrees more with what MCTS concluded; that's a position the
+    model "got wrong" in the prior sense even if MCTS rescued it."""
+    if not examples:
+        return np.zeros(0, dtype=np.float32)
+    planes = np.stack([ex.planes for ex in examples]).astype(np.float32)
+    pi = np.stack([ex.pi for ex in examples]).astype(np.float32)
+    out = np.empty(len(examples), dtype=np.float32)
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            chunk = 512
+            for start in range(0, len(examples), chunk):
+                stop = min(start + chunk, len(examples))
+                pl = torch.from_numpy(planes[start:stop]).to(device)
+                pi_b = torch.from_numpy(pi[start:stop]).to(device)
+                logits, _ = model(pl)
+                logp = F.log_softmax(logits, dim=-1)
+                p = logp.exp()
+                kl = (p * (logp - torch.log(pi_b.clamp_min(1e-9)))).sum(dim=-1)
+                out[start:stop] = kl.cpu().numpy()
+    finally:
+        if was_training:
+            model.train()
+    return out
 
 
-def _play_game_vs_baseline(model_picker, opp_picker, *, rng: np.random.Generator,
-                           max_plies: int = N_ACTIONS):
-    """Play one game. Return (trajectory, winner_side, n_plies).
+def _mine_hard_kl_live(model, evaluator, opp_picker, *, target: int, mcts_sims: int,
+                       c_puct: float, rng: np.random.Generator,
+                       batch_games: int, wave_size: int, max_rounds: int,
+                       device: str) -> list[dict]:
+    """Play batched games against `opp_picker` (None = selfplay); rank ALL
+    model-move examples by KL(p_net || pi_mcts) and keep the global top-K.
 
-    trajectory is a list of (state_before_move, mover_side, action) — one entry
-    per ply, in order.
+    Works regardless of model strength — doesn't rely on losses, just on
+    "positions where the net's prior is wrongest about MCTS's conclusion".
     """
-    model_is_black = bool(rng.integers(0, 2) == 0)
-    state = GameState.initial()
-    trajectory: list[tuple[GameState, int, int]] = []
-    winner_side: int | None = None
-    ply = 0
-    while ply < max_plies:
-        side = ply % 2
-        model_turn = (side == 0) == model_is_black
-        picker = model_picker if model_turn else opp_picker
-        action = int(picker(state, rng))
-        trajectory.append((state, side, action))
-        state = state.apply(action)
-        done, term_val = state.is_terminal()
-        if done:
-            if term_val == -1.0:
-                winner_side = side
-            break
-        ply += 1
-    return trajectory, winner_side, len(trajectory), model_is_black
-
-
-def _play_selfplay_game(model_picker, *, rng: np.random.Generator,
-                        max_plies: int = N_ACTIONS):
-    state = GameState.initial()
-    trajectory: list[tuple[GameState, int, int]] = []
-    winner_side: int | None = None
-    ply = 0
-    while ply < max_plies:
-        side = ply % 2
-        action = int(model_picker(state, rng))
-        trajectory.append((state, side, action))
-        state = state.apply(action)
-        done, term_val = state.is_terminal()
-        if done:
-            if term_val == -1.0:
-                winner_side = side
-            break
-        ply += 1
-    return trajectory, winner_side, len(trajectory)
-
-
-def _z_from_perspective(winner_side: int | None, mover_side: int) -> float:
-    if winner_side is None:
-        return 0.0
-    return 1.0 if winner_side == mover_side else -1.0
-
-
-def _model_mcts_picker(evaluator, *, n_sims: int, c_puct: float):
-    """Greedy MCTS picker — argmax visits, no Dirichlet noise."""
-    def pick(state: GameState, rng: np.random.Generator) -> int:
-        g = MCTSGame(state, c_puct=c_puct, rng=rng)
-        run_batched_mcts([g], evaluator, n_simulations=n_sims, add_root_noise=False)
-        pi = policy_from_visits(g.root, temperature=0.0)
-        return int(np.argmax(pi))
-    return pick
-
-
-def _mine_baseline_losses(evaluator, opp_picker, *, target: int, mcts_sims: int,
-                          c_puct: float, rng: np.random.Generator) -> list[dict]:
-    """Play games until we have `target` positions captured from games the model
-    lost. For each losing game, capture every position where it was the model's
-    turn (so we can label pi_mcts there) — that's the position the model had to
-    decide from before its last losing move.
-    """
-    model_picker = _model_mcts_picker(evaluator, n_sims=mcts_sims, c_puct=c_puct)
-    out: list[dict] = []
+    pool: list[tuple[float, dict]] = []  # (kl, row); kept as min-heap-ish
     games_played = 0
-    while len(out) < target and games_played < target * 6:
-        traj, winner_side, n_plies, model_is_black = _play_game_vs_baseline(
-            model_picker, opp_picker, rng=rng,
+    for round_idx in range(max_rounds):
+        if opp_picker is None:
+            records = generate_games(
+                n_games=batch_games, evaluator=evaluator,
+                n_simulations=mcts_sims, c_puct=c_puct,
+                temperature_moves=0, temperature_final=0.0, dirichlet_eps=0.0,
+                augment_symmetries=False, wave_size=wave_size, rng=rng,
+            )
+        else:
+            records = generate_games_vs_baseline(
+                n_games=batch_games, evaluator=evaluator, opponent_picker=opp_picker,
+                n_simulations=mcts_sims, c_puct=c_puct,
+                temperature_moves=0, temperature_final=0.0, dirichlet_eps=0.0,
+                augment_symmetries=False, wave_size=wave_size, rng=rng,
+            )
+        games_played += len(records)
+        flat = [ex for r in records for ex in r.examples]
+        if not flat:
+            continue
+        kls = _score_kl(model, device, flat)
+        for ex, kl in zip(flat, kls):
+            pool.append((float(kl), {
+                "planes": ex.planes, "pi": ex.pi, "z": float(ex.z),
+                "side": int(ex.side), "ply": int(ex.ply),
+            }))
+        # Keep only the top-`target` by KL so the list doesn't grow unbounded.
+        pool.sort(key=lambda t: -t[0])
+        pool = pool[: max(target, 2 * target if round_idx < max_rounds - 1 else target)]
+        print(f"  round {round_idx + 1}/{max_rounds}: games={games_played}, "
+              f"examples_scored={len(flat)}, pool_size={len(pool)}, "
+              f"top_kl={pool[0][0]:.3f}", flush=True)
+        if len(pool) >= target and round_idx >= 1:
+            # Diminishing returns check: if the top-K is mostly stable, stop.
+            # Simple heuristic: stop after 3 rounds.
+            if round_idx >= 2:
+                break
+    pool.sort(key=lambda t: -t[0])
+    return [row for _, row in pool[:target]]
+
+
+def _mine_selfplay(evaluator, *, target_long: int, target_canonical: int,
+                   mcts_sims: int, c_puct: float, rng: np.random.Generator,
+                   batch_games: int, wave_size: int,
+                   max_rounds: int) -> tuple[list[dict], list[dict]]:
+    """Batched selfplay; harvest two buckets from each games batch.
+       long_defense: positions with ply > 30 in games of plies > 50.
+       canonical_opening: positions with ply < 10.
+    """
+    long_def: list[dict] = []
+    canonical: list[dict] = []
+    for round_idx in range(max_rounds):
+        if len(long_def) >= target_long and len(canonical) >= target_canonical:
+            break
+        records = generate_games(
+            n_games=batch_games,
+            evaluator=evaluator,
+            n_simulations=mcts_sims,
+            c_puct=c_puct,
+            temperature_moves=0,
+            temperature_final=0.0,
+            dirichlet_eps=0.0,
+            augment_symmetries=False,
+            wave_size=wave_size,
+            rng=rng,
         )
-        games_played += 1
-        if winner_side is None:
-            continue
-        model_side = 0 if model_is_black else 1
-        if winner_side == model_side:
-            continue
-        # Model lost. Capture the LAST model turn — the position right before
-        # the final losing move (or the position from which the model failed to
-        # block the opponent's winning sequence).
-        model_positions = [(state, side, ply_idx) for ply_idx, (state, side, _action)
-                           in enumerate(traj) if side == model_side]
-        if not model_positions:
-            continue
-        state, side, ply_idx = model_positions[-1]
-        pi = _mcts_label(state, evaluator, n_sims=mcts_sims, c_puct=c_puct, rng=rng)
-        out.append({
-            "planes": state.to_planes(),
-            "pi": pi.astype(np.float32),
-            "z": _z_from_perspective(winner_side, side),
-            "side": int(side),
-            "ply": int(ply_idx),
-        })
-    return out
-
-
-def _mine_long_defense(evaluator, *, target: int, mcts_sims: int, c_puct: float,
-                       rng: np.random.Generator) -> list[dict]:
-    model_picker = _model_mcts_picker(evaluator, n_sims=mcts_sims, c_puct=c_puct)
-    out: list[dict] = []
-    games_played = 0
-    while len(out) < target and games_played < target * 4:
-        traj, winner_side, n_plies = _play_selfplay_game(model_picker, rng=rng)
-        games_played += 1
-        if n_plies <= 50:
-            continue
-        late_positions = [(s, side, p) for p, (s, side, _) in enumerate(traj) if p > 30]
-        rng.shuffle(late_positions)
-        for state, side, ply_idx in late_positions[:4]:
-            if len(out) >= target:
-                break
-            pi = _mcts_label(state, evaluator, n_sims=mcts_sims, c_puct=c_puct, rng=rng)
-            out.append({
-                "planes": state.to_planes(),
-                "pi": pi.astype(np.float32),
-                "z": _z_from_perspective(winner_side, side),
-                "side": int(side),
-                "ply": int(ply_idx),
-            })
-    return out
-
-
-def _mine_canonical_opening(evaluator, *, target: int, mcts_sims: int, c_puct: float,
-                            rng: np.random.Generator) -> list[dict]:
-    model_picker = _model_mcts_picker(evaluator, n_sims=mcts_sims, c_puct=c_puct)
-    out: list[dict] = []
-    while len(out) < target:
-        traj, winner_side, n_plies = _play_selfplay_game(model_picker, rng=rng)
-        early_positions = [(s, side, p) for p, (s, side, _) in enumerate(traj) if p < 10]
-        rng.shuffle(early_positions)
-        for state, side, ply_idx in early_positions[:3]:
-            if len(out) >= target:
-                break
-            pi = _mcts_label(state, evaluator, n_sims=mcts_sims, c_puct=c_puct, rng=rng)
-            out.append({
-                "planes": state.to_planes(),
-                "pi": pi.astype(np.float32),
-                "z": _z_from_perspective(winner_side, side),
-                "side": int(side),
-                "ply": int(ply_idx),
-            })
-    return out
+        for r in records:
+            for ex in r.examples:
+                if ex.ply < 10 and len(canonical) < target_canonical:
+                    canonical.append({
+                        "planes": ex.planes, "pi": ex.pi, "z": float(ex.z),
+                        "side": int(ex.side), "ply": int(ex.ply),
+                    })
+                if r.plies > 50 and ex.ply > 30 and len(long_def) < target_long:
+                    long_def.append({
+                        "planes": ex.planes, "pi": ex.pi, "z": float(ex.z),
+                        "side": int(ex.side), "ply": int(ex.ply),
+                    })
+    return long_def[:target_long], canonical[:target_canonical]
 
 
 def _mine_high_kl(model, payload: dict, device: str, *, target: int) -> list[dict]:
@@ -271,11 +242,11 @@ def _mine_high_kl(model, payload: dict, device: str, *, target: int) -> list[dic
     out: list[dict] = []
     for j in sel.tolist():
         out.append({
-            "planes": planes_all[j].numpy().astype(np.float32),
-            "pi": pi_all[j].numpy().astype(np.float32),
-            "z": float(z_all[j].item()),
-            "side": int(side_all[j].item()) if side_all is not None else 0,
-            "ply": int(ply_all[j].item()) if ply_all is not None else 0,
+            "planes": planes_all[j].cpu().numpy().astype(np.float32),
+            "pi": pi_all[j].cpu().numpy().astype(np.float32),
+            "z": float(z_all[j].cpu().item()),
+            "side": int(side_all[j].cpu().item()) if side_all is not None else 0,
+            "ply": int(ply_all[j].cpu().item()) if ply_all is not None else 0,
         })
     return out
 
@@ -307,40 +278,44 @@ def main() -> None:
     rows: list[dict] = []
     provenance: list[str] = []
 
-    baselines = [
-        ("heuristic_loss", heuristic_player),
-        ("lookahead2_loss", lookahead_player(depth=2)),
-        ("lookahead4_loss", lookahead_player(depth=4)),
+    # hard_kl_* buckets: live-mined top-K positions by KL(p_net || pi_mcts)
+    # against each opponent type. Saturated models don't lose to weaker
+    # baselines, but they still have positions where their prior diverges
+    # from MCTS's conclusion — those are the actual "trouble states".
+    hard_sources = [
+        ("hard_kl_selfplay", None),
+        ("hard_kl_heuristic", heuristic_player),
+        ("hard_kl_lookahead2", lookahead_player(depth=2)),
+        ("hard_kl_lookahead4", lookahead_player(depth=4)),
     ]
-    for tag, opp in baselines:
-        print(f"mining bucket {tag} (target={target}) ...")
-        items = _mine_baseline_losses(
-            evaluator, opp, target=target,
+    for tag, opp in hard_sources:
+        print(f"mining bucket {tag} (target={target}) ...", flush=True)
+        items = _mine_hard_kl_live(
+            model, evaluator, opp, target=target,
             mcts_sims=args.mcts_sims, c_puct=args.c_puct, rng=rng,
+            batch_games=args.batch_games, wave_size=args.wave_size,
+            max_rounds=args.max_rounds, device=device,
         )
-        print(f"  -> {len(items)} positions")
+        print(f"  -> {len(items)} positions", flush=True)
         rows.extend(items)
         provenance.extend([tag] * len(items))
 
-    print(f"mining bucket long_defense (target={target}) ...")
-    items = _mine_long_defense(
-        evaluator, target=target, mcts_sims=args.mcts_sims, c_puct=args.c_puct, rng=rng,
+    print(f"mining buckets long_defense + canonical_opening (target={target} each) ...", flush=True)
+    long_def, canonical = _mine_selfplay(
+        evaluator, target_long=target, target_canonical=target,
+        mcts_sims=args.mcts_sims, c_puct=args.c_puct, rng=rng,
+        batch_games=args.batch_games, wave_size=args.wave_size,
+        max_rounds=args.max_rounds,
     )
-    print(f"  -> {len(items)} positions")
-    rows.extend(items)
-    provenance.extend(["long_defense"] * len(items))
+    print(f"  -> long_defense {len(long_def)}, canonical_opening {len(canonical)}", flush=True)
+    rows.extend(long_def)
+    provenance.extend(["long_defense"] * len(long_def))
+    rows.extend(canonical)
+    provenance.extend(["canonical_opening"] * len(canonical))
 
-    print(f"mining bucket canonical_opening (target={target}) ...")
-    items = _mine_canonical_opening(
-        evaluator, target=target, mcts_sims=args.mcts_sims, c_puct=args.c_puct, rng=rng,
-    )
-    print(f"  -> {len(items)} positions")
-    rows.extend(items)
-    provenance.extend(["canonical_opening"] * len(items))
-
-    print(f"mining bucket high_kl (target={target}) ...")
+    print(f"mining bucket high_kl (target={target}) ...", flush=True)
     items = _mine_high_kl(model, payload, device, target=target)
-    print(f"  -> {len(items)} positions")
+    print(f"  -> {len(items)} positions", flush=True)
     rows.extend(items)
     provenance.extend(["high_kl"] * len(items))
 

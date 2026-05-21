@@ -3,6 +3,16 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-21] docs | mining-validation-archives recipe
+
+- Added [topics/mining-validation-archives.md](topics/mining-validation-archives.md):
+  command, bucket cost drivers, throughput numbers (40-90 min wall for 6
+  buckets × 200 positions on MPS), and the anti-patterns we learned the
+  hard way during WL5 setup (don't `torch.load` the full 8 GB checkpoint
+  N times in parallel; don't run without `-u`; don't run on CPU; don't
+  co-run with training).
+- Indexed in [index.md](index.md) Start-Here table.
+
 ## [2026-05-21] docs | how-to-play page
 
 - Added [topics/playing-the-model.md](topics/playing-the-model.md) covering the
