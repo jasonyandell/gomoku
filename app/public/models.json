@@ -1,0 +1,27 @@
+{
+  "models": [
+    {
+      "id": "wl4-e4024",
+      "label": "WL4 e4024 (458kg, 17-plane)",
+      "url": "/wl4-e4024.onnx",
+      "meta_url": "/wl4-e4024.meta.json",
+      "n_input_planes": 17,
+      "epoch": 4024,
+      "total_games": 457889,
+      "n_filters": 64,
+      "n_blocks": 4,
+      "default": true
+    },
+    {
+      "id": "epoch0100",
+      "label": "epoch 100 (6.4kg, 3-plane legacy)",
+      "url": "/model.onnx",
+      "meta_url": "/epoch0100.meta.json",
+      "n_input_planes": 3,
+      "epoch": 100,
+      "total_games": 6400,
+      "n_filters": 64,
+      "n_blocks": 4
+    }
+  ]
+}

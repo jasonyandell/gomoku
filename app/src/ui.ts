@@ -16,6 +16,7 @@ import {
   actionToStr,
 } from "./game";
 import { MCTSGame, policyFromVisits, runBatchedMCTS } from "./mcts";
+import type { EvaluatorOptions } from "./evaluator";
 
 const $ = <T extends Element = HTMLElement>(sel: string) =>
   document.querySelector(sel) as T;
@@ -63,14 +64,22 @@ const state = {
 };
 
 let evaluator: Evaluator | null = null;
-let evaluatorFactory: (() => Evaluator) | null = null;
+let evaluatorFactory: ((opts: EvaluatorOptions) => Evaluator) | null = null;
+let currentOpts: EvaluatorOptions = {};
 
 function getEvaluator(): Evaluator {
   if (!evaluator) {
     if (!evaluatorFactory) throw new Error("evaluator not initialized");
-    evaluator = evaluatorFactory();
+    evaluator = evaluatorFactory(currentOpts);
   }
   return evaluator;
+}
+
+/** Swap the active model. The next MCTS call lazily creates a fresh evaluator
+ * bound to the new URL + plane count. */
+export function setActiveModel(opts: EvaluatorOptions): void {
+  currentOpts = opts;
+  evaluator = null;
 }
 
 function gameFromHistory(history: number[]): GameState {
@@ -404,7 +413,7 @@ function setupBoardClick(): void {
   });
 }
 
-export function setupUI(factory: () => Evaluator): void {
+export function setupUI(factory: (opts: EvaluatorOptions) => Evaluator): void {
   evaluatorFactory = factory;
   setupBoardClick();
   $$(".tab").forEach((t) => t.addEventListener("click", () => setTab((t as HTMLElement).dataset.tab as "play" | "replay")));

@@ -35,7 +35,8 @@ def export_onnx(checkpoint_path: Path, out_path: Path) -> dict:
     model, payload = load_checkpoint(str(checkpoint_path), device="cpu")
     model.eval()
 
-    dummy = torch.zeros(1, 3, 9, 9, dtype=torch.float32)
+    n_planes = int(payload.get("model_config", {}).get("n_input_planes", 3))
+    dummy = torch.zeros(1, n_planes, 9, 9, dtype=torch.float32)
 
     torch.onnx.export(
         model,
@@ -69,7 +70,7 @@ def export_onnx(checkpoint_path: Path, out_path: Path) -> dict:
 
         sess = ort.InferenceSession(str(out_path), providers=["CPUExecutionProvider"])
         rng = np.random.default_rng(0)
-        x = rng.random((4, 3, 9, 9), dtype=np.float32)
+        x = rng.random((4, n_planes, 9, 9), dtype=np.float32)
         with torch.no_grad():
             p_t, v_t = model(torch.from_numpy(x))
         ort_out = sess.run(None, {"input": x})

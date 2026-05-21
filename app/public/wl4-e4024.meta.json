@@ -1,0 +1,9 @@
+{
+  "epoch": 4024,
+  "total_games": 457889,
+  "n_filters": 64,
+  "n_blocks": 4,
+  "n_input_planes": 17,
+  "exported_at": "2026-05-21T22:46:47+00:00",
+  "checkpoint_source": "epoch4024.pt"
+}

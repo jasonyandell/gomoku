@@ -1,12 +1,17 @@
 // TypeScript port of gomoku/game.py.
 // 9x9 free-style gomoku: first to 5-in-a-row wins. State is canonicalized so
 // plane 0 is always the side-to-move's stones; plane 1 is opponent stones.
-// `apply()` flips perspective. `to_planes()` adds a third constant-1 plane
-// so the network sees (3, 9, 9).
+// `apply()` flips perspective and snapshots the pre-move canonical board onto
+// the head of `history` (most-recent first; up to HISTORY_PLY-1 entries) —
+// mirrors gomoku/state_ops.py:apply_move_arrays.
+// `toPlanes(n)` supports two layouts:
+//   n=3:  [my, opp, const-1]               — legacy single-frame (epoch-100 model)
+//   n=17: [my×H, opp×H, const-1]  H=8     — AlphaZero-style history (WL series)
 
 export const BOARD_SIZE = 9;
 export const N_ACTIONS = BOARD_SIZE * BOARD_SIZE; // 81
 export const WIN_LEN = 5;
+export const HISTORY_PLY = 8; // matches gomoku/game.py HISTORY_PLY
 
 const PLANE = BOARD_SIZE * BOARD_SIZE; // 81
 
@@ -23,14 +28,23 @@ export class GameState {
   // Plane 1 (offsets 81..161) = opponent's stones.
   readonly board: Uint8Array;
   readonly moveCount: number;
+  // Up to HISTORY_PLY-1 (=7) past canonical boards, most-recent first.
+  // Each entry is the pre-flip canonical board (length 2*PLANE) as observed
+  // by the mover at that ply.
+  readonly history: ReadonlyArray<Uint8Array>;
 
-  constructor(board: Uint8Array, moveCount: number) {
+  constructor(
+    board: Uint8Array,
+    moveCount: number,
+    history: ReadonlyArray<Uint8Array> = [],
+  ) {
     this.board = board;
     this.moveCount = moveCount;
+    this.history = history;
   }
 
   static initial(): GameState {
-    return new GameState(new Uint8Array(2 * PLANE), 0);
+    return new GameState(new Uint8Array(2 * PLANE), 0, []);
   }
 
   /** Length-81 mask of legal (empty) actions. */
@@ -58,17 +72,17 @@ export class GameState {
     if (this.board[action] || this.board[action + PLANE]) {
       throw new Error(`illegal move ${action} on occupied square`);
     }
+    // Snapshot the pre-move canonical board (matches Python's state_ops.apply_move_arrays).
+    const snapshot = new Uint8Array(this.board);
     const next = new Uint8Array(2 * PLANE);
     // Swap planes during copy: my (plane 0) becomes opponent (plane 1) for next state.
-    // First: place my new stone in current plane 0, then copy planes swapped.
-    // We'll just copy directly: out[0..81] = old[81..162] (opponent's old stones)
-    //                          out[81..162] = old[0..81] + this new stone
     for (let i = 0; i < PLANE; i++) {
       next[i] = this.board[i + PLANE];
       next[i + PLANE] = this.board[i];
     }
     next[action + PLANE] = 1;
-    return new GameState(next, this.moveCount + 1);
+    const nextHistory = [snapshot, ...this.history.slice(0, HISTORY_PLY - 1)];
+    return new GameState(next, this.moveCount + 1, nextHistory);
   }
 
   /** Returns [done, value_from_side_to_move_perspective].
@@ -84,15 +98,49 @@ export class GameState {
     return { done: false, value: 0.0 };
   }
 
-  /** Return Float32Array of shape [3, 9, 9] flattened: 243 elements. */
-  toPlanes(): Float32Array {
-    const out = new Float32Array(3 * PLANE);
-    for (let i = 0; i < PLANE; i++) {
-      out[i] = this.board[i];
-      out[i + PLANE] = this.board[i + PLANE];
-      out[i + 2 * PLANE] = 1.0;
+  /** Return Float32Array of shape [nPlanes, 9, 9] flattened.
+   *
+   * nPlanes=3:  [my, opp, const-1]                — legacy
+   * nPlanes=17: AlphaZero-style 2*HISTORY_PLY history planes + const-1, matching
+   *             gomoku/game.py:to_planes layout. Slots beyond available history
+   *             stay zero.
+   */
+  toPlanes(nPlanes: number = 3): Float32Array {
+    if (nPlanes === 3) {
+      const out = new Float32Array(3 * PLANE);
+      for (let i = 0; i < PLANE; i++) {
+        out[i] = this.board[i];
+        out[i + PLANE] = this.board[i + PLANE];
+        out[i + 2 * PLANE] = 1.0;
+      }
+      return out;
     }
-    return out;
+    if (nPlanes === 2 * HISTORY_PLY + 1) {
+      const H = HISTORY_PLY;
+      const out = new Float32Array(nPlanes * PLANE);
+      // Plane 0 (my, t) and plane H (opp, t)
+      for (let i = 0; i < PLANE; i++) {
+        out[i] = this.board[i];
+        out[i + H * PLANE] = this.board[i + PLANE];
+      }
+      // Planes 1..H-1 / H+1..2H-1: past frames, perspective-corrected.
+      // history[k-1] = canonical board observed by mover at t-k. If k is odd
+      // the mover was the opposite side, so swap planes when reading.
+      for (let k = 1; k < H; k++) {
+        const past = this.history[k - 1];
+        if (!past) break;
+        const myOffset = k % 2 === 0 ? 0 : PLANE;
+        const oppOffset = k % 2 === 0 ? PLANE : 0;
+        for (let i = 0; i < PLANE; i++) {
+          out[k * PLANE + i] = past[myOffset + i];
+          out[(H + k) * PLANE + i] = past[oppOffset + i];
+        }
+      }
+      // Last plane (2H): constant 1.0
+      for (let i = 0; i < PLANE; i++) out[2 * H * PLANE + i] = 1.0;
+      return out;
+    }
+    throw new Error(`unsupported nPlanes=${nPlanes} (expected 3 or 17)`);
   }
 }
 

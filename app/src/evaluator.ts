@@ -48,10 +48,31 @@ const ORT_VERSION = "1.20.1";
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
 const ORT_MODULE_URL = `${ORT_BASE}ort.bundle.min.mjs`;
 
-const MODEL_URL = "/model.onnx";
+export type ModelMeta = {
+  epoch: number;
+  total_games: number;
+  n_filters: number;
+  n_blocks: number;
+  n_input_planes?: number;
+  exported_at: string;
+  checkpoint_source?: string;
+};
 
-let sessionPromise: Promise<OrtSession> | null = null;
+export type ModelEntry = {
+  id: string;
+  label: string;
+  url: string;
+  meta_url?: string;
+  default?: boolean;
+} & Partial<ModelMeta>;
+
+const DEFAULT_MODEL_URL = "/model.onnx";
+
 let ortPromise: Promise<OrtModule> | null = null;
+
+// One session per model URL. Switching models reuses any session we already
+// loaded.
+const sessionPromises: Map<string, Promise<OrtSession>> = new Map();
 
 async function getOrt(): Promise<OrtModule> {
   if (!ortPromise) {
@@ -68,11 +89,12 @@ async function getOrt(): Promise<OrtModule> {
   return ortPromise;
 }
 
-async function getSession(): Promise<OrtSession> {
-  if (!sessionPromise) {
-    sessionPromise = (async () => {
+async function getSession(url: string): Promise<OrtSession> {
+  let p = sessionPromises.get(url);
+  if (!p) {
+    p = (async () => {
       const ort = await getOrt();
-      const resp = await fetch(MODEL_URL);
+      const resp = await fetch(url);
       if (!resp.ok) throw new Error(`failed to fetch model: ${resp.status}`);
       const buf = await resp.arrayBuffer();
       return ort.InferenceSession.create(buf, {
@@ -80,25 +102,35 @@ async function getSession(): Promise<OrtSession> {
         graphOptimizationLevel: "all",
       });
     })();
+    sessionPromises.set(url, p);
   }
-  return sessionPromise;
+  return p;
 }
 
-/** Warm up: kick off the model download (and session creation) in the background. */
-export function warmUp(): void {
-  void getSession().catch((err) => console.warn("model preload failed:", err));
+/** Warm up: kick off the default model download (and session creation). */
+export function warmUp(url: string = DEFAULT_MODEL_URL): void {
+  void getSession(url).catch((err) => console.warn("model preload failed:", err));
 }
 
-export function createOrtEvaluator(): Evaluator {
+export type EvaluatorOptions = {
+  url?: string;
+  nInputPlanes?: number;
+};
+
+/** Build an Evaluator that runs `url` with the given input-plane count. */
+export function createOrtEvaluator(opts: EvaluatorOptions = {}): Evaluator {
+  const url = opts.url ?? DEFAULT_MODEL_URL;
+  const nPlanes = opts.nInputPlanes ?? 3;
   return async (states: GameState[]) => {
-    const session = await getSession();
+    const session = await getSession(url);
     const ort = await getOrt();
     const B = states.length;
-    const buf = new Float32Array(B * 3 * 9 * 9);
+    const stride = nPlanes * 9 * 9;
+    const buf = new Float32Array(B * stride);
     for (let i = 0; i < B; i++) {
-      buf.set(states[i].toPlanes(), i * 3 * 9 * 9);
+      buf.set(states[i].toPlanes(nPlanes), i * stride);
     }
-    const input = new ort.Tensor("float32", buf, [B, 3, 9, 9]);
+    const input = new ort.Tensor("float32", buf, [B, nPlanes, 9, 9]);
     const out = await session.run({ input });
     const policyData = out.policy.data;
     const valueData = out.value.data;
@@ -113,28 +145,41 @@ export function createOrtEvaluator(): Evaluator {
   };
 }
 
-export type ModelMeta = {
-  epoch: number;
-  total_games: number;
-  n_filters: number;
-  n_blocks: number;
-  n_input_planes?: number;
-  exported_at: string;
-  checkpoint_source?: string;
-};
-
-let metaPromise: Promise<ModelMeta | null> | null = null;
-export async function loadModelMeta(): Promise<ModelMeta | null> {
-  if (!metaPromise) {
-    metaPromise = (async () => {
+let modelsPromise: Promise<ModelEntry[] | null> | null = null;
+/** Load the optional models.json index. Returns null if not present (single-model legacy). */
+export async function loadModelsIndex(): Promise<ModelEntry[] | null> {
+  if (!modelsPromise) {
+    modelsPromise = (async () => {
       try {
-        const r = await fetch("/model.meta.json");
+        const r = await fetch("/models.json");
+        if (!r.ok) return null;
+        const data = (await r.json()) as { models: ModelEntry[] };
+        return data.models;
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return modelsPromise;
+}
+
+const metaCache: Map<string, Promise<ModelMeta | null>> = new Map();
+/** Load model meta for a specific URL (defaults to legacy `/model.meta.json`). */
+export async function loadModelMeta(
+  url: string = "/model.meta.json",
+): Promise<ModelMeta | null> {
+  let p = metaCache.get(url);
+  if (!p) {
+    p = (async () => {
+      try {
+        const r = await fetch(url);
         if (!r.ok) return null;
         return (await r.json()) as ModelMeta;
       } catch {
         return null;
       }
     })();
+    metaCache.set(url, p);
   }
-  return metaPromise;
+  return p;
 }
