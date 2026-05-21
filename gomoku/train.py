@@ -43,6 +43,8 @@ def train_step(
     accum_scale: float = 1.0,
     do_optimizer_step: bool = True,
     zero_grad: bool = True,
+    side: torch.Tensor | None = None,
+    ply: torch.Tensor | None = None,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
@@ -53,8 +55,12 @@ def train_step(
     if zero_grad:
         optimizer.zero_grad(set_to_none=True)
     logits, v = model(planes)
-    pl = policy_loss(logits, pi)
-    vl = value_loss(v, z)
+    logp = F.log_softmax(logits, dim=-1)
+    # Per-sample policy CE so we can split by side/ply without a second pass.
+    per_policy_ce = -(pi * logp).sum(dim=-1)
+    pl = per_policy_ce.mean()
+    per_value_se = (v - z) ** 2
+    vl = per_value_se.mean()
     loss = pl + value_weight * vl
     if l2_weight > 0:
         l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
@@ -66,16 +72,39 @@ def train_step(
     if do_optimizer_step:
         optimizer.step()
     with torch.no_grad():
-        # Accuracy: fraction where argmax(logits over legal entries of pi) matches argmax(pi).
         pred = logits.argmax(dim=-1)
         target = pi.argmax(dim=-1)
         acc = (pred == target).float().mean()
-    return {
+        target_entropy = -(pi * torch.log(pi.clamp_min(1e-9))).sum(dim=-1).mean()
+        policy_kl = pl - target_entropy
+        p = logp.exp()
+        net_entropy = -(p * logp).sum(dim=-1).mean()
+    out: dict[str, float] = {
         "loss/total": float(loss.detach()),
         "loss/policy": float(pl.detach()),
         "loss/value": float(vl.detach()),
         "train/policy_acc": float(acc),
+        "train/policy_target_entropy": float(target_entropy),
+        "train/policy_net_entropy": float(net_entropy),
+        "train/policy_kl": float(policy_kl),
     }
+    if side is not None and ply is not None:
+        with torch.no_grad():
+            ce_cpu = per_policy_ce.detach()
+            ve_cpu = per_value_se.detach()
+            side_long = side.long()
+            for s in (0, 1):
+                mask = (side_long == s)
+                if bool(mask.any()):
+                    out[f"train/policy_ce/side_{s}"] = float(ce_cpu[mask].mean())
+                    out[f"train/value_mse/side_{s}"] = float(ve_cpu[mask].mean())
+            ply_long = ply.long()
+            for lo, hi, label in ((0, 10, "ply_00_10"), (10, 25, "ply_10_25"), (25, 60, "ply_25_60")):
+                mask = (ply_long >= lo) & (ply_long < hi)
+                if bool(mask.any()):
+                    out[f"train/policy_ce/{label}"] = float(ce_cpu[mask].mean())
+                    out[f"train/value_mse/{label}"] = float(ve_cpu[mask].mean())
+    return out
 
 
 def ema_update(ema_model, model, tau: float) -> None:
@@ -114,6 +143,64 @@ def _baseline_log_key(spec) -> str:
         depth = spec.kwargs.get("depth", "")
         return f"vs_lookahead{depth}"
     return f"vs_{spec.kind}"
+
+
+def _score_validation_archive(model, archive: dict, device) -> dict[str, float]:
+    """Score the model against a frozen validation archive.
+
+    Returns overall val/* metrics plus per-bucket variants tagged by
+    provenance. The archive format is the one produced by
+    scripts/mine_validation_archive.py.
+    """
+    planes = archive["planes"].to(device)
+    pi = archive["pi_mcts"].to(device)
+    z = archive["z"].to(device)
+    provenance: list[str] = list(archive["provenance"])
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            n = planes.shape[0]
+            # Score in chunks to avoid blowing MPS memory on huge archives.
+            chunk = 512
+            ce_parts: list[torch.Tensor] = []
+            se_parts: list[torch.Tensor] = []
+            acc_parts: list[torch.Tensor] = []
+            kl_parts: list[torch.Tensor] = []
+            for start in range(0, n, chunk):
+                stop = min(start + chunk, n)
+                logits, v = model(planes[start:stop])
+                logp = F.log_softmax(logits, dim=-1)
+                ce = -(pi[start:stop] * logp).sum(dim=-1)
+                ent = -(pi[start:stop] * torch.log(pi[start:stop].clamp_min(1e-9))).sum(dim=-1)
+                ce_parts.append(ce.cpu())
+                kl_parts.append((ce - ent).cpu())
+                se_parts.append(((v - z[start:stop]) ** 2).cpu())
+                acc_parts.append((logits.argmax(dim=-1) == pi[start:stop].argmax(dim=-1)).float().cpu())
+            ce_all = torch.cat(ce_parts)
+            kl_all = torch.cat(kl_parts)
+            se_all = torch.cat(se_parts)
+            acc_all = torch.cat(acc_parts)
+    finally:
+        if was_training:
+            model.train()
+    out: dict[str, float] = {
+        "val/policy_ce": float(ce_all.mean()),
+        "val/policy_kl": float(kl_all.mean()),
+        "val/value_mse": float(se_all.mean()),
+        "val/policy_acc": float(acc_all.mean()),
+    }
+    buckets: dict[str, list[int]] = {}
+    for i, tag in enumerate(provenance):
+        buckets.setdefault(tag, []).append(i)
+    for tag, idxs in buckets.items():
+        if not idxs:
+            continue
+        idx_t = torch.tensor(idxs, dtype=torch.long)
+        out[f"val/policy_ce/{tag}"] = float(ce_all[idx_t].mean())
+        out[f"val/policy_kl/{tag}"] = float(kl_all[idx_t].mean())
+        out[f"val/value_mse/{tag}"] = float(se_all[idx_t].mean())
+    return out
 
 
 def _parse_specs(s: str) -> list:
@@ -239,6 +326,12 @@ def parse_args() -> argparse.Namespace:
                         "the number of forward+backward passes per cycle; the "
                         "number of optimizer.step() calls becomes "
                         "ceil(steps_this_cycle / grad_accum_steps).")
+    p.add_argument("--validation-archive-path", type=str, default=None,
+                   help="Path to a frozen validation archive (.pt) produced by "
+                        "scripts/mine_validation_archive.py. When set, the trainer "
+                        "scores the current model against this fixed set every "
+                        "--eval-every cycles and logs val/policy_ce, val/policy_kl, "
+                        "val/value_mse, val/policy_acc plus per-bucket variants.")
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--eval-sims", type=int, default=50,
                    help="MCTS sims used by the model during eval matches")
@@ -381,6 +474,16 @@ def main() -> None:
         for p in ema_model.parameters():
             p.requires_grad_(False)
         ema_model.eval()
+
+    validation_archive: dict | None = None
+    if args.validation_archive_path:
+        validation_archive = torch.load(
+            args.validation_archive_path, map_location="cpu", weights_only=False,
+        )
+        print(
+            f"validation archive loaded: {validation_archive['planes'].shape[0]} positions "
+            f"from {args.validation_archive_path}"
+        )
 
     buffer = ReplayBuffer(args.replay_buffer_size, device=device)
     if args.resume:
@@ -914,7 +1017,7 @@ def main() -> None:
         optimizer_steps_this_cycle = 0
         if buffer.size >= args.batch_size:
             for i in range(steps_this_cycle):
-                planes, pi, z = buffer.sample(args.batch_size)
+                planes, pi, z, side, ply = buffer.sample(args.batch_size)
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
                 m = train_step(
@@ -924,6 +1027,8 @@ def main() -> None:
                     accum_scale=1.0 / accum_n,
                     do_optimizer_step=is_last_in_window,
                     zero_grad=is_first_in_window,
+                    side=side,
+                    ply=ply,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)
@@ -988,6 +1093,11 @@ def main() -> None:
             log.update(ext_eval)
 
         # --- in-trainer eval (only when --no-eval not passed) ---
+        if validation_archive is not None and (epoch + 1) % args.eval_every == 0:
+            va_start = time.time()
+            log.update(_score_validation_archive(model, validation_archive, device))
+            log["time/val_archive_s"] = time.time() - va_start
+
         if args.eval_in_trainer and (epoch + 1) % args.eval_every == 0:
             eval_counter += 1
             eval_start = time.time()

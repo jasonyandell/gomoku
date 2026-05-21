@@ -27,6 +27,8 @@ class SelfPlayExample:
     planes: np.ndarray   # (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE) float32
     pi: np.ndarray       # (N_ACTIONS,) float32, sums to 1 over legal actions
     z: float             # value in [-1, 1]
+    side: int = 0        # 0=black (first mover), 1=white — for per-color diagnostics
+    ply: int = 0         # ply count at which this position was captured
 
 
 @dataclass
@@ -196,13 +198,21 @@ def _generate_games_native(
     records: list[GameRecord] = []
     for g_idx, outcome_for_black, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
-        for planes, pi, side in trajectories[g_idx]:
+        n_initial = initial_plies[g_idx]
+        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
             z = outcome_for_black if side == 0 else -outcome_for_black
+            ply_at_capture = n_initial + ply_idx
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(aug_planes, aug_pi.astype(np.float32), z))
+                    examples.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                    ))
             else:
-                examples.append(SelfPlayExample(planes, pi.astype(np.float32), z))
+                examples.append(SelfPlayExample(
+                    planes, pi.astype(np.float32), z,
+                    side=int(side), ply=int(ply_at_capture),
+                ))
         records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
 
     return records
@@ -339,14 +349,21 @@ def generate_games(
     records: list[GameRecord] = []
     for g_idx, outcome_for_black, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
-        for planes, pi, side in trajectories[g_idx]:
-            # z from this ply's side-to-move perspective
+        n_initial = initial_plies[g_idx]
+        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
             z = outcome_for_black if side == 0 else -outcome_for_black
+            ply_at_capture = n_initial + ply_idx
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(aug_planes, aug_pi.astype(np.float32), z))
+                    examples.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                    ))
             else:
-                examples.append(SelfPlayExample(planes, pi, z))
+                examples.append(SelfPlayExample(
+                    planes, pi, z,
+                    side=int(side), ply=int(ply_at_capture),
+                ))
         records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
 
     return records
@@ -404,7 +421,7 @@ def generate_games_vs_baseline(
     # side the model plays in each game: 0 = first mover, 1 = second
     model_side = np.where(rng.random(n_games) < model_first_frac, 0, 1).astype(np.int8)
 
-    trajectories: list[list[tuple[np.ndarray, np.ndarray]]] = [[] for _ in range(n_games)]
+    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []  # (game_idx, outcome_for_model, plies)
 
@@ -435,7 +452,7 @@ def generate_games_vs_baseline(
                 g = mcts_games[slot_idx]
                 tau = 1.0 if ply < temperature_moves else temperature_final
                 pi = policy_from_visits(g.root, tau)
-                trajectories[g_idx].append((g.root.state.to_planes(), pi.copy()))
+                trajectories[g_idx].append((g.root.state.to_planes(), pi.copy(), n_initial + ply))
                 action = _sample_action(pi, rng)
                 g.advance_root(action)
 
@@ -472,15 +489,22 @@ def generate_games_vs_baseline(
     records: list[GameRecord] = []
     for g_idx, outcome_for_model, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
-        for planes, pi in trajectories[g_idx]:
+        side = int(model_side[g_idx])
+        for planes, pi, ply_at_capture in trajectories[g_idx]:
             # planes are canonical (plane 0 = side-to-move = model at the moment
             # the example was recorded), so z is directly outcome_for_model.
             z = outcome_for_model
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(aug_planes, aug_pi.astype(np.float32), z))
+                    examples.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=side, ply=int(ply_at_capture),
+                    ))
             else:
-                examples.append(SelfPlayExample(planes, pi, z))
+                examples.append(SelfPlayExample(
+                    planes, pi, z,
+                    side=side, ply=int(ply_at_capture),
+                ))
         records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_model))
 
     return records
