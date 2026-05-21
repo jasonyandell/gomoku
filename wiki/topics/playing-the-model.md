@@ -80,18 +80,46 @@ Two endpoints behind the scenes:
 
 ## Live SPA (gomoku.jasonyandell.workers.dev)
 
-Static ONNX, no server. Snapshot is whatever was last `git push`-ed via
-`scripts/export_onnx.py`. Check what's live:
+Static ONNX, no server. As of 2026-05-21 the SPA serves **multiple models**
+side-by-side via an in-app dropdown — pick any from the header. The set is
+indexed at `/models.json`:
 
 ```bash
-curl -s https://gomoku.jasonyandell.workers.dev/model.meta.json
-# {"epoch": 100, "total_games": 6400, ...}  ← whatever the deployed snapshot is
+curl -s https://gomoku.jasonyandell.workers.dev/models.json | jq
+# [{ id: wl4-e4024 (default), 17-plane, 458kg },
+#  { id: epoch0100, 3-plane legacy, 6.4kg }]
 ```
 
-If the live model is meaningfully behind a strong local checkpoint and you want
-to update it, see the **Cloudflare live SPA deploy** block in the
-`gomoku-train` skill — it's a three-step `export_onnx.py` → commit
-`app/public/` → push flow.
+### Adding another model to the live SPA
+
+1. Export ONNX with the right plane count (the exporter derives it from
+   `model_config.n_input_planes` automatically):
+   ```bash
+   python scripts/export_onnx.py \
+     --checkpoint sweep_runs/<cell>/checkpoints/epochNNNN.pt \
+     --out app/public/<id>.onnx
+   ```
+2. Append an entry to `app/public/models.json`:
+   ```json
+   {
+     "id": "<id>", "label": "<human label>",
+     "url": "/<id>.onnx", "meta_url": "/<id>.meta.json",
+     "n_input_planes": 17, "epoch": N, "total_games": G,
+     "n_filters": 64, "n_blocks": 4
+   }
+   ```
+   Set `"default": true` on the one that should load first. Only one entry
+   should have `default: true`.
+3. `git add app/public/<id>.onnx app/public/<id>.meta.json app/public/models.json`
+   and push. GH Actions deploys in ~60 s.
+
+### Feature-plane caveat (3 vs 17)
+
+The SPA carries both featurizers: 3-plane (legacy, no history) and 17-plane
+(AZ-style, 8 plies of history per side + const). Adding a *new* plane count
+would require extending `app/src/game.ts:toPlanes` and the golden parity test
+at `app/src/__tests__/planes17.test.ts`. The Python source of truth is
+`gomoku/game.py:to_planes`.
 
 ## Common annoyances
 
