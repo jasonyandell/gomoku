@@ -3,6 +3,15 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-21] docs | how-to-play page
+
+- Added [topics/playing-the-model.md](topics/playing-the-model.md) covering the
+  local web UI surface (strong play), the live SPA, checkpoint selection (incl.
+  the "latest.pt is huge, prefer epochNNNN.pt" trap), play/replay-tab knobs,
+  and common annoyances (MPS contention, stale `epoch0136.pt` smoke checkpoint
+  in `./checkpoints/`).
+- Indexed in [index.md](index.md) Start-Here table.
+
 ## [2026-05-19] setup | LLM wiki operating model
 
 - Added [index.md](index.md) as the wiki entry point and content catalog.
