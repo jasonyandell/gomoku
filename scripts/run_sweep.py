@@ -128,15 +128,17 @@ CELLS: dict[str, Cell] = {
                buffer_size=1_500_000, size="small", stem_padding=1,
                n_simulations=400, lr=5e-4, epochs=5000,
                worker_min_positions=12800, sgd_per_position=0.0025),
-    # WL1: wave-lockstep, 5M buffer. First test of the per-version uniformity
-    # hypothesis from wiki/topics/wave-of-lockstep-design.md: 8 workers each
-    # produce an 8-game tile against one model version, then the trainer steps
-    # and publishes the next version. Existing sgd_per_position convention is
-    # K=1 per game at ~50 plies with D4 augmentation:
+    # WL1: wave-lockstep, 1.5M buffer (matches az-recipe-160k; max that fits
+    # under MPS INT_MAX at 17 planes × 81 cells per position). First test of
+    # the per-version uniformity hypothesis from
+    # wiki/topics/wave-of-lockstep-design.md: 8 workers each produce an 8-game
+    # tile against one model version, then the trainer steps and publishes the
+    # next version. Existing sgd_per_position convention is K=1 per game at
+    # ~50 plies with D4 augmentation:
     #   64 games * 50 plies * 8 aug = 25,600 positions/tile
     #   64 SGD steps / 25,600 positions = 0.0025
-    "WL1": Cell("WL1-wave-lockstep-5M-buffer", sgd_per_game=1.0,
-                buffer_size=5_000_000, games_per_epoch=64,
+    "WL1": Cell("WL1-wave-lockstep-1p5M-buffer", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=400,
                 n_workers=8, games_per_batch=8, wave_mode=True,
                 c_puct=1.25, c_puct_base=19652.0,
