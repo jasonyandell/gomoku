@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gomoku.game import GameState, N_ACTIONS, augment
+from gomoku.game import GameState, HISTORY_PLY, N_ACTIONS, augment
 from gomoku.mcts import (
     Evaluator,
     MCTSGame,
@@ -38,6 +38,7 @@ class GameRecord:
     examples: list[SelfPlayExample]
     plies: int
     outcome: float  # +1 if first-mover (black) won, -1 if second-mover (white) won, 0 draw
+    archive_start: bool = False  # WL5: True if game was seeded from validation archive
 
 
 def _sample_action(pi: np.ndarray, rng: np.random.Generator) -> int:
@@ -88,6 +89,26 @@ def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameS
         # restart from scratch
 
 
+def _gamestate_from_archive(archive: dict, idx: int) -> GameState:
+    """WL5 archive-start: build a GameState from one archived position.
+
+    Reads plane 0 (current-side stones) and plane HISTORY_PLY (opponent
+    stones) at archive index `idx` and constructs a fresh `GameState`
+    with `move_count` taken from `archive["ply"][idx]`. History tuple is
+    left empty — the archive only persists planes, not move order, so
+    planes 1..H-1 / H+1..2H-1 will read as zeros from the new state. The
+    archived current+opponent positions and side-to-move are preserved;
+    only the per-ply history snapshots are lost. Acceptable per the WL5
+    design doc (history is "hard without move order").
+    """
+    planes = archive["planes"][idx].cpu().numpy()
+    current = planes[0].astype(bool)
+    opponent = planes[HISTORY_PLY].astype(bool)
+    board = np.stack([current, opponent], axis=0)
+    move_count = int(archive["ply"][idx].item())
+    return GameState(board=board, move_count=move_count, history=())
+
+
 def _can_use_native_mcts(evaluator: Evaluator) -> bool:
     return bool(
         native_mcts.USING_NATIVE_MCTS
@@ -112,6 +133,8 @@ def _generate_games_native(
     augment_symmetries: bool = True,
     wave_size: int = 1,
     random_opening_moves: int = 0,
+    archive: dict | None = None,
+    archive_start_frac: float = 0.0,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -120,8 +143,19 @@ def _generate_games_native(
     planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
     games = []
     initial_plies: list[int] = []
+    archive_start_flags: list[bool] = []
+    n_archive = 0 if archive is None else int(archive["planes"].shape[0])
     for _ in range(n_games):
-        if random_opening_moves > 0:
+        from_archive = (
+            archive is not None
+            and n_archive > 0
+            and float(rng.random()) < archive_start_frac
+        )
+        if from_archive:
+            idx = int(rng.integers(0, n_archive))
+            start_state = _gamestate_from_archive(archive, idx)
+            opening_plies = start_state.move_count
+        elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
             start_state, opening_plies = GameState.initial(), 0
@@ -136,6 +170,7 @@ def _generate_games_native(
             )
         )
         initial_plies.append(opening_plies)
+        archive_start_flags.append(from_archive)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
@@ -213,7 +248,12 @@ def _generate_games_native(
                     planes, pi.astype(np.float32), z,
                     side=int(side), ply=int(ply_at_capture),
                 ))
-        records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
+        records.append(GameRecord(
+            examples=examples,
+            plies=plies,
+            outcome=outcome_for_black,
+            archive_start=archive_start_flags[g_idx],
+        ))
 
     return records
 
@@ -234,6 +274,8 @@ def generate_games(
     augment_symmetries: bool = True,
     wave_size: int = 1,
     random_opening_moves: int = 0,
+    archive: dict | None = None,
+    archive_start_frac: float = 0.0,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
@@ -267,6 +309,8 @@ def generate_games(
             augment_symmetries=augment_symmetries,
             wave_size=wave_size,
             random_opening_moves=random_opening_moves,
+            archive=archive,
+            archive_start_frac=archive_start_frac,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)

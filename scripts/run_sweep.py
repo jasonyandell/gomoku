@@ -97,6 +97,13 @@ class Cell:
     # examples are NOT recorded for those K plies — MCTS picks up at K+1 and
     # the model trains on post-random positions. Breaks opening monoculture.
     random_opening_moves: int = 0
+    # WL5 levers (wiki/topics/wl5-diagnostics-archive-start-design.md). Trainer
+    # scores a frozen validation set every eval cycle for stationary policy/
+    # value quality. Workers seed `archive_start_frac` of games from the same
+    # archive instead of the canonical empty board.
+    validation_archive_path: str | None = None
+    archive_start_path: str | None = None
+    archive_start_frac: float = 0.0
     extra_train_args: list[str] = field(default_factory=list)
     extra_worker_args: list[str] = field(default_factory=list)
 
@@ -267,6 +274,39 @@ CELLS: dict[str, Cell] = {
                 weights_poll_min_sec=2.0,
                 weights_poll_max_sec=8.0,
                 random_opening_moves=0),  # ← the experimental change
+    # WL5: WL4 + WL5 diagnostics + archive-start lever (see
+    # wiki/topics/wl5-diagnostics-archive-start-design.md). Resumes from
+    # WL4 e4024 (sweep_runs/WL4-no-random-openings.plateau-e4024/checkpoints/
+    # latest.pt) via CLI --resume; cell rename gives clean wandb timeline.
+    # WL4 plateaued at elo 1841 ATH with la4=100% — best WL-series outcome
+    # to date but no further breakthrough. Two streams here:
+    #   diagnostics (validation_archive_path): trainer scores a frozen ~1-2k
+    #     position archive every eval cycle to separate target-entropy noise
+    #     from learning-gap effects in the policy loss.
+    #   archive-start (archive_start_path/frac): per-game, with prob 0.15,
+    #     workers seed from a curated trouble-state position instead of empty
+    #     board. Tests Go-Exploit-style state-coverage gap hypothesis.
+    # All WL4 levers preserved (EMA, past-mix, poll jitter, grad-accum 4×).
+    "WL5": Cell("WL5-diagnostics-archive-start", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025,
+                save_buffer_every=100,
+                ema_tau=0.99,
+                grad_accum_steps=4,
+                opponent_mix_recent=0.4,
+                opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0,
+                weights_poll_max_sec=8.0,
+                random_opening_moves=0,
+                validation_archive_path="archives/wl5_validation_v1.pt",
+                archive_start_path="archives/wl5_validation_v1.pt",
+                archive_start_frac=0.15),
 }
 
 
@@ -330,6 +370,8 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         cmd += ["--grad-accum-steps", str(cell.grad_accum_steps)]
     if cell.random_opening_moves > 0:
         cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
+    if cell.validation_archive_path is not None:
+        cmd += ["--validation-archive-path", cell.validation_archive_path]
     return cmd
 
 
@@ -367,6 +409,11 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
         cmd += ["--weights-poll-max-sec", str(cell.weights_poll_max_sec)]
     if cell.random_opening_moves > 0:
         cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
+    if cell.archive_start_path is not None and cell.archive_start_frac > 0:
+        cmd += [
+            "--archive-start-path", cell.archive_start_path,
+            "--archive-start-frac", str(cell.archive_start_frac),
+        ]
     return cmd
 
 
