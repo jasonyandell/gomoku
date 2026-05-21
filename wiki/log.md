@@ -442,3 +442,24 @@ consistent heading so future sessions can scan recent changes with simple tools.
   ids), the two gotchas as Don'ts, and a pointer to the runbook for every
   "start a run" type request. Single-process `gomoku.train` path stays
   documented for ad-hoc smoke work.
+
+## [2026-05-20] notebook | eval-time-vs-heuristic as a hidden plies-regrowth indicator (WL2)
+
+- Jason flagged at WL2 e420 that `time/eval_vs_heuristic_s` climbed from ~6s
+  at e1 to ~17s by e420 — roughly 3x more wall-clock per eval. Since the
+  eval plays 16 fixed games vs heuristic per cycle, the per-move cost is
+  constant; the wall-clock growth maps directly to more plies per game.
+- This is the **plies-regrowth signal hiding outside of `selfplay/plies_mean`**:
+  in WL2 the self-play tile still shows plies ~11-12 (model beats its own
+  EMA-smoothed brain fast via attacks), but vs heuristic — a different
+  style — the model has learned to fight back to 30+ plies. Eval-time
+  surfaces real defensive capability that selfplay metrics don't expose.
+- WL2's eval-time climb roughly coincides with the first heuristic
+  crossing at e370 (15%), suggesting the time-climb leads the win-rate
+  signal: defensive ability shows up in game length before it shows up
+  in actual wins.
+- Watch for: does WL2's eval-time *stay* climbing as the model approaches
+  sustained crossing, or does it plateau then drop? Z plateaued; WL1's
+  late-run collapse coincided with eval times dropping.
+- Filing in the runbook "Leading indicators" section as a hidden but
+  high-value signal.

@@ -187,6 +187,7 @@ When the user calls the run (plateau, regression, completed budget):
 |---|---|---|
 | `selfplay/plies_mean` falling | model entering fast-attack regime | normal early; alarming if it never regrows past e500 |
 | `selfplay/plies_p90` > 30 | defense regime forming | celebrate / push notification |
+| `time/eval_vs_heuristic_s` climbing | **hidden plies-regrowth signal**: model fights longer vs external opponents *before* selfplay plies grow (because selfplay still fast-wins vs self). 16 games per eval at constant per-move cost → wall-clock growth ≈ per-game move count growth. Surfaces real defensive capability that selfplay metrics miss. | celebrate; leads `selfplay/plies_mean` by hundreds of epochs |
 | `loss/policy` stagnating + `loss/value` near 0 | model converged on its current strategy; needs perturbation | check eval bouncing pattern |
 | `eval/vs_lookahead4_winrate` REGRESSING from a prior peak | catastrophic forgetting; opponent-diversity failure | flag in run log; consider stopping if it doesn't recover in ~200 epochs |
 | `wave/wait_for_slowest_s` > 50% of `wave/total_s` and growing | barrier rot; one worker is stalling | investigate the slow worker; check for race-drops |
