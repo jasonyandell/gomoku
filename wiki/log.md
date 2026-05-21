@@ -561,3 +561,26 @@ consistent heading so future sessions can scan recent changes with simple tools.
   re-architecture). Also need to think about poisoning paths, not
   just process-death paths — the WL3 recovery missed this and
   burned the buffer for 9 epochs.
+
+## [2026-05-21] notebook | WL3.1 relaunched with native MCTS C fix — root cause closed
+
+- Background investigator agent landed the root cause of the WL3 NaN
+  crash (commit `7c3e405`): `NativeMCTSGame.policy(tau)` was casting
+  `pow(N, 1/tau)` to float32 before normalizing. At τ=0.1 with
+  concentrated visits N≥~7100, the cast overflowed FLT_MAX (~3.4e38) →
+  `Inf/Inf` → NaN. Long concentrated games (which only appeared at
+  e825+ in WL3 as plies regrew past ~18) reliably triggered it.
+- Fix: do the τ-normalization in `double[]`, cast only final
+  probabilities to float32. Plus +Inf-sum argmax-tie fallback.
+  Regression test in `tests/test_native_mcts.py::test_native_policy_
+  finite_at_low_temperature_with_concentrated_visits` — fails on
+  pre-fix, passes on post-fix. 89 tests passing.
+- WL3.1 first try (wandb `i34ihwj9`) ran 92 epochs with only the
+  Python band-aids; relaunched as `44cxzc9d` after rebuilding the C
+  extension. Same cell config. Old artifacts preserved at
+  `sweep_runs/WL3.1-random-openings-nanfix.preCfix-e92/`.
+- The C fix + the two Python band-aids (`c5049be` + `0557671`) close
+  the failure mode at both levels: C-side overflow prevented, and
+  Python-side NaN-in-pi still falls back gracefully if anything similar
+  ever emerges.
+- Workspace refreshed: https://wandb.ai/jasonyandell-forge42/gomoku?nw=tfzwgv1hwbp

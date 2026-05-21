@@ -2779,3 +2779,30 @@ charts.
 |---|---|---|---|---|---|---|---|---|---|
 | TBD | | | | | | | | | populating from launch |
 
+
+### WL3.1 relaunched at e92 with native MCTS C fix (2026-05-21 ~08:30)
+
+The first WL3.1 (wandb `i34ihwj9`) ran cleanly to e92 with the Python
+NaN band-aids in place. During that run, the background investigator
+agent nailed the root cause of the original NaN:
+
+**Native MCTS `policy(tau)` bug:** `pow(N, 1/tau)` was computed in
+`double`, then cast to `float32` BEFORE normalizing. At τ=0.1 with a
+concentrated child N ≥ ~7100, the cast overflowed to `+Inf`, then
+`Inf/Inf` → NaN. The overflow requires long concentrated games — which
+WL3 only produced once plies regrew past ~18 around e825. Below that
+threshold, no NaN. That explains why WL3 ran 825 epochs before all 8
+workers stumbled on it within minutes once the threshold crossed.
+
+**Fix (commit `7c3e405`, plus tests in commit `397c784`):** keep the
+sharpened scores in `double[]`, normalize in double, cast only the
+final [0,1] probabilities to float. Plus an Inf-sum fallback to
+argmax-tie. Regression test verifies the fix produces finite policies
+at τ=0.1 with N=8000.
+
+Python NaN band-aids (`c5049be` + `0557671`) remain as belt-and-
+suspenders. With both layers, the failure mode is fully closed.
+
+**WL3.1 relaunched as wandb `44cxzc9d`** with the rebuilt C extension.
+Same cell config. Old artifacts at
+`sweep_runs/WL3.1-random-openings-nanfix.preCfix-e92/`.
