@@ -84,6 +84,15 @@ class Cell:
     # Apply torch.compile to worker models (eval-only). ~1.3-1.5x forward
     # speedup at batch>=32 for the small model on MPS.
     compile_workers: bool = False
+    # WL2 levers (wiki/topics/wl2-scale-emulation-design.md). All default-off
+    # so existing cells are unchanged. WL2 turns all four on.
+    ema_tau: float = 0.0                          # lever #1: EMA self-play weights
+    grad_accum_steps: int = 1                     # lever #4: gradient accumulation
+    opponent_mix_recent: float = 0.0              # lever #2: past-checkpoint mix (recent)
+    opponent_mix_history: float = 0.0             # lever #2: past-checkpoint mix (history)
+    opponent_mix_recent_window: int = 100         # lever #2: recent window size
+    weights_poll_min_sec: float | None = None     # lever #3: poll-interval jitter min
+    weights_poll_max_sec: float | None = None     # lever #3: poll-interval jitter max
     extra_train_args: list[str] = field(default_factory=list)
     extra_worker_args: list[str] = field(default_factory=list)
 
@@ -145,6 +154,37 @@ CELLS: dict[str, Cell] = {
                 temperature_moves=30, temperature_final=0.1,
                 sgd_per_position=0.0025,
                 save_buffer_every=100),
+    # WL2: WL1 + the four scale-emulation levers from
+    # wiki/topics/wl2-scale-emulation-design.md, designed in response to WL1's
+    # high-frequency strength oscillation (elo bounced 620-1281 across single
+    # evals after e500, la4 regressed 52% -> 5%). Each lever emulates one
+    # AZ-at-scale property our 8-worker laptop setup lacks:
+    #   #1 EMA self-play weights (tau=0.99): decouples the brain that plays
+    #      from the brain that learns -> emulates AZ's publish-to-workers lag.
+    #   #2 past-checkpoint opponent mix (recent=0.4, history=0.1): some waves
+    #      run an older snapshot on both sides -> emulates the multi-snapshot
+    #      generation that AZ has by default from async publishing.
+    #   #3 worker poll jitter (2-8s): workers pick up new weights at slightly
+    #      different times -> emulates per-worker async-publish skew.
+    #   #4 gradient accumulation 4x: cuts per-step gradient noise -> emulates
+    #      AZ's batch=4096-against-broad-buffer stability.
+    # Everything else identical to WL1 for an apples-to-apples test.
+    "WL2": Cell("WL2-scale-emulation", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025,
+                save_buffer_every=100,
+                ema_tau=0.99,
+                grad_accum_steps=4,
+                opponent_mix_recent=0.4,
+                opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0,
+                weights_poll_max_sec=8.0),
 }
 
 
@@ -202,6 +242,10 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
             "--wave-workers", str(cell.n_workers),
             "--wave-games-per-worker", str(cell.games_per_batch),
         ]
+    if cell.ema_tau > 0:
+        cmd += ["--ema-tau", str(cell.ema_tau)]
+    if cell.grad_accum_steps > 1:
+        cmd += ["--grad-accum-steps", str(cell.grad_accum_steps)]
     return cmd
 
 
@@ -227,6 +271,16 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
         cmd += ["--wave-mode"]
     if cell.compile_workers:
         cmd += ["--compile"]
+    if cell.opponent_mix_recent > 0:
+        cmd += ["--opponent-mix-recent", str(cell.opponent_mix_recent)]
+    if cell.opponent_mix_history > 0:
+        cmd += ["--opponent-mix-history", str(cell.opponent_mix_history)]
+    if cell.opponent_mix_recent > 0 or cell.opponent_mix_history > 0:
+        cmd += ["--opponent-mix-recent-window", str(cell.opponent_mix_recent_window)]
+    if cell.weights_poll_min_sec is not None:
+        cmd += ["--weights-poll-min-sec", str(cell.weights_poll_min_sec)]
+    if cell.weights_poll_max_sec is not None:
+        cmd += ["--weights-poll-max-sec", str(cell.weights_poll_max_sec)]
     return cmd
 
 
