@@ -240,6 +240,33 @@ CELLS: dict[str, Cell] = {
                   weights_poll_min_sec=2.0,
                   weights_poll_max_sec=8.0,
                   random_opening_moves=2),
+    # WL4: WL3.1 with random openings TURNED OFF. Resumes from WL3.1 e1536
+    # (latest.pt snapshotted as $CLAUDE_JOB_DIR/wl3.1_e1536_latest.pt) which
+    # reached the "established model" trigger Jason proposed:
+    # eval/vs_heuristic hit 100% sustained (e1123-1157), la4 sustained 60-95%
+    # across 5+ evals, plies hit 27 (single-eval). Hypothesis: with diversity
+    # baked in, canonical-opening depth becomes the bottleneck. Pulling
+    # random openings should either (a) unlock further breakthrough as the
+    # model can finally compound on canonical lines, or (b) cause rapid
+    # collapse — showing diversity is permanent training infrastructure at
+    # this model size. Both outcomes informative.
+    "WL4": Cell("WL4-no-random-openings", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025,
+                save_buffer_every=100,
+                ema_tau=0.99,
+                grad_accum_steps=4,
+                opponent_mix_recent=0.4,
+                opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0,
+                weights_poll_max_sec=8.0,
+                random_opening_moves=0),  # ← the experimental change
 }
 
 
