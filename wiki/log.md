@@ -405,3 +405,22 @@ consistent heading so future sessions can scan recent changes with simple tools.
   opponent mix, worker poll jitter, gradient accumulation 4×.
   Implementation cost ~120 LoC, throughput hit ~5-15%.
 - Indexed from [index.md](index.md) Start Here.
+
+## [2026-05-20] notebook | WL2 launched — four scale-emulation levers stacked
+
+- Wave 2 of the wave-lockstep series. Cell `WL2` adds all four levers from
+  [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md)
+  on top of the WL1 recipe: EMA self-play (tau=0.99), past-checkpoint
+  opponent mix (recent=0.4 / history=0.1 / window=100), worker poll jitter
+  (Uniform 2-8s), gradient accumulation 4x.
+- Two background implementation agents in parallel landed cleanly:
+  `b582d37` (train.py: EMA + grad accum) and `ded7728` (selfplay_worker.py:
+  past-mix + poll jitter). Cell wiring + new Cell fields at `02c5fc3`.
+  All 88 tests pass.
+- Pre-launch 30-epoch smoke validated all four lever signals; mix distribution
+  reached 12/43/45% (history/recent/self) against designed 10/40/50.
+  Cycle ~5s vs WL1's 3.4s — ~50% slowdown from grad-accum + past-ckpt loads.
+- Live run: wandb `9wng4yu9`, launched 2026-05-20 ~23:00, 5000 epochs.
+  Tracked in [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL2 live run log"
+  section. Add `9wng4yu9` to the wandb workspace run picker for three-way
+  overlays with WL1 (`l8mbntcm`) and Z (`sppjo3z5`).

@@ -2477,3 +2477,55 @@ of bouncing.
 - commits anchoring the run: `bd28670` (cell), `c296e49` (stem_padding),
   `28f90bf` (wave-mode trainer), `0d2c106` (worker race-drop fix),
   `0ab3d9d` (native MCTS)
+
+## WL2 live run log (2026-05-20, wandb 9wng4yu9)
+
+Live tracking for the WL2 scale-emulation run launched 2026-05-20 ~23:00.
+Same append-oriented structure as WL1's log section above. Cross-ref the
+design at [wiki/topics/wl2-scale-emulation-design.md](wiki/topics/wl2-scale-emulation-design.md).
+
+**Setup**
+- wandb run: `9wng4yu9` (https://wandb.ai/jasonyandell-forge42/gomoku/runs/9wng4yu9)
+- wandb workspace: https://wandb.ai/jasonyandell-forge42/gomoku?nw=ul0vliphj6x —
+  add `9wng4yu9` to the run picker alongside `l8mbntcm` (WL1) and `sppjo3z5` (Z)
+  for three-way overlays.
+- cell: `WL2` (see scripts/run_sweep.py). Identical to WL1 except all four
+  scale-emulation levers ON: `--ema-tau 0.99`, `--grad-accum-steps 4`,
+  `--opponent-mix-recent 0.4`, `--opponent-mix-history 0.1`,
+  `--opponent-mix-recent-window 100`, `--weights-poll-min-sec 2.0`,
+  `--weights-poll-max-sec 8.0`.
+- baseline: `WL1` (wandb `l8mbntcm`) — same recipe minus all four levers.
+  Comparison shows whether the levers fix WL1's strength oscillation.
+
+**Smoke (30 epochs, pre-launch):**
+- All 4 lever signals fired cleanly
+- Mix distribution: 12/43/45% (history/recent/self) — close to designed 10/40/50
+- Cycle ~5s (vs WL1's 3.4s) — ~50% slowdown from grad-accum + past-checkpoint loads
+- Training progresses normally (pl 4.31 → 3.50 over 30 epochs)
+
+**Live milestones**
+
+| epoch | wall   | pl   | vl    | plies | elo | h%  | la2% | la4% | note |
+|------:|:------:|-----:|------:|------:|----:|----:|-----:|-----:|------|
+| 1     | 00:08  | 4.36 | 0.94  | 33.9  | —   | —   | —    | —    | start, EMA-on baseline |
+
+Will update as new evals land.
+
+**Signals specifically to watch:**
+
+- `train/ema_l2_distance` — should stay bounded; pathological divergence
+  (rapid climb without bound) would mean the EMA isn't keeping up with the
+  raw model and they're decoupling badly.
+- `train/optimizer_steps_this_cycle` — should be ~1/4 of `train/steps_this_cycle`.
+- `selfplay/plies_p90` — Jason's leading defense indicator; WL1 never moved
+  past 11. The bigger question for WL2: does plies retention improve.
+- `eval/vs_lookahead4_winrate` — the metric WL1 regressed badly on (52% → 5%).
+  WL2 hypothesis: should hold any peak it reaches.
+
+**Predictions to falsify:**
+- WL2 makes Z-e1854-class strength faster than WL1 (e324 was WL1's mark).
+  If WL2 is SLOWER to that mark, the levers cost convergence.
+- WL2 retains la4 across consolidations (WL1's failure). If la4 oscillates
+  the same way, the levers don't fix this failure mode.
+- WL2's eval-to-eval elo variance is roughly half WL1's. If equal or worse,
+  EMA isn't doing what we hoped.
