@@ -792,7 +792,12 @@ def main() -> None:
         return merged
 
     # Initial weight publication + orphan sweep, if applicable.
-    _publish_worker_weights()
+    # Pass start_epoch so workers see the correct model_version tag and write
+    # to v{start_epoch}/. Without this, a --resume from a non-zero epoch
+    # publishes worker_weights.pt tagged epoch=0, workers write to v0/, and
+    # the wave-mode barrier (which waits on v{start_epoch}) stalls forever.
+    # Bit us on WL4 resume from WL3.1 e1500.
+    _publish_worker_weights(epoch=start_epoch)
     _sweep_orphans()
 
     for epoch in range(start_epoch, start_epoch + args.epochs):
