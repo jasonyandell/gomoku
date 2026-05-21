@@ -123,14 +123,14 @@ New Cell `WL1` (wave-lockstep, first iteration):
 
 ```python
 "WL1": Cell(
-    label="WL1: wave-lockstep, 5M buffer",
+    label="WL1: wave-lockstep, 1.5M buffer",
     size="small",
     sims=400,
     stem_padding=3,
     n_workers=8,
     games_per_batch=8,        # G per worker per wave
     wave_mode=True,           # new flag
-    buffer_size=5_000_000,
+    buffer_size=1_500_000,
     sgd_per_position=...,     # set so K=1 SGD step per ~3800-position wave tile
     temperature_initial=1.0,
     temperature_drop_step=30,
@@ -179,8 +179,9 @@ WL1 succeeds, hold them constant. If WL1 needs help, try in this order:
    that turns out to be a residual problem.
 2. **K (SGD steps per wave)** — bump from 1 to 2. Targets undertraining
    if model isn't learning enough per version.
-3. **Buffer size** — bump from 5M to 10M. Targets too-recent buffer
-   distribution if old versions are being evicted too fast.
+3. **Buffer size** — bump from 1.5M to 5M only if the 1.5M lockstep run still
+   shows too-recent buffer distribution. This is now a held-back lever rather
+   than part of WL1 because 5M changes the hardware/memory axis too much.
 4. **Random opening moves** — Jason explicitly rejected this as a
    gomoku-specific concern (random openings construct flawed games for
    a game where openers are critical). Listed here for completeness, not

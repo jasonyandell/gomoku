@@ -14,6 +14,7 @@ history.
 | [log.md](log.md) | Chronological wiki maintenance log. |
 | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
 | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and aren't. Don't re-port "v2 storage" — we're already there. |
+| [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md) | Practical knobs and interpretation rules for Mac Activity Monitor perf experiments. |
 | [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | Why the wrinkles in our run (exploration arcs, plies swings, age oscillations) are laptop-scale artifacts, not training bugs. |
 | [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | Next run's design: per-version uniformity via wave-of-lockstep + greedy fill. Implementation plan and held-back levers. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
@@ -29,6 +30,11 @@ read is:
 
 - Local throughput work succeeded; distributed self-play made iteration much
   faster.
+- The current perf worktree includes optional native MCTS (`gomoku._mcts_native`)
+  for Torch self-play. Production-shaped single-process MPS benches moved from
+  ~700 to ~2,000-2,200 augmented positions/sec; the 10-epoch WL1 multi-worker
+  read now shows ~2,379 wall augmented positions/sec at 8 workers x 8 games; see
+  [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
 - The main training failure mode is fast-attack collapse: policy targets sharpen
   around attacks, self-play opponents fail to punish missing defense, and fixed
   heuristic/lookahead opponents expose the gap.

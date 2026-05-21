@@ -288,3 +288,57 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Filed the interpretation in
   [../TRAINING_WIKI.md](../TRAINING_WIKI.md) under "2026-05-20 — WL1
   matched-throughput read".
+
+## [2026-05-20] runbook | Activity Monitor perf integration lane
+
+- Added [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md)
+  as the maintained run/config surface for Mac Activity Monitor-oriented perf
+  checks. It routes future sessions toward wall-clock/games/sec/positions/sec
+  and away from GPU-percent chasing.
+- Added `scripts/perf_microbench.py` as a bounded production-shaped MCTS
+  generation bench. It exercises the existing evaluator + `generate_games`
+  path without touching core game or MCTS code.
+- Updated [../README.md](../README.md) with the bench command and the
+  `--save-buffer-every` / `--keep-last-n` checkpoint-throttling recipe for
+  long 5M-buffer runs.
+- Changed WL1 in `scripts/run_sweep.py` to write full replay-buffer
+  `latest.pt` checkpoints every 100 epochs instead of every 20. Intermediate
+  epoch snapshots remain cheap weights+optimizer files.
+
+## [2026-05-20] config | WL1 buffer downshift
+
+- Updated `scripts/run_sweep.py` WL1 from a 5M replay buffer to 1.5M after the
+  hardware/readiness decision that 5M is too much to justify right now.
+- Preserved WL1's main experimental axis: wave-lockstep / per-version uniformity.
+  The next run now avoids changing buffer size at the same time.
+- Kept `save_buffer_every=100` as a low-risk disk-pressure guardrail. It is less
+  critical at 1.5M than 5M, but still prevents full replay-buffer rewrites from
+  becoming a hidden Activity Monitor problem.
+
+## [2026-05-21] implementation | native MCTS engine landed
+
+- Added optional `gomoku._mcts_native` in worktree `codex/gomoku-perf-extension`.
+  It moves the self-play MCTS arena, bitboard state/history, PUCT selection,
+  child creation, virtual loss, backup, and leaf plane materialization into C.
+- Wired `generate_games` to use native MCTS automatically when the evaluator
+  exposes `evaluate_planes`; `GOMOKU_DISABLE_NATIVE_MCTS=1` keeps the old Python
+  MCTS path available for A/B checks.
+- Updated [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md),
+  [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md),
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md), and [../README.md](../README.md)
+  with the new boundary and benchmark receipts.
+- Reference MPS microbench: `8 games / 400 sims / wave 64 / max_plies 16`
+  improved from 701 to 2,200 augmented positions/sec; `max_plies 32` improved
+  from 728 to 2,007 augmented positions/sec.
+
+## [2026-05-21] benchmark | WL1 10-epoch native production read
+
+- Ran three fresh 10-epoch wave-lockstep throughput trials under the next-run
+  WL1 recipe (`small`, stem padding 1, 400 sims, wave 64, 1.5M buffer).
+- Results saved in `sweep_logs/perf10-summary.tsv`.
+- Best launch shape remains 8 workers x 8 games with native MCTS: 2,379 wall
+  augmented positions/sec and 3,303 generation augmented positions/sec.
+- Same 64-game tile with 4 workers x 16 games was slower (1,918 wall pos/s).
+- Python-MCTS fallback at 8 workers x 8 games was 1,863 wall pos/s, so native
+  is a 1.28x production-shaped wall-throughput win even though the single-process
+  microbench showed a larger 2.8-3.1x jump.

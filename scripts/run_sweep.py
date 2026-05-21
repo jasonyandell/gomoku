@@ -73,10 +73,9 @@ class Cell:
     worker_min_positions: int = 0
     sgd_per_position: float | None = None
     # Per-worker games-per-batch. Bigger batches give MCTS more leaves per
-    # evaluator call (better MPS saturation) but fewer worker-publish
-    # synchronizations. Pair with smaller n_workers to avoid MPS contention
-    # (4 procs share one MPS stream → no parallel speedup; 1 proc × N games
-    # is faster than N procs × 1 game for the same data).
+    # evaluator call, but the 2026-05-20 production read showed that one big
+    # worker leaves MPS idle during Python tree work. At this model size, more
+    # small workers plus wave batching beats a single wide worker.
     games_per_batch: int = 8
     # Wave-lockstep mode is a per-version tile barrier: workers generate a
     # tile against one published model, the trainer ingests that tile, then
@@ -128,8 +127,8 @@ CELLS: dict[str, Cell] = {
                buffer_size=1_500_000, size="small", stem_padding=1,
                n_simulations=400, lr=5e-4, epochs=5000,
                worker_min_positions=12800, sgd_per_position=0.0025),
-    # WL1: wave-lockstep, 1.5M buffer (matches az-recipe-160k; max that fits
-    # under MPS INT_MAX at 17 planes × 81 cells per position). First test of
+    # WL1: wave-lockstep at the proven 1.5M replay-buffer scale (matches
+    # az-recipe-160k and avoids changing the buffer-size axis). First test of
     # the per-version uniformity hypothesis from
     # wiki/topics/wave-of-lockstep-design.md: 8 workers each produce an 8-game
     # tile against one model version, then the trainer steps and publishes the
@@ -144,7 +143,8 @@ CELLS: dict[str, Cell] = {
                 c_puct=1.25, c_puct_base=19652.0,
                 dirichlet_alpha=0.13, dirichlet_eps=0.25,
                 temperature_moves=30, temperature_final=0.1,
-                sgd_per_position=0.0025),
+                sgd_per_position=0.0025,
+                save_buffer_every=100),
 }
 
 

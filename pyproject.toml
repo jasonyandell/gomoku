@@ -24,11 +24,11 @@ gomoku-play = "gomoku.cli:main"
 gomoku-web = "web.server:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=69", "wheel", "numpy>=2.0"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-packages = ["gomoku"]
+[tool.setuptools.packages.find]
+include = ["gomoku*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

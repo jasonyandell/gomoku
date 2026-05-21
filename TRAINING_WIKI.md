@@ -2188,3 +2188,134 @@ Interpretation:
 - If WL1 still arcs despite clean tiles, the next suspects should move away
   from raw per-version under-sampling and toward opening monoculture,
   capacity, search depth, or greedy-extra bias.
+
+## 2026-05-20 — Lane C perf run/config integration
+
+Worktree `codex/gomoku-perf-extension`, Lane C only: run/config/docs surface
+for Activity Monitor-oriented performance work. This is an implementation
+receipt, not a strength or throughput claim.
+
+Changes:
+- Added `scripts/perf_microbench.py`, a bounded self-play/MCTS bench that runs
+  through the existing evaluator and `generate_games` path. Use it to compare
+  wall-clock seconds, games/sec, and positions/sec before changing a live run.
+- Set WL1's `save_buffer_every=100` in `scripts/run_sweep.py` so the 5M replay
+  buffer does not rewrite `latest.pt` every 20 epochs. Intermediate
+  `epochNNNN.pt` snapshots remain cheap weights+optimizer saves; `latest.pt`
+  is the expensive replay-buffer resume checkpoint.
+- Added `wiki/topics/activity-monitor-perf-runbook.md` and linked it from the
+  wiki index plus the MCTS perf ceiling page. The page preserves the practical
+  operating rule: Activity Monitor GPU percent is a diagnostic hint, not the
+  score. The score is production-shaped wall-clock throughput.
+- README now exposes the microbench command and the checkpoint-throttling knob.
+
+Working theory preserved:
+- GPU underutilization remains structural at this model size: tiny MPS forwards
+  are separated by Python MCTS/state work.
+- Do not chase GPU percent by collapsing workers or inflating a single worker's
+  batch unless same-shape wall throughput improves.
+- The structural next wins belong at the native hot-path boundary, MCTS
+  allocation cleanup, and evaluator materialization cleanup, not in core
+  game/MCTS rewrites from this lane.
+
+## 2026-05-20 — WL1 buffer-size correction and native state_ops phase
+
+Correction to the WL1 plan: 5M replay-buffer capacity is too large for the
+current hardware budget and changes more than we need. The next phase should
+test wave-lockstep/per-version uniformity at the known 1.5M replay-buffer scale
+instead of also changing buffer capacity.
+
+Implementation changes in worktree `codex/gomoku-perf-extension`:
+- `scripts/run_sweep.py` now names WL1 as `WL1-wave-lockstep-1p5M-buffer` and
+  sets `buffer_size=1_500_000`.
+- The native hot-path phase adds an optional `gomoku._state_ops_native`
+  extension behind `gomoku.state_ops`. If the extension is absent, the NumPy
+  fallback remains the source of truth.
+- `GameState` and MCTS node initialization already call through this boundary,
+  so future compiled work can focus on state apply / legal mask / terminal
+  status without touching training semantics.
+- Packaging now builds a platform wheel containing the extension via
+  Setuptools. `GOMOKU_DISABLE_NATIVE_STATE_OPS=1` forces the fallback path for
+  A/B checks.
+- Smoke microbench on CPU tiny/MCTS shape showed native median 0.116s vs
+  fallback median 0.124s. Treat this as a plumbing proof and small hot-path win,
+  not a production MPS claim.
+
+## 2026-05-21 — Native MCTS engine phase
+
+Question from Jason: how deeply native can we go, and can we spend essentially
+no amortized time on Python?
+
+Implementation in worktree `codex/gomoku-perf-extension`:
+- Added optional `gomoku._mcts_native`, an arena-backed C MCTS engine. It owns
+  bitboard state/history, node storage, child creation, terminal/legal status,
+  PUCT selection, wave virtual loss, backup, and input-plane materialization.
+- `make_torch_evaluator` now exposes `evaluate_planes`, so native MCTS calls
+  Python/Torch only at leaf-batch wave boundaries.
+- `generate_games` automatically uses native MCTS when available and when the
+  evaluator exposes `evaluate_planes`. `GOMOKU_DISABLE_NATIVE_MCTS=1` forces the
+  old Python MCTS path for A/B checks.
+- The smaller `gomoku._state_ops_native` extension remains the fallback boundary
+  for Python `GameState` helpers.
+
+Verification:
+- `python setup.py build_ext --inplace`
+- `pytest -q` with native MCTS enabled: full suite passed.
+- `GOMOKU_DISABLE_NATIVE_MCTS=1 pytest -q`: fallback suite passed, native-only
+  tests skipped.
+
+MPS microbench results, small model, stem padding 1, fresh random weights:
+
+| command shape | fallback | native MCTS | read |
+|---|---:|---:|---|
+| `--games 4 --n-simulations 32 --wave-size 4 --max-plies 6` | 2,438 aug pos/s | 2,888 aug pos/s | 1.18x |
+| `--games 8 --n-simulations 400 --wave-size 64 --max-plies 16` | 701 aug pos/s | 2,200 aug pos/s | 3.14x |
+| `--games 8 --n-simulations 400 --wave-size 64 --max-plies 32` | 728 aug pos/s | 2,007 aug pos/s | 2.76x |
+
+Interpretation:
+- This validates the Activity Monitor diagnosis. The big production-shaped win
+  appears once the native boundary covers the full search engine, not just
+  small state helper calls.
+- Python is no longer paid per node/leaf in the Torch self-play path. It is
+  still paid per wave evaluator callback and per outer move/record step.
+- Next throughput question is multi-worker production behavior. The
+  single-process result is large enough that WL1 should be re-benchmarked with
+  native MCTS active before launching a long run.
+
+## 2026-05-21 — WL1 10-epoch native production read
+
+Jason asked for 10 epochs each at the parameters under consideration for the
+next run. This was a throughput experiment, not a strength claim: fresh random
+small models, MPS workers, no eval sidecar, no W&B, 10 epochs each, same WL1
+recipe unless noted:
+
+- `size=small`, `stem_padding=1`, `n_simulations=400`, `wave_size=64`
+- `buffer_size=1_500_000`, `sgd_per_position=0.0025`, `batch_size=512`
+- AGZ PUCT defaults (`c_puct=1.25`, `c_puct_base=19652`), `dirichlet_alpha=0.13`,
+  `dirichlet_eps=0.25`, `temperature_moves=30`, `temperature_final=0.1`
+- Wave-lockstep barrier; positions/sec below are D4-augmented training
+  positions/sec computed from trainer log rows (`new_games * plies_mean * 8`).
+
+Artifact summary: `sweep_logs/perf10-summary.tsv`.
+
+| variant | workers x G | native MCTS | games | mean plies | wall pos/s | gen pos/s | wall games/s | mean tile |
+|---|---:|:---:|---:|---:|---:|---:|---:|---:|
+| `perf10-wl1-native-8w8g` | 8 x 8 | yes | 1065 | 26.8 | **2,379** | **3,303** | **11.25** | 77.0 |
+| `perf10-wl1-native-4w16g` | 4 x 16 | yes | 853 | 28.0 | 1,918 | 2,152 | 8.61 | 75.0 |
+| `perf10-wl1-fallback-8w8g` | 8 x 8 | no (`GOMOKU_DISABLE_NATIVE_MCTS=1`) | 915 | 26.8 | 1,863 | 2,264 | 8.85 | 74.6 |
+
+Read:
+
+- The next-run perf shape should stay **8 workers x 8 games**. Native search
+  did not make the lower-process `4 x 16` shape better; it was 24% slower by
+  wall positions/sec and 35% slower by wall games/sec.
+- Native MCTS buys a real production-shaped win, but smaller than the
+  single-process microbench: **1.28x wall positions/sec** and **1.46x
+  generation positions/sec** over the Python-MCTS fallback at the same 8x8 WL1
+  shape.
+- Multi-worker scheduling already hid a lot of the old Python MCTS cost; the
+  native engine still matters because it lets the same WL1 recipe ingest about
+  516 more augmented positions/sec wall-clock under this short run.
+- The 10-epoch WL1 launch estimate from this read is roughly 11 games/sec while
+  games are in the 25-30 ply early-training range. As usual, expect wall time to
+  grow if the model learns defense and plies climb toward 50-80.

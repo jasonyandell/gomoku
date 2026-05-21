@@ -1,6 +1,6 @@
 import numpy as np
 
-from gomoku.game import GameState, str_to_action
+from gomoku.game import N_ACTIONS, GameState, str_to_action
 from gomoku.mcts import (
     MCTSGame,
     make_random_evaluator,
@@ -152,3 +152,42 @@ def test_wave_bfs_matches_sequential_byte_for_byte():
                     f"seed={seed} wave={wave_size} sims={n_sim}: N mismatch")
                 assert np.allclose(g_ref.root.W, g_new.root.W, atol=1e-6), (
                     f"seed={seed} wave={wave_size} sims={n_sim}: W mismatch")
+
+
+def test_torch_evaluator_materializes_same_planes_and_restores_training_mode():
+    import torch
+
+    class CapturingModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.captured = None
+
+        def forward(self, x):
+            self.captured = x.detach().cpu().numpy().copy()
+            b = x.shape[0]
+            logits = torch.arange(
+                b * N_ACTIONS,
+                dtype=x.dtype,
+                device=x.device,
+            ).reshape(b, N_ACTIONS)
+            values = torch.linspace(-0.25, 0.25, b, dtype=x.dtype, device=x.device)
+            return logits, values
+
+    from gomoku.mcts import make_torch_evaluator
+
+    states = [
+        GameState.initial(),
+        GameState.initial().apply(str_to_action("e5")).apply(str_to_action("a1")),
+    ]
+    expected = np.stack([s.to_planes() for s in states], axis=0)
+    model = CapturingModel()
+    model.train()
+
+    priors, values = make_torch_evaluator(model, torch.device("cpu"))(states)
+
+    assert model.training
+    assert np.array_equal(model.captured, expected)
+    assert priors.shape == (2, N_ACTIONS)
+    assert values.shape == (2,)
+    assert np.array_equal(priors[0], np.arange(N_ACTIONS, dtype=np.float32))
+    assert np.allclose(values, np.array([-0.25, 0.25], dtype=np.float32))

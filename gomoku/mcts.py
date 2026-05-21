@@ -17,7 +17,8 @@ from typing import Callable, Protocol
 
 import numpy as np
 
-from gomoku.game import N_ACTIONS, GameState
+from gomoku import state_ops
+from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES, GameState
 
 
 class Evaluator(Protocol):
@@ -96,11 +97,14 @@ def _add_dirichlet_noise(node: Node, alpha: float, eps: float, rng: np.random.Ge
 
 def _init_node(node: Node) -> None:
     """Compute terminal info and legal mask for a fresh node."""
-    done, v = node.state.is_terminal()
+    done, v, legal_mask = state_ops.init_node_status(
+        node.state.board,
+        node.state.move_count,
+    )
     node.is_terminal = done
     node.terminal_value = v
-    if not done:
-        node.legal_mask = node.state.legal_mask()
+    if legal_mask is not None:
+        node.legal_mask = legal_mask
 
 
 @dataclass
@@ -310,8 +314,13 @@ def _bfs_descend_one_per_game(
     nodes: list[Node] = [g.root for g in games_subset]
     paths: list[list[tuple[Node, int]]] = [[] for _ in games_subset]
     leaves: list[_PendingLeaf | None] = [None] * len(games_subset)
-    c_puct_init = np.array([g.c_puct for g in games_subset], dtype=np.float64)
-    c_puct_base = np.array([g.c_puct_base for g in games_subset], dtype=np.float64)
+    max_rows = len(games_subset)
+    N_stack = np.empty((max_rows, N_ACTIONS), dtype=np.int32)
+    W_stack = np.empty((max_rows, N_ACTIONS), dtype=np.float32)
+    P_stack = np.empty((max_rows, N_ACTIONS), dtype=np.float32)
+    L_stack = np.empty((max_rows, N_ACTIONS), dtype=bool)
+    c_puct_init = np.empty(max_rows, dtype=np.float64)
+    c_puct_base = np.empty(max_rows, dtype=np.float64)
 
     # Active indices into games_subset.
     active = list(range(len(games_subset)))
@@ -328,22 +337,35 @@ def _bfs_descend_one_per_game(
         if not still:
             break
 
-        # Stack current-node action arrays for the still-going descents.
-        N_stack = np.stack([nodes[i].N for i in still])               # (P, 81) int32
-        W_stack = np.stack([nodes[i].W for i in still])               # (P, 81) float32
-        P_stack = np.stack([nodes[i].P for i in still])               # (P, 81) float32
-        L_stack = np.stack([nodes[i].legal_mask for i in still])      # (P, 81) bool
-        cpi = c_puct_init[still]                                       # (P,)
-        cpb = c_puct_base[still]                                       # (P,)
+        # Copy current-node action arrays into reusable scratch buffers. This
+        # preserves the vectorized PUCT math while avoiding four fresh
+        # np.stack allocations at every BFS level.
+        n_still = len(still)
+        for row, i in enumerate(still):
+            node = nodes[i]
+            N_stack[row] = node.N
+            W_stack[row] = node.W
+            P_stack[row] = node.P
+            L_stack[row] = node.legal_mask
+            game = games_subset[i]
+            c_puct_init[row] = game.c_puct
+            c_puct_base[row] = game.c_puct_base
+
+        N_rows = N_stack[:n_still]                                     # (P, 81) int32
+        W_rows = W_stack[:n_still]                                     # (P, 81) float32
+        P_rows = P_stack[:n_still]                                     # (P, 81) float32
+        L_rows = L_stack[:n_still]                                     # (P, 81) bool
+        cpi = c_puct_init[:n_still]                                    # (P,)
+        cpb = c_puct_base[:n_still]                                    # (P,)
 
         # Vectorized PUCT scoring (one np.argmax across all still-going descents).
-        totals = N_stack.sum(axis=1, dtype=np.float64)                # (P,)
+        totals = N_rows.sum(axis=1, dtype=np.float64)                 # (P,)
         pb_c = np.log((1.0 + totals + cpb) / cpb) + cpi               # (P,)
         sqrt_totals = np.sqrt(totals + 1e-8)                          # (P,)
-        denom = 1.0 + N_stack                                         # (P, 81)
-        Q = np.where(N_stack > 0, W_stack / np.maximum(N_stack, 1), 0.0)
-        U = (pb_c * sqrt_totals)[:, None] * P_stack / denom           # (P, 81)
-        score = np.where(L_stack, Q + U, -np.inf)
+        denom = 1.0 + N_rows                                          # (P, 81)
+        Q = np.where(N_rows > 0, W_rows / np.maximum(N_rows, 1), 0.0)
+        U = (pb_c * sqrt_totals)[:, None] * P_rows / denom            # (P, 81)
+        score = np.where(L_rows, Q + U, -np.inf)
         actions = np.argmax(score, axis=1)                            # (P,) int
 
         # Descend each still-going descent by one level, applying soft vloss.
@@ -477,13 +499,22 @@ def make_torch_evaluator(
     """Wrap a GomokuNet for use as a leaf evaluator."""
     import torch
 
+    def states_to_batch(states: list[GameState]) -> np.ndarray:
+        x = np.empty(
+            (len(states), N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE),
+            dtype=np.float32,
+        )
+        for i, state in enumerate(states):
+            x[i] = state.to_planes()
+        return x
+
     @torch.no_grad()
-    def evaluate(states: list[GameState]) -> tuple[np.ndarray, np.ndarray]:
+    def evaluate_planes(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         was_training = model.training
         if was_training:
             model.eval()
         try:
-            x = np.stack([s.to_planes() for s in states], axis=0)
+            x = np.asarray(x, dtype=np.float32)
             t = torch.from_numpy(x).to(device)
             if fp16:
                 t = t.half()
@@ -503,6 +534,11 @@ def make_torch_evaluator(
             if was_training:
                 model.train()
 
+    @torch.no_grad()
+    def evaluate(states: list[GameState]) -> tuple[np.ndarray, np.ndarray]:
+        return evaluate_planes(states_to_batch(states))
+
+    evaluate.evaluate_planes = evaluate_planes  # type: ignore[attr-defined]
     return evaluate
 
 

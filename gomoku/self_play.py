@@ -14,6 +14,7 @@ from gomoku.mcts import (
     run_batched_mcts,
     run_batched_mcts_waves,
 )
+from gomoku import native_mcts
 
 
 @dataclass
@@ -74,6 +75,113 @@ def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameS
         # restart from scratch
 
 
+def _can_use_native_mcts(evaluator: Evaluator) -> bool:
+    return bool(
+        native_mcts.USING_NATIVE_MCTS
+        and native_mcts.NativeMCTSGame is not None
+        and hasattr(evaluator, "evaluate_planes")
+    )
+
+
+def _generate_games_native(
+    n_games: int,
+    evaluator: Evaluator,
+    *,
+    n_simulations: int = 100,
+    c_puct: float = 1.25,
+    c_puct_base: float = 19652.0,
+    temperature_moves: int = 8,
+    temperature_final: float = 0.1,
+    dirichlet_alpha: float = 0.3,
+    dirichlet_eps: float = 0.25,
+    max_plies: int | None = None,
+    rng: np.random.Generator | None = None,
+    augment_symmetries: bool = True,
+    wave_size: int = 1,
+    random_opening_moves: int = 0,
+) -> list[GameRecord]:
+    rng = rng or np.random.default_rng()
+    if max_plies is None:
+        max_plies = N_ACTIONS
+
+    planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
+    games = []
+    initial_plies: list[int] = []
+    for _ in range(n_games):
+        if random_opening_moves > 0:
+            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+        else:
+            start_state, opening_plies = GameState.initial(), 0
+        games.append(
+            native_mcts.NativeMCTSGame(
+                start_state,
+                c_puct=c_puct,
+                c_puct_base=c_puct_base,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps,
+                seed=int(rng.integers(1, 2**63 - 1)),
+            )
+        )
+        initial_plies.append(opening_plies)
+
+    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    active: list[int] = list(range(n_games))
+    completed: list[tuple[int, float, int]] = []
+
+    ply = 0
+    while active and ply < max_plies:
+        active_games = [games[i] for i in active]
+        native_mcts.search_batch(
+            active_games,
+            planes_evaluator,
+            n_simulations=n_simulations,
+            wave_size=wave_size,
+            add_root_noise=True,
+        )
+
+        next_active: list[int] = []
+        for slot_idx, g_idx in enumerate(active):
+            g = active_games[slot_idx]
+            tau = 1.0 if ply < temperature_moves else temperature_final
+            pi = g.policy(temperature=tau)
+            n_initial = initial_plies[g_idx]
+            side = (n_initial + ply) % 2
+            trajectories[g_idx].append((g.root_planes(), pi.copy(), side))
+
+            action = _sample_action(pi, rng)
+            g.advance_root(action)
+            done, term_val = g.is_terminal()
+            if done:
+                if term_val == -1.0:
+                    winner_side = side
+                    outcome_for_black = 1.0 if winner_side == 0 else -1.0
+                else:
+                    outcome_for_black = 0.0
+                completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+            else:
+                next_active.append(g_idx)
+
+        active = next_active
+        ply += 1
+
+    for g_idx in active:
+        completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
+
+    records: list[GameRecord] = []
+    for g_idx, outcome_for_black, plies in sorted(completed):
+        examples: list[SelfPlayExample] = []
+        for planes, pi, side in trajectories[g_idx]:
+            z = outcome_for_black if side == 0 else -outcome_for_black
+            if augment_symmetries:
+                for aug_planes, aug_pi in augment(planes, pi):
+                    examples.append(SelfPlayExample(aug_planes, aug_pi.astype(np.float32), z))
+            else:
+                examples.append(SelfPlayExample(planes, pi.astype(np.float32), z))
+        records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
+
+    return records
+
+
 def generate_games(
     n_games: int,
     evaluator: Evaluator,
@@ -107,6 +215,23 @@ def generate_games(
     the model to learn from a diverse set of starting positions.
     """
     rng = rng or np.random.default_rng()
+    if _can_use_native_mcts(evaluator):
+        return _generate_games_native(
+            n_games,
+            evaluator,
+            n_simulations=n_simulations,
+            c_puct=c_puct,
+            c_puct_base=c_puct_base,
+            temperature_moves=temperature_moves,
+            temperature_final=temperature_final,
+            dirichlet_alpha=dirichlet_alpha,
+            dirichlet_eps=dirichlet_eps,
+            max_plies=max_plies,
+            rng=rng,
+            augment_symmetries=augment_symmetries,
+            wave_size=wave_size,
+            random_opening_moves=random_opening_moves,
+        )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
 

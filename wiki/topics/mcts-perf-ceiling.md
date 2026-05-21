@@ -12,10 +12,18 @@ dict iteration happens in the PUCT hot path. **Structurally we are already at
 the "AGZ mcts_v2" layout** that other gomoku/AZ READMEs advertise as a big win
 over their "mcts_v1." That refactor is therefore a no-op for us.
 
-Real production constraint: the gen path is bounded by `state.apply` (board
+Real production constraint: the gen path was bounded by `state.apply` (board
 copy + history snapshot, Python), `_init_node` (terminal check + legal mask,
-Python), and the MPS forward + sync. None of those is a "vectorize-with-numpy"
-win — closing the gap further requires real structural work, not a refactor.
+Python), MCTS tree orchestration, and the MPS forward + sync. None of those is
+a "vectorize-with-numpy" win — closing the gap requires moving the boundary,
+not rearranging Python arrays.
+
+2026-05-21 update: the first deep-native pass moved `Node`, child creation,
+PUCT selection, virtual loss, backup, bitboard state/history, and leaf
+input-plane materialization into optional `gomoku._mcts_native`. Python still
+owns the PyTorch callback at wave boundaries and the outer self-play loop, but
+the per-node/per-leaf search churn is no longer Python-owned when the Torch
+evaluator is used.
 
 ## What is already in the tree
 
@@ -67,9 +75,9 @@ realized win is in the 5–10% range. In single-process at G=32 with wave=16
 it's ~20%. Verified byte-for-byte against the sequential reference, see
 `tests/test_mcts.py::test_wave_bfs_matches_sequential_byte_for_byte`.
 
-## Where the next 2× actually lives (all real work)
+## Where the next 2× lived (and what remains)
 
-In rough leverage order:
+Before the native engine pass, the rough leverage order was:
 
 1. **Batched `state.apply` on GPU.** Today every newly-visited child does a
    board-copy + history-snapshot in Python. If state can be encoded as a
@@ -82,6 +90,46 @@ In rough leverage order:
    CUDA cluster, not on one MPS device.
 4. **Strong virtual loss (W -= 1 with explicit revert).** Marginal — would
    make waves more diverse but our wave=32 already matches wave=1 in plies.
+
+The 2026-05-21 native engine fused #1/#2 with the MCTS tree itself instead of
+making a GPU tensor-state rewrite. Same-shape MPS microbench results:
+
+| config | Python MCTS + native state ops | native MCTS | speedup |
+|---|---:|---:|---:|
+| 4 games, 32 sims, wave 4, max 6 plies | 2,438 aug pos/s | 2,888 aug pos/s | 1.18× |
+| 8 games, 400 sims, wave 64, max 16 plies | 701 aug pos/s | 2,200 aug pos/s | **3.14×** |
+| 8 games, 400 sims, wave 64, max 32 plies | 728 aug pos/s | 2,007 aug pos/s | **2.76×** |
+
+Interpretation: the win gets much larger in the production-shaped wave-64
+config because the old path paid Python descent/child/state overhead across
+many leaves per evaluator call. The native path amortizes Python over the whole
+wave callback.
+
+Remaining likely wins:
+
+1. Move more of the outer self-play loop native: action sampling, trajectory
+   staging, and D4 augmentation. This should be smaller than the search-engine
+   jump but removes Python at the move/record boundary.
+2. Profile the post-search worker loop before another native pass; the search
+   engine is no longer the only plausible Python owner.
+3. Consider a heavier evaluator/model only after native search reduces CPU gaps
+   enough that the MPS forward becomes the pacing item.
+
+The actual multi-worker WL1 check is now done. Ten epochs at the next-run
+shape (`small`, stem padding 1, 400 sims, wave 64, 1.5M replay,
+wave-lockstep, no eval sidecar) produced:
+
+| config | wall aug pos/s | gen aug pos/s | wall games/s |
+|---|---:|---:|---:|
+| native MCTS, 8 workers x 8 games | **2,379** | **3,303** | **11.25** |
+| native MCTS, 4 workers x 16 games | 1,918 | 2,152 | 8.61 |
+| Python MCTS fallback, 8 workers x 8 games | 1,863 | 2,264 | 8.85 |
+
+Read: native is still a production win (1.28x wall positions/sec, 1.46x
+generation positions/sec over fallback), but multi-worker scheduling already
+hid enough Python work that the single-process 2.8-3.1x speedup should not be
+used as the launch ETA. The 8-worker shape remains better than same-tile 4
+workers x 16 games even after native search.
 
 ## How to reason about MCTS perf claims in the future
 
@@ -101,6 +149,9 @@ When some upstream AZ repo claims a big speedup from a refactor:
 
 ## References
 
+- [activity-monitor-perf-runbook.md](activity-monitor-perf-runbook.md) —
+  practical run knobs and microbench command for interpreting Mac GPU/CPU
+  readings without chasing GPU percent.
 - [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 9 — the cross-game BFS
   descent: implementation, bench, and the "agent's 2-3× claim was wrong"
   finding.

@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from gomoku import state_ops
+
 BOARD_SIZE = 9
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE
 WIN_LEN = 5
@@ -50,8 +52,7 @@ class GameState:
 
     def legal_mask(self) -> np.ndarray:
         """Return (N_ACTIONS,) bool — True where empty (legal to place)."""
-        occupied = self.board[0] | self.board[1]
-        return ~occupied.reshape(-1)
+        return state_ops.legal_mask(self.board)
 
     def legal_actions(self) -> np.ndarray:
         return np.flatnonzero(self.legal_mask())
@@ -65,19 +66,12 @@ class GameState:
         `history`. That way each history slot encodes a real past observation
         distinct from the current frame.
         """
-        r, c = divmod(action, BOARD_SIZE)
-        if self.board[0, r, c] or self.board[1, r, c]:
-            raise ValueError(f"illegal move {action} on occupied square")
-        # Snapshot the state-as-the-mover-observed-it: BEFORE we place their stone
-        # and BEFORE we flip. Each ply produces a distinct snapshot of "what did
-        # the player see when they made this decision."
-        snapshot = self.board.copy()
-        new_board = self.board.copy()
-        new_board[0, r, c] = True
-        # Flip planes so plane 0 is now the next side-to-move.
-        new_board = new_board[::-1].copy()
-        # Push snapshot; keep at most HISTORY_PLY - 1 (current frame is `board`).
-        new_history = (snapshot,) + self.history[: HISTORY_PLY - 1]
+        new_board, new_history = state_ops.apply_move_arrays(
+            self.board,
+            self.history,
+            action,
+            history_ply=HISTORY_PLY,
+        )
         return GameState(
             board=new_board, move_count=self.move_count + 1, history=new_history
         )
@@ -92,13 +86,7 @@ class GameState:
         Convention: this is called AFTER apply(), so plane 1 holds the player who
         just moved. We check plane 1 for a 5-in-a-row.
         """
-        if _has_five_in_a_row(self.board[1]):
-            # The player who just moved (now on plane 1) won.
-            # From the current side-to-move's perspective this is a loss.
-            return True, -1.0
-        if self.move_count >= N_ACTIONS:
-            return True, 0.0
-        return False, 0.0
+        return state_ops.terminal_value(self.board, self.move_count)
 
     def to_planes(self) -> np.ndarray:
         """Return (N_INPUT_PLANES, N, N) float32 input for the network.
@@ -135,20 +123,9 @@ class GameState:
 
 
 def _has_five_in_a_row(plane: np.ndarray) -> bool:
-    # Vectorized: AND together 5 shifted views along each direction. ~2× faster
-    # than the Python-loop variant on a 9×9 board.
-    p = plane
-    h = p[:, :-4] & p[:, 1:-3] & p[:, 2:-2] & p[:, 3:-1] & p[:, 4:]
-    if h.any():
-        return True
-    v = p[:-4, :] & p[1:-3, :] & p[2:-2, :] & p[3:-1, :] & p[4:, :]
-    if v.any():
-        return True
-    d = p[:-4, :-4] & p[1:-3, 1:-3] & p[2:-2, 2:-2] & p[3:-1, 3:-1] & p[4:, 4:]
-    if d.any():
-        return True
-    a = p[:-4, 4:] & p[1:-3, 3:-1] & p[2:-2, 2:-2] & p[3:-1, 1:-3] & p[4:, :-4]
-    return bool(a.any())
+    # Kept for existing imports/tests; the implementation now lives behind the
+    # state_ops boundary so a native helper can replace it in one place.
+    return state_ops.has_five_in_a_row(plane)
 
 
 # ----- 8-fold symmetry for data augmentation -----
