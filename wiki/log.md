@@ -687,3 +687,31 @@ consistent heading so future sessions can scan recent changes with simple tools.
   metrics) then archive-start diversity (10-25% from curated trouble
   states). Needs design conversation + code work — not a one-shot
   parameter tweak.
+
+## [2026-05-21] design | WL5 design landed — diagnostics + Go-Exploit archive-start
+
+- Filed [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md)
+  capturing the next-run shape from
+  [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md)
+  "Candidate Next-Run Shape" section.
+- Design choices (post-Jason ACK 2026-05-21):
+  - **Single run** with both diagnostics + archive-start lever (not
+    two sequential runs).
+  - **Static archive** mined from WL4 artifacts (heuristic-loss /
+    lookahead-loss / high-KL / long-defense / canonical-opening
+    positions, target ~1000-2000 total).
+  - **Resume from WL4 e4024** (continues the WL series; new wandb run id
+    for clean charts).
+- Three diagnostic streams:
+  1. Fixed validation archive, scored every eval cycle, per-provenance
+     breakdown (val/policy_ce/heuristic_loss etc.)
+  2. Policy CE decomposition into H(pi_mcts) + KL(pi_mcts || p_net)
+  3. Per-color and per-ply-bucket loss metrics
+- One behavioral lever: archive-start (15% of self-play games begin
+  from a random archive position; 85% canonical empty board).
+- Implementation surface: ~640 LoC + tests. Worth parallelizing
+  across 2-3 agents per the wave-of-lockstep / WL2 launch pattern.
+- Indexed from [index.md](index.md) Start Here.
+- Next session: implementation (archive-mining script, trainer
+  instrumentation, buffer side+ply tagging, worker archive-start,
+  WL5 cell wiring, smoke).
