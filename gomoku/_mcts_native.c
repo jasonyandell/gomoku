@@ -847,16 +847,26 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     }
 
     double inv_temp = 1.0 / temperature;
+    // Keep per-action sharpened scores in DOUBLE to avoid float32 overflow.
+    // pow(N, 1/tau) can exceed FLT_MAX (~3.4e38) when N is large and tau is
+    // small — e.g. at WL3's tau=0.1 with subtree-reused root visits of
+    // ~7200+ (which happens routinely past 18 plies in concentrated games),
+    // pow(7200, 10) ≈ 3.7e38 saturates float32 to +Inf. The subsequent
+    // out[a] = (float)out[a]/sum then carries that Inf forward, sum is
+    // +Inf, and the Python sampler hits Inf/Inf → NaN. Doing all
+    // arithmetic in double and only casting the *normalized* (in [0,1])
+    // probabilities to float32 keeps the output strictly finite.
+    double scores[N_ACTIONS];
     for (int a = 0; a < N_ACTIONS; a++) {
         double x = pow((double)root->N[a], inv_temp);
-        out[a] = (float)x;
+        scores[a] = x;
         sum += x;
     }
-    if (sum > 0.0) {
+    if (sum > 0.0 && isfinite(sum)) {
         for (int a = 0; a < N_ACTIONS; a++) {
-            out[a] = (float)((double)out[a] / sum);
+            out[a] = (float)(scores[a] / sum);
         }
-    } else {
+    } else if (isfinite(sum)) {
         int legal_count = 0;
         for (int a = 0; a < N_ACTIONS; a++) {
             legal_count += root->legal[a] ? 1 : 0;
@@ -864,6 +874,25 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
         float p = legal_count > 0 ? 1.0f / (float)legal_count : 0.0f;
         for (int a = 0; a < N_ACTIONS; a++) {
             out[a] = root->legal[a] ? p : 0.0f;
+        }
+    } else {
+        // sum overflowed double (only possible at absurd tau or N). Fall back
+        // to argmax-tie distribution so the policy is still a valid pmf.
+        int32_t max_count = root->N[0];
+        for (int a = 1; a < N_ACTIONS; a++) {
+            if (root->N[a] > max_count) {
+                max_count = root->N[a];
+            }
+        }
+        int winners = 0;
+        for (int a = 0; a < N_ACTIONS; a++) {
+            if (root->N[a] == max_count) {
+                winners++;
+            }
+        }
+        float p = winners > 0 ? 1.0f / (float)winners : 0.0f;
+        for (int a = 0; a < N_ACTIONS; a++) {
+            out[a] = root->N[a] == max_count ? p : 0.0f;
         }
     }
     return out_obj;
