@@ -2327,7 +2327,11 @@ This section is appended-to as the run progresses; older entries are
 preserved with their epoch + wall-clock so the trajectory is auditable.
 
 **Setup**
-- wandb: `l8mbntcm` (https://wandb.ai/jasonyandell-forge42/gomoku/runs/l8mbntcm)
+- wandb run: `l8mbntcm` (https://wandb.ai/jasonyandell-forge42/gomoku/runs/l8mbntcm)
+- wandb workspace (overlay WL1 + Z by clicking both in the run picker):
+  https://wandb.ai/jasonyandell-forge42/gomoku?nw=ul0vliphj6x — created by
+  [scripts/wandb_workspace.py](scripts/wandb_workspace.py). Switch x-axis
+  to `_runtime` per-panel to see wall-clock savings.
 - cell: `WL1` = wave-lockstep, 1.5M buffer, native MCTS, 8w × 8g, AGZ recipe (small,
   stem_padding=1, sims=400, τ=1.0→0.1 at move 30, AGZ PUCT/Dirichlet)
 - baseline: `Z` = az-recipe-160k (wandb `sppjo3z5`); same model/MCTS recipe,

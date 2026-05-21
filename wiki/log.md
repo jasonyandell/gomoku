@@ -366,3 +366,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Open question still ahead: do plies regrow (defense regime) on a
   similarly accelerated schedule? At e605 plies still 10-11, value head
   already at Z-e2179 levels.
+
+## [2026-05-20] tooling | wandb workspace layout script
+
+- Added [../scripts/wandb_workspace.py](../scripts/wandb_workspace.py) — one-shot
+  creator for a 6-section wandb workspace tuned for WL1-vs-Z overlays
+  (strength, learning, game shape, buffer, wave dynamics, wall economy).
+  Requires `wandb-workspaces` (pip install).
+- Live workspace URL (the view this script created on 2026-05-20 20:55):
+  https://wandb.ai/jasonyandell-forge42/gomoku?nw=ul0vliphj6x
+  Open it, click both `l8mbntcm` (WL1) and `sppjo3z5` (Z) in the run
+  picker. Switch the x-axis to `_runtime` (per-panel) to see wall-clock
+  savings instead of per-epoch convergence.
+- The workspaces API does not update views in place — re-running the
+  script creates a new URL. Treat the bookmarked URL as canonical until
+  it's superseded; delete stale views via the UI if they accumulate.
+- Cross-ref: training notebook "WL1 live run log" section in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) names the metrics each
+  section is meant to surface.
