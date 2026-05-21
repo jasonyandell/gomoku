@@ -605,3 +605,25 @@ consistent heading so future sessions can scan recent changes with simple tools.
   infrastructure at this model size.
 - Either outcome informative. Recovery path: restart from the snapshot
   with K=2 if it collapses badly.
+
+## [2026-05-21] runbook | handoff-friction section added to launch runbook
+
+- Filed everything that bit us today as a "Handoff friction" section
+  in [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md).
+  Eight gotchas covered:
+  1. `latest.pt` vs `epochNNNN.pt` (the buffer-resume distinction —
+     WL4's "resume at e1500 not e1536" surprise)
+  2. `keep_last_n=3` brutally short — snapshot aside immediately
+  3. `--resume` always continues the old wandb run id (feature for
+     WL4 curriculum continuation, but surprising)
+  4. Cell rename pattern for branching experiments from a paused run
+  5. Workspaces API doesn't update in place (each script run = new URL)
+  6. macOS `pgrep` quirks (`\b` doesn't work; transient self-PIDs)
+  7. Old `/loop` chains keep firing once after you change cells
+  8. `$CLAUDE_JOB_DIR/` is ephemeral — don't park anything important
+     there for a future session
+- Also noted: WL3.1 e1500 buffer-checkpoint is preserved at
+  `sweep_runs/WL3.1-random-openings-nanfix.paused-e1536/checkpoints/latest.pt`
+  (8.8G). That's the canonical resume point if WL3.1 needs to come
+  back online. The `$CLAUDE_JOB_DIR` copy is redundant and will be
+  cleaned up automatically.

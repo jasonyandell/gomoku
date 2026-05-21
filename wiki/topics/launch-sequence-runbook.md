@@ -232,6 +232,107 @@ parallelize implementation across background agents:
 This pattern worked for WL2: two agents in parallel, ~10min wall total,
 clean commits, no conflicts, 88 tests passing.
 
+## Handoff friction — gotchas that will bite the next session
+
+Distilled from the WL3 / WL3.1 / WL4 incidents on 2026-05-21. These
+are non-obvious things a future-Claude (or Jason after sleep) needs
+to know before touching a paused or crashed run.
+
+### Checkpoint anatomy: `latest.pt` vs `epochNNNN.pt`
+
+- `epochNNNN.pt` (slim, ~5MB): model + EMA + optimizer state + wandb_run_id.
+  Written every `save_every` epochs (default 1). Subject to `keep_last_n=3`
+  pruning — only the last 3 survive.
+- `latest.pt` (heavy, ~8GB): same as epoch checkpoints PLUS the full
+  1.5M-position replay buffer. Written every `save_buffer_every` epochs
+  (default 100). The slim epoch checkpoints between buffer-saves don't
+  include the buffer.
+- **To resume a run with its replay buffer**, you MUST use the latest
+  `save_buffer_every` checkpoint. `--resume sweep_runs/<cell>/checkpoints/latest.pt`
+  reads the model state at whatever epoch latest.pt was last saved
+  (which can be lower than the highest-numbered epoch checkpoint).
+- The on-disk epoch number ≠ the epoch in the checkpoint payload when
+  resuming from `latest.pt`. WL4 resume requested e1536 but actually
+  loaded e1500 because `latest.pt` was last saved at e1500.
+
+### `keep_last_n=3` is brutally short — snapshot aside immediately
+
+- The default cell config keeps only the last 3 per-epoch checkpoints.
+  At ~5s/cycle in production this is **15 seconds of training history**.
+- If you need to preserve a specific epoch (e.g. for forensic comparison,
+  a known-good fallback during recovery, or a milestone marker), copy
+  it aside the moment you decide it's important:
+  `cp sweep_runs/<cell>/checkpoints/epoch1234.pt sweep_runs/<cell>/checkpoints/milestone-e1234.pt`
+- The `latest.pt` is preserved through `mv` of the cell dir, so renaming
+  to `<cell>.paused-eN` keeps both the slim checkpoints AND the buffer
+  checkpoint that's the actual resume point.
+
+### `--resume` continues the OLD wandb run id
+
+- The trainer pulls `wandb_run_id` from the checkpoint payload during
+  `--resume`. There's no flag to override; resume always continues the
+  prior wandb timeline.
+- **Implications:**
+  - If you want a clean separate wandb run for an experiment branched
+    from an existing checkpoint, you'd have to strip the wandb_run_id
+    from the checkpoint before resuming (or edit train.py to accept a
+    `--wandb-new-run` flag — not currently a thing).
+  - WL4 inherited 44cxzc9d (was WL3.1's). For the K=2→K=0 curriculum
+    experiment this turned out to be a *feature* — the chart shows the
+    transition at step 1537 as one continuous trajectory.
+  - If wandb resume seems to lose history or step numbers go weird,
+    the resume is probably overlaying an existing run. Check wandb_run_id.
+
+### Cell rename + path divergence
+
+- `scripts/run_sweep.py`'s cell dirs come from `cell.name`. Renaming a
+  cell (e.g. WL3.1 → WL4 in CELLS) means a *new* `sweep_runs/<new>/`
+  and `sweep_logs/<new>/` are created. The old dirs aren't touched —
+  but `--resume` lets you point at the old cell's checkpoint while the
+  new run's artifacts go to the new dir.
+- This is the pattern for "branch an experiment from a paused run":
+  preserve the old dirs as `<cell>.paused-eN/`, add a new cell with the
+  experimental knob change, `--resume` from the paused checkpoint.
+
+### Workspaces API doesn't update in place
+
+- `python scripts/wandb_workspace.py` creates a NEW view URL every
+  time. There's no API to update an existing view.
+- The URL printed by the script is the latest authoritative one — any
+  URLs in wiki/TRAINING_WIKI.md from earlier runs are stale and just
+  show the wandb default workspace if followed.
+- The cure: the wiki entries always mention the URL exists in
+  `scripts/wandb_workspace.py` — regenerate when needed.
+
+### macOS `pgrep` quirks
+
+- `pgrep -fl "name"` returns lines (PID + cmdline), `pgrep -f "name"`
+  returns just PIDs.
+- `pgrep -f "WL3.1\b"` does NOT work as expected on macOS — the `\b`
+  word boundary returns 0 matches even when there are obvious hits.
+  Use the pattern without anchors: `pgrep -f "WL3.1"`.
+- `pgrep` can transiently include your own bash subshell as a "matching"
+  PID. After kill operations, `sleep 3-5` then re-check before
+  declaring the run dead.
+
+### Old `/loop` chains keep firing
+
+- When you change the prompt to a `/loop` (e.g. switch from monitoring
+  WL3.1 to WL4), the *previous* scheduled wakeup still fires once with
+  the old prompt. Recognize stale loops and don't reschedule them
+  (just don't call ScheduleWakeup at the end of the turn).
+- They're harmless other than one extra check with the wrong context.
+
+### Snapshot redundancy: `$CLAUDE_JOB_DIR/` is ephemeral
+
+- `$CLAUDE_JOB_DIR/` is `/Users/jason/.claude/jobs/<job_id>/` and gets
+  cleaned up when the job ends. Files there will NOT persist across
+  sessions.
+- Diagnoses, state files, and forensic notes can go there during a
+  session. **Anything you want a future session to find should live in
+  the repo** — either as wiki content, or in `sweep_runs/<cell>.dead-eN/`,
+  or as a committed file.
+
 ## Cross-refs
 
 - `wiki/topics/wave-of-lockstep-design.md` — WL1 design
