@@ -2626,3 +2626,70 @@ Will populate as evals land.
 - WL3 trajectory is smoother eval-to-eval than WL2 was post-peak.
 - `time/eval_vs_heuristic_s` climbs past 20s sustained (WL2 plateaued
   around 17s before regression hit).
+
+## Queued follow-up experiments (post-WL3, 2026-05-21)
+
+Captured during WL3 run while the eval-distribution test was running.
+Theme: WL3 keeps K=2 random openings ON the entire run. What if K is a
+curriculum knob — high early, decayed away? That tests "does the model
+internalize opening diversity, or does it need the crutch forever?"
+
+To run after WL3 finishes (or if WL3 plateaus early). Listed in
+no particular priority order — pick by what the WL3 close-out points at.
+
+### Q1 — K=2 with mid-run anneal away
+
+Start WL3-style with K=2 random openings. After some epoch threshold
+(e.g. e1000 or e2000), turn random openings OFF and continue from the
+existing checkpoint. Hypothesis: model has by then learned to handle
+diverse positions, so removing the random crutch lets it focus on
+canonical play without losing the breadth it gained.
+
+Failure mode predictions: model collapses back to fast-attack within
+a few hundred epochs after K → 0 (the past-checkpoint mix is no longer
+producing diverse openings because the mixed-in past brains were
+trained at K=2 too; once K=0, all selfplay starts converging on the
+same opener again). If this happens, conclusion is "random openings
+are load-bearing forever, not a curriculum."
+
+### Q2 — Black-only random first move (K_black=1, K_white=0)
+
+Just black's first move is uniform-random. White responds with MCTS as
+normal. Asymmetric setup. Hypothesis: forces the model to handle
+diverse openings as white (defender) while keeping black's opening
+discipline intact. Cheaper than K=2 (only one random ply per game).
+
+Implementation: needs a new flag — `--random-opening-moves` currently
+applies to both sides. Could be `--random-opening-black-moves` /
+`--random-opening-white-moves` or just `--random-opening-side {both,black,white}`.
+
+### Q3 — Phased curriculum: K=2 / K=1 / K=0
+
+Sequential schedule:
+- e1-500:    K=2 random plies
+- e500-1000: K=1 random plies
+- e1000+:    K=0 (canonical)
+
+Tests whether a decay path lets the model build robustness early then
+specialize for canonical play late. The Q1 "binary anneal" is the
+simplest version; this is the smoother version.
+
+Implementation: schedule could be cell-level (a list of
+(epoch_threshold, K) pairs) or runtime-only (`--random-opening-moves`
+read from a file each cycle). Cell-level is cleaner for reproducibility.
+
+### Q4 — Sweep K across full range
+
+Run K ∈ {1, 2, 3, 4, 6} as independent cells, 500-1000 epochs each.
+Cheap exploration of where the K sweet spot is. Combine with the
+matched-distribution eval (from the 2026-05-21 ad-hoc test) so we
+measure real strength on the trained distribution, not eval-distribution
+mismatched strength.
+
+### Cross-cutting note
+
+All four of these queue items assume the matched-distribution eval
+question (Jason's 2026-05-21 observation) is resolved. If WL3's slow
+heuristic-crossing turns out to be an eval-distribution artifact,
+the queue priorities should re-orient around what we learn about
+training quality vs measurement quality.
