@@ -584,3 +584,24 @@ consistent heading so future sessions can scan recent changes with simple tools.
   Python-side NaN-in-pi still falls back gracefully if anything similar
   ever emerges.
 - Workspace refreshed: https://wandb.ai/jasonyandell-forge42/gomoku?nw=tfzwgv1hwbp
+
+## [2026-05-21] notebook | WL3.1 paused at e1536, WL4 (no random openings) launched
+
+- WL3.1 (wandb `44cxzc9d`) paused after reaching "established" trigger
+  Jason proposed: eval/vs_heuristic 100% sustained, la4 60-95%
+  sustained across many evals, plies 20-27 (defense regime forming),
+  elo 1400-1700. Strongest WL-series state by every measure.
+- e1536 snapshotted aside: `$CLAUDE_JOB_DIR/wl3.1_e1536_latest.pt`
+  (8.2G, includes model + EMA + buffer). WL3.1 artifacts preserved at
+  `sweep_runs/WL3.1-random-openings-nanfix.paused-e1536/`.
+- WL4 cell (`a88749d`): WL3.1 config with `random_opening_moves=0`.
+  Resumes from the snapshot. Wandb run id continues (`44cxzc9d`) — the
+  chart is a single trajectory with the K=2→0 transition at step 1537,
+  cleaner than two separate runs to overlay.
+- Hypothesis: WL3.1 baked in opening-diverse representations; removing
+  random plies should either (a) unlock canonical-depth compounding
+  that the random plies were rate-limiting, OR (b) trigger rapid
+  regression — testing whether diversity is permanent training
+  infrastructure at this model size.
+- Either outcome informative. Recovery path: restart from the snapshot
+  with K=2 if it collapses badly.

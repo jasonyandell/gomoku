@@ -2806,3 +2806,57 @@ suspenders. With both layers, the failure mode is fully closed.
 **WL3.1 relaunched as wandb `44cxzc9d`** with the rebuilt C extension.
 Same cell config. Old artifacts at
 `sweep_runs/WL3.1-random-openings-nanfix.preCfix-e92/`.
+
+### WL3.1 paused at e1536 — WL4 launched as curriculum-decay experiment (2026-05-21)
+
+WL3.1 (wandb `44cxzc9d`) paused at e1536 after demonstrating clear success:
+peak la4=95% (single-eval) at e1105, sustained la4 60-90% across e931-1413,
+heuristic 100% sustained e1123-1157, elo holding 1400-1700, plies hit 27.
+Strongest WL-series state by every measure. Per Jason's call: take the
+training wheels off and see if it breaks through further OR collapses.
+
+**Pause mechanics:**
+- WL3.1 artifacts preserved: `sweep_runs/WL3.1-random-openings-nanfix.paused-e1536/`
+- e1536 snapshotted aside: `$CLAUDE_JOB_DIR/wl3.1_e1536_latest.pt` (8.2G — model + EMA + buffer)
+- Slim version: `$CLAUDE_JOB_DIR/wl3.1_e1536_slim.pt`
+- Can resume WL3.1 with K=2 anytime if needed
+
+## WL4 live run log (2026-05-21, wandb 44cxzc9d continued)
+
+WL3.1 + `random_opening_moves=0`. Resumes from WL3.1 e1536.
+
+**Setup**
+- wandb run: `44cxzc9d` continues (wandb resume restored from checkpoint;
+  WL4 epochs are e1537+. The chart is a single trajectory with K=2 then
+  K=0 at step 1537 — clearer than two separate runs to overlay.)
+- cell: `WL4` in `scripts/run_sweep.py`. Same as WL3.1 with one change:
+  `random_opening_moves=0`.
+- parent state: WL3.1 e1536 (la4 60-90% sustained, heuristic 100% peaks,
+  elo 1400-1700, plies 20-27)
+- model identity: same neural weights, same EMA, same buffer, same
+  optimizer state — only the *future* games will have canonical openings
+
+**Hypothesis under test (Jason 2026-05-21):**
+WL3.1 has had 1500+ epochs of K=2 random-opening training and is at
+"established" by every measure. If diversity is now baked into the
+weights, removing random openings should unlock canonical-line depth
+that random plies were rate-limiting. If diversity is permanent
+training infrastructure, removing it should cause rapid regression
+toward attack-only collapse.
+
+**Live milestones**
+
+| epoch | wall | pl | vl | plies | elo | h% | la2% | la4% | note |
+|---|---|---|---|---|---|---|---|---|---|
+| 1536 | 02:18 | 1.076 | 0.096 | 29.8 | — | — | — | — | resume point (WL3.1 final) |
+
+**Predictions to falsify**
+- "Diversity baked in" hypothesis: WL4 should continue or improve from e1537,
+  with plies pushing further past 25 toward the defense regime
+- "Diversity load-bearing" hypothesis: heuristic drops below 70% sustained
+  within ~200 epochs of K=0; if it falls below 50% the run is reverting
+- Specifically watch eval-to-eval variance: if it widens after K=0, the
+  model is bouncing again (WL1 failure mode returning)
+
+**Recovery if it collapses**: resume from `$CLAUDE_JOB_DIR/wl3.1_e1536_latest.pt`
+with `--random-opening-moves 2` to get back to WL3.1 trajectory.
