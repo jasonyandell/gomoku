@@ -215,6 +215,31 @@ CELLS: dict[str, Cell] = {
                 weights_poll_min_sec=2.0,
                 weights_poll_max_sec=8.0,
                 random_opening_moves=2),
+    # WL3.1: identical to WL3, restart after WL3 died at e825 from a NaN-
+    # in-policy crash. The native MCTS engine occasionally emits NaN visit-
+    # policies; commits c5049be + 0557671 add NaN guards at the play path
+    # (gomoku/self_play.py::_sample_action) and the data-recording path
+    # (trajectory pi sanitization). With those guards in place, an
+    # occasional NaN no longer kills workers or poisons the buffer — it
+    # falls back to argmax / uniform target. A parallel investigator is
+    # looking at the underlying MCTS NaN root cause.
+    "WL3.1": Cell("WL3.1-random-openings-nanfix", sgd_per_game=1.0,
+                  buffer_size=1_500_000, games_per_epoch=64,
+                  size="small", stem_padding=1, n_simulations=400,
+                  n_workers=8, games_per_batch=8, wave_mode=True,
+                  c_puct=1.25, c_puct_base=19652.0,
+                  dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                  temperature_moves=30, temperature_final=0.1,
+                  sgd_per_position=0.0025,
+                  save_buffer_every=100,
+                  ema_tau=0.99,
+                  grad_accum_steps=4,
+                  opponent_mix_recent=0.4,
+                  opponent_mix_history=0.1,
+                  opponent_mix_recent_window=100,
+                  weights_poll_min_sec=2.0,
+                  weights_poll_max_sec=8.0,
+                  random_opening_moves=2),
 }
 
 
