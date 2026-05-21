@@ -463,3 +463,30 @@ consistent heading so future sessions can scan recent changes with simple tools.
   late-run collapse coincided with eval times dropping.
 - Filing in the runbook "Leading indicators" section as a hidden but
   high-value signal.
+
+## [2026-05-21] notebook | WL2 ended at e1200, WL3 launched with K=2 random openings
+
+- WL2 (wandb `9wng4yu9`) stopped at e1200 / 1h 11min wall. Final state:
+  pl=1.89, vl=0.012, plies=10.5 (selfplay), elo bouncing 788-1071 in
+  the last 6 evals, **la4 regressed from peak 62% at e900 to 18% at
+  e1101**. The four scale-emulation levers raised the ceiling (peak la4
+  62% > WL1's 52%) and smoothed early trajectory (heuristic 0→15→5→8
+  vs WL1's 30→0→15→0) — but the late-run failure mode matched WL1's
+  (~44pp la4 drop vs WL1's ~47pp). Full close-out in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL2 run end" section.
+- Reframe: even with EMA + past-checkpoint mix + jitter + grad-accum,
+  all model versions share the same opening lineage. Worker diversity
+  doesn't help if the "diversity" is "different brains thinking about
+  the same opening."
+- WL3 = WL2 + K=2 uniform-random opening plies. Per train.py:165-170,
+  training examples are NOT recorded for the random plies, so the
+  model sees more diverse mid-game starting positions without learning
+  broken-move signal. K=2 is conservative; 30-epoch smoke showed plies
+  bumped +20% (22-26 vs WL2 smoke's 16-20), confirming random openings
+  produce slightly longer games as expected.
+- Live run: wandb `0o75gws5`, launched 2026-05-21 ~00:10. Anchored by
+  commit `91f7408`. Tracked in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL3 live run log" section.
+- Workspace regenerated via `scripts/wandb_workspace.py` to include
+  WL3. New URL printed by the script (workspaces API doesn't update in
+  place — each run produces a new view).

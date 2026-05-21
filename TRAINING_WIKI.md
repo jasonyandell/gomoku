@@ -2529,3 +2529,100 @@ Will update as new evals land.
   the same way, the levers don't fix this failure mode.
 - WL2's eval-to-eval elo variance is roughly half WL1's. If equal or worse,
   EMA isn't doing what we hoped.
+
+### WL2 run end — stopped at e1200 (~1h 11min wall, 2026-05-21)
+
+Stopped by user after the run made it clear the four scale-emulation
+levers raised the ceiling but didn't break the underlying retention
+failure.
+
+**Final state:**
+- e1200, 137,722 games, 11 race-drops handled cleanly
+- pl=1.889, vl=0.012, plies=10.5 (selfplay plies never regrew)
+- Last 6 evals (e944-e1151): elo bouncing 788-1071, heuristic 0-50%,
+  la4 18-52%
+- Final epoch: 3.0s — stable cycle time throughout
+
+**Run shape, summarized:**
+
+| phase | epochs | what happened |
+|---|---|---|
+| spin-up | e1-200 | fast-attack collapse, plies 13→11, baselines pinned 0% |
+| slow climb | e200-370 | first heuristic crossing at e370 (15%) — 224 epochs later than WL1 |
+| smooth ascent | e370-900 | la4 climbing 0→20→48→62; heuristic 15→70; pl/vl falling. **No bouncing** in this window — main early WL2 success |
+| peak | e900 | la4=62% (PEAK, higher than WL1's 52%), h=70, elo=1197 |
+| regression | e944-1200 | la4 drifted to 18, heuristic to 0-30 bouncing, elo 800-1071 |
+
+**Validated hypothesis (partial):**
+- EMA stabilization works — early WL2 trajectory was visibly smoother
+  than WL1's bouncy chaos (heuristic 0→15→5→8 vs WL1's 30→0→15→0)
+- Past-checkpoint mix raised the ceiling — la4=62% peak vs WL1's 52%
+- Eval-time-vs-heuristic climbed 6s→17s through the climbing phase,
+  indicating real defensive ability against a different style even
+  while selfplay plies stayed flat at 11 (filed as a leading indicator
+  in [wiki/topics/launch-sequence-runbook.md](wiki/topics/launch-sequence-runbook.md))
+
+**Refuted hypothesis (in this form):**
+- WL2 did NOT fix retention. la4 regression was 62→18 (44pp), almost
+  identical magnitude to WL1's 52→5 (47pp). The four levers stabilized
+  the trajectory and raised the ceiling but couldn't keep the model
+  from forgetting hard-won deep play.
+- Same depth-without-breadth pattern at trough as WL1 (heuristic 0%
+  while la2 still at 42% at e1101 — model forgets simple kills first)
+
+**Reframe:** even with EMA + past-checkpoint mix + jitter + grad-accum,
+all model versions in this setup share the same opening lineage. Every
+past checkpoint we mix in learned from positions reachable from the
+"canonical" opening. Worker diversity doesn't help if the worker
+diversity is "different brains thinking about the same opening."
+
+**Next-run design:** WL3 = WL2 + K=2 random opening plies. Training
+examples are not recorded for the random plies, so the model just sees
+more diverse mid-game starting positions. Hypothesis: breaking opening
+monoculture forces the model to learn defense/offense from positions
+it can't reach from canonical play, which should improve retention.
+
+**Run artifacts:**
+- wandb: `9wng4yu9` (run preserved)
+- workspace: https://wandb.ai/jasonyandell-forge42/gomoku?nw=cz8thj3cbh5
+  (3-way WL2/WL1/Z overlay)
+- checkpoints: `sweep_runs/WL2-scale-emulation/checkpoints/`
+- logs: `sweep_logs/WL2-scale-emulation/`
+- commits anchoring: `b582d37` (train: EMA + grad accum),
+  `ded7728` (selfplay_worker: past-mix + poll jitter),
+  `02c5fc3` (sweep: WL2 cell)
+
+## WL3 live run log (2026-05-21, wandb TBD)
+
+Live tracking for the WL3 run. WL2 + K=2 random opening plies (training
+examples not recorded for the random plies). Same append-oriented
+structure as the WL1/WL2 sections above.
+
+**Setup**
+- wandb run: `0o75gws5` (https://wandb.ai/jasonyandell-forge42/gomoku/runs/0o75gws5)
+- wandb workspace: regenerated post-launch to include WL3 — open the URL
+  printed by `python scripts/wandb_workspace.py` and select all four runs
+  (`0o75gws5`, `9wng4yu9`, `l8mbntcm`, `sppjo3z5`) in the picker for the
+  full WL3 → WL2 → WL1 → Z lineage.
+- cell: `WL3` (see scripts/run_sweep.py). WL2 + `--random-opening-moves 2`.
+- baseline: `WL2` (wandb `9wng4yu9`) — same recipe minus the random openings.
+  Comparison shows whether opening diversity fixes the la4 retention failure.
+
+**Smoke (30 epochs, pre-launch):**
+- All four WL2 lever signals fired with random openings active
+- Plies bumped +20% vs WL2 smoke at same range (22-26 vs 16-20)
+- No crashes, no NaN, cycle 4-5s (comparable to WL2)
+
+**Live milestones**
+
+| epoch | wall   | pl   | vl    | plies | elo | h%  | la2% | la4% | note |
+|------:|:------:|-----:|------:|------:|----:|----:|-----:|-----:|------|
+
+Will populate as evals land.
+
+**Predictions to falsify** (per WL2 close-out):
+- WL3 retains la4 across consolidations (WL1: 52→5, WL2: 62→18). If WL3
+  arcs as badly, opening monoculture wasn't the load-bearing cause.
+- WL3 trajectory is smoother eval-to-eval than WL2 was post-peak.
+- `time/eval_vs_heuristic_s` climbs past 20s sustained (WL2 plateaued
+  around 17s before regression hit).

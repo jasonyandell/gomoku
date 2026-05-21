@@ -20,6 +20,7 @@ PROJECT = "gomoku"
 # The view itself doesn't pin runs (workspaces API doesn't support that cleanly
 # from Python); these are the run IDs you click in the picker after opening.
 RUNS = {
+    "WL3 (WL2 + K=2 random opening plies)": "0o75gws5",
     "WL2 (scale-emulation: EMA + past-mix + jitter + grad-accum)": "9wng4yu9",
     "WL1 (wave-lockstep, native)": "l8mbntcm",
     "Z (continuous, python MCTS)": "sppjo3z5",
