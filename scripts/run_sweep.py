@@ -137,7 +137,7 @@ CELLS: dict[str, Cell] = {
     #   64 SGD steps / 25,600 positions = 0.0025
     "WL1": Cell("WL1-wave-lockstep-5M-buffer", sgd_per_game=1.0,
                 buffer_size=5_000_000, games_per_epoch=64,
-                size="small", stem_padding=3, n_simulations=400,
+                size="small", stem_padding=1, n_simulations=400,
                 n_workers=8, games_per_batch=8, wave_mode=True,
                 c_puct=1.25, c_puct_base=19652.0,
                 dirichlet_alpha=0.13, dirichlet_eps=0.25,
