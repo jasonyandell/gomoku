@@ -39,11 +39,22 @@ class GameRecord:
 
 
 def _sample_action(pi: np.ndarray, rng: np.random.Generator) -> int:
-    """Sample an action from a probability distribution. Falls back to argmax if needed."""
+    """Sample an action from a probability distribution. Falls back to argmax
+    if the distribution is degenerate (zero/NaN sum) or contains NaN entries.
+
+    NaN guard is load-bearing: WL3 (wandb 0o75gws5) crashed all 8 workers
+    at e825 from `ValueError: Probabilities contain NaN` because native
+    MCTS occasionally emits NaN visit-policies. Without the guard, `s <= 0`
+    returned False on NaN (NaN comparisons are False), the divide
+    propagated NaN, and rng.choice rejected. The underlying MCTS NaN
+    source is the real fix — this is the safety net.
+    """
     s = pi.sum()
-    if s <= 0:
-        return int(np.argmax(pi))
+    if not np.isfinite(s) or s <= 0:
+        return int(np.argmax(np.nan_to_num(pi, nan=-np.inf)))
     pi = pi / s
+    if not np.all(np.isfinite(pi)):
+        return int(np.argmax(np.nan_to_num(pi, nan=-np.inf)))
     return int(rng.choice(len(pi), p=pi))
 
 
