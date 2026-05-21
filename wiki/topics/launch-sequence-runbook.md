@@ -323,6 +323,28 @@ to know before touching a paused or crashed run.
   (just don't call ScheduleWakeup at the end of the turn).
 - They're harmless other than one extra check with the wrong context.
 
+### Resume + wave-mode: confirm worker_weights.pt epoch tag is right
+
+- The initial `_publish_worker_weights()` call in `gomoku/train.py`
+  USED to default to `epoch=0`. For a fresh run that's fine — the
+  wave-mode barrier expects v0 and workers write v0. For a `--resume`
+  from a non-zero epoch, this was a STALL BUG: worker_weights.pt
+  tagged epoch=0, workers write to v0/, trainer barrier waits on
+  v{start_epoch}, they never meet.
+- Fixed in commit `e8e0cef`: `_publish_worker_weights(epoch=start_epoch)`.
+- **Verification step on every wave-mode resume:**
+  ```bash
+  python -c "
+  import torch
+  p = torch.load('sweep_runs/<cell>/checkpoints/worker_weights.pt', map_location='cpu', weights_only=False)
+  print('worker_weights.pt epoch tag:', p.get('epoch'))
+  "
+  ```
+  The epoch should match what the trainer log says it resumed at.
+  If it shows `0` after a resume, the fix is missing.
+- **Smell test mid-run:** if you see a `v0/` directory growing rapidly
+  after a resume, you have this bug. Check `ls sweep_runs/<cell>/checkpoints/_records/`.
+
 ### Snapshot redundancy: `$CLAUDE_JOB_DIR/` is ephemeral
 
 - `$CLAUDE_JOB_DIR/` is `/Users/jason/.claude/jobs/<job_id>/` and gets
