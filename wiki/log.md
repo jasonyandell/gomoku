@@ -490,3 +490,39 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Workspace regenerated via `scripts/wandb_workspace.py` to include
   WL3. New URL printed by the script (workspaces API doesn't update in
   place — each run produces a new view).
+
+## [2026-05-21] notebook | WL3 e515 sustained crossing + eval-distribution test result
+
+- WL3 (wandb `0o75gws5`) reached its **first sustained heuristic crossing
+  at e487-e515** with h=50% held across two consecutive evals and all
+  three baselines climbing together (h50/la2:25/la4:38, elo 1031 at e515).
+  Slower to first crossing than WL2 (e487 vs WL2's e370) but the
+  *strength profile* is fundamentally different — WL2's first 200
+  epochs after crossing showed single-baseline spikes (heuristic 88%
+  while la4 collapsed to 5%); WL3's first 30 epochs after crossing show
+  balanced wins across all three baselines.
+- Tentative plies regrowth signal: `selfplay/plies_mean` bumped
+  13.2 → 15.0 over the last 250 epochs. WL2 stayed pinned at 11.x for
+  its entire run. Too small to call decisive, but it's in the right
+  direction for the first time in the WL series.
+- Retention test still in progress. WL2 lost la4 from peak 62% (e900)
+  to 18% (e1101) over 200 epochs. WL3 is in the equivalent window now.
+- **Eval-distribution test (Jason's hypothesis about K-mismatch hiding
+  signal):** ad-hoc CPU match on WL3 epoch0361 vs heuristic at K=0/2/4
+  random openings. Result: **K=0 and K=2 win rates within noise (0.350
+  vs 0.338 over 40 games)** — the matched-distribution eval does NOT
+  reveal hidden strength. K=4 was much worse (0.200), showing the
+  model is fragile far OOD. Conclusion: WL3's slow first-crossing is
+  a real training-side phenomenon, not an eval-distribution artifact.
+  Decision: skip the "plumb random-opening eval everywhere" lever;
+  lean into the queued opening-curriculum experiments (Q1-Q4 in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md)) instead.
+- **Important caveat surfaced by this test**: trainer's e361 eval
+  reported h=5% (≤1 win on 16 games); 40-game test reported h=35%.
+  Possibly sample-size variance, possibly native-MCTS-vs-python-MCTS
+  path difference. Filed in the runbook + user skill so future
+  sessions don't over-interpret single-eval bouncing.
+- Updated `gomoku-train` user skill at
+  `/Users/jason/.claude/skills/gomoku-train/SKILL.md` with WL3 cell
+  entry, eval interpretation gotchas, and an "ad-hoc match" recipe
+  for `$CLAUDE_JOB_DIR`-style forensic tests.
