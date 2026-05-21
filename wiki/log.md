@@ -627,3 +627,63 @@ consistent heading so future sessions can scan recent changes with simple tools.
   (8.8G). That's the canonical resume point if WL3.1 needs to come
   back online. The `$CLAUDE_JOB_DIR` copy is redundant and will be
   cleaned up automatically.
+
+## [2026-05-21] synthesis | loss-floor bouncing interpretation
+
+- Added [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) after
+  Jason asked whether WL4's low-floor loss bounce is a documented AlphaZero
+  phenomenon or a bug.
+- W&B pull for live run `44cxzc9d` shows the K=2→K=0 transition at e1537:
+  loss/total bumped from ~1.2-1.4 to ~1.5, then fell to a new floor near
+  0.4-0.8 while plies regrew and fixed external baselines stayed broadly
+  strong/noisy. That shape is not the WL3 NaN bug signature.
+- Filed the working interpretation: policy loss is cross-entropy against a
+  moving MCTS visit distribution, so small-scale AZ can show "bump, absorb,
+  lower floor" cycles when self-play discovers new lines. Treat the bounce as
+  healthy unless paired with NaN/Inf, worker death, replay-buffer poisoning,
+  short-game collapse, or sustained multi-window external regression.
+- Updated [index.md](index.md) and appended the WL4 evidence note to
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md).
+
+## [2026-05-21] synthesis | source-backed next-run lessons
+
+- Extended [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) with
+  the web/literature takeaways from AlphaZero, AlphaGo Zero, KataGo,
+  Go-Exploit, small-game hyperparameter work, MCTS-policy-imitation work, and
+  the Tablut AlphaZero reproduction.
+- Main next-run lesson: do not optimize for a pretty loss curve; instrument the
+  moving teacher. Add a frozen validation archive and split policy loss into
+  target entropy plus KL so we can distinguish true regression from MCTS target
+  distribution movement.
+- Behavioral recommendation if WL4 needs another lever: prefer 10-25%
+  archive-start self-play from curated trouble/long-defense/high-KL states over
+  reintroducing permanent random openings. Keep most games canonical K=0.
+- Appended the action-oriented summary to
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) under the WL4 loss-floor section.
+
+## [2026-05-21] notebook | WL4 plateau-end at e4024 — best WL series outcome to date
+
+- WL4 (wandb `44cxzc9d`, K=0 from e1537) stopped cleanly at e4024 after
+  ~5h 39min wall. Reached the "healthy lower-floor-bouncing" plateau
+  described in [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md).
+- **Best WL-series outcome by every measure**: elo ATH=1841 at e2401
+  (123 above Z's lifetime peak), la4=100% at e3148, la2 sustained 100%,
+  plies past Z's e5000 endpoint (peak 63.8 at e2960), 0 NaN/crashes in
+  5h 39min.
+- Validated: random opening diversity is necessary but not permanent
+  training infrastructure. K=2 (WL3.1) built diverse representations;
+  K=0 (WL4) confirmed they persist AND unlocked canonical-line depth
+  that K=2 was rate-limiting.
+- Refuted: "diversity is permanent training infrastructure" hypothesis.
+  WL4 with K=0 didn't regress toward attack-only.
+- Full run-end summary in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL4 plateau-end" entry.
+- Run artifacts preserved at
+  `sweep_runs/WL4-no-random-openings.plateau-e4024/` (incl. latest.pt
+  with full buffer for any future resume).
+- Next-run shape (WL5) NOT auto-launched. Per the article's
+  "Candidate Next-Run Shape" section, the next experiment is
+  diagnostics-first (fixed validation archive, H/KL split, per-color
+  metrics) then archive-start diversity (10-25% from curated trouble
+  states). Needs design conversation + code work — not a one-shot
+  parameter tweak.

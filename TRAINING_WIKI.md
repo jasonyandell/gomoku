@@ -2860,3 +2860,126 @@ toward attack-only collapse.
 
 **Recovery if it collapses**: resume from `$CLAUDE_JOB_DIR/wl3.1_e1536_latest.pt`
 with `--random-opening-moves 2` to get back to WL3.1 trajectory.
+
+### WL4 loss-floor bounce read (2026-05-21, W&B snapshot through ~e3776)
+
+Jason observed the post-switch loss curve: `random_opening_moves=2` was removed
+at e1537, loss bumped, then descended to a much lower floor and began bouncing
+there. This has happened before in this repo: the model improves against fixed
+external baselines while loss "bounces off the bottom."
+
+W&B pull for run `44cxzc9d` supports the healthy interpretation for now:
+
+| window | loss/total | loss/policy | loss/value | selfplay/plies_mean | external read |
+|---|---:|---:|---:|---:|---|
+| e1450-e1536, pre-switch | 1.21-1.37 | 1.06-1.24 | 0.080-0.098 | 14-31 | elo 1455-1592 |
+| e1537-e1900, K=0 bump | 1.35-1.57 | 1.22-1.45 | 0.070-0.091 | 13-23 | elo 1385-1918 |
+| e1901-e2400, absorb | 0.77-1.55 | 0.66-1.43 | 0.070-0.090 | 14-50 | h mean 84%, la2 mean 93% |
+| e2401-e3000, lower floor | 0.39-0.86 | 0.34-0.73 | 0.027-0.102 | 28-69 | e2996: elo 1760, h 88%, la2 100%, la4 90% |
+| e3001-e3773, floor bounce | 0.56-0.97 | 0.48-0.83 | 0.048-0.117 | 24-59 | e3772: elo 1519, h 75%, la2 100%, la4 62.5% |
+
+Interpretation: this is not the WL3 NaN bug shape. Loss is finite, value loss
+stays small but not poisoned, plies have regrown into the long-game regime, and
+fixed external baselines remain broadly strong/noisy rather than collapsing.
+The likely mechanism is moving-target AlphaZero training: `policy_loss` is
+cross-entropy against the MCTS visit distribution, and the MCTS target
+distribution changes when the self-play/search system discovers new canonical
+lines after K=0.
+
+Filed maintained synthesis at
+[wiki/topics/loss-floor-bouncing.md](wiki/topics/loss-floor-bouncing.md). Current
+triage rule: low-floor bouncing is healthy if plies and fixed baselines hold;
+suspect a bug only with NaN/Inf, worker death, replay-buffer poisoning,
+short-game collapse, or sustained multi-window external regression.
+
+### Source-backed next-run lessons from the loss-bounce literature pass
+
+Web/literature pass did NOT find a named "loss bounces off the bottom"
+AlphaZero phenomenon. It DID find strong support for the mechanism: AlphaZero
+policy loss is against a moving MCTS/self-play teacher, and small-scale
+self-play is sensitive, noisy, and vulnerable to coverage/forgetting problems.
+Important correction: published AlphaZero used 5000 TPUs for self-play, not
+GPUs; the "scale smooths the wrinkles" point still stands.
+
+Next-run implications, filed in
+[wiki/topics/loss-floor-bouncing.md](wiki/topics/loss-floor-bouncing.md):
+
+1. Add a frozen validation archive and log policy CE/KL on fixed positions
+   (old WL3/WL4, heuristic-loss, lookahead-loss, long-defense, high-KL,
+   canonical-opening positions). This separates true regression from target
+   distribution movement.
+2. Split policy loss into `H(pi_mcts)` and `KL(pi_mcts || p_net)`, plus net
+   entropy. Total loss alone hides whether the teacher changed shape or the net
+   failed to track it.
+3. Keep the smoothing stack: EMA self-play, past-checkpoint mix, grad
+   accumulation, careful replay age, and fixed external baselines are our
+   laptop-scale substitutes for AlphaZero's giant self-play/batch/replay scale.
+4. Prefer structured start diversity over crude permanent opening randomness:
+   if WL4 needs a new lever, try 10-25% archive-start games from interesting
+   states while keeping 75-90% canonical K=0 self-play.
+5. Consider a KataGo-style policy-target pruning/downweighting ablation so
+   exploration visits do not automatically become policy labels.
+6. Instrument role asymmetry before architecture changes: evals by color, value
+   error by side-to-move/ply bucket, and fixed-probe loss by role.
+
+Working next-run shape: WL4 recipe + better diagnostics first. If behavior
+needs changing, the cleanest first lever is archive-start diversity, because it
+targets the documented coverage problem without putting random openings back in
+as permanent infrastructure.
+
+### WL4 plateau-end — stopped at e4024 (~5h 39min wall, 2026-05-21)
+
+Stopped cleanly per Jason's call: WL4 reached the "healthy lower-floor-
+bouncing" steady state described in
+[wiki/topics/loss-floor-bouncing.md](wiki/topics/loss-floor-bouncing.md).
+Letting it run further would mostly cycle through more local
+canonical-line discoveries without changing the floor.
+
+**Final state:**
+- e4024, 457,889 games, ~2500 epochs of K=0 training (from e1500 resume)
+- pl=0.604, vl=0.090, plies=40.0 (last epoch line)
+- last 8 evals (e3783-3874): h locked 60-75, la2 mostly 100% (one 50% dip),
+  la4 48-82%, elo 1262-1620
+- 0 errors, 0 NaN warnings, 0 worker deaths in 5h 39min
+
+**Run shape, summarized:**
+
+| phase | epochs | story |
+|---|---|---|
+| spin-up | e1501-1700 | K=0 transition: plies dropped 21→14, model adapts to canonical openings |
+| stable plateau | e1700-2200 | locked WL3.1-strength: h75-100, la4 60-90, elo 1455-1682 |
+| regime change | e2329-2401 | plies surged 20→47, pl dropped 1.23→0.67, **elo hit 1841 ATH** (Z lifetime peak was 1718) |
+| deep defense | e2401-3200 | plies sustained 36-64, la4 perfect at e3148, la2 sustained 100%, elo 1290-1760 |
+| lower-floor plateau | e3200-4024 | losses bouncing 0.5-0.7 (healthy per article), external baselines steady, model cycles through local discoveries |
+
+**Validated:**
+- Random opening diversity is **necessary but not permanent infrastructure**.
+  WL3.1 (K=2) built the diverse representations; WL4 (K=0) confirmed they
+  persist when K→0, plus unlocked canonical-line depth that K=2 was
+  rate-limiting (plies 21→47 mean, elo 1465→1841 ATH).
+- WL series ATH elo=1841 (WL4 e2401) — 123 elo above Z's lifetime peak.
+- Defense regime is genuinely achievable on 9x9 small-model: la4=100%
+  at e3148, la2 sustained 100%, plies past Z's e5000 endpoint.
+
+**Failure mode that didn't happen:**
+- The "diversity is permanent training infrastructure" hypothesis was
+  refuted. K=0 didn't cause regression toward attack-only.
+- The WL1 oscillation pattern didn't return. Loss bouncing in late WL4
+  is structured (per loss-floor-bouncing.md) not chaotic.
+
+**Run artifacts:**
+- wandb: `44cxzc9d` (started as WL3.1, continued through WL4 e1501-4024;
+  K=2→0 transition visible at step 1537)
+- WL3.1 paused state: `sweep_runs/WL3.1-random-openings-nanfix.paused-e1536/`
+- WL4 final state: `sweep_runs/WL4-no-random-openings.plateau-e4024/`
+- latest.pt preserved in the WL4 paused dir (8.2G, model+EMA+buffer)
+- commits anchoring: `c5049be` `0557671` (Python NaN guards),
+  `7c3e405` (native MCTS C fix), `e8e0cef` (worker_weights resume bug),
+  `a88749d` (WL4 cell)
+
+**Next-run shape (deferred to Jason design conversation):**
+Per `wiki/topics/loss-floor-bouncing.md` "Candidate Next-Run Shape" —
+diagnostics first (fixed validation archive, H/KL split, per-color
+metrics), then behavioral lever (archive-start diversity: 10-25% of
+self-play games from curated trouble states). NOT a simple parameter
+tweak — needs design + code work before launch.
