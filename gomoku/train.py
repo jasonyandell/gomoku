@@ -40,9 +40,18 @@ def train_step(
     *,
     value_weight: float = 1.0,
     l2_weight: float = 1e-4,
+    accum_scale: float = 1.0,
+    do_optimizer_step: bool = True,
+    zero_grad: bool = True,
 ) -> dict[str, float]:
+    """One forward + backward. By default does optimizer.step() + zero_grad
+    (legacy behavior). For WL2 gradient accumulation, the caller controls
+    those: pass accum_scale=1/N to scale loss before backward, zero_grad=True
+    only on the first microbatch of an accumulation window, and
+    do_optimizer_step=True only on the last microbatch."""
     model.train()
-    optimizer.zero_grad(set_to_none=True)
+    if zero_grad:
+        optimizer.zero_grad(set_to_none=True)
     logits, v = model(planes)
     pl = policy_loss(logits, pi)
     vl = value_loss(v, z)
@@ -50,8 +59,12 @@ def train_step(
     if l2_weight > 0:
         l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
         loss = loss + l2_weight * l2
-    loss.backward()
-    optimizer.step()
+    # Scale loss BEFORE backward when accumulating, so the summed gradient
+    # over N microbatches equals the gradient of the mean loss over N*B
+    # examples (modulo the L2 reg, which is identical across microbatches).
+    (loss * accum_scale).backward()
+    if do_optimizer_step:
+        optimizer.step()
     with torch.no_grad():
         # Accuracy: fraction where argmax(logits over legal entries of pi) matches argmax(pi).
         pred = logits.argmax(dim=-1)
@@ -63,6 +76,29 @@ def train_step(
         "loss/value": float(vl.detach()),
         "train/policy_acc": float(acc),
     }
+
+
+def ema_update(ema_model, model, tau: float) -> None:
+    """EMA update on parameters AND buffers (batchnorm running stats):
+    ema <- tau * ema + (1 - tau) * src. No-grad. WL2 lever #1."""
+    with torch.no_grad():
+        for ep, p in zip(ema_model.parameters(), model.parameters()):
+            ep.mul_(tau).add_(p.detach(), alpha=1.0 - tau)
+        # Keep buffers (e.g. BN running stats) in lockstep too. Strict copy
+        # rather than EMA is fine — buffers update during training forward,
+        # not via gradients — but copy keeps semantics simple and matches
+        # what most EMA implementations do.
+        for eb, b in zip(ema_model.buffers(), model.buffers()):
+            eb.copy_(b)
+
+
+def ema_l2_distance(ema_model, model) -> float:
+    """Flat-vector L2 norm of (theta - theta_ema) across all parameters."""
+    with torch.no_grad():
+        sq = 0.0
+        for ep, p in zip(ema_model.parameters(), model.parameters()):
+            sq += float((p - ep).pow(2).sum())
+        return sq ** 0.5
 
 
 def _baseline_log_key(spec) -> str:
@@ -182,6 +218,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--value-weight", type=float, default=1.0)
     p.add_argument("--l2", type=float, default=1e-4)
+    p.add_argument("--ema-tau", type=float, default=0.0,
+                   help="WL2 lever #1: EMA self-play weights. When > 0, the "
+                        "trainer maintains an EMA copy of the model "
+                        "(theta_ema <- tau*theta_ema + (1-tau)*theta after each "
+                        "optimizer.step()) and publishes the EMA weights to "
+                        "--worker-weights-path instead of the raw weights. "
+                        "Decouples the self-play 'brain that plays' from the "
+                        "'brain that learns' to emulate AZ-at-scale "
+                        "publish-to-workers lag. 0.0 (default) = disabled, "
+                        "matches pre-WL2 behavior. Recommended live value 0.99 "
+                        "(~70 SGD-step half-life). EMA update is per-SGD-step.")
+    p.add_argument("--grad-accum-steps", type=int, default=1,
+                   help="WL2 lever #4: gradient accumulation. Accumulate "
+                        "gradients across this many minibatches before "
+                        "optimizer.step(). Effective batch becomes "
+                        "grad_accum_steps * batch_size. 1 (default) = no "
+                        "accumulation, matches pre-WL2 behavior. Recommended "
+                        "live value 4. Note: --sgd-per-position still controls "
+                        "the number of forward+backward passes per cycle; the "
+                        "number of optimizer.step() calls becomes "
+                        "ceil(steps_this_cycle / grad_accum_steps).")
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--eval-sims", type=int, default=50,
                    help="MCTS sims used by the model during eval matches")
@@ -301,7 +358,29 @@ def main() -> None:
     else:
         model = build_model(args.size, stem_padding=args.stem_padding).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+        payload = {}
         print(f"fresh {args.size} model: {n_params(model):,} params")
+
+    # WL2 lever #1: EMA self-play weights. Build a slowly-tracking copy that
+    # workers see, while `model` continues to train normally. On resume,
+    # restore the EMA state if it was persisted; otherwise initialize ema=model.
+    # The ema architecture mirrors `model.cfg` (not args.size) so resume from
+    # a checkpoint with a different cfg still gets a matching ema.
+    ema_model = None
+    if args.ema_tau > 0.0:
+        if not (0.0 < args.ema_tau < 1.0):
+            raise SystemExit(f"--ema-tau must be in (0, 1); got {args.ema_tau}")
+        from gomoku.model import GomokuNet
+        ema_model = GomokuNet(model.cfg).to(device)
+        if args.resume and "ema_model_state_dict" in payload:
+            ema_model.load_state_dict(payload["ema_model_state_dict"])
+            print(f"ema model restored from checkpoint (tau={args.ema_tau})")
+        else:
+            ema_model.load_state_dict(model.state_dict())
+            print(f"ema model initialized from current weights (tau={args.ema_tau})")
+        for p in ema_model.parameters():
+            p.requires_grad_(False)
+        ema_model.eval()
 
     buffer = ReplayBuffer(args.replay_buffer_size, device=device)
     if args.resume:
@@ -399,12 +478,17 @@ def main() -> None:
         (selfplay or eval) can mtime-poll and reload. Embeds the trainer's
         wandb run id + current epoch so eval_worker can log to the same run.
         Also bumps the buffer's current_weight_version so subsequent add() calls
-        get the new tag."""
+        get the new tag.
+
+        WL2 lever #1: when --ema-tau > 0, workers see the EMA weights, not
+        the raw training weights. The 'brain that plays' is decoupled from
+        the 'brain that learns'."""
         buffer.set_weight_version(epoch)
         if not worker_weights_path:
             return
+        publish_model = ema_model if ema_model is not None else model
         tmp = worker_weights_path + ".tmp"
-        save_checkpoint(tmp, model, optimizer=None,
+        save_checkpoint(tmp, publish_model, optimizer=None,
                         epoch=epoch, total_games=total_games,
                         wandb_run_id=wandb_run_id)
         os.replace(tmp, worker_weights_path)
@@ -814,13 +898,39 @@ def main() -> None:
 
         train_metrics_acc: dict[str, list[float]] = {}
         train_start = time.time()
+        # WL2 lever #4: grad accumulation. steps_this_cycle is the number of
+        # forward+backward passes (microbatches); optimizer.step() happens
+        # every --grad-accum-steps microbatches. A final partial window at
+        # end-of-cycle still steps (the partial accumulator's gradient is
+        # under-scaled by partial_size/grad_accum_steps, which acts as a
+        # smaller effective LR for that one step — preferable to discarding
+        # the backward work we already paid for).
+        accum_n = max(1, int(args.grad_accum_steps))
+        optimizer_steps_this_cycle = 0
         if buffer.size >= args.batch_size:
-            for _ in range(steps_this_cycle):
+            for i in range(steps_this_cycle):
                 planes, pi, z = buffer.sample(args.batch_size)
-                m = train_step(model, optimizer, planes, pi, z,
-                               value_weight=args.value_weight, l2_weight=args.l2)
+                is_first_in_window = (i % accum_n == 0)
+                is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
+                m = train_step(
+                    model, optimizer, planes, pi, z,
+                    value_weight=args.value_weight,
+                    l2_weight=args.l2,
+                    accum_scale=1.0 / accum_n,
+                    do_optimizer_step=is_last_in_window,
+                    zero_grad=is_first_in_window,
+                )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)
+                if is_last_in_window:
+                    optimizer_steps_this_cycle += 1
+                    # WL2 lever #1: EMA tracks the trained model per optimizer
+                    # step (BYOL-style per-step cadence, not per-wave). Default
+                    # picked for ablation consistency with the design doc; can
+                    # be revisited per-wave if per-step is too cheap to see in
+                    # the ema_l2_distance trace.
+                    if ema_model is not None:
+                        ema_update(ema_model, model, args.ema_tau)
         train_time = time.time() - train_start
         train_metrics = {k: float(np.mean(v)) for k, v in train_metrics_acc.items()}
 
@@ -848,6 +958,7 @@ def main() -> None:
             "time/gen_s": gen_time,
             "time/train_s": train_time,
             "train/steps_this_cycle": steps_this_cycle,
+            "train/optimizer_steps_this_cycle": optimizer_steps_this_cycle,
             "train/actual_sgd_per_game": (
                 steps_this_cycle / n_games_this_cycle if n_games_this_cycle else 0.0
             ),
@@ -861,6 +972,10 @@ def main() -> None:
             # Computed every cycle so wandb shows shape evolution over time.
             **buffer.shape_stats(),
         }
+        # WL2 lever #1: diagnose runaway divergence between learn-brain and
+        # play-brain. Logged only when EMA is enabled.
+        if ema_model is not None:
+            log["train/ema_l2_distance"] = ema_l2_distance(ema_model, model)
 
         # --- forward any new eval_worker results into wandb ---
         ext_eval = _consume_eval_jsonl()
@@ -949,6 +1064,10 @@ def main() -> None:
             # Intermediate snapshots are weights+optimizer only (small, ~4 MB).
             # The replay buffer (~1.4 GB) only goes in latest.pt to support
             # resume — old "epochNNNN.pt" files don't need it.
+            # WL2: persist EMA state alongside so resume restores the play-brain too.
+            ckpt_extra: dict | None = None
+            if ema_model is not None:
+                ckpt_extra = {"ema_model_state_dict": ema_model.state_dict()}
             save_checkpoint(
                 ckpt_path,
                 model,
@@ -956,12 +1075,16 @@ def main() -> None:
                 epoch=epoch + 1,
                 total_games=total_games,
                 wandb_run_id=wandb_run_id,
+                extra=ckpt_extra,
             )
             # Write a separate latest.pt that includes the replay buffer.
             # Throttled by --save-buffer-every since this is the ~1.4 GB write.
             if (epoch + 1) % args.save_buffer_every == 0:
                 latest = os.path.join(args.checkpoint_dir, "latest.pt")
                 latest_tmp = latest + ".tmp"
+                latest_extra: dict = {"replay_buffer": buffer.state_dict()}
+                if ema_model is not None:
+                    latest_extra["ema_model_state_dict"] = ema_model.state_dict()
                 save_checkpoint(
                     latest_tmp,
                     model,
@@ -969,7 +1092,7 @@ def main() -> None:
                     epoch=epoch + 1,
                     total_games=total_games,
                     wandb_run_id=wandb_run_id,
-                    extra={"replay_buffer": buffer.state_dict()},
+                    extra=latest_extra,
                 )
                 try:
                     if os.path.islink(latest) or os.path.exists(latest):
