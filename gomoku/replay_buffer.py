@@ -23,6 +23,10 @@ class ReplayBuffer:
         # Used for stratified sampling and shape diagnostics. Auto-overwritten
         # when the ring buffer reuses a slot — no separate deletion needed.
         self.weight_version = torch.zeros((capacity,), dtype=torch.int64, device=self.device)
+        # Side-to-move (0=black, 1=white) and ply count at the position. Used by
+        # the WL5 diagnostics layer for per-color and per-ply-bucket metrics.
+        self.side = torch.zeros((capacity,), dtype=torch.int8, device=self.device)
+        self.ply = torch.zeros((capacity,), dtype=torch.int16, device=self.device)
         self.current_weight_version: int = 0
         self.head = 0
         self.size = 0
@@ -38,8 +42,9 @@ class ReplayBuffer:
         planes = torch.from_numpy(np.stack([e.planes for e in examples]))
         pi = torch.from_numpy(np.stack([e.pi for e in examples]))
         z = torch.from_numpy(np.array([e.z for e in examples], dtype=np.float32))
+        side = torch.from_numpy(np.array([getattr(e, "side", 0) for e in examples], dtype=np.int8))
+        ply = torch.from_numpy(np.array([getattr(e, "ply", 0) for e in examples], dtype=np.int16))
         ver = int(self.current_weight_version)
-        # Write in chunks if we wrap around the ring.
         i = 0
         while i < n:
             end = min(self.head + (n - i), self.capacity)
@@ -48,15 +53,17 @@ class ReplayBuffer:
             self.pi[self.head:end].copy_(pi[i:i + chunk].to(self.device))
             self.z[self.head:end].copy_(z[i:i + chunk].to(self.device))
             self.weight_version[self.head:end] = ver
+            self.side[self.head:end].copy_(side[i:i + chunk].to(self.device))
+            self.ply[self.head:end].copy_(ply[i:i + chunk].to(self.device))
             i += chunk
             self.head = end % self.capacity
             self.size = min(self.size + chunk, self.capacity)
 
-    def sample(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def sample(self, batch_size: int) -> tuple[torch.Tensor, ...]:
         if self.size == 0:
             raise ValueError("empty replay buffer")
         idx = torch.randint(0, self.size, (batch_size,), device=self.device)
-        return self.planes[idx], self.pi[idx], self.z[idx]
+        return self.planes[idx], self.pi[idx], self.z[idx], self.side[idx], self.ply[idx]
 
     def shape_stats(self, stone_buckets: tuple[int, ...] = (0, 5, 10, 15, 20, 30, 40, 60, 81)
                     ) -> dict[str, float]:
@@ -118,6 +125,8 @@ class ReplayBuffer:
             "pi": self.pi[:self.size].cpu(),
             "z": self.z[:self.size].cpu(),
             "weight_version": self.weight_version[:self.size].cpu(),
+            "side": self.side[:self.size].cpu(),
+            "ply": self.ply[:self.size].cpu(),
             "current_weight_version": int(self.current_weight_version),
         }
 
@@ -132,6 +141,16 @@ class ReplayBuffer:
             self.z[:n].copy_(sd["z"][:n].to(self.device))
             if "weight_version" in sd:
                 self.weight_version[:n].copy_(sd["weight_version"][:n].to(self.device))
+            if "side" in sd:
+                self.side[:n].copy_(sd["side"][:n].to(self.device))
+            else:
+                self.side[:n].zero_()
+                print(f"replay buffer: side tag missing from checkpoint, zero-filled {n} slots")
+            if "ply" in sd:
+                self.ply[:n].copy_(sd["ply"][:n].to(self.device))
+            else:
+                self.ply[:n].zero_()
+                print(f"replay buffer: ply tag missing from checkpoint, zero-filled {n} slots")
         if "current_weight_version" in sd:
             self.current_weight_version = int(sd["current_weight_version"])
         self.size = n
