@@ -157,6 +157,21 @@ def _generate_games_native(
             pi = g.policy(temperature=tau)
             n_initial = initial_plies[g_idx]
             side = (n_initial + ply) % 2
+            # Sanitize pi before recording the training example: NaN entries
+            # from the native MCTS policy export must not enter the buffer.
+            # _sample_action handles NaN for the *play* path, but trajectories
+            # are stored independently and feed the trainer's cross-entropy
+            # target. A NaN target poisons the loss for the entire minibatch.
+            # Replace NaN with 0 and re-normalize; if everything is NaN, fall
+            # back to a uniform distribution (lowest-information target —
+            # better than corrupting the buffer).
+            if not np.all(np.isfinite(pi)):
+                pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
+                s = pi.sum()
+                if s <= 0:
+                    pi = np.full_like(pi, 1.0 / len(pi))
+                else:
+                    pi = pi / s
             trajectories[g_idx].append((g.root_planes(), pi.copy(), side))
 
             action = _sample_action(pi, rng)
