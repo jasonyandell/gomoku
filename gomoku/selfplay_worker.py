@@ -15,6 +15,20 @@ and ingests `.pt` files from the output dir, deleting them after consuming.
 This module is the worker side; the trainer side is in `gomoku.train`
 (activated by passing `--worker-input-dir` and `--worker-weights-path`).
 
+WL2 levers implemented here (see `wiki/topics/wl2-scale-emulation-design.md`):
+
+- Lever #2 (past-checkpoint opponent mix): at each wave start a worker rolls
+  dice; with `--opponent-mix-recent` probability it loads a random checkpoint
+  from the last `--opponent-mix-recent-window` snapshots, with
+  `--opponent-mix-history` it loads from anywhere in the run, otherwise it
+  uses the current published `worker_weights.pt`. The past-checkpoint games
+  are written to the *current* model-version tile so the trainer ingests
+  them normally.
+- Lever #3 (worker poll jitter): each worker samples its own poll interval
+  once at startup from `Uniform(--weights-poll-min-sec, --weights-poll-max-sec)`
+  so the 8-worker pool picks up new weights with natural async-publish skew
+  instead of all reloading on the same tick.
+
 Usage::
 
     python -m gomoku.selfplay_worker \\
@@ -86,7 +100,32 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-batches", type=int, default=0,
                    help="Stop after this many batches (0 = run forever).")
     p.add_argument("--weights-poll-sec", type=float, default=1.0,
-                   help="Sleep this long if the weights file isn't ready yet on startup.")
+                   help="Sleep this long if the weights file isn't ready yet on startup. "
+                        "Also used as the base poll interval unless --weights-poll-min-sec "
+                        "or --weights-poll-max-sec is set (in which case the worker draws "
+                        "its own interval once at startup from Uniform(min, max)).")
+    p.add_argument("--weights-poll-min-sec", type=float, default=None,
+                   help="WL2 lever #3 (poll jitter): lower bound of the per-worker poll "
+                        "interval, sampled once at startup. If unset, defaults to "
+                        "--weights-poll-sec (no jitter).")
+    p.add_argument("--weights-poll-max-sec", type=float, default=None,
+                   help="WL2 lever #3 (poll jitter): upper bound of the per-worker poll "
+                        "interval, sampled once at startup. If unset, defaults to "
+                        "--weights-poll-sec (no jitter).")
+
+    # WL2 lever #2: past-checkpoint opponent mix. Defaults disable the
+    # feature; recommended starting values per the design doc are 0.4 / 0.1.
+    p.add_argument("--opponent-mix-recent", type=float, default=0.0,
+                   help="Per-wave probability of running full self-play against a "
+                        "random checkpoint drawn from the last "
+                        "--opponent-mix-recent-window snapshots. Games are still "
+                        "written to the current model-version tile.")
+    p.add_argument("--opponent-mix-history", type=float, default=0.0,
+                   help="Per-wave probability of running full self-play against a "
+                        "random checkpoint drawn from anywhere in the run history.")
+    p.add_argument("--opponent-mix-recent-window", type=int, default=100,
+                   help="Number of most-recent checkpoints eligible for the "
+                        "--opponent-mix-recent draw.")
     p.add_argument("--gen-once-per-publish", action="store_true",
                    help="Generate exactly one batch per weight publish. After "
                         "writing a batch, sleep on the weights mtime until it "
@@ -169,14 +208,179 @@ def _atomic_save_wave_game(
     version: int,
     seq: int,
     payload: dict,
-) -> Path:
+) -> Path | None:
+    """Persist one greedy-fill game. Returns None if the trainer cleaned up
+    `v{version}/` between mkdir and write — the game is dropped and the outer
+    loop should reload fresh weights on its next iteration."""
     worker_dir = out_dir / f"v{version}" / _worker_dir_name(worker_id)
-    worker_dir.mkdir(parents=True, exist_ok=True)
-    final = worker_dir / f"game{seq:06d}.pt"
-    tmp = worker_dir / f"game{seq:06d}.pt.tmp"
-    torch.save(payload, tmp)
-    os.replace(tmp, final)
+    try:
+        worker_dir.mkdir(parents=True, exist_ok=True)
+        final = worker_dir / f"game{seq:06d}.pt"
+        tmp = worker_dir / f"game{seq:06d}.pt.tmp"
+        torch.save(payload, tmp)
+        os.replace(tmp, final)
+    except (FileNotFoundError, OSError, RuntimeError) as e:
+        print(
+            f"[{worker_id}] drop wave game v{version} seq{seq}: "
+            f"{type(e).__name__}: {e}",
+            flush=True,
+        )
+        return None
     return final
+
+
+def _list_past_checkpoints(weights_path: str) -> list[tuple[int, Path]]:
+    """Scan the checkpoint dir (parent of `weights_path`) for `epochNNNN.pt`.
+
+    Returns a list of (epoch_num, path) sorted ascending by epoch. The
+    `latest.pt` symlink and `worker_weights.pt` are excluded; if a file
+    happens to be a symlink whose realpath matches an `epoch*.pt` already
+    in the list, it is deduped.
+    """
+    ckpt_dir = Path(weights_path).parent
+    out: dict[int, Path] = {}
+    for p in ckpt_dir.glob("epoch*.pt"):
+        stem = p.stem  # epoch0089
+        rest = stem.removeprefix("epoch")
+        if not rest.isdigit():
+            continue
+        # Dedupe by realpath so symlinks pointing at the same blob collapse.
+        try:
+            real = p.resolve()
+        except OSError:
+            real = p
+        epoch = int(rest)
+        # Prefer the non-symlink (concrete) path when both exist.
+        existing = out.get(epoch)
+        if existing is None or (existing.is_symlink() and not p.is_symlink()):
+            out[epoch] = p
+        # If we've already got a concrete file, ignore symlink duplicates.
+        _ = real
+    return sorted(out.items(), key=lambda kv: kv[0])
+
+
+def _pick_wave_mix_source(
+    rng: np.random.Generator,
+    p_recent: float,
+    p_history: float,
+    recent_window: int,
+    weights_path: str,
+) -> tuple[str, Path | None]:
+    """Roll dice for what weights this wave should use.
+
+    Returns (mix_source, checkpoint_path) where mix_source is one of
+    "self" | "recent" | "history". For "self", checkpoint_path is None
+    (caller keeps using the currently loaded weights). For "recent" and
+    "history", checkpoint_path is the chosen `epochNNNN.pt`.
+
+    If the requested bucket happens to be empty (e.g. early in a run with
+    fewer checkpoints than recent_window), the roll falls back to "self"
+    rather than crashing — the worker just generates one more wave with
+    current weights, which is the safest no-op.
+    """
+    p_recent = max(0.0, float(p_recent))
+    p_history = max(0.0, float(p_history))
+    if p_recent + p_history <= 0.0:
+        return "self", None
+    if p_recent + p_history > 1.0:
+        # Normalize defensively; "self" share would be negative otherwise.
+        scale = p_recent + p_history
+        p_recent /= scale
+        p_history /= scale
+    roll = float(rng.random())
+    if roll < p_recent:
+        bucket = "recent"
+    elif roll < p_recent + p_history:
+        bucket = "history"
+    else:
+        return "self", None
+
+    ckpts = _list_past_checkpoints(weights_path)
+    if not ckpts:
+        return "self", None
+    if bucket == "recent":
+        window = max(1, int(recent_window))
+        pool = ckpts[-window:]
+    else:
+        pool = ckpts
+    idx = int(rng.integers(0, len(pool)))
+    return bucket, pool[idx][1]
+
+
+def _roll_wave_mix(
+    rng: np.random.Generator,
+    args: argparse.Namespace,
+    *,
+    current_evaluator,
+    device: torch.device,
+    model_version: int,
+    worker_id: str,
+):
+    """Roll the WL2 lever #2 mix dice for one wave.
+
+    Returns (wave_evaluator, wave_mix_source, wave_mix_label) where
+    wave_mix_source is "self" | "recent" | "history" and wave_mix_label is
+    a short string for logs/payloads ("current" or e.g. "epoch0089"). If
+    the chosen bucket is empty or the load fails, falls back to "self" so
+    the worker never blocks on a bad past checkpoint.
+
+    Logs the choice with the standard `[wN] wave v{model_version}
+    weights=... (mix=...)` line.
+    """
+    mix_source, ckpt_path = _pick_wave_mix_source(
+        rng,
+        p_recent=args.opponent_mix_recent,
+        p_history=args.opponent_mix_history,
+        recent_window=args.opponent_mix_recent_window,
+        weights_path=args.weights_path,
+    )
+    if mix_source == "self" or ckpt_path is None:
+        print(
+            f"[{worker_id}] wave v{model_version} weights=current (mix=self)",
+            flush=True,
+        )
+        return current_evaluator, "self", "current"
+
+    try:
+        past_model, _payload = load_checkpoint(str(ckpt_path), device=device)
+        past_model.eval()
+        past_model = _maybe_compile(past_model, args.compile, worker_id)
+        past_evaluator = make_torch_evaluator(past_model, device)
+    except Exception as e:
+        print(
+            f"[{worker_id}] wave v{model_version} past-ckpt load failed "
+            f"({ckpt_path.name}: {e}); falling back to current",
+            flush=True,
+        )
+        return current_evaluator, "self", "current"
+
+    label = ckpt_path.stem  # e.g. "epoch0089"
+    print(
+        f"[{worker_id}] wave v{model_version} weights={label} (mix={mix_source})",
+        flush=True,
+    )
+    return past_evaluator, mix_source, label
+
+
+def _draw_poll_interval(
+    rng: np.random.Generator,
+    base_sec: float,
+    min_sec: float | None,
+    max_sec: float | None,
+) -> float:
+    """Resolve the per-worker poll interval (WL2 lever #3).
+
+    If neither min nor max is set, returns `base_sec` (no jitter). If only
+    one of min/max is set, the other defaults to `base_sec`. The interval
+    is sampled exactly once per worker lifetime.
+    """
+    lo = min_sec if min_sec is not None else base_sec
+    hi = max_sec if max_sec is not None else base_sec
+    if hi < lo:
+        lo, hi = hi, lo
+    if hi <= lo:
+        return float(lo)
+    return float(rng.uniform(lo, hi))
 
 
 def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_games: int):
@@ -249,6 +453,18 @@ def main() -> None:
     # so we only emit one batch per published weight version.
     last_gen_mtime = 0.0
 
+    # WL2 lever #3: each worker draws its own poll interval ONCE here.
+    poll_sec = _draw_poll_interval(
+        rng,
+        base_sec=args.weights_poll_sec,
+        min_sec=args.weights_poll_min_sec,
+        max_sec=args.weights_poll_max_sec,
+    )
+    print(
+        f"[{args.worker_id}] weights poll interval = {poll_sec:.1f}s",
+        flush=True,
+    )
+
     if args.wave_mode:
         games_on_version = 0
         next_seq = _next_wave_seq(out_dir, model_version, args.worker_id)
@@ -256,6 +472,22 @@ def main() -> None:
             f"[{args.worker_id}] wave-mode G={args.games_per_batch} "
             f"version={model_version} next_seq={next_seq}",
             flush=True,
+        )
+
+        # WL2 lever #2 wave-local state. `wave_evaluator` is what we generate
+        # against this wave; it's either the current evaluator or a temporary
+        # one wrapping a past checkpoint. `wave_mix_source` ("self"|"recent"
+        # |"history") and `wave_mix_label` (e.g. "current" or "epoch0089") are
+        # recorded in every game's payload so the trainer can aggregate
+        # per-wave mix composition. All three are (re)rolled at every wave
+        # boundary including this initial one before the loop starts.
+        wave_evaluator, wave_mix_source, wave_mix_label = _roll_wave_mix(
+            rng,
+            args,
+            current_evaluator=evaluator,
+            device=device,
+            model_version=model_version,
+            worker_id=args.worker_id,
         )
 
         while True:
@@ -281,23 +513,33 @@ def main() -> None:
                         f"mtime={weights_mtime:.0f} next_seq={next_seq}",
                         flush=True,
                     )
+                    # WL2 lever #2: new wave, new roll. Even if "self" is
+                    # chosen, this drops any past-checkpoint evaluator from
+                    # the prior wave so we don't leak old weights.
+                    wave_evaluator, wave_mix_source, wave_mix_label = _roll_wave_mix(
+                        rng,
+                        args,
+                        current_evaluator=evaluator,
+                        device=device,
+                        model_version=model_version,
+                        worker_id=args.worker_id,
+                    )
                 except Exception as e:
                     print(f"[{args.worker_id}] wave reload failed ({e}); retrying", flush=True)
-                    time.sleep(args.weights_poll_sec)
+                    time.sleep(poll_sec)
                     continue
 
             target_games = max(args.games_per_batch - games_on_version, 1)
             t0 = time.perf_counter()
-            records = _generate_records(args, evaluator, opp_picker, rng, target_games)
+            records = _generate_records(args, wave_evaluator, opp_picker, rng, target_games)
             dt = time.perf_counter() - t0
             batch_n += 1
 
-            n_examples = sum(len(r.examples) for r in records)
             paths: list[Path] = []
+            saved_examples = 0
             for record in records:
                 seq = next_seq
                 next_seq += 1
-                games_on_version += 1
                 payload = {
                     "records": [record],
                     "worker_id": args.worker_id,
@@ -309,16 +551,30 @@ def main() -> None:
                     "n_examples": len(record.examples),
                     "gen_s": dt / max(len(records), 1),
                     "batch_gen_s": dt,
+                    # WL2 lever #2 accounting. mix_source is "self" | "recent"
+                    # | "history"; mix_weights is the checkpoint label for
+                    # debugging (e.g. "epoch0089" or "current").
+                    "mix_source": wave_mix_source,
+                    "mix_weights": wave_mix_label,
                 }
-                paths.append(
-                    _atomic_save_wave_game(out_dir, args.worker_id, model_version, seq, payload)
+                saved = _atomic_save_wave_game(
+                    out_dir, args.worker_id, model_version, seq, payload
                 )
+                if saved is None:
+                    # Trainer ingested v{model_version} and cleaned the dir
+                    # between mkdir and write — drop the game. Outer loop
+                    # will pick up new weights on the next iteration.
+                    break
+                paths.append(saved)
+                games_on_version += 1
+                saved_examples += len(record.examples)
 
             print(
                 f"[{args.worker_id}] wave batch {batch_n}: v{model_version} "
-                f"{len(records)}g {n_examples}ex {dt:.1f}s "
+                f"{len(paths)}g {saved_examples}ex {dt:.1f}s "
                 f"seq {paths[0].stem if paths else '-'}..{paths[-1].stem if paths else '-'} "
-                f"tile_count={games_on_version}",
+                f"tile_count={games_on_version} "
+                f"mix={wave_mix_source}({wave_mix_label})",
                 flush=True,
             )
 
@@ -352,7 +608,7 @@ def main() -> None:
         # In gen-once-per-publish mode, only generate when the weights mtime has
         # advanced since our last batch. Otherwise sleep and re-poll.
         if args.gen_once_per_publish and cur_mtime <= last_gen_mtime:
-            time.sleep(args.weights_poll_sec)
+            time.sleep(poll_sec)
             continue
 
         # 2) generate a batch of games
