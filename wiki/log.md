@@ -526,3 +526,38 @@ consistent heading so future sessions can scan recent changes with simple tools.
   `/Users/jason/.claude/skills/gomoku-train/SKILL.md` with WL3 cell
   entry, eval interpretation gotchas, and an "ad-hoc match" recipe
   for `$CLAUDE_JOB_DIR`-style forensic tests.
+
+## [2026-05-21] notebook | WL3 crashed at e825 (NaN), WL3.1 launched with NaN guards
+
+- WL3 (wandb `0o75gws5`) crashed at e825 from native MCTS emitting NaN
+  visit-policies. All 8 workers died in sequence over ~15 min. Trainer
+  barrier-stalled forever. Full diagnosis at `$CLAUDE_JOB_DIR/wl3_nan_diagnosis.md`.
+  Run-end summary in [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL3 run end".
+- **Pre-crash WL3 was the strongest run in the WL series**: peak la4=68%
+  at e714 (>WL2's 62%), all three baselines climbing balanced together,
+  plies regrew 13→18. Crash was infrastructure failure, not training-
+  quality failure.
+- Two NaN fixes landed (`c5049be` + `0557671`): `_sample_action` guard
+  for the play path, plus pi sanitization at the trajectory-recording
+  path. The first fix alone was insufficient — NaN pi was being stored
+  into the buffer before `_sample_action` ran, poisoning the trainer's
+  cross-entropy targets. Found this during recovery attempt #1.
+- WL3.1 (wandb `i34ihwj9`) launched as fresh restart with both guards
+  in place. Identical cell config to WL3 (proven trajectory). Skipped
+  smoke since the only changes are NaN-fallback paths covered by pytest.
+- Old WL3 artifacts preserved as
+  `sweep_runs/WL3-random-openings.dead-e825/` and parallel sweep_logs/
+  for forensics.
+- Workspace refreshed to include WL3.1:
+  https://wandb.ai/jasonyandell-forge42/gomoku?nw=q5fg9ei2ash
+- Native MCTS NaN root cause is under parallel investigation (background
+  agent in worktree). The band-aids keep the run going while the C-level
+  fix lands.
+- **Skill update**: added "Unattended-run policy" section to
+  `~/.claude/skills/gomoku-train/SKILL.md` defining what kinds of
+  infrastructure fixes future sessions can apply autonomously during
+  monitoring (single-file <50 line process-death prevention + hot
+  resume), what requires human (training hyperparameter changes,
+  re-architecture). Also need to think about poisoning paths, not
+  just process-death paths — the WL3 recovery missed this and
+  burned the buffer for 9 epochs.

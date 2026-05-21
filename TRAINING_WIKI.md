@@ -2693,3 +2693,89 @@ question (Jason's 2026-05-21 observation) is resolved. If WL3's slow
 heuristic-crossing turns out to be an eval-distribution artifact,
 the queue priorities should re-orient around what we learn about
 training quality vs measurement quality.
+
+### WL3 run end — crashed at e825 (NaN in MCTS policy, 2026-05-21)
+
+Killed by infrastructure failure, not training quality. **Pre-crash WL3
+was the strongest run in the WL series**:
+
+- Peak la4 = 68% at e714 (higher than WL2's 62%, WL1 never sustained la4)
+- All three baselines climbing TOGETHER (h50/la2:25/la4:38 at e515) —
+  balanced strength profile, fundamentally different from WL1/WL2's
+  single-baseline spike pattern
+- Plies actually regrew: 13 → 18 across the run (first time in the
+  WL series; WL1/WL2 stayed pinned at 11)
+- elo climbed to 1434 at e801 — approaching Z's e3881 peak (1718) at
+  ~5× fewer epochs
+
+**Crash mechanism (NaN cascade — full diagnosis at
+`$CLAUDE_JOB_DIR/wl3_nan_diagnosis.md`):**
+
+1. At ~e825, native MCTS emitted a NaN visit-policy via `g.policy()` on
+   the first worker (w6). Then w5, w3, w1 over the next ~5 minutes, then
+   eventually all 8.
+2. Each worker crashed in `_sample_action` (`gomoku/self_play.py:47`)
+   because the old `if s <= 0` guard didn't catch NaN — NaN comparisons
+   return False, so the divide propagated NaN, and `rng.choice` rejected.
+3. Trainer barrier-stalled forever waiting on dead workers to publish to
+   v825.
+4. Recovery attempt #1 (during sleep window — applied band-aid at
+   `_sample_action`, resumed from epoch0825.pt) failed because the
+   band-aid didn't sanitize pi BEFORE storing it in trajectories. The
+   NaN-laden pi went into the training buffer, and within 9 epochs the
+   trainer logged `pl=nan` and corrupted all surviving checkpoints.
+5. `keep_last_n=3` had already pruned the healthy e825 — corrupt
+   checkpoints (e832/833/834) were all that remained.
+
+**Two fixes in main (`c5049be` + `0557671`):**
+
+- `_sample_action`: NaN guard via `not np.isfinite(s) or s <= 0` —
+  prevents worker death.
+- `_generate_games_native`: sanitize pi before storing in trajectories
+  (NaN → 0 + renormalize; all-NaN → uniform) — prevents buffer poison.
+
+Both fixes are safety nets, not root cause. The underlying MCTS NaN
+source is under parallel investigation.
+
+**What the WL3 wandb run preserved:**
+
+- wandb: `0o75gws5` — eval/loss timeline through e825 is intact; the
+  post-e825 NaN epochs are also in there but visually anomalous.
+- Workspace overlay: https://wandb.ai/jasonyandell-forge42/gomoku?nw=816incbozdx
+- Local artifacts moved to `sweep_runs/WL3-random-openings.dead-e825/`
+  and `sweep_logs/WL3-random-openings.dead-e825/` for forensics.
+
+**Lesson learned (filed in skill):** the "unattended infrastructure fix"
+policy worked for the worker-death fix but missed the trajectory-recording
+poisoning. Need to think about poisoning paths, not just process-death
+paths, when triaging infrastructure bugs. Skill updated 2026-05-21.
+
+## WL3.1 live run log (2026-05-21, wandb TBD)
+
+Restart of WL3 with the two NaN guards in place (`c5049be` + `0557671`).
+Identical cell config to WL3 (we know that's what produced WL3's
+trajectory). Fresh wandb run (rather than rewind-resume) for clean
+charts.
+
+**Setup**
+- wandb run: `i34ihwj9` (https://wandb.ai/jasonyandell-forge42/gomoku/runs/i34ihwj9)
+- cell: `WL3.1` in `scripts/run_sweep.py`. Same as WL3 + new code paths
+  (NaN guards in self_play.py).
+- baseline: `WL3` (wandb `0o75gws5`) — the run that died at e825. WL3.1
+  should reproduce the trajectory or come close (random seed + EMA
+  randomness make exact reproduction unlikely, but the shape should
+  match).
+
+**Question under test:**
+- Does WL3.1 reproduce WL3's pre-crash trajectory? (la4 peak ~e700,
+  all baselines climbing balanced)
+- Does the NaN crash recur? If yes, the band-aid lets us continue
+  running (workers fall back to argmax), but native-MCTS root cause
+  needs landing.
+
+**Live milestones**
+
+| epoch | wall | pl | vl | plies | elo | h% | la2% | la4% | note |
+|---|---|---|---|---|---|---|---|---|---|
+| TBD | | | | | | | | | populating from launch |
+
