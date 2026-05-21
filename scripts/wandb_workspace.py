@@ -17,7 +17,10 @@ ENTITY = "jasonyandell-forge42"
 PROJECT = "gomoku"
 
 # Runs to overlay. Add new run IDs here as they become interesting.
+# The view itself doesn't pin runs (workspaces API doesn't support that cleanly
+# from Python); these are the run IDs you click in the picker after opening.
 RUNS = {
+    "WL2 (scale-emulation: EMA + past-mix + jitter + grad-accum)": "9wng4yu9",
     "WL1 (wave-lockstep, native)": "l8mbntcm",
     "Z (continuous, python MCTS)": "sppjo3z5",
 }
@@ -109,14 +112,14 @@ def main() -> None:
     workspace = ws.Workspace(
         entity=ENTITY,
         project=PROJECT,
-        name="WL1 vs Z — live monitoring",
+        name="WL2 vs WL1 vs Z — live monitoring",
         sections=build_sections(),
     )
     saved = workspace.save()
     print(f"workspace URL:\n  {saved.url}")
-    print("\nTo overlay WL1 + Z in this workspace:")
-    print(f"  - top-left run picker, select both: {', '.join(RUNS.values())}")
-    print("  - or set the filter to: Run.id in [\"l8mbntcm\", \"sppjo3z5\"]")
+    print("\nTo overlay all three runs in this workspace:")
+    print(f"  - top-left run picker, select: {', '.join(RUNS.values())}")
+    print(f"  - or set the filter to: Run.id in [{', '.join(repr(r) for r in RUNS.values())}]")
 
 
 if __name__ == "__main__":

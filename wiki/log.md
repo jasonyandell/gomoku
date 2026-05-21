@@ -424,3 +424,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
   Tracked in [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL2 live run log"
   section. Add `9wng4yu9` to the wandb workspace run picker for three-way
   overlays with WL1 (`l8mbntcm`) and Z (`sppjo3z5`).
+
+## [2026-05-20] tooling | launch sequence runbook + skill update + 3-way workspace
+
+- Added [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md)
+  capturing the WL1+WL2 launch pattern as a reusable playbook: pre-launch
+  state check + the two known gotchas (MPS INT_MAX, worker race fix), title
+  card protocol, smoke test pattern, real launch + spin-up verify, wiki +
+  workspace updates, /loop monitoring cadence, and the fan-out-implementation
+  pattern that landed WL2 cleanly via two parallel agents in ~10min wall.
+- Updated `scripts/wandb_workspace.py` to include WL2 (`9wng4yu9`) alongside
+  WL1 (`l8mbntcm`) and Z (`sppjo3z5`). Fresh 3-way overlay view:
+  https://wandb.ai/jasonyandell-forge42/gomoku?nw=cz8thj3cbh5
+- Updated the `gomoku-train` user skill at
+  `/Users/jason/.claude/skills/gomoku-train/SKILL.md` to surface the production
+  cell-based launch path, the cell map (A-F / Z / Zc / WL1 / WL2 with wandb
+  ids), the two gotchas as Don'ts, and a pointer to the runbook for every
+  "start a run" type request. Single-process `gomoku.train` path stays
+  documented for ad-hoc smoke work.
