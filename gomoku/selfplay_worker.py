@@ -169,13 +169,24 @@ def _atomic_save_wave_game(
     version: int,
     seq: int,
     payload: dict,
-) -> Path:
+) -> Path | None:
+    """Persist one greedy-fill game. Returns None if the trainer cleaned up
+    `v{version}/` between mkdir and write — the game is dropped and the outer
+    loop should reload fresh weights on its next iteration."""
     worker_dir = out_dir / f"v{version}" / _worker_dir_name(worker_id)
-    worker_dir.mkdir(parents=True, exist_ok=True)
-    final = worker_dir / f"game{seq:06d}.pt"
-    tmp = worker_dir / f"game{seq:06d}.pt.tmp"
-    torch.save(payload, tmp)
-    os.replace(tmp, final)
+    try:
+        worker_dir.mkdir(parents=True, exist_ok=True)
+        final = worker_dir / f"game{seq:06d}.pt"
+        tmp = worker_dir / f"game{seq:06d}.pt.tmp"
+        torch.save(payload, tmp)
+        os.replace(tmp, final)
+    except (FileNotFoundError, OSError, RuntimeError) as e:
+        print(
+            f"[{worker_id}] drop wave game v{version} seq{seq}: "
+            f"{type(e).__name__}: {e}",
+            flush=True,
+        )
+        return None
     return final
 
 
@@ -292,12 +303,11 @@ def main() -> None:
             dt = time.perf_counter() - t0
             batch_n += 1
 
-            n_examples = sum(len(r.examples) for r in records)
             paths: list[Path] = []
+            saved_examples = 0
             for record in records:
                 seq = next_seq
                 next_seq += 1
-                games_on_version += 1
                 payload = {
                     "records": [record],
                     "worker_id": args.worker_id,
@@ -310,13 +320,21 @@ def main() -> None:
                     "gen_s": dt / max(len(records), 1),
                     "batch_gen_s": dt,
                 }
-                paths.append(
-                    _atomic_save_wave_game(out_dir, args.worker_id, model_version, seq, payload)
+                saved = _atomic_save_wave_game(
+                    out_dir, args.worker_id, model_version, seq, payload
                 )
+                if saved is None:
+                    # Trainer ingested v{model_version} and cleaned the dir
+                    # between mkdir and write — drop the game. Outer loop
+                    # will pick up new weights on the next iteration.
+                    break
+                paths.append(saved)
+                games_on_version += 1
+                saved_examples += len(record.examples)
 
             print(
                 f"[{args.worker_id}] wave batch {batch_n}: v{model_version} "
-                f"{len(records)}g {n_examples}ex {dt:.1f}s "
+                f"{len(paths)}g {saved_examples}ex {dt:.1f}s "
                 f"seq {paths[0].stem if paths else '-'}..{paths[-1].stem if paths else '-'} "
                 f"tile_count={games_on_version}",
                 flush=True,
