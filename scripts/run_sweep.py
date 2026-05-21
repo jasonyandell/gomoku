@@ -93,6 +93,10 @@ class Cell:
     opponent_mix_recent_window: int = 100         # lever #2: recent window size
     weights_poll_min_sec: float | None = None     # lever #3: poll-interval jitter min
     weights_poll_max_sec: float | None = None     # lever #3: poll-interval jitter max
+    # WL3 lever: K plies of uniform-random legal moves at game start. Training
+    # examples are NOT recorded for those K plies — MCTS picks up at K+1 and
+    # the model trains on post-random positions. Breaks opening monoculture.
+    random_opening_moves: int = 0
     extra_train_args: list[str] = field(default_factory=list)
     extra_worker_args: list[str] = field(default_factory=list)
 
@@ -185,6 +189,32 @@ CELLS: dict[str, Cell] = {
                 opponent_mix_recent_window=100,
                 weights_poll_min_sec=2.0,
                 weights_poll_max_sec=8.0),
+    # WL3: WL2 + K=2 random opening plies. WL2 reached higher peaks than WL1
+    # (la4=62% vs 52%) but exhibited the same arc-then-regression failure
+    # mode. Working theory: the four scale-emulation levers raised the
+    # ceiling by stabilizing the training feedback loop, but didn't address
+    # opening monoculture — even past-checkpoint mix delivers diverse brains
+    # that all share the same opening lineage. WL3 adds K=2 uniform-random
+    # legal moves at game start; training examples are NOT recorded for the
+    # random plies (per train.py:165-170), so the model just sees more
+    # diverse mid-game starting positions without learning broken-move signal.
+    "WL3": Cell("WL3-random-openings", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025,
+                save_buffer_every=100,
+                ema_tau=0.99,
+                grad_accum_steps=4,
+                opponent_mix_recent=0.4,
+                opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0,
+                weights_poll_max_sec=8.0,
+                random_opening_moves=2),
 }
 
 
@@ -246,6 +276,8 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         cmd += ["--ema-tau", str(cell.ema_tau)]
     if cell.grad_accum_steps > 1:
         cmd += ["--grad-accum-steps", str(cell.grad_accum_steps)]
+    if cell.random_opening_moves > 0:
+        cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
     return cmd
 
 
@@ -281,6 +313,8 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
         cmd += ["--weights-poll-min-sec", str(cell.weights_poll_min_sec)]
     if cell.weights_poll_max_sec is not None:
         cmd += ["--weights-poll-max-sec", str(cell.weights_poll_max_sec)]
+    if cell.random_opening_moves > 0:
+        cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
     return cmd
 
 
