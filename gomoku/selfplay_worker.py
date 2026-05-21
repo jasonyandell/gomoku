@@ -87,6 +87,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dirichlet-eps", type=float, default=0.25)
     p.add_argument("--random-opening-moves", type=int, default=0)
 
+    # WL5 archive-start lever (wiki/topics/wl5-diagnostics-archive-start-design.md).
+    # Per-game roll: with probability `--archive-start-frac` the game starts from
+    # a uniform-random position drawn from the archive instead of the empty board.
+    # Defaults disable the feature.
+    p.add_argument("--archive-start-path", type=str, default=None,
+                   help="Path to a .pt archive (torch.load dict with `planes`, "
+                        "`side`, `ply` tensors). Loaded once at worker startup. "
+                        "Enables WL5 archive-start when paired with "
+                        "--archive-start-frac > 0.")
+    p.add_argument("--archive-start-frac", type=float, default=0.0,
+                   help="Per-game probability of seeding from an archive position "
+                        "instead of the canonical empty board. Requires "
+                        "--archive-start-path. 0.0 disables.")
+
     # Opponent options (default self-play, but support vs-baseline like the trainer).
     p.add_argument("--opponent", type=str, default="self",
                    help="self / random / heuristic / defensive / pacifist / "
@@ -383,7 +397,8 @@ def _draw_poll_interval(
     return float(rng.uniform(lo, hi))
 
 
-def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_games: int):
+def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_games: int,
+                      archive: dict | None = None):
     if opp_picker is None:
         return generate_games(
             n_games, evaluator,
@@ -397,6 +412,8 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             rng=rng,
             wave_size=args.wave_size,
             random_opening_moves=args.random_opening_moves,
+            archive=archive,
+            archive_start_frac=args.archive_start_frac,
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
@@ -414,11 +431,30 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
     )
 
 
+def _load_archive(path: str | None, worker_id: str) -> dict | None:
+    if not path:
+        return None
+    archive = torch.load(path, map_location="cpu")
+    n = int(archive["planes"].shape[0])
+    print(
+        f"[{worker_id}] loaded archive {path} ({n} positions)",
+        flush=True,
+    )
+    return archive
+
+
 def main() -> None:
     args = parse_args()
     device = pick_device(args.device)
     print(f"[{args.worker_id}] device={device}", flush=True)
     print(f"[{args.worker_id}] weights={args.weights_path} output={args.output_dir}", flush=True)
+
+    archive = _load_archive(args.archive_start_path, args.worker_id)
+    if archive is not None and args.archive_start_frac > 0:
+        print(
+            f"[{args.worker_id}] archive-start enabled: frac={args.archive_start_frac}",
+            flush=True,
+        )
 
     model, weights_mtime, model_version = _load_model(args.weights_path, device)
     model = _maybe_compile(model, args.compile, args.worker_id)
@@ -531,9 +567,12 @@ def main() -> None:
 
             target_games = max(args.games_per_batch - games_on_version, 1)
             t0 = time.perf_counter()
-            records = _generate_records(args, wave_evaluator, opp_picker, rng, target_games)
+            records = _generate_records(
+                args, wave_evaluator, opp_picker, rng, target_games, archive=archive
+            )
             dt = time.perf_counter() - t0
             batch_n += 1
+            archive_started = sum(1 for r in records if getattr(r, "archive_start", False))
 
             paths: list[Path] = []
             saved_examples = 0
@@ -574,7 +613,8 @@ def main() -> None:
                 f"{len(paths)}g {saved_examples}ex {dt:.1f}s "
                 f"seq {paths[0].stem if paths else '-'}..{paths[-1].stem if paths else '-'} "
                 f"tile_count={games_on_version} "
-                f"mix={wave_mix_source}({wave_mix_label})",
+                f"mix={wave_mix_source}({wave_mix_label}) "
+                f"archive_started={archive_started}",
                 flush=True,
             )
 
@@ -613,8 +653,11 @@ def main() -> None:
 
         # 2) generate a batch of games
         t0 = time.perf_counter()
-        records = _generate_records(args, evaluator, opp_picker, rng, args.games_per_batch)
+        records = _generate_records(
+            args, evaluator, opp_picker, rng, args.games_per_batch, archive=archive
+        )
         dt = time.perf_counter() - t0
+        archive_started = sum(1 for r in records if getattr(r, "archive_start", False))
 
         # 3) atomic write
         n_games = len(records)
@@ -633,7 +676,8 @@ def main() -> None:
         last_gen_mtime = weights_mtime
         print(
             f"[{args.worker_id}] batch {batch_n}: {n_games}g {n_examples}ex "
-            f"{dt:.1f}s ({dt/n_games*1000:.0f} ms/game) -> {path.name}",
+            f"{dt:.1f}s ({dt/n_games*1000:.0f} ms/game) "
+            f"archive_started={archive_started} -> {path.name}",
             flush=True,
         )
 
