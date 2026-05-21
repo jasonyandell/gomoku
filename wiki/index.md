@@ -16,7 +16,8 @@ history.
 | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and aren't. Don't re-port "v2 storage" — we're already there. |
 | [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md) | Practical knobs and interpretation rules for Mac Activity Monitor perf experiments. |
 | [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | Why the wrinkles in our run (exploration arcs, plies swings, age oscillations) are laptop-scale artifacts, not training bugs. |
-| [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | Next run's design: per-version uniformity via wave-of-lockstep + greedy fill. Implementation plan and held-back levers. |
+| [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | WL1 design: per-version uniformity via wave-of-lockstep + greedy fill. Implementation plan and held-back levers. |
+| [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md) | WL2 design: emulate AZ-at-scale in-flight diversity via EMA self-play + past-checkpoint mix + worker poll jitter + grad accumulation. Motivated by WL1's high-frequency oscillation failure mode. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
 | [../scripts/wandb_workspace.py](../scripts/wandb_workspace.py) | Creates the 6-section wandb workspace tuned for WL1-vs-Z overlays. Live view: https://wandb.ai/jasonyandell-forge42/gomoku?nw=ul0vliphj6x |
 

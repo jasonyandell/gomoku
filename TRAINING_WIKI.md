@@ -2423,3 +2423,57 @@ than INT_MAX` because the 5M buffer × 17 planes × 81 cells (= 6.9B
 elements) exceeded the MPS dim-product limit. Cell renamed to
 `WL1-wave-lockstep-1p5M-buffer` and buffer dropped to 1.5M (matches Z,
 max-under-INT_MAX). Per Jason: 5M was arbitrary; 1.5M is fine.
+
+### WL1 run end — stopped at e1600 (~1h 18min wall, 2026-05-20)
+
+Stopped by user after the run made it clear the new failure mode
+wasn't going to self-correct.
+
+**Final state:**
+- e1600, 170,576 games, 12 race-drops handled cleanly across the run
+- pl=1.706, vl=0.012, plies=10.2 (never regrew)
+- Recent 5 evals: elo 776, 813, 620, 652, 871 — bouncing in 200-elo
+  range with no net climb
+- Final epoch: 2.9s (cycle time stable through the run)
+
+**Run shape, summarized:**
+
+| phase | epochs | what happened |
+|---|---|---|
+| spin-up | e1-100 | fast-attack collapse, plies 14 → 11, baselines pinned 0% |
+| arc 1 climb | e146-499 | rapid elo climb to 1281, la4 hit sustained 52%, heuristic 88% |
+| arc 1 trough | e500-605 | first consolidation, elo 1041 — *still* Z-e1854 class |
+| regression band | e600-1600 | strength bouncing 620-1140, **la4 regressed to ~5%**, no net climb |
+
+**Validated hypothesis (partial):** WL1 reached its arc-1 peak ~5-8×
+faster per epoch than Z and exposed strength tiers Z barely touched
+(la4 52% sustained at e499). The per-version-uniformity intervention
+is *necessary* and operationally works.
+
+**Refuted hypothesis (in this form):** removing per-version bias is
+*not sufficient* for stable training. WL1 replaced Z's
+800-1000-epoch consolidation arcs with high-frequency oscillation
+(20-100 epoch wavelength) that doesn't retain prior peaks. The model
+became more reactive, not more diverse.
+
+**Reframe:** the laptop setup is missing the *in-flight version
+diversity* that AZ-at-scale has by default (async publish lag, ~125k
+concurrent games, batch 4096). WL1 actually *removed* the partial
+version diversity Z had accidentally — one-version-per-tile is the
+most-feedback-prone config possible.
+
+**Next-run design:** [wiki/topics/wl2-scale-emulation-design.md](wiki/topics/wl2-scale-emulation-design.md)
+stacks four cheap laptop-side emulations of AZ-scale properties:
+EMA self-play weights, past-checkpoint opponent mix, worker poll
+jitter, gradient accumulation 4×. Hypothesis: combined, they dampen
+the WL1 oscillation enough that the model retains progress instead
+of bouncing.
+
+**Run artifacts:**
+- wandb: `l8mbntcm` (run preserved, not deleted)
+- workspace: https://wandb.ai/jasonyandell-forge42/gomoku?nw=ul0vliphj6x
+- checkpoints: `sweep_runs/WL1-wave-lockstep-1p5M-buffer/checkpoints/`
+- logs: `sweep_logs/WL1-wave-lockstep-1p5M-buffer/`
+- commits anchoring the run: `bd28670` (cell), `c296e49` (stem_padding),
+  `28f90bf` (wave-mode trainer), `0d2c106` (worker race-drop fix),
+  `0ab3d9d` (native MCTS)

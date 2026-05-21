@@ -384,3 +384,24 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Cross-ref: training notebook "WL1 live run log" section in
   [../TRAINING_WIKI.md](../TRAINING_WIKI.md) names the metrics each
   section is meant to surface.
+
+## [2026-05-20] notebook | WL1 stopped at e1600; WL2 scale-emulation design landed
+
+- WL1 ran 1h 18min wall, peaked elo 1281 at e360-499, then dropped into
+  a regression band (elo 620-1140, **la4 regressed from 52% to ~5%**).
+  Stopped by user when it was clear the new failure mode wasn't
+  self-correcting. Final state + arc breakdown in
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL1 run end — stopped at
+  e1600" entry.
+- Reframe: per-version uniformity is *necessary but not sufficient*. WL1
+  replaced Z's slow consolidation arcs with high-frequency oscillation
+  because removing per-version bias also removed the *in-flight version
+  diversity* that AZ-at-scale has by default (async publish lag, ~125k
+  concurrent games, batch 4096).
+- Filed next-run design at
+  [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md).
+  Four levers, each emulating one AZ-scale property:
+  EMA self-play weights (biggest single intervention), past-checkpoint
+  opponent mix, worker poll jitter, gradient accumulation 4×.
+  Implementation cost ~120 LoC, throughput hit ~5-15%.
+- Indexed from [index.md](index.md) Start Here.
