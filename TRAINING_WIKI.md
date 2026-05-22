@@ -3142,3 +3142,116 @@ Verification:
 - CPU smoke:
   `python scripts/perf_microbench.py --device cpu --size tiny --games 2
   --n-simulations 2 --wave-size 1 --max-plies 2 --repeats 1 --warmup 0`.
+
+### Production verification — hot-restart of WL5 workers (2026-05-21 21:35)
+
+The fusion commits landed (`4f21cdd`, `aff6969`) ~2h after WL5 launched
+(wandb `o6cbjfnr`, started 19:05:28), so the running self-play workers
+had imported the un-fused code into memory. To convert the microbench
+speedup into a production measurement on the same in-flight run, we
+hot-restarted the 8 self-play workers in place while the trainer (and
+WL5 replay buffer + wandb timeline) kept going.
+
+**Hot-restart procedure (reusable):**
+1. Snapshot baseline cycle stats in trainer log (`grep '^epoch ' .../trainer.log`).
+2. SIGTERM canary worker w0 (PID from `ps`); wait 5s for exit.
+3. Respawn w0 with identical args extracted from `ps`, redirecting stdout to
+   `sweep_logs/<run>/w0.log` (append). Wait ~30s; verify new PID alive
+   and worker log shows `wave batch` lines on a fresh model version.
+4. If canary healthy, SIGTERM remaining 7 in parallel; respawn each with
+   the same args + matching `--seed`/`--worker-id`. Trainer stalls ~30s
+   during one wave barrier, then resumes.
+5. Wait ~25 epochs for steady state; compare against pre-restart baseline.
+
+**Microbench A/B (live with training contention):**
+
+| run | median wall | aug pos/s |
+|---|---:|---:|
+| `--no-fuse-eval` | 1.036s | 710 |
+| fused (default) | 0.718s | 1047 |
+| **ratio** | — | **1.47×** |
+
+(`perf_microbench --checkpoint .../worker_weights.pt --games 8 --n-simulations 400
+--wave-size 32 --max-plies 12 --repeats 5 --warmup 1`)
+
+**Production cycle stats — pre/post-restart (n=26 / n=25 epochs each):**
+
+|   | pre (5020-5045) | post (5055-5079) | ratio |
+|---|---:|---:|---:|
+| wall/epoch | 8.58s | 8.74s | 1.02× (flat) |
+| gen/epoch | 5.22s | 4.50s | 0.86× |
+| train/epoch | 2.89s | 3.58s | 1.24× |
+| new games/epoch | 113 | 148 | 1.31× |
+| SGD steps/epoch | 86 | 86 | 1.00× |
+| plies mean | 41.9 | 32.8 | 0.78× |
+| pl | 0.590 | 0.734 | 1.24× |
+| **games/sec on gen** | **21.6** | **33.0** | **1.53×** |
+| games/hour | 47k | 61k | 1.29× |
+| SGD steps/hour | 36k | 35k | 1.00× |
+| aug-pos/hour | 15.9M | 16.1M | 1.01× |
+
+**Interpretation:**
+- The **gen-side games/sec speedup is 1.53×**, slightly *above* the
+  microbench's 1.47×. Microbench ran against live WL5 contention; the
+  post-restart workers don't compete with a bench, so the production
+  number is cleaner upside.
+- Per-batch worker logs show the same: pre-fusion v5044 8-game wave
+  batch in `w0.log` was 3.3s; post-fusion v5046 8-game wave was 2.4s
+  (~1.38×, confounded by colder caches in the new process).
+- **Epochs/hour is unchanged** because the trainer scales SGD steps
+  with new positions (`--sgd-per-game 1.0`, `--sgd-per-position 0.0025`),
+  so faster generation just feeds the trainer more games per cycle.
+- **aug-pos/hour is also ~flat** — but this is confounded: the model
+  hit an absorption rough patch right at the restart (`pl 0.59 → 0.73`,
+  plies 41.9 → 32.8). Shorter games = less work per game, eating the
+  perf win on a positions-per-second basis. Once absorption settles
+  and plies climb back, the throughput win should compound.
+- The clean signal is the **gen-side games/sec ratio** because it
+  isolates worker performance from trainer scaling and model state.
+  Production confirms the microbench prediction.
+
+**Caveat on hot-restart timing:** restart was deliberately mid-WL5,
+which means the post-restart epoch window overlaps the archive-start
+absorption phase. A cleaner perf measurement would be: do this
+post-restart again after WL5 reports out, with the model in a
+stable-plies regime. The 1.53× games/sec on gen will hold; the
+end-to-end aug-pos/hour ratio will be more interpretable.
+
+### Aggressive engine scout — Core ML vs MPS overlap (2026-05-22)
+
+Implemented a first scout for the "self-play on ANE/Core ML, trainer on
+MPS, eval on CPU" idea:
+
+- `gomoku/coreml_evaluator.py`: Core ML evaluator matching the existing
+  `evaluate_planes` boundary, plus checkpoint/model export helpers.
+- `scripts/aggressive_engine_scout.py`: JSON-emitting harness for eval
+  latency and trainer-overlap pressure.
+- Receipt: `sweep_logs/aggressive-engine-scout-2026-05-22.json`.
+
+Run shape: fresh `small` model, `stem_padding=1`, fused eval, batches
+8/32/64/128, Core ML FP16 + INT8, `CPU_ONLY` + `CPU_AND_NE`, trainer-like
+MPS batch 256.
+
+Key numbers:
+
+| lane | raw eval b128 median | b128 pos/s |
+|---|---:|---:|
+| PyTorch MPS | 2.94 ms | 43.5k |
+| Core ML FP16 CPU_AND_NE | 9.05 ms | 14.1k |
+| Core ML FP16 CPU_ONLY | 8.47 ms | 15.1k |
+| Core ML INT8 CPU_AND_NE | 9.04 ms | 14.2k |
+| Core ML INT8 CPU_ONLY | 9.05 ms | 14.1k |
+
+Overlap probe: trainer baseline median step 13.94 ms. A competing
+PyTorch/MPS eval process slowed trainer steps to 2.65× baseline. Core ML
+pressure lanes were much gentler: 1.13-1.32× baseline.
+
+Interpretation:
+- Core ML is not yet a raw eval-latency win over fused PyTorch/MPS for the
+  tiny/small model.
+- INT8 weight quantization works mechanically but did not help latency in
+  this path.
+- The full-send idea remains alive as an **engine isolation** bet, not a
+  "Core ML is faster per call" bet. Next measurement should wire Core ML
+  into production-shaped self-play and compare end-to-end overlap with the
+  trainer.

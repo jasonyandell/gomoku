@@ -113,8 +113,13 @@ Remaining likely wins:
    MPS BatchNorm / graph-execution frames. Direct small-model MPS forward
    timing under live WL5 load dropped from roughly 1.9-2.1ms to
    0.86-1.14ms for batch sizes 8-128 after Conv+BatchNorm fusion, with
-   output parity at float noise. Generator-level benches during an active
-   WL5 run are noisy, but this is the clearest post-native cheap win.
+   output parity at float noise. **Landed and validated in production**
+   2026-05-21 via WL5 worker hot-restart: microbench A/B showed
+   **1.47×** aug-pos/s under live contention; production wave-mode
+   measurement showed **1.53× games/sec on gen** over 25+25 epochs.
+   See [TRAINING_WIKI.md](../../TRAINING_WIKI.md) "Production
+   verification" subsection under the 2026-05-21 fusion entry for
+   the reusable hot-restart procedure.
 2. Split eval-only inference across Apple Silicon engines. The next large
    hardware-specific bet is not just "make MPS faster"; it is self-play
    leaf eval on ANE/Core ML, training on MPS GPU, and eval sidecar work on

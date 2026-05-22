@@ -72,6 +72,70 @@ the current bottleneck is dispatch/graph overhead, not parameter memory.
 It is also easy to stage: a Core ML evaluator only needs to satisfy the
 existing `Evaluator.evaluate_planes` boundary.
 
+## First aggressive scout (2026-05-22)
+
+Implemented `gomoku/coreml_evaluator.py` plus
+`scripts/aggressive_engine_scout.py` and ran one bounded scout on the
+small model (`stem_padding=1`, fused eval, batches 8/32/64/128). Output
+receipt:
+`sweep_logs/aggressive-engine-scout-2026-05-22.json` (ignored artifact).
+
+Command shape:
+
+```bash
+python scripts/aggressive_engine_scout.py \
+  --size small --stem-padding 1 \
+  --batches 8,32,64,128 --warmup 2 --repeats 5 \
+  --coreml-precisions fp16,int8 \
+  --coreml-compute-units CPU_ONLY,CPU_AND_NE \
+  --train-batch-size 256 --train-warmup 6 \
+  --train-prewarm-steps 8 --train-steps 16 \
+  --overlap-batch 64 --pressure-warmup 2 --pressure-sleep-ms 0 \
+  --overlap-lanes torch_mps,coreml_fp16_CPU_AND_NE,coreml_fp16_CPU_ONLY,coreml_int8_CPU_AND_NE,coreml_int8_CPU_ONLY \
+  --output sweep_logs/aggressive-engine-scout-2026-05-22.json
+```
+
+Raw eval latency at batch 128:
+
+| lane | median | positions/sec |
+|---|---:|---:|
+| PyTorch MPS | 2.94 ms | 43.5k |
+| Core ML FP16 CPU_AND_NE | 9.05 ms | 14.1k |
+| Core ML FP16 CPU_ONLY | 8.47 ms | 15.1k |
+| Core ML INT8 CPU_AND_NE | 9.04 ms | 14.2k |
+| Core ML INT8 CPU_ONLY | 9.05 ms | 14.1k |
+| PyTorch CPU | 56.78 ms | 2.3k |
+
+Overlap probe (MPS trainer batch 256, median step baseline 13.94 ms):
+
+| pressure lane | train slowdown | pressure eval positions/sec |
+|---|---:|---:|
+| PyTorch MPS eval process | 2.65x | 8.7k |
+| Core ML FP16 CPU_AND_NE | 1.32x | 2.4k |
+| Core ML FP16 CPU_ONLY | 1.14x | 2.2k |
+| Core ML INT8 CPU_AND_NE | 1.19x | 3.1k |
+| Core ML INT8 CPU_ONLY | 1.13x | 2.3k |
+
+Interpretation:
+
+- Core ML is **not** a raw per-call speed win yet. Fused PyTorch/MPS is
+  still much faster for eval batches on this tiny model.
+- The three-engine idea survives because the contention story is very
+  different: a competing PyTorch/MPS eval process made trainer steps
+  ~2.65x slower, while Core ML pressure lanes were ~1.13-1.32x.
+- INT8 weight quantization worked mechanically, but did not improve raw
+  latency in this first scout. It may still matter if a different Core ML
+  conversion path actually lands on ANE; this run should not be read as
+  proof that ANE is exhausted.
+- Same-process threaded MPS eval pressure crashed Metal during smoke
+  (`commit an already committed command buffer`), so the scout now uses
+  spawned pressure processes, matching the production worker shape.
+
+Next move: make the Core ML lane production-shaped enough to measure
+generation throughput, not just naked eval calls. If CPU/ANE eval is slower
+per leaf but preserves trainer time, it may still win end-to-end when the
+trainer and self-play overlap.
+
 ## Implementation plan
 
 0. **Boundary scouting microbench** before any launch wiring:

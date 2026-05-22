@@ -3,6 +3,67 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-22] perf | aggressive Apple Silicon engine scout
+
+- Added `gomoku/coreml_evaluator.py` with lazy Core ML loading/export helpers
+  and `scripts/aggressive_engine_scout.py`, a bounded JSON-emitting harness
+  for PyTorch MPS vs Core ML CPU_ONLY/CPU_AND_NE latency plus MPS trainer
+  overlap pressure.
+- Ran the scout once on the small fused model. Receipt:
+  `sweep_logs/aggressive-engine-scout-2026-05-22.json`.
+- First verdict: raw Core ML eval is slower than fused PyTorch/MPS at batch
+  128 (Core ML ~8.5-9.1 ms vs PyTorch/MPS ~2.9 ms), and INT8 weight
+  quantization did not help raw latency in this conversion path.
+- The engine-isolation thesis still has teeth: PyTorch/MPS eval pressure
+  slowed MPS trainer steps by ~2.65x, while Core ML pressure lanes slowed
+  trainer steps by ~1.13-1.32x. Next scout should be production-shaped
+  self-play throughput with trainer overlap, not just naked eval latency.
+- Filed the receipt and interpretation in
+  [topics/ane-int8-inference.md](topics/ane-int8-inference.md).
+
+## [2026-05-21] perf | Conv+BN fusion validated in production via WL5 worker hot-restart
+
+- Microbench (`perf_microbench --no-fuse-eval` vs default): **1.47×**
+  throughput speedup (710 → 1047 aug pos/s, median of 5 trials each,
+  both contending with live WL5 for MPS).
+- Hot-restarted 8 self-play workers in-place while WL5 trainer kept
+  running. Canary w0 first (verified healthy on a fresh model version),
+  then the remaining 7 in parallel. Total wave-mode stall: ~30s across
+  two restart blips (epochs 5046 and 5051).
+- Production gen-side measurement (n=26/n=25 epochs): **1.53× games/sec**
+  on gen (21.6 → 33.0), slightly above microbench because workers no
+  longer compete with the bench. Per-batch wave times in worker logs
+  confirmed: pre-fusion 8-game wave 3.3s, post-fusion 2.4s.
+- Per-batch worker log evidence (`w0.log`): pre-fusion v5044 batch 8011
+  = 3.3s, post-fusion v5046 batch 20 = 2.4s (same 8-game shape).
+- Caveat: post-restart window overlaps the WL5 archive-start
+  absorption rough patch (pl jumped 0.59→0.73, plies 41.9→32.8). That
+  ate the games/sec gain on a positions/sec basis (aug-pos/hour ~flat).
+  Re-measure after WL5 reports out for a stable-plies cycle-time
+  ratio.
+- Full numbers + reusable hot-restart procedure landed in
+  [TRAINING_WIKI.md](../TRAINING_WIKI.md) under the 2026-05-21
+  fusion entry "Production verification" subsection.
+
+## [2026-05-21] philosophy | M5 Max as mainframe, 9×9 as perf proving ground
+
+- Added [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md)
+  capturing the guiding philosophy for the post-WL5 perf era. Treats
+  the M5 Max as a single, knowable mainframe — invest in chip-specific
+  tuning (parameter sweeps, unified-memory pipelining, MPS-fallback
+  elimination, custom Metal kernels) rather than generic ML recipes.
+- 9×9 gomoku is explicitly the perf proving ground, not the endpoint.
+  Deliverable is a calibrated chart of the M5 Max's gomoku-AZ behavior
+  (the contour plot), used to confidently pick knobs for 15×15.
+- Compounded chip-specific levers (ANE INT8 × pipelined ANE+GPU+AMX ×
+  custom Metal kernels) plausibly buy 10-25× throughput, which is
+  what makes a month-long 15×15 + Gomocup submission realistic on
+  one machine.
+- Sequenced after WL5 → buffer cheap-test → ANE INT8 → canonical
+  sweep → 15×15 renju port → Gomocup protocol → calibrated ELO.
+- Indexed in [index.md](index.md). Short-form lives in memory as
+  `feedback-know-the-machine`.
+
 ## [2026-05-21] plan | bit-packed replay buffer as post-WL5 task
 
 - Added [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md)

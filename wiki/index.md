@@ -23,6 +23,7 @@ history.
 | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | Operational recipe for `scripts/mine_validation_archive.py` — buckets, knobs, throughput, anti-patterns. Reuse this every time we need a fresh validation archive. |
 | [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Post-WL5 task: split eval-only inference off the MPS training path. Target shape: self-play on ANE/Core ML, training on MPS GPU, eval sidecar on CPU/BNNS. Starts with INT8/FP16 Core ML calibration against the WL5 validation archive. |
 | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 task: bit-pack the planes (binary stones) + FP16 the pi to shrink per-position storage 17×. Practical packed target on the 48 GB M5 Max is ~250-300k games; 1M games needs sparse game-level storage or larger RAM. ~3 days; cheap-test first before refactoring. |
+| [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | Guiding philosophy for the post-WL5 perf era: treat the M5 Max as a knowable mainframe, 9×9 gomoku as the perf proving ground, with the goal of a calibrated chip-behavior chart before committing to a 15×15 + Gomocup run. Compounded chip-specific levers (ANE INT8 + pipelined ANE/GPU/AMX + Metal kernels) targeting 10-25× throughput. |
 | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | Reusable playbook for kicking off a training run. Pre-launch checks (incl. MPS INT_MAX + worker race gotchas), title card → ACK, smoke, real launch, wiki + workspace updates, /loop monitoring cadence, fan-out implementation pattern. |
 | [topics/playing-the-model.md](topics/playing-the-model.md) | How to actually play a trained checkpoint: local web UI (strongest), live SPA (convenient), which checkpoint to pick, knobs that matter, common annoyances. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
@@ -53,6 +54,10 @@ read is:
   forward/backward on MPS, and eval sidecar work on CPU/BNNS so the
   three heavy lanes stop fighting for one accelerator path; see
   [topics/ane-int8-inference.md](topics/ane-int8-inference.md).
+- First engine scout says Core ML is slower than fused PyTorch/MPS for raw
+  small-model eval, but it hurts concurrent MPS training far less than a
+  competing PyTorch/MPS eval process. Treat the next step as a production
+  overlap experiment, not a naked eval microbench.
 - The main training failure mode is fast-attack collapse: policy targets sharpen
   around attacks, self-play opponents fail to punish missing defense, and fixed
   heuristic/lookahead opponents expose the gap.
