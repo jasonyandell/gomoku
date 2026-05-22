@@ -1,0 +1,51 @@
+{
+  "template": "ml-perf",
+  "maxWorkers": 5,
+  "resourceLimits": {
+    "gpu": 1,
+    "cpu": 3,
+    "code": 3,
+    "wiki": 1
+  },
+  "defaultHeats": ["hot", "active", "warm"],
+  "baseBranch": "main",
+  "wikiFiles": [
+    "AGENTS.md",
+    "wiki/index.md",
+    "TRAINING_WIKI.md",
+    "wiki/topics/activity-monitor-perf-runbook.md",
+    "wiki/topics/mcts-perf-ceiling.md",
+    "wiki/topics/ane-int8-inference.md",
+    "wiki/ops/status.md",
+    "wiki/ops/frontier.md",
+    "wiki/ops/baselines.md",
+    "wiki/ops/experiment-ledger.md",
+    "wiki/ops/test-ledger.md"
+  ],
+  "workerEnv": {
+    "PYTORCH_ENABLE_MPS_FALLBACK": "1",
+    "PYTHONUNBUFFERED": "1"
+  },
+  "validationCommands": {
+    "quickSmoke": "pytest -q",
+    "cpuMicrobench": "python scripts/perf_microbench.py --device cpu --size tiny --games 2 --n-simulations 2 --wave-size 1 --max-plies 2 --repeats 1 --warmup 0",
+    "mpsMicrobench": "python scripts/perf_microbench.py --device mps --size small --stem-padding 1 --games 8 --n-simulations 400 --wave-size 64 --max-plies 16 --repeats 3"
+  },
+  "receiptRequiredFields": [
+    "lane",
+    "hypothesis",
+    "code_ref",
+    "baseline_command",
+    "candidate_command",
+    "hardware",
+    "seed",
+    "baseline_metric",
+    "candidate_metric",
+    "delta",
+    "confidence",
+    "artifacts",
+    "commands_run",
+    "decision",
+    "next_action"
+  ]
+}

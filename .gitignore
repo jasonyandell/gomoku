@@ -20,6 +20,11 @@ sweep_logs/
 .DS_Store
 .claude/
 
+# Frontier lab runtime artifacts (keep .frontier/config.json and lanes.json tracked)
+.frontier/runs/
+.frontier/worktrees/
+.frontier/tmp/
+
 # app/ (Vite + TS SPA)
 node_modules/
 app/dist/

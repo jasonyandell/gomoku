@@ -1,0 +1,89 @@
+[
+  {
+    "id": "baseline-harness",
+    "title": "Baseline perf harness",
+    "stage": "seeded",
+    "heat": "hot",
+    "resource": "code",
+    "goal": "Make the current benchmark/eval surfaces easy to run, compare, and cite before changing hot paths.",
+    "nextAction": "Inventory scripts/perf_microbench.py, sweep log summaries, and the smallest CPU/MPS smoke commands; write a baseline receipt and any missing harness notes.",
+    "doneShape": [
+      "baseline command is named",
+      "metric fields are named",
+      "artifact path convention is named",
+      "wiki/ops/baselines.md is updated"
+    ]
+  },
+  {
+    "id": "selfplay-throughput",
+    "title": "Self-play throughput hot path",
+    "stage": "open",
+    "heat": "hot",
+    "resource": "gpu",
+    "goal": "Improve or falsify improvement ideas for production-shaped self-play throughput on Apple Silicon.",
+    "nextAction": "Use existing perf runbooks to compare baseline vs one candidate under bounded production-shaped microbench; do not chase Activity Monitor percent without wall-clock delta.",
+    "doneShape": [
+      "paired baseline/candidate commands",
+      "games/sec and positions/sec delta",
+      "native/Python fallback flags recorded",
+      "decision promote/reject/repeat"
+    ]
+  },
+  {
+    "id": "engine-isolation",
+    "title": "Apple Silicon engine isolation",
+    "stage": "open",
+    "heat": "warm",
+    "resource": "gpu",
+    "goal": "Test whether eval-only inference should move off competing PyTorch/MPS paths via Core ML / ANE / CPU lanes.",
+    "nextAction": "Map the aggressive engine scout evidence and propose the next production-overlap experiment, not a naked latency-only bench.",
+    "doneShape": [
+      "overlap metric named",
+      "raw latency and trainer-pressure metrics separated",
+      "Core ML / MPS / CPU choice has evidence"
+    ]
+  },
+  {
+    "id": "outer-loop-python",
+    "title": "Outer self-play loop profiling",
+    "stage": "open",
+    "heat": "warm",
+    "resource": "cpu",
+    "goal": "Find post-native Python overhead outside the C MCTS search boundary before another native pass.",
+    "nextAction": "Profile action sampling, trajectory staging, D4 augmentation, record creation, and worker loop overhead using bounded commands.",
+    "doneShape": [
+      "profile command and artifact",
+      "top owners with percentages",
+      "candidate next 10-20% change or no-op verdict"
+    ]
+  },
+  {
+    "id": "training-quality-guardrails",
+    "title": "Training quality guardrails",
+    "stage": "open",
+    "heat": "active",
+    "resource": "cpu",
+    "goal": "Ensure perf wins do not silently damage strength, plies, archive metrics, or reproducibility.",
+    "nextAction": "Define the minimum eval/validation receipt required before promoting a perf change that touches training or inference behavior.",
+    "doneShape": [
+      "fixed baseline opponent or archive gate named",
+      "short-eval noise caveat documented",
+      "promotion rule added to experiment ledger"
+    ]
+  },
+  {
+    "id": "wiki-curation",
+    "title": "Perf wiki control room",
+    "stage": "seeded",
+    "heat": "active",
+    "resource": "wiki",
+    "goal": "Keep frontier, baseline, experiment ledger, and status pages current as worker receipts land.",
+    "nextAction": "Curate completed receipts into wiki/ops pages and promote the next BFS lane.",
+    "doneShape": [
+      "wiki/ops/status.md current",
+      "wiki/ops/frontier.md current",
+      "experiment-ledger has receipts",
+      "test-ledger has commands/results"
+    ]
+  }
+]

@@ -3,6 +3,15 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-22] ops | frontier-lab ML perf control room seeded
+
+- Added project-local pi frontier-lab setup under `.pi/` plus machine-readable
+  `.frontier/config.json` and `.frontier/lanes.json`.
+- Seeded `wiki/ops/` control-room pages for status, frontier, baselines,
+  experiment receipts, test ledger, and open notes.
+- Indexed the frontier-lab ops pages so future performance fanout starts from
+  maintained baseline/receipt surfaces instead of raw chat state.
+
 ## [2026-05-21] run | WL5 phase-1 closed at e5051 (un-fused-workers era)
 
 - Closed the pre-fusion era of WL5 as a discrete chapter. WL5 phase 1
