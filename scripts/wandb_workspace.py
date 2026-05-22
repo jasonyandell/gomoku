@@ -20,8 +20,9 @@ PROJECT = "gomoku"
 # The view itself doesn't pin runs (workspaces API doesn't support that cleanly
 # from Python); these are the run IDs you click in the picker after opening.
 RUNS = {
-    "WL3.1 (restart with C-level NaN fix + Python band-aids)": "44cxzc9d",
-    "WL3.1 first try (Python band-aids only; superseded at e92)": "i34ihwj9",
+    "WL5 (diagnostics + archive-start, resumed from WL4 e4024)": "o6cbjfnr",
+    "WL4 (no random openings; plateau-end e4024 ATH=1841)": "44cxzc9d",
+    "WL3.1 (random openings + C-level NaN fix; paused e1536)": "44cxzc9d",
     "WL3 (WL2 + K=2 random opening plies; died e825 NaN)": "0o75gws5",
     "WL2 (scale-emulation: EMA + past-mix + jitter + grad-accum)": "9wng4yu9",
     "WL1 (wave-lockstep, native)": "l8mbntcm",
@@ -98,6 +99,38 @@ def build_sections() -> list[ws.Section]:
                 line("cumulative games", ["total_games"]),
             ],
         ),
+        # 7. WL5 diagnostics — validation archive scoring + H/KL decomposition
+        ws.Section(
+            name="7. WL5 — validation archive + H/KL decomposition",
+            panels=[
+                line("val/policy_ce (overall + per-bucket)",
+                     ["val/policy_ce",
+                      "val/policy_ce/hard_kl_selfplay",
+                      "val/policy_ce/hard_kl_heuristic",
+                      "val/policy_ce/hard_kl_lookahead2",
+                      "val/policy_ce/hard_kl_lookahead4",
+                      "val/policy_ce/long_defense",
+                      "val/policy_ce/canonical_opening",
+                      "val/policy_ce/high_kl"]),
+                line("val/policy_kl + val/policy_acc",
+                     ["val/policy_kl", "val/policy_acc"]),
+                line("val/value_mse (overall + per-bucket)",
+                     ["val/value_mse",
+                      "val/value_mse/hard_kl_lookahead4",
+                      "val/value_mse/long_defense",
+                      "val/value_mse/canonical_opening"]),
+                line("train: H(pi_mcts), H(p_net), KL — central interpretive split",
+                     ["train/policy_target_entropy",
+                      "train/policy_net_entropy",
+                      "train/policy_kl"]),
+                line("per-color policy CE",
+                     ["train/policy_ce/side_0", "train/policy_ce/side_1"]),
+                line("per-ply-bucket policy CE",
+                     ["train/policy_ce/ply_00_10",
+                      "train/policy_ce/ply_10_25",
+                      "train/policy_ce/ply_25_60"]),
+            ],
+        ),
     ]
 
 
@@ -115,7 +148,7 @@ def main() -> None:
     workspace = ws.Workspace(
         entity=ENTITY,
         project=PROJECT,
-        name="WL2 vs WL1 vs Z — live monitoring",
+        name="WL5 vs WL4 vs WL3.1 vs Z — live monitoring",
         sections=build_sections(),
     )
     saved = workspace.save()

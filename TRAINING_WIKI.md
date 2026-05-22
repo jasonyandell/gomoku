@@ -2983,3 +2983,101 @@ diagnostics first (fixed validation archive, H/KL split, per-color
 metrics), then behavioral lever (archive-start diversity: 10-25% of
 self-play games from curated trouble states). NOT a simple parameter
 tweak — needs design + code work before launch.
+
+---
+
+## 2026-05-21 — WL5 launched (diagnostics + Go-Exploit archive-start)
+
+**wandb:** `o6cbjfnr`
+**cell:** `WL5-diagnostics-archive-start` (`scripts/run_sweep.py`)
+**resume parent:** WL4 `latest.pt` at e4024 (stripped of `wandb_run_id` so WL5
+gets its own clean timeline)
+**design:** [wiki/topics/wl5-diagnostics-archive-start-design.md](wiki/topics/wl5-diagnostics-archive-start-design.md)
+
+**What's different vs WL4:**
+1. **Validation archive scoring** every `eval_every` cycles against a
+   frozen 1400-position archive mined from WL4 (7 buckets, 200 each;
+   see [wiki/topics/mining-validation-archives.md](wiki/topics/mining-validation-archives.md)).
+   Logs `val/policy_ce`, `val/policy_kl`, `val/value_mse`, `val/policy_acc`
+   plus per-bucket variants. Separates *target-distribution noise* from
+   *learning gap* across cycles.
+2. **H/KL decomposition** of policy loss per train step: logs
+   `train/policy_target_entropy`, `train/policy_net_entropy`,
+   `train/policy_kl`. The central interpretive question from
+   [loss-floor-bouncing.md](wiki/topics/loss-floor-bouncing.md).
+3. **Per-color and per-ply-bucket metrics**:
+   `train/policy_ce/side_{0,1}`, `train/value_mse/side_{0,1}`, plus
+   ply buckets `[0,10)`, `[10,25)`, `[25,60)`.
+4. **Archive-start lever (15% frac)**: each game-start in workers rolls
+   U(0,1); if < 0.15 AND archive loaded, initialize the native MCTS game
+   state from a curated trouble position instead of empty board. Go-Exploit
+   pattern (Trudeau & Bowling 2023). Recorded with `archive_started` per
+   wave for transparency.
+
+**Levers preserved from WL4:** EMA τ=0.99, past-mix 0.4/0.1, poll jitter
+2-8s, grad-accum 4×, K=0 (no random opening plies).
+
+**Bugs hit + fixed before stable launch:**
+1. **High_kl bucket had ply=0 on every position** — replay buffer loader
+   zero-fills missing tags on backward-compat path; the mine script
+   inherited the zeros. Archive-start games then had move_count=0 but
+   ~50 stones on board → MCTS's `move_count >= N_ACTIONS` terminal gate
+   never fired → C extension's `select_action` returned action 0 on
+   full board (no legal moves) → `state_apply` raised "illegal move 0
+   on occupied square".
+2. **C-level safety net added**: `init_node_fields` now marks any node
+   with `legal_count == 0` as terminal (draw). Defends against any future
+   bad-input class hitting this same invariant.
+3. **C-level select_action default fixed**: best_action defaults to the
+   first legal action instead of 0; defends against pathological NaN W
+   propagation that could leave all scores as -inf/NaN.
+4. **Evaluator sanitize**: `gomoku/mcts.py` evaluator now `nan_to_num`s
+   priors and values before returning. Defense in depth against
+   pathological forward passes on archived positions.
+
+Fixes anchored in commit `dc8c38b`.
+
+**Initial state (epoch 4001-4007):**
+- pl 0.63-0.65, vl 0.10, plies 32-46 (matches WL4 defense regime)
+- ~9s/cycle (faster than WL4's 16-24s — possibly EMA warmup, or
+  resumption efficiency)
+- `archive_started` ≥1 firing on multiple workers (w4 batch 33 had 2;
+  w7 batch 35 had 3) — confirming 15% archive-start mix
+- past-mix: `mix=self(current)`, `mix=recent(epochNNNN)`,
+  `mix=history(epochNNNN)` all observed
+
+**Mining the archive** (replicate this for any future archive):
+```bash
+PYTHONUNBUFFERED=1 GOMOKU_DEVICE=mps PYTORCH_ENABLE_MPS_FALLBACK=1 \
+  python -u scripts/mine_validation_archive.py \
+    --wl4-checkpoint sweep_runs/WL4-no-random-openings.plateau-e4024/checkpoints/latest.pt \
+    --output archives/wl5_validation_v1.pt \
+    --target-per-bucket 200 --mcts-sims 200 --batch-games 64 \
+    --wave-size 8 --max-rounds 3
+```
+Wall: ~13 min. Buckets: hard_kl_{selfplay,heuristic,lookahead2,lookahead4}
+(top-K positions by `KL(p_net || pi_mcts)` per opponent),
+`long_defense` + `canonical_opening` from self-play, `high_kl` from the
+WL4 buffer top-K by KL. The "lost games" buckets in the original design
+were replaced with `hard_kl_*` — saturated models don't lose to weak
+baselines, but they always have positions where the prior disagrees
+with searched policy.
+
+**What to watch:**
+1. **`train/policy_kl` vs `train/policy_target_entropy`**: if KL floors
+   while H bounces → target-distribution noise (article's prediction
+   confirmed). If KL doesn't close → fittability gap (capacity bet
+   for next run).
+2. **`val/*` per-bucket trends**: long_defense val_ce dropping faster
+   than canonical_opening would confirm archive-start is unlocking
+   the deeper-state coverage gap.
+3. **`selfplay/plies_mean` past 50**: would push past WL4's defense ceiling.
+4. **External baseline trajectory vs WL4 ATH 1841 elo**: any sustained
+   move past 1841 would validate the lever quantitatively.
+
+**Failure modes to abort on:**
+- Sustained `selfplay/plies_mean` drop below 25 — fast-attack collapse.
+- `val/policy_ce` regression on canonical_opening — the diagnostic
+  archive is supposed to be a stable reference; regression there means
+  the model is forgetting basic play.
+- Any NaN/Inf reappearance in metrics.
