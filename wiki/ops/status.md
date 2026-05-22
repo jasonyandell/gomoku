@@ -4,15 +4,17 @@ This page is the current control-room summary for bounded Gomoku performance wor
 
 ## Current Focus
 
-The first perf frontier fanout (`20260522T054739Z`) finished all workers and was manually integrated after the manager hit a stale-UI-context bug. The current actionable lane is now post-native outer-loop Python profiling. GPU engine-overlap work is blocked until ANE rail proof can be repeated with `powermetrics`.
+Frontier run `20260522T061713Z` completed and integrated the post-native outer-loop Python profiling lane. The result is a **reject/no-op for another post-search Python native pass**: action sampling, trajectory staging, D4 augmentation, record creation, and file handoff together accounted for only ~4-5% of wall time in the bounded production-shaped profile.
+
+The next useful perf work is evaluator/engine isolation or deeper `native_search_batch` / evaluator-boundary investigation. Production engine-overlap remains blocked until ANE rail proof can be repeated with `powermetrics`; absent that, no unblocked hot perf lane should be promoted from this receipt.
 
 Use the frontier lab commands from pi:
 
 ```text
 /frontier-start --dry-run
-/frontier-start --max=1 --lane=outer-loop-python-profile
 /frontier-status
 /frontier-curate
+# If sudo/powermetrics is unblocked: /frontier-start --max=1 --lane=ane-residency-rail-proof
 ```
 
 ## Operating Rule
@@ -25,17 +27,18 @@ BFS by default: current-main baseline receipts and production contour are now do
 - Production contour is complete under `sweep_logs/production-contour-20260522/`: promote native small `8w x 8g`, `sims=400`, `wave=64` as the throughput default; reject fallback, `4w16g`, and `wave32` for throughput. `sims=200` and `tiny` are speed candidates only and need quality gates before behavior-changing use.
 - Quality promotion gates are codified in `wiki/ops/experiment-ledger.md`.
 - Core ML / ANE residency harness is integrated, but the lane is blocked for fresh proof because `sudo -n true` failed and `powermetrics required` could not run. Existing detached 934b artifacts remain useful candidates, not production proof.
+- Outer-loop profiling (`20260522T061713Z`) found the worker wall dominated by `native_search_batch` / evaluator time: wave-mode wall 1.064s, evaluator 0.896s (84.3%), native search excluding evaluator 0.117s (11.0%), and measured post-search Python 0.050s (4.7%). Decision: reject post-search Python optimization pass.
 - The frontier extension stale-UI-context failure was recovered manually and patched in commit `7e26e7c` so future completed background runs should not be marked failed solely because the command UI context expired.
 
 ## Active / Blocked Lanes
 
 | Lane | Status | Evidence / blocker |
 | --- | --- | --- |
-| Outer self-play loop profiling | hot / open | Next actionable CPU lane. Profile post-native worker-loop Python: sampling, trajectory staging, D4, record creation, and file handoff. |
+| Outer self-play loop profiling | completed / rejected | Run `20260522T061713Z`; no 10-20% post-search Python owner found. |
 | ANE residency rail proof | blocked | Needs cached/passwordless sudo for same-window `powermetrics` plus Vision positive control / CPU_ONLY negative. |
 | Production engine-overlap | blocked | Wait for ANE-metered or explicit CPU-only isolation candidate; do not launch from `CPU_AND_NE` labels alone. |
 | Replay-buffer width cheap test | warm / seeded | Post-WL5 ablation: 1.5M vs 750k buffer before bit-packing. |
 
 ## Next Action
 
-Start or dispatch `outer-loop-python-profile` as a single CPU lane. Keep GPU lanes blocked until the ANE rail-proof blocker is removed.
+Do not launch a D4/action-sampling/file-handoff native pass. Promote evaluator/engine overlap only after the ANE rail-proof blocker is removed, or open a narrowly-scoped `native_search_batch` / evaluator-boundary profiling lane if the manager wants another CPU-side perf fanout. Otherwise keep the replay-buffer cheap test warm until WL5 reports out.

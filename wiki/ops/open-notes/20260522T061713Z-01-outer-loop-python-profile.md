@@ -59,3 +59,7 @@ No blocker. No optimization candidate in the requested post-search Python surfac
 ## Board-update recommendation
 
 Curator can close `Outer self-play loop profiling` as `completed/reject-no-op`: post-search Python is too small in this bounded production shape. Recommend next hot lane be evaluator/engine overlap or deeper native_search_batch internals, not D4/action-sampling/file-handoff.
+
+## Curator note
+
+The worker receipt records raw JSON/log paths under `sweep_logs/outer-loop-profile-20260522T061713Z/`, but those files were not present in the main checkout after integration/worktree cleanup. Treat this open note and the worker receipt as the durable evidence for the reject/no-op decision; rerun the bounded profile command if exact JSON is needed.

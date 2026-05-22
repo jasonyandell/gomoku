@@ -13,9 +13,18 @@ This page is the human-readable board. The frontier lab extension claims lanes f
 | Core ML / ANE residency rail proof | blocked | blocked | gpu | Re-run only when `sudo -n true` passes; capture fresh Vision positive control plus CPU_ONLY negative and CPU_AND_NE cells. |
 | Training quality promotion gates | completed | done | cpu | Done; use `wiki/ops/experiment-ledger.md` gate for behavior-changing perf receipts. |
 | Perf wiki control room curation | completed | done | wiki | Done; stale active-run claims trimmed after manual recovery. |
-| Outer self-play loop profiling | open | hot | cpu | Next actionable lane: profile post-native worker-loop Python overhead. |
+| Outer self-play loop profiling | completed | done | cpu | Done in run `20260522T061713Z`; reject/no-op for post-search Python native pass. |
 | Production engine-overlap experiment | blocked-on-ane-residency | blocked | gpu | Do not launch until ANE proof or explicit CPU-only isolation candidate exists. |
 | Replay-buffer width cheap test | seeded | warm | cpu | After WL5 reports out, run 1.5M vs 750k buffer ablation before bit-packing. |
+
+## Completed Run 20260522T061713Z
+
+- Claimed lane: `outer-loop-python-profile`.
+- Integration status: worker branch merged (`5e20aaa` worker, `411ed75` integration).
+- Result: post-search worker-loop Python is too small for a 10-20% optimization lane in the bounded production-shaped profile.
+- Key wave-mode numbers: wall 1.064s; `native_search_batch` 1.013s / 95.2%; evaluator 0.896s / 84.3%; native search excluding evaluator 0.117s / 11.0%; all measured post-search Python 0.050s / 4.7%; file handoff 3.2%; D4 0.82%; action sampling 0.30%.
+- Decision: `reject` for action sampling / trajectory staging / D4 / record creation / file handoff optimization. Next perf attention belongs to evaluator/engine overlap or the native-search/evaluator boundary, with engine-overlap still blocked on ANE rail proof.
+- Open note: `wiki/ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md`.
 
 ## Completed Run 20260522T054739Z
 

@@ -85,11 +85,11 @@
   {
     "id": "outer-loop-python-profile",
     "title": "Outer self-play loop profiling",
-    "stage": "open",
-    "heat": "hot",
+    "stage": "completed",
+    "heat": "done",
     "resource": "cpu",
     "goal": "After native MCTS and eval fusion, identify remaining Python overhead outside the native search boundary before another native pass.",
-    "nextAction": "Profile action sampling, trajectory staging, D4 augmentation, record creation, file handoff, and worker loop overhead in a bounded production-shaped worker command; separate post-search Python from evaluator and native_search_batch time.",
+    "nextAction": "Completed in frontier run 20260522T061713Z. Reject/no-op for action sampling, trajectory staging, D4, record creation, and file handoff: measured post-search Python was only ~4-5% wall, while native_search_batch/evaluator owned ~95%.",
     "doneShape": [
       "profile command and artifact path are recorded",
       "top owners have percentages or wall-time shares",

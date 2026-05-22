@@ -20,6 +20,20 @@ python scripts/perf_microbench.py --device mps --size small --stem-padding 1 --g
 
 Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/sec, and positions/sec.
 
+### Outer-loop worker profile
+
+```bash
+python -m gomoku.selfplay_worker \
+  --weights-path sweep_logs/outer-loop-profile-20260522T061713Z/checkpoints/worker_weights.pt \
+  --output-dir sweep_logs/outer-loop-profile-20260522T061713Z/records-wave \
+  --worker-id profile --device mps --games-per-batch 8 \
+  --n-simulations 400 --wave-size 64 --max-plies 16 \
+  --wave-mode --seed 0 --max-batches 1 \
+  --profile-output sweep_logs/outer-loop-profile-20260522T061713Z/profile-mps-wave-mode-8g-s400-p16.json
+```
+
+Purpose: separate evaluator/native-search time from post-search Python in a bounded worker-shaped self-play batch. Use as a verifier only; it is not a training-quality or strength benchmark.
+
 ## Baseline Rows
 
 | Date | Commit | Hardware | Command | Metric | Result | Artifact |
@@ -32,6 +46,7 @@ Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/s
 | 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / CPU | CPU syntax smoke with `GOMOKU_DISABLE_NATIVE_MCTS=1` | native_mcts=false; native_state_ops=true; fused_eval=true | median 0.009s; 224.51 games/s; 3,592 aug pos/s; plies_mean 2.0 | `sweep_logs/frontier-baselines/20260522T054845Z/cpu-smoke-fallback.txt` |
 | 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / MPS, live WL5 contention | MPS production-shaped microbench, default native | native_mcts=true; native_state_ops=true; fused_eval=true | median 0.626s; 12.79 games/s; 1,637 aug pos/s; plies_mean 16.0 | `sweep_logs/frontier-baselines/20260522T054845Z/mps-microbench-native.txt` |
 | 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / MPS, live WL5 contention | MPS production-shaped microbench with `GOMOKU_DISABLE_NATIVE_MCTS=1` | native_mcts=false; native_state_ops=true; fused_eval=true | median 2.309s; 3.46 games/s; 443 aug pos/s; plies_mean 16.0 | `sweep_logs/frontier-baselines/20260522T054845Z/mps-microbench-fallback.txt` |
+| 2026-05-22 | `5e20aaa` worker / `411ed75` integrated | M5 Max class / MPS | outer-loop worker profile, wave-mode 8 games, 400 sims, wave 64, max 16 plies, seed 0 | wall-share owners | wall 1.064s; evaluator 0.896s / 84.3%; native search excl evaluator 0.117s / 11.0%; post-search Python 0.050s / 4.7%; file handoff 3.2%; D4 0.82%; action sampling 0.30% | `wiki/ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md` |
 
 ## Engine-Isolation / Residency References
 
@@ -48,3 +63,4 @@ Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/s
 - Record env flags such as `GOMOKU_DISABLE_NATIVE_MCTS=1`, `GOMOKU_DISABLE_NATIVE_STATE_OPS=1`, and `PYTORCH_ENABLE_MPS_FALLBACK=1`.
 - If a benchmark contends with a live training run, say so.
 - Current frontier artifact convention: raw command output under `sweep_logs/frontier-baselines/<timestamp>/`, plus a small `summary.tsv` or `summary.json` for ledger ingestion.
+- Outer-loop profile raw JSON/log paths are recorded in the worker receipt, but the durable curated citation is the open note. If exact JSON is needed, rerun the bounded worker profile command and keep the `sweep_logs/outer-loop-profile-*` directory outside the removed worker worktree.

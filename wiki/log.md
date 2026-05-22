@@ -3,6 +3,13 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-22] ops | frontier run 20260522T061713Z curated
+
+- Integrated `outer-loop-python-profile` receipt from run `20260522T061713Z` after worker merge (`5e20aaa`, integrated as `411ed75`). Marked the lane completed/rejected in `.frontier/lanes.json` and the ops board.
+- Curated the profile result into [ops/status.md](ops/status.md), [ops/frontier.md](ops/frontier.md), [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), and [ops/test-ledger.md](ops/test-ledger.md): bounded wave-mode worker profile wall 1.064s, evaluator 84.3%, native search excluding evaluator 11.0%, measured post-search Python 4.7%.
+- Preserved worker detail in [ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md](ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md). Added the artifact caveat: raw JSON/log paths named by the worker were not present in main after worktree cleanup, so rerun the bounded profile command if exact JSON is needed.
+- Promoted no unblocked post-search Python lane; next perf attention should be evaluator/engine overlap after ANE rail proof, or a narrowly scoped native-search/evaluator-boundary profile if the manager wants another CPU pass.
+
 ## [2026-05-22] ops | frontier run 20260522T054739Z manually recovered
 
 - Frontier workers all exited successfully, but the manager failed during integration with a stale UI context (`Extension ctx is stale after session replacement or reload`). Manually merged all five worker branches, resolved curation conflicts, removed the run worktrees/branches, and patched `.pi/extensions/frontier-lab/index.ts` so stale background UI handles no longer mark completed runs failed.

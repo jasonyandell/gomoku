@@ -105,3 +105,30 @@ decision: needs_repeat
 next_action: The ANE residency lane should integrate or reproduce 934b with exact commands, a nearby Vision positive control, CPU_ONLY negative control, and a production-overlap candidate before unblocking engine-overlap-production.
 
 ```
+
+### 2026-05-22 — outer-loop Python profile no-op
+
+```yaml
+lane: outer-loop-python-profile
+hypothesis: After native MCTS and eval fusion, remaining Python outside native search is large enough to justify another outer-loop native/format pass.
+code_ref: 5e20aaa0b331f32eadc1cd58707a3ccbf3e86e9d on frontier/20260522T061713Z/01-outer-loop-python-profile; integrated on main as 411ed758a12568691f92bc414ee425ae385015fd
+dataset_ref: fresh self-play from a freshly initialized small stem_padding=1 checkpoint; no training dataset or strength claim
+baseline_command: python -m gomoku.selfplay_worker --weights-path sweep_logs/outer-loop-profile-20260522T061713Z/checkpoints/worker_weights.pt --output-dir sweep_logs/outer-loop-profile-20260522T061713Z/records-wave --worker-id profile --device mps --games-per-batch 8 --n-simulations 400 --wave-size 64 --max-plies 16 --wave-mode --seed 0 --max-batches 1 --profile-output sweep_logs/outer-loop-profile-20260522T061713Z/profile-mps-wave-mode-8g-s400-p16.json
+candidate_command: no implementation candidate promoted; future candidates should use the same worker command and JSON profile diff, preferably repeated 3x
+hardware: macOS-26.4.1 arm64; Apple M5 Max class machine; device=mps; Python 3.12.13
+seed: 0
+baseline_metric: wave-mode bounded worker wall=1.064s for 8 games / 128 plies / 1024 augmented examples; native_search_batch=1.013s (95.2% wall); evaluator=0.896s (84.3% wall); native_search_excluding_evaluator=0.117s (11.0% wall); post_search_python=0.050s (4.7% wall); file_handoff=0.034s (3.2% wall); record_build=0.011s (1.0% wall); D4=0.0087s (0.82% wall); sample_action=0.0032s (0.30% wall)
+candidate_metric: non-wave cross-check wall=1.235s; evaluator=86.9%; native_search_excluding_evaluator=8.7%; post_search_python=4.4%; no post-search Python owner exceeds file handoff at ~3%
+delta: no 10-20% outer-loop Python opportunity found; deleting all measured post-search Python would cap at ~4-5% on this shape, while evaluator plus native search boundary owns ~95%
+confidence: low-to-medium; one bounded MPS run per shape on fresh random weights. Enough to reject a large post-search-Python pass, but repeat before citing exact percentages because raw JSON/log artifacts were not present in main after worker worktree cleanup.
+artifacts: wiki/ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md; .frontier/runs/20260522T061713Z/workers/01-outer-loop-python-profile/receipt.md; raw paths named in receipt under sweep_logs/outer-loop-profile-20260522T061713Z/
+commands_run:
+  - python -m py_compile gomoku/self_play.py gomoku/selfplay_worker.py
+  - python - <<'PY' ... build_model('small', stem_padding=1); save_checkpoint('sweep_logs/outer-loop-profile-20260522T061713Z/checkpoints/worker_weights.pt', m, epoch=0) ... PY
+  - python -m gomoku.selfplay_worker --weights-path sweep_logs/outer-loop-profile-20260522T061713Z/checkpoints/worker_weights.pt --output-dir sweep_logs/outer-loop-profile-20260522T061713Z/records --worker-id profile --device mps --games-per-batch 8 --n-simulations 400 --wave-size 64 --max-plies 16 --seed 0 --max-batches 1 --profile-output sweep_logs/outer-loop-profile-20260522T061713Z/profile-mps-wave8-s400-p16.json
+  - python -m gomoku.selfplay_worker --weights-path sweep_logs/outer-loop-profile-20260522T061713Z/checkpoints/worker_weights.pt --output-dir sweep_logs/outer-loop-profile-20260522T061713Z/records-wave --worker-id profile --device mps --games-per-batch 8 --n-simulations 400 --wave-size 64 --max-plies 16 --wave-mode --seed 0 --max-batches 1 --profile-output sweep_logs/outer-loop-profile-20260522T061713Z/profile-mps-wave-mode-8g-s400-p16.json
+  - python scripts/perf_microbench.py --device cpu --size tiny --games 2 --n-simulations 2 --wave-size 1 --max-plies 2 --repeats 1 --warmup 0
+  - pytest -q
+decision: reject
+next_action: Do not start another native pass for action sampling, trajectory staging, D4, record creation, or worker file handoff. Focus next perf work on evaluator/engine overlap after ANE rail proof, or a narrowly scoped native_search_batch/evaluator-boundary profile if needed.
+```
