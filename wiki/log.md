@@ -3,6 +3,24 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-21] plan | bit-packed replay buffer as post-WL5 task
+
+- Added [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md)
+  scoping a refactor that shrinks per-position storage 17× by bit-packing
+  the binary stones (currently float32) and using FP16 for pi.
+- Current buffer: 1.5M positions = 6,250 games at 8.2 GB on MPS. Packed
+  encoding at the same RAM footprint: 100k games (16× wider). At a 10 GB
+  CPU footprint: 1M games (Jason's target).
+- Motivated by WL5's archive-start absorption phase showing a real
+  loss bump — wider buffer smooths target-distribution shifts and
+  reduces need for EMA + past-mix kludges.
+- Cheap-test first: train 1.5M vs 750k buffer ablation for 500 epochs;
+  only do the refactor if halving meaningfully worsens stability.
+- ~3 days work. Do AFTER WL5 reports out, ideally after
+  [ANE INT8 inference](topics/ane-int8-inference.md) (the two don't
+  conflict but ANE pays off in cycle time immediately).
+- Indexed in [index.md](index.md).
+
 ## [2026-05-21] plan | ANE INT8 inference as post-WL5 task
 
 - Added [topics/ane-int8-inference.md](topics/ane-int8-inference.md)
