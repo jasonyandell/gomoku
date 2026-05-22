@@ -59,6 +59,9 @@ evidence.
 - Wiki index first, then the training notebook, then W&B/logs/checkpoints, then
   code. The training dynamics are subtle enough that code inspection alone is
   usually misleading.
+- Git hygiene is important here. For substantial work, use a dedicated
+  worktree, make small coherent commits as you go, merge the finished branch
+  back to `main`, push it, and remove the worktree when it is no longer needed.
 - File reusable answers back into the wiki. If a question produces a useful
   synthesis, add a topic page or update the index/log so the next session does
   not rediscover it from scratch.
