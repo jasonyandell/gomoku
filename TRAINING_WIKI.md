@@ -3255,3 +3255,115 @@ Interpretation:
   "Core ML is faster per call" bet. Next measurement should wire Core ML
   into production-shaped self-play and compare end-to-end overlap with the
   trainer.
+
+### WL5 phase-1 close — un-fused-workers era, e4001 → e5051 (2026-05-21, ~2.5h wall)
+
+Closing the pre-fusion era of WL5 as a discrete chapter. WL5 phase 1 ran
+from launch (`o6cbjfnr` start at 19:05:28) through e5051, at which point
+the 8 self-play workers were hot-restarted to pick up the Conv+BatchNorm
+eval fusion that landed in commit `4f21cdd` ~2h after launch. The wandb
+run, trainer process, replay buffer, and design hyperparameters are all
+**continuous** across the boundary — what changed at e5052 is purely the
+self-play inference path (1.53× games/sec on gen). That regime change is
+big enough that pre- vs post-boundary numbers are not directly comparable
+on per-epoch metrics, so phase 1 deserves its own framing.
+
+**Phase 1 final state (e5051):**
+- 1051 epochs of WL5 training (resumed from WL4 `e4024` checkpoint)
+- 123,453 games generated; replay buffer at 1.5M (full ring)
+- Last 10 evals (e4969-e5048): elo 1424-1738 (mean 1551), plies 30.4-46.9
+  (healthy defense range)
+- Phase-1 elo peak: **1784 at e4035** — landed only 34 epochs after
+  resume, i.e. it was still effectively the WL4 strength carrying over.
+  The lever's absorption shock arrived shortly after.
+- 0 NaN, 0 worker deaths, 0 barrier stalls
+
+**Phase 1 stats (n=1051 epoch lines):**
+
+| metric | value | vs WL4 plateau-end |
+|---|---:|---|
+| wall/epoch (median) | 8.70s | similar |
+| pl (mean) | 0.673 | **0.604 → 0.673, +11%** (absorption signature) |
+| vl (mean) | 0.082 | similar (0.090 → 0.082) |
+| plies (mean) | 38.6 | similar (40.0 → 38.6) |
+| elo (mean) | 1498 | regression from WL4 ATH 1841 |
+| epochs/hr | 414 | similar |
+
+**Run shape, summarized:**
+
+| phase | epochs | story |
+|---|---|---|
+| resume bleed-over | e4001-4035 | residual WL4 strength: elo hit 1784, then absorption shock began |
+| absorption descent | e4035-e4500 | pl climbed 0.60 → 0.75, elo dropped to 1300s, plies stayed 30-50 |
+| oscillating absorption | e4500-e5051 | pl bouncing 0.55-0.84, elo 1159-1738 on 88 evals (no clear trend), plies sustained 30-50 |
+
+**What was validated (as a lever-introduction shape):**
+- **Archive-start at 15% does not crash the run.** No NaN, no worker
+  death, no fast-attack plies collapse over 1051 epochs of operation.
+- **Diagnostic streams are populating cleanly.** Validation archive
+  per-bucket CE/KL recorded every cycle; H(pi_mcts) and
+  KL(pi_mcts || p_net) split logged; per-color and per-ply-bucket
+  metrics logged. The data the loss-floor-bouncing article asked for is
+  now collected at scale.
+- **The absorption-phase shape predicted by
+  [[feedback-absorption-phase]] held.** ~1000 epochs of external-baseline
+  regression after the new lever flipped on, plies in healthy range
+  throughout, pl bouncing above prior floor but without collapse. WL3.1
+  → WL4 (K=2 → K=0) had the same shape over ~500 epochs.
+- **The C MCTS robustness fixes (commit `dc8c38b`) held.** No
+  "illegal move on occupied square" crash recurrence in 1051 epochs.
+
+**What didn't happen (failure modes ruled out for this phase):**
+- No fast-attack collapse (plies never sustained below 25).
+- No worker death from archive-start position oddities.
+- No NaN reappearance.
+- No buffer poisoning shape (vl held steady, didn't trend down to trivial).
+- No barrier stall in the wave-mode coordinator.
+
+**What didn't (yet) happen that we were hoping for:**
+- elo did not push past WL4 ATH 1841 (peak 1784 was residual WL4 strength,
+  not a phase-1 advance).
+- Per-bucket val/policy_ce trends to confirm the lever is unlocking
+  long_defense have not been audited yet (data collected, analysis
+  pending).
+
+**Run artifacts:**
+- wandb: `o6cbjfnr` (continuous, includes phase 2). For phase-1-only
+  analysis, filter step ≤ 5051.
+- Trainer log: `sweep_logs/WL5-diagnostics-archive-start/trainer.log`
+  (phase 1 = epoch lines e4001 → e5051, ~1051 lines from start).
+- Worker logs: `sweep_logs/WL5-diagnostics-archive-start/w[0-7].log`
+  (phase 1 = entries before the restart timestamp ~21:35).
+- Checkpoint history rolls; `keep-last-n=3` means e5051 specifically is
+  no longer on disk. Phase 1 is fully captured in wandb.
+- Resume source preserved at
+  `sweep_runs/_resume_from/wl4_e4024_fresh_wandb.pt` (8.2 GB,
+  model+EMA+buffer from WL4).
+- Commits anchoring phase 1: `7bbe70a` (trainer instrumentation),
+  `cc6aa4e` / `8879254` (archive-start lever + cell wiring), `dc8c38b`
+  (mining + C robustness fixes), `d8cc58f` (hard_kl mining strategy +
+  recipe wiki), `bf130d0` (INST trainer machinery from worktree),
+  `aff6969` / `4f21cdd` (Conv+BN fusion — landed mid-run, kicks off
+  phase 2 once workers restart).
+
+**Phase 2 (what's running now, e5052+):**
+- Same wandb run, same trainer, same buffer, same design.
+- 8 self-play workers replaced in place with fused-inference processes
+  (PIDs 98749, 99565-99571).
+- Gen-side throughput up 1.53× (measured over n=25 post-restart epochs);
+  trainer absorbs the surplus as more games per cycle, so
+  epochs-per-hour is ~unchanged but games-per-hour is up ~1.29×.
+- Reading phase 2 metrics: pre-fusion per-epoch absolute numbers
+  (games/epoch, training-steps/epoch) are not directly comparable to
+  phase 1; epoch counter advances at the same rate but each epoch
+  embeds more work. For ratio comparisons across the boundary, use
+  rates per wallclock hour or per game, not per epoch.
+- Phase 2 stop condition unchanged: run to e9000, push only on collapse
+  / NaN / new ATH / canonical-opening regression.
+
+**Cross-refs:**
+- [wiki/topics/wl5-diagnostics-archive-start-design.md](wiki/topics/wl5-diagnostics-archive-start-design.md) — WL5 design as launched.
+- [wiki/topics/loss-floor-bouncing.md](wiki/topics/loss-floor-bouncing.md) — interpretive frame for phase 1's loss shape.
+- Production verification of the fusion that demarcates phase 1 from
+  phase 2 lives a few sections above ("Production verification — hot-restart
+  of WL5 workers (2026-05-21 21:35)").

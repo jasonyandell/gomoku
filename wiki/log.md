@@ -3,6 +3,29 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-21] run | WL5 phase-1 closed at e5051 (un-fused-workers era)
+
+- Closed the pre-fusion era of WL5 as a discrete chapter. WL5 phase 1
+  ran from launch (`o6cbjfnr`, 19:05:28) through e5051, then continued
+  as phase 2 from e5052 once 8 workers were hot-restarted with
+  Conv+BN-fused inference. Same wandb run, same trainer, same buffer,
+  same design — but gen-side throughput at e5052+ is **1.53× higher**,
+  which makes per-epoch absolute numbers (games/epoch, steps/epoch) not
+  directly comparable across the boundary. That regime shift justifies
+  framing phase 1 as its own closed-out chapter.
+- Phase 1 = 1051 epochs, ~2.5h wall, 123,453 games, ~414 epochs/hr,
+  zero NaN/crashes/worker deaths. Validated the archive-start lever
+  doesn't destabilize the pipeline; validated the diagnostic streams
+  populate cleanly; phase shape matched the [[feedback-absorption-phase]]
+  prediction (200-1000 epochs of absorption shock, plies stayed healthy).
+- Phase 1 elo peak of 1784 at e4035 was residual WL4 strength (34
+  epochs after resume); the rest of phase 1 was absorption with elo
+  oscillating 1159-1738 (mean 1498), pl mean 0.673 (up from WL4
+  plateau-end's 0.604), plies mean 38.6 (vs WL4's 40.0).
+- Phase 2 monitoring continues: stop when run hits e9000, or on
+  collapse / NaN / new ATH > 1841 / canonical-opening regression.
+  Full close-out entry in [TRAINING_WIKI.md](../TRAINING_WIKI.md).
+
 ## [2026-05-22] perf | aggressive Apple Silicon engine scout
 
 - Added `gomoku/coreml_evaluator.py` with lazy Core ML loading/export helpers
