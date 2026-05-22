@@ -55,7 +55,7 @@ import torch
 
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
-from gomoku.model import load_checkpoint
+from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import generate_games, generate_games_vs_baseline
 from gomoku.util import pick_device
 
@@ -186,7 +186,7 @@ def _load_model(weights_path: str, device: torch.device) -> tuple[torch.nn.Modul
     while not os.path.exists(weights_path):
         time.sleep(1.0)
     model, payload = load_checkpoint(weights_path, device=device)
-    model.eval()
+    model = fuse_model_for_inference(model)
     return model, os.path.getmtime(weights_path), int(payload.get("epoch", 0))
 
 
@@ -357,7 +357,7 @@ def _roll_wave_mix(
 
     try:
         past_model, _payload = load_checkpoint(str(ckpt_path), device=device)
-        past_model.eval()
+        past_model = fuse_model_for_inference(past_model)
         past_model = _maybe_compile(past_model, args.compile, worker_id)
         past_evaluator = make_torch_evaluator(past_model, device)
     except Exception as e:
@@ -537,7 +537,7 @@ def main() -> None:
             if games_on_version >= args.games_per_batch and cur_mtime > weights_mtime:
                 try:
                     model, payload = load_checkpoint(args.weights_path, device=device)
-                    model.eval()
+                    model = fuse_model_for_inference(model)
                     model = _maybe_compile(model, args.compile, args.worker_id)
                     evaluator = make_torch_evaluator(model, device)
                     weights_mtime = cur_mtime
@@ -631,7 +631,7 @@ def main() -> None:
         if cur_mtime > weights_mtime:
             try:
                 model, payload = load_checkpoint(args.weights_path, device=device)
-                model.eval()
+                model = fuse_model_for_inference(model)
                 model = _maybe_compile(model, args.compile, args.worker_id)
                 evaluator = make_torch_evaluator(model, device)
                 weights_mtime = cur_mtime

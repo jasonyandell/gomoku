@@ -21,8 +21,8 @@ history.
 | [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md) | WL2 design: emulate AZ-at-scale in-flight diversity via EMA self-play + past-checkpoint mix + worker poll jitter + grad accumulation. Motivated by WL1's high-frequency oscillation failure mode. |
 | [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) | WL5 design: 3 diagnostic streams (fixed validation archive, H/KL decomposition, per-color/ply metrics) + Go-Exploit-style archive-start lever (15% of self-play games from curated WL4 trouble positions). Resume from WL4 e4024. Targets the article's central interpretive distinction: target-distribution noise vs learning gap. |
 | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | Operational recipe for `scripts/mine_validation_archive.py` — buckets, knobs, throughput, anti-patterns. Reuse this every time we need a fresh validation archive. |
-| [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Post-WL5 task: port self-play + eval inference to Apple Neural Engine at INT8 via Core ML. ~50-60% faster cycle estimated; ~2 days work; uses WL5 validation archive as calibration set. KataGo precedent says board games tolerate INT8 with calibration. |
-| [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 task: bit-pack the planes (binary stones) + FP16 the pi to shrink per-position storage 17×. Lets us hold 16-160× more games at the same RAM footprint (current 6k games → 100k or 1M). ~3 days; cheap-test first before refactoring. |
+| [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Post-WL5 task: split eval-only inference off the MPS training path. Target shape: self-play on ANE/Core ML, training on MPS GPU, eval sidecar on CPU/BNNS. Starts with INT8/FP16 Core ML calibration against the WL5 validation archive. |
+| [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 task: bit-pack the planes (binary stones) + FP16 the pi to shrink per-position storage 17×. Practical packed target on the 48 GB M5 Max is ~250-300k games; 1M games needs sparse game-level storage or larger RAM. ~3 days; cheap-test first before refactoring. |
 | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | Reusable playbook for kicking off a training run. Pre-launch checks (incl. MPS INT_MAX + worker race gotchas), title card → ACK, smoke, real launch, wiki + workspace updates, /loop monitoring cadence, fan-out implementation pattern. |
 | [topics/playing-the-model.md](topics/playing-the-model.md) | How to actually play a trained checkpoint: local web UI (strongest), live SPA (convenient), which checkpoint to pick, knobs that matter, common annoyances. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
@@ -48,6 +48,11 @@ read is:
   eval-only Conv+BatchNorm fusion is wired into workers/play surfaces, while
   trainer models stay unfused; see
   [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
+- The next hardware-specific perf idea is engine partitioning, not just
+  faster kernels: keep self-play leaf eval on ANE/Core ML, trainer
+  forward/backward on MPS, and eval sidecar work on CPU/BNNS so the
+  three heavy lanes stop fighting for one accelerator path; see
+  [topics/ane-int8-inference.md](topics/ane-int8-inference.md).
 - The main training failure mode is fast-attack collapse: policy targets sharpen
   around attacks, self-play opponents fail to punish missing defense, and fixed
   heuristic/lookahead opponents expose the gap.

@@ -139,11 +139,11 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
     # in the fork.
     from gomoku.match import build_player, parse_spec
     from gomoku.mcts import make_torch_evaluator
-    from gomoku.model import load_checkpoint
+    from gomoku.model import fuse_model_for_inference, load_checkpoint
 
     if checkpoint_path:
         model, _ = load_checkpoint(checkpoint_path, device=device)
-        model.eval()
+        model = fuse_model_for_inference(model)
         evaluator = make_torch_evaluator(model, device)
         _WORKER_MODEL_PICKER = mcts_picker(
             evaluator, n_simulations=sims, c_puct=c_puct

@@ -36,7 +36,7 @@ import torch
 from gomoku.eval import mcts_picker, play_match_parallel, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
-from gomoku.model import load_checkpoint
+from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.rating import (
     ANCHOR_ELOS,
     baseline_spec_to_anchor_key,
@@ -123,7 +123,7 @@ def main() -> None:
 
     _wait_for_checkpoint(args.checkpoint_path, args.poll_sec)
     model, payload = load_checkpoint(args.checkpoint_path, device=device)
-    model.eval()
+    model = fuse_model_for_inference(model)
     last_mtime = os.path.getmtime(args.checkpoint_path)
 
     cycle_n = 0
@@ -213,7 +213,7 @@ def main() -> None:
             if cur > last_mtime:
                 try:
                     model, payload = load_checkpoint(args.checkpoint_path, device=device)
-                    model.eval()
+                    model = fuse_model_for_inference(model)
                     last_mtime = cur
                     break
                 except Exception as e:

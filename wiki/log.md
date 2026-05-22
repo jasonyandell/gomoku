@@ -796,3 +796,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Appended the evidence and verification receipt to
   [../TRAINING_WIKI.md](../TRAINING_WIKI.md) and updated
   [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
+
+## [2026-05-22] design | three-engine Apple Silicon perf split
+
+- Expanded [topics/ane-int8-inference.md](topics/ane-int8-inference.md) from
+  a narrow ANE INT8 conversion task into a three-engine pipeline design:
+  self-play leaf eval on ANE/Core ML, trainer forward/backward on MPS GPU,
+  eval sidecar/match probes on CPU via Core ML CPU-only or Accelerate/BNNS,
+  and native MCTS tree work in the C extension.
+- Captured the key correction to the "unified memory" intuition: the likely
+  win is accelerator isolation, not assuming one PyTorch tensor object can
+  pass zero-copy through PyTorch MPS, Core ML, and BNNS without runtime/layout
+  boundaries.
+- Added a boundary-scouting microbench before launch wiring: fixed-checkpoint
+  FP16/INT8 conversion, batch latency at 8/32/64/128/256, conversion/compile/
+  load timing, and an overlap test while MPS trainer work is active.
+- Updated [index.md](index.md) so future perf sessions route to the engine
+  partitioning idea directly, and corrected the buffer-bit-packing index
+  summary to match the 48 GB M5 Max math.

@@ -107,12 +107,25 @@ wave callback.
 
 Remaining likely wins:
 
-1. Move more of the outer self-play loop native: action sampling, trajectory
+1. Fuse the eval-only network graph before workers build their evaluator.
+   A live WL5 worker sample on the M5 Max showed nearly all sampled
+   `native_search_batch` time falling through `call_evaluator`, with repeated
+   MPS BatchNorm / graph-execution frames. Direct small-model MPS forward
+   timing under live WL5 load dropped from roughly 1.9-2.1ms to
+   0.86-1.14ms for batch sizes 8-128 after Conv+BatchNorm fusion, with
+   output parity at float noise. Generator-level benches during an active
+   WL5 run are noisy, but this is the clearest post-native cheap win.
+2. Split eval-only inference across Apple Silicon engines. The next large
+   hardware-specific bet is not just "make MPS faster"; it is self-play
+   leaf eval on ANE/Core ML, training on MPS GPU, and eval sidecar work on
+   CPU/BNNS so those lanes stop contending for one backend. See
+   [ane-int8-inference.md](ane-int8-inference.md).
+3. Move more of the outer self-play loop native: action sampling, trajectory
    staging, and D4 augmentation. This should be smaller than the search-engine
    jump but removes Python at the move/record boundary.
-2. Profile the post-search worker loop before another native pass; the search
+4. Profile the post-search worker loop before another native pass; the search
    engine is no longer the only plausible Python owner.
-3. Consider a heavier evaluator/model only after native search reduces CPU gaps
+5. Consider a heavier evaluator/model only after native search reduces CPU gaps
    enough that the MPS forward becomes the pacing item.
 
 The actual multi-worker WL1 check is now done. Ten epochs at the next-run
