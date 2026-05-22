@@ -28,6 +28,10 @@ Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/s
 | 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | WL1-shaped 10-epoch production sweep, small model, 400 sims, wave 64 | native 8w8g | wall 2,379 aug pos/s; gen 3,303 aug pos/s; wall 11.25 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
 | 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | same as above | native 4w16g | wall 1,918 aug pos/s; gen 2,152 aug pos/s; wall 8.61 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
 | 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | same as above with Python MCTS fallback | fallback 8w8g | wall 1,863 aug pos/s; gen 2,264 aug pos/s; wall 8.85 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
+| 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / CPU | CPU syntax smoke, default native | native_mcts=true; native_state_ops=true; fused_eval=true | median 0.008s; 266.12 games/s; 4,258 aug pos/s; plies_mean 2.0 | `sweep_logs/frontier-baselines/20260522T054845Z/cpu-smoke-native.txt` |
+| 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / CPU | CPU syntax smoke with `GOMOKU_DISABLE_NATIVE_MCTS=1` | native_mcts=false; native_state_ops=true; fused_eval=true | median 0.009s; 224.51 games/s; 3,592 aug pos/s; plies_mean 2.0 | `sweep_logs/frontier-baselines/20260522T054845Z/cpu-smoke-fallback.txt` |
+| 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / MPS, live WL5 contention | MPS production-shaped microbench, default native | native_mcts=true; native_state_ops=true; fused_eval=true | median 0.626s; 12.79 games/s; 1,637 aug pos/s; plies_mean 16.0 | `sweep_logs/frontier-baselines/20260522T054845Z/mps-microbench-native.txt` |
+| 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / MPS, live WL5 contention | MPS production-shaped microbench with `GOMOKU_DISABLE_NATIVE_MCTS=1` | native_mcts=false; native_state_ops=true; fused_eval=true | median 2.309s; 3.46 games/s; 443 aug pos/s; plies_mean 16.0 | `sweep_logs/frontier-baselines/20260522T054845Z/mps-microbench-fallback.txt` |
 
 ## Notes
 
