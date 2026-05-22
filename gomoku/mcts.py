@@ -529,6 +529,16 @@ def make_torch_evaluator(
             ).cpu().numpy()
             priors = combo[: B * N_ACTIONS].reshape(B, N_ACTIONS)
             vals = combo[B * N_ACTIONS:]
+            # Sanitize non-finite outputs. NaN values propagated through
+            # native MCTS backup leave all select_action scores NaN, and
+            # the C extension's default best_action=0 then plays an
+            # illegal move when (0,0) is occupied. Guards against archived
+            # mid-game positions (no history) producing pathological model
+            # outputs.
+            if not np.all(np.isfinite(priors)):
+                priors = np.nan_to_num(priors, nan=0.0, posinf=1e6, neginf=-1e6)
+            if not np.all(np.isfinite(vals)):
+                vals = np.nan_to_num(vals, nan=0.0, posinf=1.0, neginf=-1.0)
             return priors, vals
         finally:
             if was_training:

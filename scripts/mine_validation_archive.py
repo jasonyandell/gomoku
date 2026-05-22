@@ -240,13 +240,24 @@ def _mine_high_kl(model, payload: dict, device: str, *, target: int) -> list[dic
     top = torch.topk(kls, k=min(target, pool)).indices
     sel = idx[top]
     out: list[dict] = []
+    H = N_INPUT_PLANES // 2  # = HISTORY_PLY
     for j in sel.tolist():
+        planes_np = planes_all[j].cpu().numpy().astype(np.float32)
+        pi_np = pi_all[j].cpu().numpy().astype(np.float32)
+        # Recover ply from the position itself: WL4-era buffers don't carry
+        # ply tags, so the loader zero-fills them, but a zero ply paired with
+        # a mid-game board crashes the native MCTS legal-action invariant
+        # downstream. Derive ply as total stone count on plane 0 + plane H.
+        derived_ply = int((planes_np[0] > 0.5).sum() + (planes_np[H] > 0.5).sum())
+        ply_tag = int(ply_all[j].cpu().item()) if ply_all is not None else 0
+        if ply_tag == 0 and derived_ply > 0:
+            ply_tag = derived_ply
         out.append({
-            "planes": planes_all[j].cpu().numpy().astype(np.float32),
-            "pi": pi_all[j].cpu().numpy().astype(np.float32),
+            "planes": planes_np,
+            "pi": pi_np,
             "z": float(z_all[j].cpu().item()),
-            "side": int(side_all[j].cpu().item()) if side_all is not None else 0,
-            "ply": int(ply_all[j].cpu().item()) if ply_all is not None else 0,
+            "side": int(side_all[j].cpu().item()) if side_all is not None else (derived_ply % 2),
+            "ply": ply_tag,
         })
     return out
 

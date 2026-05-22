@@ -407,8 +407,22 @@ static void init_node_fields(CNode *node, CState const *state, int parent, int p
         return;
     }
     Bits occupied = bits_or(state->current, state->opponent);
+    int any_legal = 0;
     for (int a = 0; a < N_ACTIONS; a++) {
         node->legal[a] = (unsigned char)(!bits_get(occupied, a));
+        if (node->legal[a]) {
+            any_legal = 1;
+        }
+    }
+    // Belt-and-suspenders: a position with no legal moves (whole board
+    // occupied without 5-in-a-row) is a draw. Without this, the MCTS
+    // selector would later try to play action 0 from a fully-occupied
+    // node and crash state_apply. Hit on WL5 from archive positions where
+    // the WL4 buffer's missing ply tags zero-filled, causing
+    // `move_count >= N_ACTIONS` to fail to fire even on full boards.
+    if (!any_legal) {
+        node->is_terminal = 1;
+        node->terminal_value = 0.0f;
     }
 }
 
@@ -526,10 +540,19 @@ static int select_action(CNode const *node, double c_puct_init, double c_puct_ba
     double pb_c = log((1.0 + (double)total + c_puct_base) / c_puct_base) + c_puct_init;
     double sqrt_total = sqrt((double)total + 1e-8);
     double best_score = -INFINITY;
-    int best_action = 0;
+    // Default to the first legal action so a NaN/-INF score sweep across all
+    // legal moves can't leave us pointing at an illegal action (which used
+    // to bite WL5 archive-start: model returned NaN value for an archived
+    // mid-game position, NaN accumulated in W, all scores became NaN, the
+    // old default best_action=0 then crashed state_apply with "illegal move 0
+    // on occupied square" whenever square (0,0) was occupied).
+    int best_action = -1;
     for (int a = 0; a < N_ACTIONS; a++) {
         if (!node->legal[a]) {
             continue;
+        }
+        if (best_action < 0) {
+            best_action = a;
         }
         double q = node->N[a] > 0 ? (double)node->W[a] / (double)node->N[a] : 0.0;
         double u = pb_c * (double)node->P[a] * sqrt_total / (1.0 + (double)node->N[a]);
@@ -538,6 +561,9 @@ static int select_action(CNode const *node, double c_puct_init, double c_puct_ba
             best_score = score;
             best_action = a;
         }
+    }
+    if (best_action < 0) {
+        best_action = 0;  // truly terminal; caller should not reach here
     }
     return best_action;
 }
