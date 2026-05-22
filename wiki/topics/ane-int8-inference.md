@@ -136,6 +136,35 @@ generation throughput, not just naked eval calls. If CPU/ANE eval is slower
 per leaf but preserves trainer time, it may still win end-to-end when the
 trainer and self-play overlap.
 
+## ANE rail proof and correction (2026-05-21/22)
+
+Follow-up metering corrected an important interpretation risk:
+`CPU_AND_NE` is a request to Core ML, not proof that the Apple Neural
+Engine actually ran the model.
+
+- Apple Vision person segmentation is the current known-good positive
+  control: `/tmp/vision-ane-powermetrics-1779421070.txt` parses to 25
+  ANE samples, mean 4474 mW, max 4488 mW, all active.
+- Detached 934b work produced a dedicated rail-proof lab page and scout
+  harness; Lane 03 integrated it as
+  `scripts/coreml_ane_residency_scout.py` plus
+  `wiki/topics/coreml-ane-residency-lab.md`.
+- The 2026-05-22 Lane 03 attempt to run a fresh powermetrics-required
+  `conv,resnet,gomoku` scout was blocked because `sudo -n true` failed
+  (`cached/passwordless sudo is unavailable`). Exports succeeded, but no
+  same-window raw rail logs were produced, so no claim can exceed
+  `coreml-scheduled`.
+
+Working correction:
+
+- No Gomoku/Core ML path should be called ANE-backed without nonzero ANE
+  rail evidence from the same pressure window.
+- Use the dedicated residency lab page for caps and receipts:
+  [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md).
+- The next measurement is not more `CPU_AND_NE` label checking; it is a
+  fresh Vision positive control plus a powermetrics-required
+  conv/resnet/gomoku shape scout when sudo is available.
+
 ## Implementation plan
 
 0. **Boundary scouting microbench** before any launch wiring:

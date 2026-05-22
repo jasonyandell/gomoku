@@ -97,6 +97,13 @@ eval was slower than fused PyTorch/MPS, but Core ML eval pressure hurt MPS
 trainer steps far less than a competing PyTorch/MPS eval process. See
 [ane-int8-inference.md](ane-int8-inference.md) for the receipt.
 
+2026-05-22 rail-meter correction: `CPU_AND_NE` is not enough evidence that
+the ANE is active. Apple Vision person segmentation drove the ANE rail to
+~4.47 W, proving the meter is live, but the fresh Gomoku shape-scout was
+blocked by unavailable cached/passwordless sudo before same-window rail
+sampling could run. The mainframe discipline here is literal: trust the
+rail, not the requested compute-unit label.
+
 ## What this enables
 
 The 9×9 → 15×15 + Gomocup arc only works if perf claws back the
