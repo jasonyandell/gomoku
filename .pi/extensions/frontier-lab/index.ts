@@ -294,9 +294,28 @@ function isIgnorableDirtyLine(line: string): boolean {
 	return file.startsWith(".frontier/runs/") || file.startsWith(".frontier/worktrees/") || file.startsWith(".frontier/tmp/");
 }
 
+async function shouldIgnoreDirtyLine(cwd: string, line: string): Promise<boolean> {
+	if (isIgnorableDirtyLine(line)) return true;
+	// Some harnesses create an empty root CLAUDE.md as local context scratch.
+	// Ignore only the empty untracked variant; a non-empty or tracked CLAUDE.md still blocks.
+	if (line.trim() === "?? CLAUDE.md") {
+		try {
+			const stat = await fsp.stat(path.join(cwd, "CLAUDE.md"));
+			return stat.size === 0;
+		} catch {
+			return false;
+		}
+	}
+	return false;
+}
+
 async function assertBaseClean(cwd: string, allowDirty: boolean): Promise<{ clean: boolean; blockingStatus: string }> {
 	const status = await porcelainStatus(cwd);
-	const blockingLines = status.split("\n").map((line) => line.trimEnd()).filter(Boolean).filter((line) => !isIgnorableDirtyLine(line));
+	const lines = status.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+	const blockingLines: string[] = [];
+	for (const line of lines) {
+		if (!(await shouldIgnoreDirtyLine(cwd, line))) blockingLines.push(line);
+	}
 	return { clean: allowDirty || blockingLines.length === 0, blockingStatus: blockingLines.join("\n") };
 }
 
