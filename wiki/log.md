@@ -3,6 +3,12 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-22] ops | frontier run 20260522T054739Z manually recovered
+
+- Frontier workers all exited successfully, but the manager failed during integration with a stale UI context (`Extension ctx is stale after session replacement or reload`). Manually merged all five worker branches, resolved curation conflicts, removed the run worktrees/branches, and patched `.pi/extensions/frontier-lab/index.ts` so stale background UI handles no longer mark completed runs failed.
+- Marked completed lanes in `.frontier/lanes.json`: baseline receipts, production contour, quality gates, and curation. Marked ANE residency and production engine-overlap blocked until `powermetrics` can run with cached/passwordless sudo.
+- Updated [ops/status.md](ops/status.md) and [ops/frontier.md](ops/frontier.md): the next actionable lane is now `outer-loop-python-profile`.
+
 ## [2026-05-22] perf | Core ML / ANE residency lab integrated
 
 - Integrated the detached 934b Core ML / ANE residency harness into the lane

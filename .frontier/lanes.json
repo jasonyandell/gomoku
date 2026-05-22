@@ -2,91 +2,91 @@
   {
     "id": "baseline-receipts",
     "title": "Baseline receipts and artifact convention",
-    "stage": "active",
-    "heat": "hot",
+    "stage": "completed",
+    "heat": "done",
     "resource": "code",
     "goal": "Turn the named perf commands and existing perf10 evidence into repeatable, citeable baseline receipts before more hot-path changes land.",
-    "nextAction": "On current main, run the CPU syntax smoke and the MPS production-shaped microbench; pair native vs GOMOKU_DISABLE_NATIVE_MCTS=1 where practical; save raw stdout under sweep_logs/frontier-baselines/<timestamp>/ and update wiki/ops/baselines.md plus the experiment/test ledgers.",
+    "nextAction": "Completed in frontier run 20260522T054739Z. Current-main contended CPU/MPS native/fallback receipts are in sweep_logs/frontier-baselines/20260522T054845Z and wiki/ops ledgers. Repeat MPS pair only when WL5 is idle if absolute baseline numbers matter.",
     "doneShape": [
-      "current-main commit and hardware are recorded",
-      "CPU smoke command result is recorded",
-      "MPS microbench command records seconds, games/sec, aug positions/sec, plies_mean, native_mcts, native_state_ops, fused_eval",
-      "native/fallback flags are explicit or the blocker is documented",
-      "artifact path convention is used",
-      "wiki/ops/baselines.md and wiki/ops/test-ledger.md are updated"
+      "current-main commit and hardware recorded",
+      "CPU smoke command result recorded",
+      "MPS microbench seconds, games/sec, aug positions/sec, plies_mean, native_mcts, native_state_ops, fused_eval recorded",
+      "native/fallback flags explicit",
+      "artifact path convention used",
+      "wiki/ops/baselines.md and wiki/ops/test-ledger.md updated"
     ]
   },
   {
     "id": "production-contour-sweep",
     "title": "M5 Max production self-play contour",
-    "stage": "open",
-    "heat": "hot",
+    "stage": "completed",
+    "heat": "done",
     "resource": "gpu",
     "goal": "Map the production-shaped throughput contour for this exact M5 Max instead of optimizing from single-process intuition.",
-    "nextAction": "Use perf10 as the seed (native 8w8g vs 4w16g vs fallback), then run a bounded fractional sweep across workers, games-per-worker, sims, wave size, and model size with trainer-shaped ingestion; score wall games/sec, gen games/sec, wall/gen aug positions/sec, plies_mean, and worker extras.",
+    "nextAction": "Completed in frontier run 20260522T054739Z. Promote native small 8 workers x 8 games, sims=400, wave=64 as the production throughput default; reject fallback, 4x16, and wave32 for throughput. Sims200/tiny require quality gates before behavior-changing use.",
     "doneShape": [
       "paired cells share checkpoint/model size and run length",
-      "commands and env flags are recorded",
-      "wall/gen games/sec and aug positions/sec are tabulated",
-      "worker-count and games-per-worker contour has a promote/reject/repeat decision",
-      "artifacts live under sweep_logs/ with a summary TSV/JSON",
-      "wiki/ops/experiment-ledger.md receives a receipt"
+      "commands and env flags recorded",
+      "wall/gen games/sec and aug positions/sec tabulated",
+      "worker-count and games-per-worker contour decision recorded",
+      "artifacts live under sweep_logs/production-contour-20260522/",
+      "experiment-ledger/open-note receipt exists"
     ]
   },
   {
     "id": "ane-residency-rail-proof",
     "title": "Core ML / ANE residency rail proof",
-    "stage": "active",
-    "heat": "hot",
+    "stage": "blocked",
+    "heat": "blocked",
     "resource": "gpu",
     "goal": "Find out whether any Gomoku-like Core ML shape actually lands on the ANE, using powermetrics rail evidence rather than CPU_AND_NE labels.",
-    "nextAction": "Inspect and either integrate or continue the detached worktree /Users/jason/.codex/worktrees/934b/gomoku: scripts/coreml_ane_residency_scout.py, tests, and wiki/topics/coreml-ane-residency-lab.md. Run a short powermetrics-required conv/resnet/gomoku scout with a nearby Vision positive control.",
+    "nextAction": "Blocked in frontier run 20260522T054739Z because `sudo -n true` failed, so powermetrics-required same-window rail logs could not be captured. Re-run only when cached/passwordless sudo is available; capture fresh Vision positive control plus CPU_ONLY negative and CPU_AND_NE Gomoku/conv/resnet cells.",
     "doneShape": [
-      "Vision or equivalent positive control proves the ANE meter is live",
-      "Gomoku/Core ML receipt includes JSON plus raw powermetrics from the same pressure window",
-      "each cell is capped as coreml-scheduled, coreml-isolated, ane-metered, or blocked",
-      "ANE mean/max mW, worker count, batch size, positions/sec, ready workers, and errors are summarized",
-      "no lane is called ANE-backed without nonzero ANE rail evidence",
-      "wiki/topics/ane-int8-inference.md or a dedicated residency page is updated"
+      "Vision positive-control parser verified from existing /tmp evidence",
+      "harness and tests integrated",
+      "coreml-scheduled smoke succeeded",
+      "powermetrics-required scout blocker documented",
+      "no lane is called ANE-backed without nonzero same-window rail evidence",
+      "wiki/topics/ane-int8-inference.md and coreml residency lab updated"
     ]
   },
   {
     "id": "quality-promotion-gates",
     "title": "Training quality promotion gates",
-    "stage": "active",
-    "heat": "active",
+    "stage": "completed",
+    "heat": "done",
     "resource": "cpu",
     "goal": "Prevent perf wins from silently damaging strength, plies, archive metrics, or reproducibility.",
-    "nextAction": "Codify the minimum gate for any perf change that touches training, inference, MCTS behavior, or data encoding: fixed external baseline/archive metric, plies/game-shape check, short-eval noise caveat, and explicit promote/reject/block decision.",
+    "nextAction": "Completed in frontier run 20260522T054739Z. Use the Training-Quality Promotion Gate in wiki/ops/experiment-ledger.md for every behavior-changing perf receipt.",
     "doneShape": [
-      "fixed external baseline or validation archive gate is named",
-      "plies_mean and game-length collapse check are required",
-      "short-eval noise caveat and minimum n/repeat policy are documented",
+      "fixed external baseline or validation archive gate named",
+      "plies_mean and game-length collapse check required",
+      "short-eval noise caveat and minimum n/repeat policy documented",
       "behavior-changing perf changes require checkpoint/run IDs",
-      "promotion rule is added to wiki/ops/experiment-ledger.md"
+      "promotion rule added to wiki/ops/experiment-ledger.md"
     ]
   },
   {
     "id": "control-room-curation",
     "title": "Perf wiki control room curation",
-    "stage": "active",
-    "heat": "active",
+    "stage": "completed",
+    "heat": "done",
     "resource": "wiki",
     "goal": "Keep the frontier board, baselines, ledgers, and worktree inventory synchronized with the actual perf evidence on disk.",
-    "nextAction": "Curate the current worktrees: perf10 summaries from /Users/jason/code/gomoku-perf-extension, the Core ML/ANE residency work in /Users/jason/.codex/worktrees/934b/gomoku, and any frontier run receipts under .frontier/runs/ into wiki/ops pages.",
+    "nextAction": "Completed and manually recovered after the frontier manager hit the stale-UI-context bug. Ops pages now include worker receipts and the extension has been patched to tolerate stale UI context.",
     "doneShape": [
-      "wiki/ops/status.md names the active hot lanes and worktree evidence",
+      "wiki/ops/status.md current",
       "wiki/ops/frontier.md matches .frontier/lanes.json",
-      "experiment-ledger has receipts for completed perf evidence",
-      "test-ledger has commands/results supporting those receipts",
-      "stale or superseded lane claims are trimmed or marked blocked"
+      "experiment-ledger has completed receipts",
+      "test-ledger has supporting commands/results",
+      "stale active-run claims trimmed"
     ]
   },
   {
     "id": "outer-loop-python-profile",
     "title": "Outer self-play loop profiling",
     "stage": "open",
-    "heat": "warm",
+    "heat": "hot",
     "resource": "cpu",
     "goal": "After native MCTS and eval fusion, identify remaining Python overhead outside the native search boundary before another native pass.",
     "nextAction": "Profile action sampling, trajectory staging, D4 augmentation, record creation, file handoff, and worker loop overhead in a bounded production-shaped worker command; separate post-search Python from evaluator and native_search_batch time.",
@@ -102,10 +102,10 @@
     "id": "engine-overlap-production",
     "title": "Production engine-overlap experiment",
     "stage": "blocked-on-ane-residency",
-    "heat": "warm",
+    "heat": "blocked",
     "resource": "gpu",
     "goal": "Measure whether a Core ML CPU/NE eval lane can improve end-to-end training overlap despite slower raw eval latency than fused PyTorch/MPS.",
-    "nextAction": "After ane-residency-rail-proof finds either an ANE-metered candidate or an explicit CPU-only isolation candidate, wire the evaluator boundary into a production-shaped self-play + MPS trainer overlap test.",
+    "nextAction": "Blocked until ane-residency-rail-proof is rerun with same-window powermetrics or an explicit CPU-only isolation candidate is selected. Do not launch production overlap from CPU_AND_NE labels alone.",
     "doneShape": [
       "overlap metric is named before running",
       "raw eval latency and trainer-pressure metrics are separated",
