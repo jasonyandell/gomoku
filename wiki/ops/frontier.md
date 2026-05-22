@@ -4,15 +4,26 @@ Source of truth for machine-readable lanes: `.frontier/lanes.json`.
 
 This page is the human-readable board. The frontier lab extension claims lanes from `.frontier/lanes.json`, fans out isolated workers, and asks the wiki curator to roll receipts back into this page.
 
+## Current Board
+
 | Lane | Stage | Heat | Resource | Next action |
 | --- | --- | --- | --- | --- |
-| Baseline perf harness | seeded | hot | code | Inventory benchmark surfaces and write a baseline receipt before changing hot paths. |
-| Self-play throughput hot path | open | hot | gpu | Compare baseline vs one candidate under bounded production-shaped microbench. |
-| Apple Silicon engine isolation | open | warm | gpu | Design the next production-overlap experiment for MPS/Core ML/CPU split. |
-| Outer self-play loop profiling | open | warm | cpu | Profile post-native Python overhead outside the C search boundary. |
-| Training quality guardrails | open | active | cpu | Define minimum eval/validation receipt before promoting perf changes. |
-| Perf wiki control room | seeded | active | wiki | Curate receipts into status/frontier/baselines/experiment-ledger/test-ledger. |
+| Baseline receipts and artifact convention | active | hot | code | Run current-main CPU smoke + MPS microbench, pair native/fallback where practical, and write baseline/test ledger receipts. |
+| M5 Max production self-play contour | open | hot | gpu | Use perf10 as seed evidence, then run a bounded production-shaped fractional sweep across workers/games/sims/wave/model. |
+| Core ML / ANE residency rail proof | active | hot | gpu | Inspect/integrate the 934b residency worktree and run powermetrics-required conv/resnet/gomoku scouts with a Vision positive control. |
+| Training quality promotion gates | active | active | cpu | Codify the minimum gate for behavior-touching perf changes: fixed baseline/archive, plies, noise caveat, and decision. |
+| Perf wiki control room curation | active | active | wiki | Curate perf10, Core ML/ANE residency, and frontier receipts into ops pages. |
+| Outer self-play loop profiling | open | warm | cpu | Profile post-native worker-loop Python: sampling, trajectory staging, D4, record creation, and file handoff. |
+| Production engine-overlap experiment | blocked-on-ane-residency | warm | gpu | Wait for ANE-metered or explicit CPU-only isolation candidate, then measure self-play + MPS-trainer overlap. |
+| Replay-buffer width cheap test | seeded | warm | cpu | After WL5 reports out, run 1.5M vs 750k buffer ablation before bit-packing. |
+
+## Worktree Evidence To Curate
+
+- Main is ahead of `origin/main` with frontier lab and engine-scout/wiki commits.
+- `/Users/jason/code/gomoku-perf-extension` holds perf10 production-shaped artifacts: `sweep_logs/perf10-summary.tsv` plus trainer/worker logs for native 8w8g, native 4w16g, and fallback 8w8g.
+- `/Users/jason/.codex/worktrees/934b/gomoku` contains uncommitted Core ML / ANE residency lab work: `scripts/coreml_ane_residency_scout.py`, tests, a draft `wiki/topics/coreml-ane-residency-lab.md`, and ANE rail correction notes.
+- Older Claude worktrees currently have no uncommitted changes; treat them as historical branches unless a lane explicitly revives one.
 
 ## Promotion Rule
 
-A lane advances only with a receipt: hypothesis, baseline command, candidate command or blocker, hardware/env, metrics, artifacts, confidence/noise caveat, decision, and next action.
+A lane advances only with a receipt: hypothesis, baseline command, candidate command or blocker, hardware/env, metrics, artifacts, confidence/noise caveat, decision (`promote`, `reject`, `blocked`, or `needs_repeat`), and next action.

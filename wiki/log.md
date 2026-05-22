@@ -12,6 +12,13 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Indexed the frontier-lab ops pages so future performance fanout starts from
   maintained baseline/receipt surfaces instead of raw chat state.
 
+## [2026-05-22] ops | perf frontier lanes rewritten from current worktree evidence
+
+- Rewrote `.frontier/lanes.json` around the current perf frontier: baseline receipts, M5 Max production contour, Core ML / ANE rail proof, quality promotion gates, control-room curation, outer-loop Python profiling, blocked production engine-overlap, and replay-buffer width cheap test.
+- Updated [ops/status.md](ops/status.md) and [ops/frontier.md](ops/frontier.md) to reflect the current worktree inventory: perf10 artifacts in `/Users/jason/code/gomoku-perf-extension` and uncommitted Core ML / ANE residency work in `/Users/jason/.codex/worktrees/934b/gomoku`.
+- Filed the perf10 production-shaped sweep into [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), and [ops/test-ledger.md](ops/test-ledger.md) as seed evidence for the production-contour lane; the ledger marks it `needs_repeat` because exact launcher commands were not captured in ops.
+- Tightened the promotion gate language: behavior-touching perf changes need fixed baseline/archive quality checks, plies/game-shape checks, noise caveats, checkpoint/run IDs for strength claims, and an explicit decision.
+
 ## [2026-05-21] run | WL5 phase-1 closed at e5051 (un-fused-workers era)
 
 - Closed the pre-fusion era of WL5 as a discrete chapter. WL5 phase 1

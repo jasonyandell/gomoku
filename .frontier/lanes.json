@@ -1,89 +1,133 @@
 [
   {
-    "id": "baseline-harness",
-    "title": "Baseline perf harness",
-    "stage": "seeded",
+    "id": "baseline-receipts",
+    "title": "Baseline receipts and artifact convention",
+    "stage": "active",
     "heat": "hot",
     "resource": "code",
-    "goal": "Make the current benchmark/eval surfaces easy to run, compare, and cite before changing hot paths.",
-    "nextAction": "Inventory scripts/perf_microbench.py, sweep log summaries, and the smallest CPU/MPS smoke commands; write a baseline receipt and any missing harness notes.",
+    "goal": "Turn the named perf commands and existing perf10 evidence into repeatable, citeable baseline receipts before more hot-path changes land.",
+    "nextAction": "On current main, run the CPU syntax smoke and the MPS production-shaped microbench; pair native vs GOMOKU_DISABLE_NATIVE_MCTS=1 where practical; save raw stdout under sweep_logs/frontier-baselines/<timestamp>/ and update wiki/ops/baselines.md plus the experiment/test ledgers.",
     "doneShape": [
-      "baseline command is named",
-      "metric fields are named",
-      "artifact path convention is named",
-      "wiki/ops/baselines.md is updated"
+      "current-main commit and hardware are recorded",
+      "CPU smoke command result is recorded",
+      "MPS microbench command records seconds, games/sec, aug positions/sec, plies_mean, native_mcts, native_state_ops, fused_eval",
+      "native/fallback flags are explicit or the blocker is documented",
+      "artifact path convention is used",
+      "wiki/ops/baselines.md and wiki/ops/test-ledger.md are updated"
     ]
   },
   {
-    "id": "selfplay-throughput",
-    "title": "Self-play throughput hot path",
+    "id": "production-contour-sweep",
+    "title": "M5 Max production self-play contour",
     "stage": "open",
     "heat": "hot",
     "resource": "gpu",
-    "goal": "Improve or falsify improvement ideas for production-shaped self-play throughput on Apple Silicon.",
-    "nextAction": "Use existing perf runbooks to compare baseline vs one candidate under bounded production-shaped microbench; do not chase Activity Monitor percent without wall-clock delta.",
+    "goal": "Map the production-shaped throughput contour for this exact M5 Max instead of optimizing from single-process intuition.",
+    "nextAction": "Use perf10 as the seed (native 8w8g vs 4w16g vs fallback), then run a bounded fractional sweep across workers, games-per-worker, sims, wave size, and model size with trainer-shaped ingestion; score wall games/sec, gen games/sec, wall/gen aug positions/sec, plies_mean, and worker extras.",
     "doneShape": [
-      "paired baseline/candidate commands",
-      "games/sec and positions/sec delta",
-      "native/Python fallback flags recorded",
-      "decision promote/reject/repeat"
+      "paired cells share checkpoint/model size and run length",
+      "commands and env flags are recorded",
+      "wall/gen games/sec and aug positions/sec are tabulated",
+      "worker-count and games-per-worker contour has a promote/reject/repeat decision",
+      "artifacts live under sweep_logs/ with a summary TSV/JSON",
+      "wiki/ops/experiment-ledger.md receives a receipt"
     ]
   },
   {
-    "id": "engine-isolation",
-    "title": "Apple Silicon engine isolation",
-    "stage": "open",
-    "heat": "warm",
+    "id": "ane-residency-rail-proof",
+    "title": "Core ML / ANE residency rail proof",
+    "stage": "active",
+    "heat": "hot",
     "resource": "gpu",
-    "goal": "Test whether eval-only inference should move off competing PyTorch/MPS paths via Core ML / ANE / CPU lanes.",
-    "nextAction": "Map the aggressive engine scout evidence and propose the next production-overlap experiment, not a naked latency-only bench.",
+    "goal": "Find out whether any Gomoku-like Core ML shape actually lands on the ANE, using powermetrics rail evidence rather than CPU_AND_NE labels.",
+    "nextAction": "Inspect and either integrate or continue the detached worktree /Users/jason/.codex/worktrees/934b/gomoku: scripts/coreml_ane_residency_scout.py, tests, and wiki/topics/coreml-ane-residency-lab.md. Run a short powermetrics-required conv/resnet/gomoku scout with a nearby Vision positive control.",
     "doneShape": [
-      "overlap metric named",
-      "raw latency and trainer-pressure metrics separated",
-      "Core ML / MPS / CPU choice has evidence"
+      "Vision or equivalent positive control proves the ANE meter is live",
+      "Gomoku/Core ML receipt includes JSON plus raw powermetrics from the same pressure window",
+      "each cell is capped as coreml-scheduled, coreml-isolated, ane-metered, or blocked",
+      "ANE mean/max mW, worker count, batch size, positions/sec, ready workers, and errors are summarized",
+      "no lane is called ANE-backed without nonzero ANE rail evidence",
+      "wiki/topics/ane-int8-inference.md or a dedicated residency page is updated"
     ]
   },
   {
-    "id": "outer-loop-python",
+    "id": "quality-promotion-gates",
+    "title": "Training quality promotion gates",
+    "stage": "active",
+    "heat": "active",
+    "resource": "cpu",
+    "goal": "Prevent perf wins from silently damaging strength, plies, archive metrics, or reproducibility.",
+    "nextAction": "Codify the minimum gate for any perf change that touches training, inference, MCTS behavior, or data encoding: fixed external baseline/archive metric, plies/game-shape check, short-eval noise caveat, and explicit promote/reject/block decision.",
+    "doneShape": [
+      "fixed external baseline or validation archive gate is named",
+      "plies_mean and game-length collapse check are required",
+      "short-eval noise caveat and minimum n/repeat policy are documented",
+      "behavior-changing perf changes require checkpoint/run IDs",
+      "promotion rule is added to wiki/ops/experiment-ledger.md"
+    ]
+  },
+  {
+    "id": "control-room-curation",
+    "title": "Perf wiki control room curation",
+    "stage": "active",
+    "heat": "active",
+    "resource": "wiki",
+    "goal": "Keep the frontier board, baselines, ledgers, and worktree inventory synchronized with the actual perf evidence on disk.",
+    "nextAction": "Curate the current worktrees: perf10 summaries from /Users/jason/code/gomoku-perf-extension, the Core ML/ANE residency work in /Users/jason/.codex/worktrees/934b/gomoku, and any frontier run receipts under .frontier/runs/ into wiki/ops pages.",
+    "doneShape": [
+      "wiki/ops/status.md names the active hot lanes and worktree evidence",
+      "wiki/ops/frontier.md matches .frontier/lanes.json",
+      "experiment-ledger has receipts for completed perf evidence",
+      "test-ledger has commands/results supporting those receipts",
+      "stale or superseded lane claims are trimmed or marked blocked"
+    ]
+  },
+  {
+    "id": "outer-loop-python-profile",
     "title": "Outer self-play loop profiling",
     "stage": "open",
     "heat": "warm",
     "resource": "cpu",
-    "goal": "Find post-native Python overhead outside the C MCTS search boundary before another native pass.",
-    "nextAction": "Profile action sampling, trajectory staging, D4 augmentation, record creation, and worker loop overhead using bounded commands.",
+    "goal": "After native MCTS and eval fusion, identify remaining Python overhead outside the native search boundary before another native pass.",
+    "nextAction": "Profile action sampling, trajectory staging, D4 augmentation, record creation, file handoff, and worker loop overhead in a bounded production-shaped worker command; separate post-search Python from evaluator and native_search_batch time.",
     "doneShape": [
-      "profile command and artifact",
-      "top owners with percentages",
-      "candidate next 10-20% change or no-op verdict"
+      "profile command and artifact path are recorded",
+      "top owners have percentages or wall-time shares",
+      "native search/evaluator time is separated from post-search Python",
+      "candidate 10-20% change is named or the lane returns a no-op verdict",
+      "any implementation proposal has a same-shape verifier"
     ]
   },
   {
-    "id": "training-quality-guardrails",
-    "title": "Training quality guardrails",
-    "stage": "open",
-    "heat": "active",
-    "resource": "cpu",
-    "goal": "Ensure perf wins do not silently damage strength, plies, archive metrics, or reproducibility.",
-    "nextAction": "Define the minimum eval/validation receipt required before promoting a perf change that touches training or inference behavior.",
+    "id": "engine-overlap-production",
+    "title": "Production engine-overlap experiment",
+    "stage": "blocked-on-ane-residency",
+    "heat": "warm",
+    "resource": "gpu",
+    "goal": "Measure whether a Core ML CPU/NE eval lane can improve end-to-end training overlap despite slower raw eval latency than fused PyTorch/MPS.",
+    "nextAction": "After ane-residency-rail-proof finds either an ANE-metered candidate or an explicit CPU-only isolation candidate, wire the evaluator boundary into a production-shaped self-play + MPS trainer overlap test.",
     "doneShape": [
-      "fixed baseline opponent or archive gate named",
-      "short-eval noise caveat documented",
-      "promotion rule added to experiment ledger"
+      "overlap metric is named before running",
+      "raw eval latency and trainer-pressure metrics are separated",
+      "self-play positions/sec and trainer step slowdown are measured concurrently",
+      "checkpoint refresh/compile/load cadence is recorded",
+      "Core ML / PyTorch MPS / CPU-only choice has evidence-backed decision"
     ]
   },
   {
-    "id": "wiki-curation",
-    "title": "Perf wiki control room",
+    "id": "packed-buffer-cheap-test",
+    "title": "Replay-buffer width cheap test",
     "stage": "seeded",
-    "heat": "active",
-    "resource": "wiki",
-    "goal": "Keep frontier, baseline, experiment ledger, and status pages current as worker receipts land.",
-    "nextAction": "Curate completed receipts into wiki/ops pages and promote the next BFS lane.",
+    "heat": "warm",
+    "resource": "cpu",
+    "goal": "Decide whether replay-buffer compression is load-bearing before spending days on bit-packed storage.",
+    "nextAction": "After WL5 reports out, run the cheap 1.5M-position vs 750k-position ablation from the same checkpoint; compare plies, loss bounces, archive metrics, and fixed-baseline strength over a bounded epoch window.",
     "doneShape": [
-      "wiki/ops/status.md current",
-      "wiki/ops/frontier.md current",
-      "experiment-ledger has receipts",
-      "test-ledger has commands/results"
+      "paired commands use the same checkpoint and run length",
+      "buffer sizes, memory footprint, and sample path are recorded",
+      "plies/loss/archive/fixed-baseline deltas are tabulated",
+      "decision says bit-pack refactor promote, reject, or repeat",
+      "wiki/topics/buffer-bit-packing.md and ledgers are updated"
     ]
   }
 ]

@@ -25,9 +25,13 @@ Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/s
 | Date | Commit | Hardware | Command | Metric | Result | Artifact |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-05-22 | existing wiki | M5 Max / MPS | see `wiki/topics/activity-monitor-perf-runbook.md` | native MCTS small MPS max_plies=16 | 2,200 aug pos/s reference | wiki topic |
+| 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | WL1-shaped 10-epoch production sweep, small model, 400 sims, wave 64 | native 8w8g | wall 2,379 aug pos/s; gen 3,303 aug pos/s; wall 11.25 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
+| 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | same as above | native 4w16g | wall 1,918 aug pos/s; gen 2,152 aug pos/s; wall 8.61 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
+| 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | same as above with Python MCTS fallback | fallback 8w8g | wall 1,863 aug pos/s; gen 2,264 aug pos/s; wall 8.85 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
 
 ## Notes
 
 - Same-shape comparisons beat isolated intuition.
 - Record env flags such as `GOMOKU_DISABLE_NATIVE_MCTS=1`, `GOMOKU_DISABLE_NATIVE_STATE_OPS=1`, and `PYTORCH_ENABLE_MPS_FALLBACK=1`.
 - If a benchmark contends with a live training run, say so.
+- Current frontier artifact convention: raw command output under `sweep_logs/frontier-baselines/<timestamp>/`, plus a small `summary.tsv` or `summary.json` for ledger ingestion.
