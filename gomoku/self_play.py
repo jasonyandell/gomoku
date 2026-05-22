@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
+from typing import MutableMapping
 
 import numpy as np
 
@@ -15,6 +17,30 @@ from gomoku.mcts import (
     run_batched_mcts_waves,
 )
 from gomoku import native_mcts
+
+
+ProfileStats = MutableMapping[str, float]
+
+
+def _profile_add(profile: ProfileStats | None, key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+class _profile_timer:
+    def __init__(self, profile: ProfileStats | None, key: str):
+        self.profile = profile
+        self.key = key
+        self.t0 = 0.0
+
+    def __enter__(self):
+        if self.profile is not None:
+            self.t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.profile is not None:
+            _profile_add(self.profile, self.key, time.perf_counter() - self.t0)
 
 
 @dataclass
@@ -135,42 +161,61 @@ def _generate_games_native(
     random_opening_moves: int = 0,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
+    profile: ProfileStats | None = None,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
         max_plies = N_ACTIONS
 
     planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
+
+    def _timed_planes_evaluator(planes_batch):
+        t0 = time.perf_counter()
+        try:
+            return planes_evaluator(planes_batch)
+        finally:
+            dt = time.perf_counter() - t0
+            _profile_add(profile, "evaluator_s", dt)
+            try:
+                batch_n = int(getattr(planes_batch, "shape", [len(planes_batch)])[0])
+            except Exception:
+                batch_n = 0
+            _profile_add(profile, "evaluator_calls", 1.0)
+            _profile_add(profile, "evaluator_positions", float(batch_n))
+
+    search_evaluator = _timed_planes_evaluator if profile is not None else planes_evaluator
+
     games = []
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
     n_archive = 0 if archive is None else int(archive["planes"].shape[0])
-    for _ in range(n_games):
-        from_archive = (
-            archive is not None
-            and n_archive > 0
-            and float(rng.random()) < archive_start_frac
-        )
-        if from_archive:
-            idx = int(rng.integers(0, n_archive))
-            start_state = _gamestate_from_archive(archive, idx)
-            opening_plies = start_state.move_count
-        elif random_opening_moves > 0:
-            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
-        else:
-            start_state, opening_plies = GameState.initial(), 0
-        games.append(
-            native_mcts.NativeMCTSGame(
-                start_state,
-                c_puct=c_puct,
-                c_puct_base=c_puct_base,
-                dirichlet_alpha=dirichlet_alpha,
-                dirichlet_eps=dirichlet_eps,
-                seed=int(rng.integers(1, 2**63 - 1)),
+    with _profile_timer(profile, "game_setup_s"):
+        for _ in range(n_games):
+            from_archive = (
+                archive is not None
+                and n_archive > 0
+                and float(rng.random()) < archive_start_frac
             )
-        )
-        initial_plies.append(opening_plies)
-        archive_start_flags.append(from_archive)
+            if from_archive:
+                idx = int(rng.integers(0, n_archive))
+                start_state = _gamestate_from_archive(archive, idx)
+                opening_plies = start_state.move_count
+            elif random_opening_moves > 0:
+                start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+            else:
+                start_state, opening_plies = GameState.initial(), 0
+            games.append(
+                native_mcts.NativeMCTSGame(
+                    start_state,
+                    c_puct=c_puct,
+                    c_puct_base=c_puct_base,
+                    dirichlet_alpha=dirichlet_alpha,
+                    dirichlet_eps=dirichlet_eps,
+                    seed=int(rng.integers(1, 2**63 - 1)),
+                )
+            )
+            initial_plies.append(opening_plies)
+            archive_start_flags.append(from_archive)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
@@ -178,51 +223,63 @@ def _generate_games_native(
 
     ply = 0
     while active and ply < max_plies:
-        active_games = [games[i] for i in active]
-        native_mcts.search_batch(
-            active_games,
-            planes_evaluator,
-            n_simulations=n_simulations,
-            wave_size=wave_size,
-            add_root_noise=True,
-        )
+        with _profile_timer(profile, "active_list_s"):
+            active_games = [games[i] for i in active]
+        with _profile_timer(profile, "native_search_batch_s"):
+            native_mcts.search_batch(
+                active_games,
+                search_evaluator,
+                n_simulations=n_simulations,
+                wave_size=wave_size,
+                add_root_noise=True,
+            )
+        _profile_add(profile, "search_calls", 1.0)
 
         next_active: list[int] = []
-        for slot_idx, g_idx in enumerate(active):
-            g = active_games[slot_idx]
-            tau = 1.0 if ply < temperature_moves else temperature_final
-            pi = g.policy(temperature=tau)
-            n_initial = initial_plies[g_idx]
-            side = (n_initial + ply) % 2
-            # Sanitize pi before recording the training example: NaN entries
-            # from the native MCTS policy export must not enter the buffer.
-            # _sample_action handles NaN for the *play* path, but trajectories
-            # are stored independently and feed the trainer's cross-entropy
-            # target. A NaN target poisons the loss for the entire minibatch.
-            # Replace NaN with 0 and re-normalize; if everything is NaN, fall
-            # back to a uniform distribution (lowest-information target —
-            # better than corrupting the buffer).
-            if not np.all(np.isfinite(pi)):
-                pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
-                s = pi.sum()
-                if s <= 0:
-                    pi = np.full_like(pi, 1.0 / len(pi))
-                else:
-                    pi = pi / s
-            trajectories[g_idx].append((g.root_planes(), pi.copy(), side))
+        with _profile_timer(profile, "post_search_loop_s"):
+            for slot_idx, g_idx in enumerate(active):
+                g = active_games[slot_idx]
+                tau = 1.0 if ply < temperature_moves else temperature_final
+                with _profile_timer(profile, "policy_export_s"):
+                    pi = g.policy(temperature=tau)
+                n_initial = initial_plies[g_idx]
+                side = (n_initial + ply) % 2
+                # Sanitize pi before recording the training example: NaN entries
+                # from the native MCTS policy export must not enter the buffer.
+                # _sample_action handles NaN for the *play* path, but trajectories
+                # are stored independently and feed the trainer's cross-entropy
+                # target. A NaN target poisons the loss for the entire minibatch.
+                # Replace NaN with 0 and re-normalize; if everything is NaN, fall
+                # back to a uniform distribution (lowest-information target —
+                # better than corrupting the buffer).
+                with _profile_timer(profile, "policy_sanitize_s"):
+                    if not np.all(np.isfinite(pi)):
+                        pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
+                        s = pi.sum()
+                        if s <= 0:
+                            pi = np.full_like(pi, 1.0 / len(pi))
+                        else:
+                            pi = pi / s
+                with _profile_timer(profile, "root_planes_s"):
+                    planes = g.root_planes()
+                with _profile_timer(profile, "trajectory_append_s"):
+                    trajectories[g_idx].append((planes, pi.copy(), side))
 
-            action = _sample_action(pi, rng)
-            g.advance_root(action)
-            done, term_val = g.is_terminal()
-            if done:
-                if term_val == -1.0:
-                    winner_side = side
-                    outcome_for_black = 1.0 if winner_side == 0 else -1.0
+                with _profile_timer(profile, "sample_action_s"):
+                    action = _sample_action(pi, rng)
+                with _profile_timer(profile, "advance_root_s"):
+                    g.advance_root(action)
+                with _profile_timer(profile, "terminal_check_s"):
+                    done, term_val = g.is_terminal()
+                if done:
+                    if term_val == -1.0:
+                        winner_side = side
+                        outcome_for_black = 1.0 if winner_side == 0 else -1.0
+                    else:
+                        outcome_for_black = 0.0
+                    completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
                 else:
-                    outcome_for_black = 0.0
-                completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
-            else:
-                next_active.append(g_idx)
+                    next_active.append(g_idx)
 
         active = next_active
         ply += 1
@@ -231,29 +288,34 @@ def _generate_games_native(
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     records: list[GameRecord] = []
-    for g_idx, outcome_for_black, plies in sorted(completed):
-        examples: list[SelfPlayExample] = []
-        n_initial = initial_plies[g_idx]
-        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
-            z = outcome_for_black if side == 0 else -outcome_for_black
-            ply_at_capture = n_initial + ply_idx
-            if augment_symmetries:
-                for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(
-                        aug_planes, aug_pi.astype(np.float32), z,
-                        side=int(side), ply=int(ply_at_capture),
-                    ))
-            else:
-                examples.append(SelfPlayExample(
-                    planes, pi.astype(np.float32), z,
-                    side=int(side), ply=int(ply_at_capture),
-                ))
-        records.append(GameRecord(
-            examples=examples,
-            plies=plies,
-            outcome=outcome_for_black,
-            archive_start=archive_start_flags[g_idx],
-        ))
+    with _profile_timer(profile, "record_build_s"):
+        for g_idx, outcome_for_black, plies in sorted(completed):
+            examples: list[SelfPlayExample] = []
+            n_initial = initial_plies[g_idx]
+            for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+                z = outcome_for_black if side == 0 else -outcome_for_black
+                ply_at_capture = n_initial + ply_idx
+                if augment_symmetries:
+                    with _profile_timer(profile, "d4_augment_s"):
+                        augmented = list(augment(planes, pi))
+                    for aug_planes, aug_pi in augmented:
+                        with _profile_timer(profile, "example_create_s"):
+                            examples.append(SelfPlayExample(
+                                aug_planes, aug_pi.astype(np.float32), z,
+                                side=int(side), ply=int(ply_at_capture),
+                            ))
+                else:
+                    with _profile_timer(profile, "example_create_s"):
+                        examples.append(SelfPlayExample(
+                            planes, pi.astype(np.float32), z,
+                            side=int(side), ply=int(ply_at_capture),
+                        ))
+            records.append(GameRecord(
+                examples=examples,
+                plies=plies,
+                outcome=outcome_for_black,
+                archive_start=archive_start_flags[g_idx],
+            ))
 
     return records
 
@@ -276,6 +338,7 @@ def generate_games(
     random_opening_moves: int = 0,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
+    profile: ProfileStats | None = None,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
@@ -311,6 +374,7 @@ def generate_games(
             random_opening_moves=random_opening_moves,
             archive=archive,
             archive_start_frac=archive_start_frac,
+            profile=profile,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)

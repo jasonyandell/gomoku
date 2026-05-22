@@ -45,6 +45,8 @@ will pick up all their files.
 from __future__ import annotations
 
 import argparse
+import json
+import platform
 import os
 import time
 import uuid
@@ -86,6 +88,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dirichlet-alpha", type=float, default=0.13)
     p.add_argument("--dirichlet-eps", type=float, default=0.25)
     p.add_argument("--random-opening-moves", type=int, default=0)
+    p.add_argument("--max-plies", type=int, default=None,
+                   help="Optional bounded-worker cap for profiling/smoke runs. "
+                        "Default None preserves full-game production behavior.")
+    p.add_argument("--profile-output", type=str, default=None,
+                   help="Write a JSON timing profile for bounded worker runs. "
+                        "The profile separates native_search_batch, evaluator, "
+                        "post-search Python, D4 augmentation, and file handoff.")
 
     # WL5 archive-start lever (wiki/topics/wl5-diagnostics-archive-start-design.md).
     # Per-game roll: with probability `--archive-start-frac` the game starts from
@@ -398,7 +407,7 @@ def _draw_poll_interval(
 
 
 def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_games: int,
-                      archive: dict | None = None):
+                      archive: dict | None = None, profile: dict[str, float] | None = None):
     if opp_picker is None:
         return generate_games(
             n_games, evaluator,
@@ -409,11 +418,13 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             temperature_final=args.temperature_final,
             dirichlet_alpha=args.dirichlet_alpha,
             dirichlet_eps=args.dirichlet_eps,
+            max_plies=args.max_plies,
             rng=rng,
             wave_size=args.wave_size,
             random_opening_moves=args.random_opening_moves,
             archive=archive,
             archive_start_frac=args.archive_start_frac,
+            profile=profile,
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
@@ -424,6 +435,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
         temperature_final=args.temperature_final,
         dirichlet_alpha=args.dirichlet_alpha,
         dirichlet_eps=args.dirichlet_eps,
+        max_plies=args.max_plies,
         rng=rng,
         wave_size=args.wave_size,
         model_first_frac=args.model_first_frac,
@@ -441,6 +453,82 @@ def _load_archive(path: str | None, worker_id: str) -> dict | None:
         flush=True,
     )
     return archive
+
+
+def _profile_add(profile: dict[str, float] | None, key: str, value: float) -> None:
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+def _write_profile(
+    path: str | None,
+    *,
+    profile: dict[str, float],
+    args: argparse.Namespace,
+    device: torch.device,
+    model_version: int,
+    batch_n: int,
+    n_games: int,
+    n_examples: int,
+    plies: list[int],
+    output_paths: list[str],
+) -> None:
+    if not path:
+        return
+    wall_s = float(profile.get("batch_wall_s", 0.0))
+    search_s = float(profile.get("native_search_batch_s", 0.0))
+    eval_s = float(profile.get("evaluator_s", 0.0))
+    profile["native_search_excluding_evaluator_s"] = max(search_s - eval_s, 0.0)
+    post_search_keys = [
+        "post_search_loop_s",
+        "record_build_s",
+        "file_handoff_s",
+        "active_list_s",
+        "mtime_check_s",
+        "worker_payload_s",
+    ]
+    profile["post_search_python_s"] = float(sum(profile.get(k, 0.0) for k in post_search_keys))
+    shares = {
+        k: (float(v) / wall_s if wall_s > 0 and isinstance(v, (int, float)) else 0.0)
+        for k, v in profile.items()
+        if k.endswith("_s")
+    }
+    payload = {
+        "schema": "gomoku.outer_loop_profile.v1",
+        "created_at_unix": time.time(),
+        "hardware": platform.platform(),
+        "python": platform.python_version(),
+        "device": str(device),
+        "worker_id": args.worker_id,
+        "model_version": model_version,
+        "batch_n": batch_n,
+        "config": {
+            "games_per_batch": args.games_per_batch,
+            "n_simulations": args.n_simulations,
+            "wave_size": args.wave_size,
+            "max_plies": args.max_plies,
+            "temperature_moves": args.temperature_moves,
+            "temperature_final": args.temperature_final,
+            "dirichlet_alpha": args.dirichlet_alpha,
+            "dirichlet_eps": args.dirichlet_eps,
+            "opponent": args.opponent,
+            "wave_mode": bool(args.wave_mode),
+        },
+        "totals": {
+            "games": n_games,
+            "examples": n_examples,
+            "plies": int(sum(plies)),
+            "plies_mean": float(np.mean(plies)) if plies else 0.0,
+            "output_paths": output_paths,
+        },
+        "timings_s": profile,
+        "shares_of_batch_wall": shares,
+    }
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, out)
 
 
 def main() -> None:
@@ -527,13 +615,17 @@ def main() -> None:
         )
 
         while True:
+            profile = {} if args.profile_output else None
+            batch_wall_t0 = time.perf_counter()
             # Wave mode reloads only at generation boundaries. Before the
             # worker has produced its G-game tile, keep filling the current
             # version even if a newer file appears unexpectedly.
+            mtime_t0 = time.perf_counter()
             try:
                 cur_mtime = os.path.getmtime(args.weights_path)
             except OSError:
                 cur_mtime = weights_mtime
+            _profile_add(profile, "mtime_check_s", time.perf_counter() - mtime_t0)
             if games_on_version >= args.games_per_batch and cur_mtime > weights_mtime:
                 try:
                     model, payload = load_checkpoint(args.weights_path, device=device)
@@ -568,9 +660,11 @@ def main() -> None:
             target_games = max(args.games_per_batch - games_on_version, 1)
             t0 = time.perf_counter()
             records = _generate_records(
-                args, wave_evaluator, opp_picker, rng, target_games, archive=archive
+                args, wave_evaluator, opp_picker, rng, target_games, archive=archive,
+                profile=profile,
             )
             dt = time.perf_counter() - t0
+            _profile_add(profile, "generate_records_s", dt)
             batch_n += 1
             archive_started = sum(1 for r in records if getattr(r, "archive_start", False))
 
@@ -579,6 +673,7 @@ def main() -> None:
             for record in records:
                 seq = next_seq
                 next_seq += 1
+                payload_t0 = time.perf_counter()
                 payload = {
                     "records": [record],
                     "worker_id": args.worker_id,
@@ -596,9 +691,12 @@ def main() -> None:
                     "mix_source": wave_mix_source,
                     "mix_weights": wave_mix_label,
                 }
+                _profile_add(profile, "worker_payload_s", time.perf_counter() - payload_t0)
+                save_t0 = time.perf_counter()
                 saved = _atomic_save_wave_game(
                     out_dir, args.worker_id, model_version, seq, payload
                 )
+                _profile_add(profile, "file_handoff_s", time.perf_counter() - save_t0)
                 if saved is None:
                     # Trainer ingested v{model_version} and cleaned the dir
                     # between mkdir and write — drop the game. Outer loop
@@ -617,17 +715,34 @@ def main() -> None:
                 f"archive_started={archive_started}",
                 flush=True,
             )
+            _profile_add(profile, "batch_wall_s", time.perf_counter() - batch_wall_t0)
+            _write_profile(
+                args.profile_output,
+                profile=profile or {},
+                args=args,
+                device=device,
+                model_version=model_version,
+                batch_n=batch_n,
+                n_games=len(paths),
+                n_examples=saved_examples,
+                plies=[int(r.plies) for r in records[:len(paths)]],
+                output_paths=[str(p) for p in paths],
+            )
 
             if args.max_batches > 0 and batch_n >= args.max_batches:
                 print(f"[{args.worker_id}] hit max-batches={args.max_batches}, exiting", flush=True)
                 return
 
     while True:
+        profile = {} if args.profile_output else None
+        batch_wall_t0 = time.perf_counter()
         # 1) reload weights if newer (cheap mtime check)
+        mtime_t0 = time.perf_counter()
         try:
             cur_mtime = os.path.getmtime(args.weights_path)
         except OSError:
             cur_mtime = weights_mtime  # file might be mid-rename
+        _profile_add(profile, "mtime_check_s", time.perf_counter() - mtime_t0)
         if cur_mtime > weights_mtime:
             try:
                 model, payload = load_checkpoint(args.weights_path, device=device)
@@ -654,15 +769,18 @@ def main() -> None:
         # 2) generate a batch of games
         t0 = time.perf_counter()
         records = _generate_records(
-            args, evaluator, opp_picker, rng, args.games_per_batch, archive=archive
+            args, evaluator, opp_picker, rng, args.games_per_batch, archive=archive,
+            profile=profile,
         )
         dt = time.perf_counter() - t0
+        _profile_add(profile, "generate_records_s", dt)
         archive_started = sum(1 for r in records if getattr(r, "archive_start", False))
 
         # 3) atomic write
         n_games = len(records)
         n_examples = sum(len(r.examples) for r in records)
-        path = _atomic_save(out_dir, args.worker_id, {
+        payload_t0 = time.perf_counter()
+        payload = {
             "records": records,
             "worker_id": args.worker_id,
             "weights_mtime": weights_mtime,
@@ -671,7 +789,11 @@ def main() -> None:
             "n_games": n_games,
             "n_examples": n_examples,
             "gen_s": dt,
-        })
+        }
+        _profile_add(profile, "worker_payload_s", time.perf_counter() - payload_t0)
+        save_t0 = time.perf_counter()
+        path = _atomic_save(out_dir, args.worker_id, payload)
+        _profile_add(profile, "file_handoff_s", time.perf_counter() - save_t0)
         batch_n += 1
         last_gen_mtime = weights_mtime
         print(
@@ -679,6 +801,19 @@ def main() -> None:
             f"{dt:.1f}s ({dt/n_games*1000:.0f} ms/game) "
             f"archive_started={archive_started} -> {path.name}",
             flush=True,
+        )
+        _profile_add(profile, "batch_wall_s", time.perf_counter() - batch_wall_t0)
+        _write_profile(
+            args.profile_output,
+            profile=profile or {},
+            args=args,
+            device=device,
+            model_version=model_version,
+            batch_n=batch_n,
+            n_games=n_games,
+            n_examples=n_examples,
+            plies=[int(r.plies) for r in records],
+            output_paths=[str(path)],
         )
 
         if args.max_batches > 0 and batch_n >= args.max_batches:
