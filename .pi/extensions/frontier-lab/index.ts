@@ -735,9 +735,27 @@ async function runCurator(run: FrontierRun): Promise<void> {
 	}
 }
 
+function safeSetFrontierStatus(value: string | undefined): void {
+	try {
+		currentCtx?.ui.setStatus("frontier", value);
+	} catch {
+		// Background frontier runs can outlive the command context that launched
+		// them. State files/events are authoritative; stale UI handles should not
+		// turn a completed run into a failed run.
+	}
+}
+
+function safeNotifyFrontier(message: string, level: "info" | "warning" | "error" = "info"): void {
+	try {
+		currentCtx?.ui.notify(message, level);
+	} catch {
+		// See safeSetFrontierStatus.
+	}
+}
+
 async function managerLoop(run: FrontierRun): Promise<void> {
 	try {
-		currentCtx?.ui.setStatus("frontier", `frontier ${run.id}: running`);
+		safeSetFrontierStatus(`frontier ${run.id}: running`);
 		run.status = "running";
 		await appendEvent(run, { type: "run_start", workers: run.workers.length });
 		await saveRun(run);
@@ -745,7 +763,7 @@ async function managerLoop(run: FrontierRun): Promise<void> {
 		if (run.status === "stopped") return;
 		run.status = "integrating";
 		await saveRun(run);
-		currentCtx?.ui.setStatus("frontier", `frontier ${run.id}: integrating`);
+		safeSetFrontierStatus(`frontier ${run.id}: integrating`);
 		for (const worker of run.workers) {
 			if (run.status === "stopped") return;
 			await integrateWorker(run, worker);
@@ -757,15 +775,15 @@ async function managerLoop(run: FrontierRun): Promise<void> {
 		run.finishedAt = nowIso();
 		await appendEvent(run, { type: "run_end", status: run.status });
 		await saveRun(run);
-		currentCtx?.ui.setStatus("frontier", undefined);
-		currentCtx?.ui.notify(`Frontier run ${run.id} completed. State: ${path.join(run.rootDir, "state.json")}`, "info");
+		safeSetFrontierStatus(undefined);
+		safeNotifyFrontier(`Frontier run ${run.id} completed. State: ${path.join(run.rootDir, "state.json")}`, "info");
 	} catch (error) {
 		run.status = "failed";
 		run.finishedAt = nowIso();
 		await appendEvent(run, { type: "run_failed", error: error instanceof Error ? error.stack ?? error.message : String(error) });
 		await saveRun(run);
-		currentCtx?.ui.setStatus("frontier", undefined);
-		currentCtx?.ui.notify(`Frontier run ${run.id} failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+		safeSetFrontierStatus(undefined);
+		safeNotifyFrontier(`Frontier run ${run.id} failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 	} finally {
 		activeRun = undefined;
 	}
