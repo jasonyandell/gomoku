@@ -898,3 +898,22 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Updated [index.md](index.md) so future perf sessions route to the engine
   partitioning idea directly, and corrected the buffer-bit-packing index
   summary to match the 48 GB M5 Max math.
+
+## [2026-05-22] organization | task routes + WL-series lineage map
+
+- Full wiki pass found the main organization issue was routing, not raw
+  content quality: [index.md](index.md) had become a flat catalog mixing
+  current state, run designs, perf pages, operations, and wiki schema.
+- Reshaped [index.md](index.md) into task-oriented start routes plus grouped
+  catalog sections: core, training dynamics, run designs, performance/hardware,
+  and operations/use.
+- Added [topics/training-run-lineage.md](topics/training-run-lineage.md) as a
+  compact maintained synthesis map for Z -> WL1 -> WL5. It keeps run IDs,
+  conclusions, and next links in one place without flattening
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md).
+- Added status notes to the WL1, WL2, and WL5 design pages so future sessions
+  read them as preserved design records, then jump to the lineage map and
+  notebook for results.
+- Updated [topics/wiki-operating-model.md](topics/wiki-operating-model.md) to
+  name route maps and lineage maps as first-class synthesis when the index
+  starts carrying too much navigation load.

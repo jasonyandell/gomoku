@@ -1,5 +1,13 @@
 # WL5 — Diagnostics + Archive-Start Design
 
+Status note (2026-05-21): implemented and launched as WL5 (`o6cbjfnr`).
+Phase 1 (e4001-e5051) validated the diagnostic streams and archive-start
+pipeline without NaN, worker death, or fast-attack collapse, but did not beat
+WL4's ATH. Phase 2 is the same run after self-play workers were hot-restarted
+with Conv+BN-fused inference. Treat this page as the preserved WL5 design
+record; read [training-run-lineage.md](training-run-lineage.md) and the WL5
+tail of [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) for current status.
+
 Design recorded 2026-05-21 by Jason and assistant after WL4 reached the
 "healthy lower-floor-bouncing" plateau described in
 [loss-floor-bouncing.md](loss-floor-bouncing.md). WL4 produced the best

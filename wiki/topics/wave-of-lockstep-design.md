@@ -1,5 +1,12 @@
 # Wave-of-Lockstep Design — Next Run
 
+Status note (2026-05-21): implemented and launched as WL1 (`l8mbntcm`).
+The barrier and greedy-fill mechanics worked, but the run replaced Z's slow
+explore/consolidate arcs with high-frequency strength oscillation. Treat this
+page as the preserved WL1 design record; read
+[training-run-lineage.md](training-run-lineage.md) and the WL1 run-end section
+in [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) for the result.
+
 Design decision recorded 2026-05-20 by Jason after `az-recipe-160k` (run id
 `sppjo3z5`) finished its 5000-epoch run. The hypothesis under test in the next
 run is that **per-version uniformity in the self-play buffer is the dominant

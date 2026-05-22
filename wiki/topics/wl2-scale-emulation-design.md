@@ -1,5 +1,12 @@
 # WL2 — Scale-Emulation Design
 
+Status note (2026-05-21): implemented and launched as WL2 (`9wng4yu9`).
+The four-lever stack smoothed the early trajectory and raised the la4 peak,
+but did not solve retention. Treat this page as the preserved WL2 design
+record; read [training-run-lineage.md](training-run-lineage.md) and the WL2
+run-end section in [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) for the
+result.
+
 Design recorded 2026-05-20 by Jason and assistant after `WL1` (wandb
 `l8mbntcm`) showed strength regression past its e360-499 peak: model
 oscillated between elo 620 and 1281 over 1100+ epochs without sustaining

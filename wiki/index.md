@@ -7,27 +7,20 @@ history.
 
 ## Start Here
 
-| Page | Role |
-|---|---|
-| [AGENTS.md](../AGENTS.md) | Schema for agents: wiki rules, repo map, and working conventions. |
-| [TRAINING_WIKI.md](../TRAINING_WIKI.md) | Primary training notebook: run history, hypotheses, results, and corrections. |
-| [log.md](log.md) | Chronological wiki maintenance log. |
-| [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
-| [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and aren't. Don't re-port "v2 storage" — we're already there. |
-| [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md) | Practical knobs and interpretation rules for Mac Activity Monitor perf experiments. |
-| [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | Why the wrinkles in our run (exploration arcs, plies swings, age oscillations) are laptop-scale artifacts, not training bugs. |
-| [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) | Why low-floor loss bounces can be healthy in small-scale AZ, and when to suspect a real bug. |
-| [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | WL1 design: per-version uniformity via wave-of-lockstep + greedy fill. Implementation plan and held-back levers. |
-| [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md) | WL2 design: emulate AZ-at-scale in-flight diversity via EMA self-play + past-checkpoint mix + worker poll jitter + grad accumulation. Motivated by WL1's high-frequency oscillation failure mode. |
-| [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) | WL5 design: 3 diagnostic streams (fixed validation archive, H/KL decomposition, per-color/ply metrics) + Go-Exploit-style archive-start lever (15% of self-play games from curated WL4 trouble positions). Resume from WL4 e4024. Targets the article's central interpretive distinction: target-distribution noise vs learning gap. |
-| [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | Operational recipe for `scripts/mine_validation_archive.py` — buckets, knobs, throughput, anti-patterns. Reuse this every time we need a fresh validation archive. |
-| [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Post-WL5 task: split eval-only inference off the MPS training path. Target shape: self-play on ANE/Core ML, training on MPS GPU, eval sidecar on CPU/BNNS. Starts with INT8/FP16 Core ML calibration against the WL5 validation archive. |
-| [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 task: bit-pack the planes (binary stones) + FP16 the pi to shrink per-position storage 17×. Practical packed target on the 48 GB M5 Max is ~250-300k games; 1M games needs sparse game-level storage or larger RAM. ~3 days; cheap-test first before refactoring. |
-| [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | Guiding philosophy for the post-WL5 perf era: treat the M5 Max as a knowable mainframe, 9×9 gomoku as the perf proving ground, with the goal of a calibrated chip-behavior chart before committing to a 15×15 + Gomocup run. Compounded chip-specific levers (ANE INT8 + pipelined ANE/GPU/AMX + Metal kernels) targeting 10-25× throughput. |
-| [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | Reusable playbook for kicking off a training run. Pre-launch checks (incl. MPS INT_MAX + worker race gotchas), title card → ACK, smoke, real launch, wiki + workspace updates, /loop monitoring cadence, fan-out implementation pattern. |
-| [topics/playing-the-model.md](topics/playing-the-model.md) | How to actually play a trained checkpoint: local web UI (strongest), live SPA (convenient), which checkpoint to pick, knobs that matter, common annoyances. |
-| [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
-| [../scripts/wandb_workspace.py](../scripts/wandb_workspace.py) | Creates the 6-section wandb workspace tuned for WL1-vs-Z overlays. Live view: https://wandb.ai/jasonyandell-forge42/gomoku?nw=ul0vliphj6x |
+Pick the doorway that matches the task. The big training notebook is still the
+source of chronological evidence; these routes keep future sessions from
+reading it front-to-back unless the work actually needs that.
+
+| Need | Start with | Then read |
+|---|---|---|
+| Current training story or "how did we get here?" | [topics/training-run-lineage.md](topics/training-run-lineage.md) | [TRAINING_WIKI.md](../TRAINING_WIKI.md) tail, then [log.md](log.md). |
+| Launch, resume, monitor, or stop a run | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | The relevant design page, then the latest run section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
+| Interpret training dynamics | [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) and [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | The run's evidence section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
+| Plan a WL-series follow-up | [topics/training-run-lineage.md](topics/training-run-lineage.md) | [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md), [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md), [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md). |
+| Work on performance or hardware strategy | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md), [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md), [topics/ane-int8-inference.md](topics/ane-int8-inference.md), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md). |
+| Mine or use validation archives | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) and [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md). |
+| Play a checkpoint | [topics/playing-the-model.md](topics/playing-the-model.md) | Latest plateau/run-end notes in [topics/training-run-lineage.md](topics/training-run-lineage.md). |
+| Maintain the wiki | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) and [log.md](log.md). |
 
 ## Current Synthesis
 
@@ -38,26 +31,19 @@ to imitate fast attacks from its own search?"
 Current evidence lives in [TRAINING_WIKI.md](../TRAINING_WIKI.md). The high-level
 read is:
 
+- The strongest current training lineage is the WL series. See
+  [topics/training-run-lineage.md](topics/training-run-lineage.md) for the
+  compact Z -> WL1 -> WL5 map and exact run IDs.
 - Local throughput work succeeded; distributed self-play made iteration much
   faster.
-- The current perf worktree includes optional native MCTS (`gomoku._mcts_native`)
-  for Torch self-play. Production-shaped single-process MPS benches moved from
-  ~700 to ~2,000-2,200 augmented positions/sec; the 10-epoch WL1 multi-worker
-  read now shows ~2,379 wall augmented positions/sec at 8 workers x 8 games; see
-  [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
-- Post-native profiling now points at the tiny-model evaluator boundary:
-  eval-only Conv+BatchNorm fusion is wired into workers/play surfaces, while
-  trainer models stay unfused; see
-  [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
-- The next hardware-specific perf idea is engine partitioning, not just
-  faster kernels: keep self-play leaf eval on ANE/Core ML, trainer
-  forward/backward on MPS, and eval sidecar work on CPU/BNNS so the
-  three heavy lanes stop fighting for one accelerator path; see
-  [topics/ane-int8-inference.md](topics/ane-int8-inference.md).
+- Native MCTS plus eval-only Conv+BatchNorm fusion moved the self-play
+  bottleneck from Python tree churn toward evaluator and engine-boundary
+  questions. See [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
 - First engine scout says Core ML is slower than fused PyTorch/MPS for raw
   small-model eval, but it hurts concurrent MPS training far less than a
   competing PyTorch/MPS eval process. Treat the next step as a production
-  overlap experiment, not a naked eval microbench.
+  overlap experiment, not a naked eval microbench. See
+  [topics/ane-int8-inference.md](topics/ane-int8-inference.md).
 - The main training failure mode is fast-attack collapse: policy targets sharpen
   around attacks, self-play opponents fail to punish missing defense, and fixed
   heuristic/lookahead opponents expose the gap.
@@ -65,6 +51,53 @@ read is:
   clear checkpoint/run IDs.
 - The next useful additions to the wiki should preserve evidence: command,
   config, W&B run ID, checkpoint path, metrics, and the working-theory change.
+
+## Page Catalog
+
+### Core
+
+| Page | Role |
+|---|---|
+| [AGENTS.md](../AGENTS.md) | Schema for agents: wiki rules, repo map, and working conventions. |
+| [TRAINING_WIKI.md](../TRAINING_WIKI.md) | Primary append-oriented training notebook: run history, hypotheses, results, and corrections. |
+| [log.md](log.md) | Chronological wiki maintenance log. |
+| [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
+| [topics/training-run-lineage.md](topics/training-run-lineage.md) | Compact route map for the Z and WL-series run sequence. |
+| [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
+
+### Training Dynamics
+
+| Page | Role |
+|---|---|
+| [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | Why exploration arcs, plies swings, and age oscillations are laptop-scale artifacts before they are bug evidence. |
+| [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) | Why low-floor loss bounces can be healthy in small-scale AZ, and when to suspect a real bug. |
+
+### Run Designs
+
+| Page | Role |
+|---|---|
+| [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | WL1 design: per-version uniformity via wave-of-lockstep + greedy fill. Now a preserved design record plus WL1 status pointer. |
+| [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md) | WL2 design: EMA self-play + past-checkpoint mix + worker poll jitter + grad accumulation. Now a preserved design record plus WL2 status pointer. |
+| [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) | WL5 design: fixed validation archive, H/KL decomposition, per-color/ply metrics, and archive-start. Now a preserved design record plus WL5 status pointer. |
+
+### Performance And Hardware
+
+| Page | Role |
+|---|---|
+| [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and are not. Do not re-port "v2 storage"; we are already there. |
+| [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md) | Practical knobs and interpretation rules for Mac Activity Monitor perf experiments. |
+| [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | Guiding philosophy and sequence for the post-WL5 perf era on Jason's M5 Max. |
+| [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Engine-isolation plan and first scout for Core ML / ANE / CPU lanes around MPS training. |
+| [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 replay-buffer compression plan: bit-packed planes plus FP16 policy, with cheap-test gate. |
+
+### Operations And Use
+
+| Page | Role |
+|---|---|
+| [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | Reusable playbook for launching, smoking, monitoring, and ending training runs. |
+| [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | Operational recipe for `scripts/mine_validation_archive.py`: buckets, knobs, throughput, anti-patterns. |
+| [topics/playing-the-model.md](topics/playing-the-model.md) | How to play a trained checkpoint through the local web UI or live SPA. |
+| [../scripts/wandb_workspace.py](../scripts/wandb_workspace.py) | Creates W&B workspaces for run overlays. Regenerate when a new run joins the comparison set. |
 
 ## Layers
 

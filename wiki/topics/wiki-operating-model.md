@@ -29,6 +29,8 @@ faster:
 - Which runs or checkpoints are meaningful.
 - Which metrics are misleading.
 - Which next experiments are justified by evidence.
+- Which route map gets a future session to the right evidence without
+  rereading the whole notebook.
 
 [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) remains the main chronological
 lab notebook. Topic pages should emerge when a recurring question needs a stable
@@ -65,6 +67,8 @@ Periodically health-check the wiki for:
 - missing links between index, notebook, and source records;
 - orphan topic pages;
 - hypotheses without run IDs or checkpoint evidence;
+- flat index sections that should become task-based routes or compact lineage
+  maps;
 - answers in chat that should become durable wiki pages.
 
 ## Local Principle
