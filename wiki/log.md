@@ -970,3 +970,18 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Updated [topics/wiki-operating-model.md](topics/wiki-operating-model.md) to
   name route maps and lineage maps as first-class synthesis when the index
   starts carrying too much navigation load.
+
+## [2026-05-22] research | external rated engine baselines
+
+- Added [topics/external-engine-baselines.md](topics/external-engine-baselines.md)
+  to preserve the decision path for OSS/source-available external Gomoku
+  engines that can become fixed eval anchors.
+- Added [sources/gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md)
+  as the source snapshot for Gomocup ratings, downloads, protocol docs, and
+  candidate repos.
+- Current recommendation: start with Rapfi because it combines the strongest
+  external signal, explicit GPL-3.0 source, Piskvork protocol support, and
+  vectorized build paths including ARM64 NEON. Treat Gomocup Elo as provenance,
+  then calibrate local 9x9 strength by time control inside our harness.
+- Indexed the route under "Add or interpret external engine baselines" so
+  future sessions do not need to rediscover the Gomocup ecosystem from scratch.
