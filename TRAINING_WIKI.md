@@ -3367,3 +3367,119 @@ on per-epoch metrics, so phase 1 deserves its own framing.
 - Production verification of the fusion that demarcates phase 1 from
   phase 2 lives a few sections above ("Production verification — hot-restart
   of WL5 workers (2026-05-21 21:35)").
+
+### WL5 phase-2 close — fused-workers era, run-end at cap e10200 (2026-05-22, ~15.8h wall)
+
+Closing WL5 phase 2 as the second discrete chapter of the same wandb run
+(`o6cbjfnr`). Phase 2 ran across two segments separated by a ~1h pause
+for parallel perf benches:
+
+- **Segment A:** e5052 → e5249 (~2.6h, post-fusion-restart 2026-05-21
+  19:35 → voluntary stop 22:12 to free MPS).
+- **Segment B:** e5201 → e10200 (~13.3h, resume 23:08 from the e5200
+  buffer snapshot, hit cap at 2026-05-22 12:25).
+
+Segment B re-started from the same wandb run id; the e5201-e5249 overlap
+spans 49 epochs of weights that were rolled back to the e5200 buffer
+snapshot and re-derived from there. The trade was deliberate: lose 49
+epochs of weight drift to keep the 1.5M-position buffer warm.
+
+**Phase 2 final state (e10200):**
+- Cap-reached normal exit; wandb finalized cleanly, last checkpoint
+  written to disk: `sweep_runs/WL5-diagnostics-archive-start/checkpoints/epoch10200.pt`
+- 724,334 games generated across phase 2 segment B (total run to date
+  1,325,249 games)
+- Replay buffer full ring at 1.5M (cycled ~28× across the run lifetime —
+  see [[project-buffer-undersized]] in session memory)
+- 0 NaN, 0 worker deaths, 0 barrier stalls, 0 tracebacks across 5000
+  epochs of segment B
+
+**Phase 2 segment B stats (n=5000 epoch lines, e5201 → e10200):**
+
+| metric | value | vs phase-1 mean | vs phase-2 reference (e5051-end) |
+|---|---:|---|---|
+| pl (mean) | 0.621 | 0.673 → 0.621, **-7.7%** | 0.69 → 0.62, **-10%** |
+| pl (min) | 0.423 | — | new low |
+| vl (mean) | 0.073 | 0.082 → 0.073 | 0.077 → 0.073 |
+| vl (min) | 0.042 | — | new low |
+| plies (mean) | 41.5 | 38.6 → 41.5 | 38 → 42, longer defenses |
+| plies (max) | 59.9 | — | longest games of the run |
+| epochs/hr | ~376 | 414 → 376 (more SGD work/cycle absorbs gen surplus) | — |
+
+**Eval scoreboard (523 eval cycles in segment B):**
+
+| metric | value |
+|---|---:|
+| elo min/median/max | 1168 / 1543 / **1738** |
+| la4 min/median/max | 25% / 82% / 100% |
+| la2 min/median/max | 38% / 90% / 100% |
+| h   min/median/max | 25% / 75% / 100% |
+| **Best elo: 1738 at e5477** | la4=100%, la2=100%, h=75% |
+
+WL4 ATH **1841** was not broken. Best elo (1738) landed ~5 hours into
+segment B, then drifted to mid-band for the remaining ~8 hours. The eval
+oscillation was wide: la4 single-cycle range 25%-100% across just 20
+games is mostly sample noise, but the underlying training metrics show
+the model genuinely moved into a lower-loss / longer-defense regime than
+phase 1 occupied.
+
+**Run shape, summarized:**
+
+| sub-phase | epochs | story |
+|---|---|---|
+| segment A (post-fusion) | e5052-e5249 | brief fusion-validation run before perf-bench pause |
+| segment B resume warm-up | e5201-e5500 | recovered from buffer snapshot; elo briefly hit 1738 (this run's ATH) |
+| segment B main body | e5500-e9500 | wide oscillation: pl swung 0.42-0.80, vl 0.04-0.11, plies 25-60, elo bouncing 1168-1699 across hundreds of evals |
+| segment B run-out | e9500-e10200 | metrics settled near phase-2 centroid (pl 0.65, vl 0.075, plies 40), elo mid-band 1414-1699, no late breakout |
+
+**What got validated in phase 2:**
+- Conv+BN fusion is stable in production over 5000+ epochs (no
+  weight-drift, no eval/MPS path divergence, no thermal weirdness)
+- The lever-set (archive-start 15%, EMA 0.99, past-mix 0.4/0.1,
+  grad-accum 4×) is well-tolerated at scale — no degradation modes that
+  hadn't already appeared in phase 1
+- Wave-mode coordinator survives a 5000-epoch cap-reach without barrier
+  stalls or worker-mismatch events
+
+**What didn't (yet) happen:**
+- WL4 ATH 1841 was not broken. Best 1738 = WL4-strength-equivalent
+  carry-over, not a phase-2 breakthrough.
+- The pl-mean drop (0.69 → 0.62) and plies-mean rise (38 → 42) suggest
+  the policy genuinely moved, but that motion didn't translate to a new
+  eval-side ceiling. Read this through [[loss-floor-bouncing]]: the
+  *learning gap* improved (lower training loss against the in-distribution
+  buffer), but the *target-distribution* against the fixed external
+  baselines didn't reflect it. Phase 3 (or post-WL5) should mine fresh
+  hard buckets from phase-2's evaluation positions rather than carrying
+  forward WL4's archive.
+
+**Phase 2 limits exposed:**
+- Buffer is undersized vs the generation rate (cycled ~28× by 1M games)
+  — see [[project-buffer-undersized]]. Default to 3M positions for the
+  next cell.
+- Eval-cycle sample size (20 games per baseline) is too small for a
+  signal-dominated read on the 1500-1700 elo band; ±10% bands routinely
+  swing elo by 100+ points cycle-to-cycle. Future cells should consider
+  larger n on the slow-eval pass.
+
+**Run artifacts:**
+- wandb: `o6cbjfnr` (continuous across both segments, step counter
+  monotonic e4001 → e10200).
+- Trainer log: `sweep_logs/WL5-diagnostics-archive-start/trainer.log`
+  (phase 2 = epoch lines e5052 → e10200).
+- Last checkpoint on disk: `epoch10200.pt` (5.3 MB slim);
+  `latest.pt` (8.8 GB full buffer snapshot at e10200).
+- Commits anchoring phase 2: the phase-1-list (especially `aff6969`,
+  `4f21cdd` — Conv+BN fusion) plus all of 2026-05-22's frontier merges
+  that ran adjacent in other worktrees but did not modify the WL5
+  trainer/worker code path.
+
+**Cross-refs:**
+- WL5 phase-1 close above for the un-fused-era retrospective and the
+  phase-boundary framing.
+- [wiki/topics/external-engine-baselines.md](wiki/topics/external-engine-baselines.md)
+  — the next eval-side step is fixed external anchors (Rapfi etc.) so
+  the noisy 20-game lookahead winrates stop being the strength signal.
+- [wiki/topics/m5-max-as-mainframe.md](wiki/topics/m5-max-as-mainframe.md)
+  — post-WL5 work pivots to chip-characterization perf sweeps before
+  the next training cell.

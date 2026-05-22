@@ -985,3 +985,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
   then calibrate local 9x9 strength by time control inside our harness.
 - Indexed the route under "Add or interpret external engine baselines" so
   future sessions do not need to rediscover the Gomocup ecosystem from scratch.
+
+## [2026-05-22] run | WL5 phase-2 reached cap e10200, run end
+
+- WL5 hit its `--epochs 5000` cap on the overnight-resume segment B,
+  ending the wandb run `o6cbjfnr` cleanly with `epoch10200.pt` written
+  to disk and wandb finalized. All 10 processes terminated, GPU/MPS free.
+- Added the **WL5 phase-2 close** retrospective to
+  [TRAINING_WIKI.md](../TRAINING_WIKI.md), mirroring the phase-1 close
+  format: phase-2 final state, segment-B stats table, eval scoreboard,
+  run shape, what got validated, what limits got exposed, run artifacts.
+- Headline numbers (segment B, n=5000 epochs, ~13.3h wall):
+  pl mean 0.621 (-10% vs phase-2 reference), vl mean 0.073, plies mean
+  41.5, best elo 1738 at e5477 (la4=100%, la2=100%, h=75%) — WL4 ATH
+  1841 was not broken. 0 NaN, 0 worker deaths, 0 tracebacks.
+- Noted two new limits-of-this-cell findings for the next cell:
+  buffer undersized vs generation rate (cycled ~28× by 1M games), and
+  20-game-per-baseline eval-cycle sample size is too small to read the
+  1500-1700 elo band cleanly.
