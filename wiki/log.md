@@ -3,6 +3,13 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-22] ops | control-room curation for frontier run 20260522T054739Z
+
+- Synced ops status/frontier pages with active frontier worktrees and receipt state: five lanes claimed under `.frontier/worktrees/20260522T054739Z-*`; before this lane wrote its own receipt, no sibling worker receipt files existed yet when checked.
+- Curated perf10 production-shaped evidence from `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` as the active production-contour seed, with exact-command capture still marked as the repeat blocker.
+- Curated detached 934b Core ML / ANE residency evidence into ops baselines, test ledger, and experiment ledger: Gomoku FP16 fixed fused Core ML b32/b128 cells show nonzero ANE rail by powermetrics, but remain `needs_repeat` because the harness is uncommitted/detached and not yet production-overlap tested.
+- Wrote the lane open note at `wiki/ops/open-notes/20260522T054739Z-05-control-room-curation.md` and manager receipt under `.frontier/runs/20260522T054739Z/workers/05-control-room-curation/receipt.md`.
+
 ## [2026-05-22] ops | frontier-lab ML perf control room seeded
 
 - Added project-local pi frontier-lab setup under `.pi/` plus machine-readable

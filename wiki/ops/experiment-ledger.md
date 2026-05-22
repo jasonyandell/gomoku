@@ -55,3 +55,24 @@ commands_run: exact launcher command not captured in ops ledger; trainer logs re
 decision: needs_repeat
 next_action: Use this as seed evidence for the production-contour-sweep lane, but rerun current-main baseline receipts with explicit command capture before treating it as a promotion gate.
 ```
+
+### 2026-05-22 — Core ML Gomoku ANE residency candidates from 934b
+
+```yaml
+lane: ane-residency-rail-proof
+hypothesis: Some Core ML FP16 Gomoku fixed-batch shapes can actually move the ANE rail, unlike the first CPU_AND_NE scout that only proved Core ML scheduling/isolation.
+code_ref: detached dirty worktree /Users/jason/.codex/worktrees/934b/gomoku at b9b9eab with uncommitted scripts/coreml_ane_residency_scout.py and tests/test_coreml_ane_residency_scout.py
+dataset_ref: synthetic random Gomoku eval planes; no training or strength dataset
+baseline_command: python scripts/coreml_ane_residency_scout.py --model-kinds gomoku --compute-units CPU_AND_NE --compute-precision FLOAT16 --batch-size 1 --workers 4 --duration-s 15 ... plus same-window powermetrics wrapper
+candidate_command: python scripts/coreml_ane_residency_scout.py --model-kinds gomoku --compute-units CPU_AND_NE --compute-precision FLOAT16 --batch-size 32 --workers 4 --duration-s 15 ...; repeated at batch 128 and 1024; powermetrics summaries saved beside JSON
+hardware: M5 Max / macOS 26.4.1 / Core ML 9.0 / PyTorch 2.11.0 / powermetrics ane_power
+seed: synthetic random inputs; seed not recorded in curated summary
+baseline_metric: b1 CPU_AND_NE Gomoku FP16 fixed fused = 33,043 positions/s, 495,648 positions, ANE mean=0 mW, max=0 mW, 0/23 active samples
+candidate_metric: b32 = 122,039 positions/s, 1,830,688 positions, ANE mean=4,061 mW, max=6,605 mW, 16/24 active samples; b128 = 99,526 positions/s, 1,493,376 positions, ANE mean=3,683 mW, max=5,728 mW, 16/23 active samples; b8 also nonzero at 916 mW mean; b1024 nonzero but GPU rail was high and needs interpretation
+delta: b32 vs b1 = 3.69x positions/s and nonzero ANE rail; b128 vs b1 = 3.01x positions/s and nonzero ANE rail
+confidence: medium-low; powermetrics-positive and promising, but produced in a detached dirty worktree with shortened 15s cells and no integrated frontier receipt or production self-play overlap yet
+artifacts: /Users/jason/.codex/worktrees/934b/gomoku/sweep_logs/coreml_ane_residency/v3_gomoku_fixed_fused_fp16_b{1,8,32,128,1024}_ne.{json,power.json}; draft wiki /Users/jason/.codex/worktrees/934b/gomoku/wiki/topics/coreml-ane-residency-lab.md
+commands_run: curator inspected JSON/power artifacts only; no new benchmark command launched in the curation worktree
+decision: needs_repeat
+next_action: The ANE residency lane should integrate or reproduce 934b with exact commands, a nearby Vision positive control, CPU_ONLY negative control, and a production-overlap candidate before unblocking engine-overlap-production.
+```

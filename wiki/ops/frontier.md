@@ -19,10 +19,12 @@ This page is the human-readable board. The frontier lab extension claims lanes f
 
 ## Worktree Evidence To Curate
 
-- Main is ahead of `origin/main` with frontier lab and engine-scout/wiki commits.
-- `/Users/jason/code/gomoku-perf-extension` holds perf10 production-shaped artifacts: `sweep_logs/perf10-summary.tsv` plus trainer/worker logs for native 8w8g, native 4w16g, and fallback 8w8g.
-- `/Users/jason/.codex/worktrees/934b/gomoku` contains uncommitted Core ML / ANE residency lab work: `scripts/coreml_ane_residency_scout.py`, tests, a draft `wiki/topics/coreml-ane-residency-lab.md`, and ANE rail correction notes.
-- Older Claude worktrees currently have no uncommitted changes; treat them as historical branches unless a lane explicitly revives one.
+- Main at frontier launch was `a418f677`; the active frontier worktrees are under `/Users/jason/code/gomoku/.frontier/worktrees/20260522T054739Z-*` on branches `frontier/20260522T054739Z/*`.
+- `/Users/jason/code/gomoku-perf-extension` (`codex/gomoku-perf-extension`, HEAD `4f21cdd`) holds perf10 production-shaped artifacts: `sweep_logs/perf10-summary.tsv` plus trainer/worker logs for native 8w8g, native 4w16g, and fallback 8w8g.
+- `/Users/jason/.codex/worktrees/934b/gomoku` (detached HEAD `b9b9eab`, dirty) contains the Core ML / ANE residency lab: uncommitted `scripts/coreml_ane_residency_scout.py`, `tests/test_coreml_ane_residency_scout.py`, draft `wiki/topics/coreml-ane-residency-lab.md`, and updated ANE rail notes.
+- 934b artifacts under `sweep_logs/coreml_ane_residency/` include negative early cells (`*_fixed_fp16_ne` with 0 mW ANE) and later positive Gomoku cells, notably `v3_gomoku_fixed_fused_fp16_b32_ne` (122k pos/s, ANE mean 4061 mW, max 6605 mW) and `v3_gomoku_fixed_fused_fp16_b128_ne` (99.5k pos/s, ANE mean 3683 mW, max 5728 mW). These are unintegrated ANE-metered candidates, not yet production-ready.
+- No sibling worker receipt files existed yet under `.frontier/runs/20260522T054739Z/workers/{01,02,03,04}-*/receipt.md` when this curation pass checked; integrate them as they appear.
+- Older Claude worktrees currently have no curated perf frontier role; treat them as historical branches unless a lane explicitly revives one.
 
 ## Promotion Rule
 

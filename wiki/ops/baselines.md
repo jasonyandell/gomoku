@@ -29,6 +29,15 @@ Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/s
 | 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | same as above | native 4w16g | wall 1,918 aug pos/s; gen 2,152 aug pos/s; wall 8.61 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
 | 2026-05-22 | `4f21cdd` worktree | M5 Max / MPS | same as above with Python MCTS fallback | fallback 8w8g | wall 1,863 aug pos/s; gen 2,264 aug pos/s; wall 8.85 games/s | `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` |
 
+## Engine-Isolation / Residency References
+
+| Date | Worktree | Hardware | Command shape | Metric | Result | Artifact |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-05-22 | main/perf scout | M5 Max / MPS + Core ML | `python scripts/aggressive_engine_scout.py --size small --stem-padding 1 --batches 8,32,64,128 ...` | raw b128 eval + MPS trainer pressure | PyTorch/MPS raw b128 2.94ms / 43.5k pos/s; Core ML CPU_ONLY/CPU_AND_NE ~8.5-9.1ms / ~14-15k pos/s; PyTorch/MPS pressure slowed trainer 2.65x vs Core ML 1.13-1.32x | `sweep_logs/aggressive-engine-scout-2026-05-22.json` |
+| 2026-05-22 | 934b detached dirty | M5 Max / Core ML + powermetrics | `python scripts/coreml_ane_residency_scout.py --model-kinds gomoku --compute-units CPU_AND_NE --compute-precision FLOAT16 --batch-size 32 --workers 4 --duration-s 15 ...` plus same-window powermetrics wrapper | Gomoku FP16 fixed fused b32 ANE rail | 122,039 positions/s; 1,830,688 total positions; 4 ready workers; ANE mean 4,061 mW, max 6,605 mW, 16/24 active samples | `/Users/jason/.codex/worktrees/934b/gomoku/sweep_logs/coreml_ane_residency/v3_gomoku_fixed_fused_fp16_b32_ne.{json,power.json}` |
+| 2026-05-22 | 934b detached dirty | M5 Max / Core ML + powermetrics | same, batch size 128 | Gomoku FP16 fixed fused b128 ANE rail | 99,526 positions/s; 1,493,376 total positions; 4 ready workers; ANE mean 3,683 mW, max 5,728 mW, 16/23 active samples | `/Users/jason/.codex/worktrees/934b/gomoku/sweep_logs/coreml_ane_residency/v3_gomoku_fixed_fused_fp16_b128_ne.{json,power.json}` |
+| 2026-05-22 | 934b detached dirty | M5 Max / Core ML + powermetrics | same, batch size 1 | Gomoku FP16 fixed fused b1 ANE rail negative | 33,043 positions/s; ANE 0 mW, 0/23 active samples | `/Users/jason/.codex/worktrees/934b/gomoku/sweep_logs/coreml_ane_residency/v3_gomoku_fixed_fused_fp16_b1_ne.{json,power.json}` |
+
 ## Notes
 
 - Same-shape comparisons beat isolated intuition.
