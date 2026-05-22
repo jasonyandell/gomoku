@@ -60,8 +60,10 @@ floats. Either FP16 over all 81 or sparse top-K would shrink it 2-7×.
 **17× smaller** than current. At the same 8.2 GB footprint, that's
 ~25M positions ≈ **100,000 games** (16× the games at no RAM cost).
 
-At a 10 GB footprint (still trivial on M5 Max with 32-128 GB RAM):
-**1M games**, which is the Jason target.
+At a 10 GB packed-buffer footprint, the same math buys roughly 30M
+positions, or about 120k games. The 1M-game target requires the
+game-level/sparse path or a larger-memory machine, not this direct
+Option A layout.
 
 ### Option B: Game-level storage + sparse top-K pi (the maximally compact)
 

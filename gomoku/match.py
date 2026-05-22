@@ -94,12 +94,12 @@ def build_player(spec: PlayerSpec) -> Player:
             # Lazy torch import — keeps `python -m gomoku.match random vs heuristic`
             # zero-torch.
             from gomoku.mcts import make_torch_evaluator
-            from gomoku.model import load_checkpoint
+            from gomoku.model import fuse_model_for_inference, load_checkpoint
             from gomoku.util import pick_device
 
             device = pick_device(os.environ.get("GOMOKU_DEVICE"))
             model, _ = load_checkpoint(checkpoint, device=device)
-            model.eval()
+            model = fuse_model_for_inference(model)
             evaluator = make_torch_evaluator(model, device)
             _model_cache[key] = mcts_picker(evaluator, n_simulations=sims, c_puct=c_puct)
         return _model_cache[key]

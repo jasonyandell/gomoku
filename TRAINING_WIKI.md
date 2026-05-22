@@ -3081,3 +3081,64 @@ with searched policy.
   archive is supposed to be a stable reference; regression there means
   the model is forgetting basic play.
 - Any NaN/Inf reappearance in metrics.
+
+## 2026-05-21 — Post-native perf pass: eval-only Conv+BN fusion
+
+Question from Jason: now that native MCTS exists, how much farther can this
+specific M5 Max go, with no implementation path off the table?
+
+Current machine read:
+- Hardware: M5 Max MacBook Pro, 18 CPU cores (6 efficiency + 12 performance),
+  40-core GPU, 48 GB unified memory, MPS backend.
+- A live WL5 run was active during inspection: trainer + 8 self-play workers
+  + eval worker. One-off generator benches in this state are contention-noisy.
+
+Evidence:
+- `sample` on live worker `w0` showed the main hot stack inside
+  `native_search_batch`, but almost all sampled time flowed through
+  `_mcts_native.c:call_evaluator` into PyTorch/MPS graph execution. Repeated
+  frames landed in MPS BatchNorm / graph setup rather than C tree traversal.
+- Direct small-model forward bench under the same live load:
+
+| batch | unfused eval | Conv+BN fused eval |
+|---:|---:|---:|
+| 8 | 1.948 ms | 0.858 ms |
+| 32 | 2.125 ms | 0.967 ms |
+| 64 | 2.136 ms | 1.008 ms |
+| 128 | 2.130 ms | 1.139 ms |
+| 256 | 3.335 ms | 2.468 ms |
+| 512 | 10.314 ms | 4.750 ms |
+
+Output parity check: max absolute diff was ~1.8e-7 policy, ~1.9e-8 value
+on a random CPU batch.
+
+Change:
+- Added `fuse_model_for_inference(model)` in `gomoku/model.py`. It mutates
+  eval-only models by folding Conv2d + BatchNorm2d into Conv2d and replacing
+  BN modules with `Identity`.
+- Applied it only after checkpoint loads in eval-only surfaces:
+  `selfplay_worker.py`, `eval_worker.py`, parallel eval workers in
+  `eval.py`, `match.py`, `cli.py`, and `web/server.py`.
+- `scripts/perf_microbench.py` now uses fused eval by default and has
+  `--no-fuse-eval` for A/B checks.
+
+Interpretation:
+- The next cheap speed layer is not more Python MCTS rearrangement. Native
+  search moved the bottleneck to tiny-model MPS graph overhead, especially BN.
+- Fusion is a safe eval-only optimization because trainer models remain
+  unfused and checkpoints stay normal.
+- Generator-level `perf_microbench` during live WL5 contention was noisy, so
+  the direct forward timings are the clean evidence. Re-benchmark production
+  8w x 8g after a restart with fused workers before banking a new wall-clock
+  multiplier.
+
+Verification:
+- `python -m py_compile gomoku/model.py gomoku/selfplay_worker.py
+  gomoku/eval_worker.py gomoku/eval.py gomoku/match.py gomoku/cli.py
+  web/server.py scripts/perf_microbench.py`
+- `pytest tests/test_model.py tests/test_native_mcts.py tests/test_mcts.py -q`
+  passed (`17 passed`).
+- `pytest -q` passed.
+- CPU smoke:
+  `python scripts/perf_microbench.py --device cpu --size tiny --games 2
+  --n-simulations 2 --wave-size 1 --max-plies 2 --repeats 1 --warmup 0`.

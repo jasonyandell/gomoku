@@ -2,7 +2,13 @@ import numpy as np
 import torch
 
 from gomoku.game import GameState
-from gomoku.model import build_model, n_params, save_checkpoint, load_checkpoint
+from gomoku.model import (
+    build_model,
+    fuse_model_for_inference,
+    load_checkpoint,
+    n_params,
+    save_checkpoint,
+)
 
 
 def test_model_forward_shape():
@@ -22,6 +28,21 @@ def test_model_sizes_distinct():
     vals = list(sizes.values())
     assert vals == sorted(vals)
     assert len(set(vals)) == 4
+
+
+def test_fuse_model_for_inference_preserves_outputs():
+    torch.manual_seed(0)
+    m = build_model("tiny", stem_padding=1)
+    m.eval()
+    x = torch.randn(4, 17, 9, 9)
+    with torch.no_grad():
+        p0, v0 = m(x)
+    fused = fuse_model_for_inference(m)
+    with torch.no_grad():
+        p1, v1 = fused(x)
+    assert torch.allclose(p0, p1, atol=1e-5, rtol=1e-5)
+    assert torch.allclose(v0, v1, atol=1e-5, rtol=1e-5)
+    assert isinstance(fused.stem[1], torch.nn.Identity)
 
 
 def test_checkpoint_roundtrip(tmp_path):

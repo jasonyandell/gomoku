@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.fusion import fuse_conv_bn_eval
 
 from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES
 
@@ -102,6 +103,32 @@ def build_model(size: str = "small", *, stem_padding: int | None = None) -> Gomo
         from dataclasses import replace
         cfg = replace(cfg, stem_padding=stem_padding)
     return GomokuNet(cfg)
+
+
+def _fuse_conv_bn_pair(conv: nn.Conv2d, bn: nn.Module) -> tuple[nn.Conv2d, nn.Module]:
+    if isinstance(bn, nn.BatchNorm2d):
+        return fuse_conv_bn_eval(conv, bn), nn.Identity()
+    return conv, bn
+
+
+def fuse_model_for_inference(model: GomokuNet) -> GomokuNet:
+    """Fuse Conv+BatchNorm pairs for eval-only inference.
+
+    This mutates and returns `model`. Call only after loading checkpoint weights
+    into a model that will not be trained or saved back as a normal checkpoint.
+    """
+    model.eval()
+    model.stem[0], model.stem[1] = _fuse_conv_bn_pair(model.stem[0], model.stem[1])
+    for block in model.tower:
+        block.conv1, block.bn1 = _fuse_conv_bn_pair(block.conv1, block.bn1)
+        block.conv2, block.bn2 = _fuse_conv_bn_pair(block.conv2, block.bn2)
+    model.policy_conv, model.policy_bn = _fuse_conv_bn_pair(
+        model.policy_conv, model.policy_bn
+    )
+    model.value_conv, model.value_bn = _fuse_conv_bn_pair(
+        model.value_conv, model.value_bn
+    )
+    return model
 
 
 def n_params(model: nn.Module) -> int:

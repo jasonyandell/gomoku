@@ -8,7 +8,7 @@ import numpy as np
 
 from gomoku.game import GameState, action_to_str, render, str_to_action
 from gomoku.mcts import MCTSGame, make_torch_evaluator, policy_from_visits, run_batched_mcts
-from gomoku.model import load_checkpoint
+from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.util import pick_device
 
 
@@ -52,7 +52,7 @@ def main() -> None:
     device = pick_device(args.device)
     print(f"device = {device}")
     model, _payload = load_checkpoint(args.checkpoint, device=device)
-    model.eval()
+    model = fuse_model_for_inference(model)
     evaluator = make_torch_evaluator(model, device)
 
     if args.first == "ask":

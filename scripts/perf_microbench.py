@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from gomoku.mcts import make_torch_evaluator
-from gomoku.model import build_model, load_checkpoint, n_params
+from gomoku.model import build_model, fuse_model_for_inference, load_checkpoint, n_params
 from gomoku import native_mcts, state_ops
 from gomoku.self_play import generate_games
 from gomoku.util import pick_device
@@ -52,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--fp16", action="store_true",
                    help="Pass fp16=True to the evaluator. Historically slower on MPS.")
+    p.add_argument("--no-fuse-eval", action="store_true",
+                   help="Skip eval-only Conv+BatchNorm fusion.")
     return p.parse_args()
 
 
@@ -100,9 +102,15 @@ def main() -> None:
         model = build_model(args.size, stem_padding=args.stem_padding).to(args.device)
         source = f"fresh size={args.size} stem_padding={args.stem_padding}"
     model.eval()
+    param_count = n_params(model)
+    if not args.no_fuse_eval:
+        model = fuse_model_for_inference(model)
     evaluator = make_torch_evaluator(model, args.device, fp16=args.fp16)
 
-    print(f"device={args.device} params={n_params(model):,} {source}")
+    print(
+        f"device={args.device} params={param_count:,} "
+        f"fused_eval={not args.no_fuse_eval} {source}"
+    )
     print(
         f"native_mcts={native_mcts.USING_NATIVE_MCTS} "
         f"native_state_ops={state_ops.USING_NATIVE}"
