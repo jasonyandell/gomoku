@@ -131,15 +131,17 @@ in `gomoku/train.py`. Estimated ~250 LoC.
 
 | buffer size | encoding | RAM | games |
 |---|---|---:|---:|
-| 1.5M positions | current FP32 | 8.2 GB | 6.3k |
-| 1.5M positions | packed | 480 MB | 6.3k |
-| 25M positions | packed | 8.2 GB | 100k |
-| 240M positions | packed | 80 GB | 1M ← Jason target |
+| 1.5M positions | current FP32 | 8.2 GB on MPS | 6.3k |
+| 1.5M positions | packed | 480 MB on CPU | 6.3k |
+| 25M positions | packed | 8 GB on CPU | 100k |
+| 75M positions | packed | **25 GB on CPU** | **~300k ← practical target on 48 GB Mac** |
+| 240M positions | packed | 80 GB on CPU | 1M (needs 128 GB SKU) |
 
-A 1M-game buffer with the packed encoding fits on a 128 GB M5 Max but
-not on the smaller 32 GB / 64 GB variants. The sweet spot is probably
-**100k games / ~25M positions / ~8 GB** — matches current RAM cost,
-gives a 16× wider replay window.
+On Jason's 48 GB M5 Max: baseline OS + apps ≈ 10-15 GB, training
+pipeline working set (trainer + 8 workers + eval) ≈ 5 GB. Safe replay
+budget is therefore **~25-30 GB**, which lands at **~250-300k games**
+of replay — a ~50× widening from current 6,250 games. Going past that
+requires a Mac with more RAM.
 
 ## Trade-offs vs current
 
