@@ -89,6 +89,7 @@ read is:
 | [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md) | Practical knobs and interpretation rules for Mac Activity Monitor perf experiments. |
 | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | Guiding philosophy and sequence for the post-WL5 perf era on Jason's M5 Max. |
 | [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Engine-isolation plan and first scout for Core ML / ANE / CPU lanes around MPS training. |
+| [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) | Rail-proof lab for Core ML / ANE residency claims; caps `CPU_AND_NE` label checks below ANE-backed unless powermetrics shows nonzero ANE rail. |
 | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 replay-buffer compression plan: bit-packed planes plus FP16 policy, with cheap-test gate. |
 
 ### Operations And Use

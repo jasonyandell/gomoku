@@ -3,6 +3,22 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-22] perf | Core ML / ANE residency lab integrated
+
+- Integrated the detached 934b Core ML / ANE residency harness into the lane
+  worktree: `scripts/coreml_ane_residency_scout.py`,
+  `tests/test_coreml_ane_residency_scout.py`, and
+  [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md).
+- Ran the harness tests and short Core ML scheduled smoke; the smoke can only
+  claim `coreml-scheduled` because powermetrics was skipped.
+- Attempted the required `conv,resnet,gomoku` powermetrics scout, but it was
+  blocked by unavailable cached/passwordless sudo (`sudo -n true` failed).
+  Exports succeeded, but no same-window rail logs were produced.
+- Updated [topics/ane-int8-inference.md](topics/ane-int8-inference.md),
+  [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md), and the
+  wiki index with the corrected rule: trust nonzero ANE rail evidence, not the
+  `CPU_AND_NE` label.
+
 ## [2026-05-22] ops | frontier-lab ML perf control room seeded
 
 - Added project-local pi frontier-lab setup under `.pi/` plus machine-readable
