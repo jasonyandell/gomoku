@@ -21,6 +21,7 @@ history.
 | [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md) | WL2 design: emulate AZ-at-scale in-flight diversity via EMA self-play + past-checkpoint mix + worker poll jitter + grad accumulation. Motivated by WL1's high-frequency oscillation failure mode. |
 | [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) | WL5 design: 3 diagnostic streams (fixed validation archive, H/KL decomposition, per-color/ply metrics) + Go-Exploit-style archive-start lever (15% of self-play games from curated WL4 trouble positions). Resume from WL4 e4024. Targets the article's central interpretive distinction: target-distribution noise vs learning gap. |
 | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | Operational recipe for `scripts/mine_validation_archive.py` — buckets, knobs, throughput, anti-patterns. Reuse this every time we need a fresh validation archive. |
+| [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Post-WL5 task: port self-play + eval inference to Apple Neural Engine at INT8 via Core ML. ~50-60% faster cycle estimated; ~2 days work; uses WL5 validation archive as calibration set. KataGo precedent says board games tolerate INT8 with calibration. |
 | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | Reusable playbook for kicking off a training run. Pre-launch checks (incl. MPS INT_MAX + worker race gotchas), title card → ACK, smoke, real launch, wiki + workspace updates, /loop monitoring cadence, fan-out implementation pattern. |
 | [topics/playing-the-model.md](topics/playing-the-model.md) | How to actually play a trained checkpoint: local web UI (strongest), live SPA (convenient), which checkpoint to pick, knobs that matter, common annoyances. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
@@ -41,6 +42,10 @@ read is:
   for Torch self-play. Production-shaped single-process MPS benches moved from
   ~700 to ~2,000-2,200 augmented positions/sec; the 10-epoch WL1 multi-worker
   read now shows ~2,379 wall augmented positions/sec at 8 workers x 8 games; see
+  [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
+- Post-native profiling now points at the tiny-model evaluator boundary:
+  eval-only Conv+BatchNorm fusion is wired into workers/play surfaces, while
+  trainer models stay unfused; see
   [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
 - The main training failure mode is fast-attack collapse: policy targets sharpen
   around attacks, self-play opponents fail to punish missing defense, and fixed

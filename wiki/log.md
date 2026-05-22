@@ -3,6 +3,21 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-21] plan | ANE INT8 inference as post-WL5 task
+
+- Added [topics/ane-int8-inference.md](topics/ane-int8-inference.md)
+  scoping the port of self-play + eval inference to Apple Neural Engine
+  at INT8 precision via Core ML.
+- Captured during WL5 monitoring. Estimated ~50-60% faster self-play
+  cycle if it lands; ~2 days of work. Calibration data is the WL5
+  validation archive (1400 positions, already mined). KataGo INT8
+  precedent says board games tolerate INT8 with proper calibration.
+- Gate: validate INT8 model elo within 30 points of FP32 over 200+
+  games before deploying to workers. Trainer stays FP32.
+- DO this AFTER WL5 reports out — mid-run backend changes invalidate
+  comparisons.
+- Indexed in [index.md](index.md).
+
 ## [2026-05-21] run | WL5 launched (diagnostics + Go-Exploit archive-start)
 
 - WL5 cell running as wandb run `o6cbjfnr`, resumed from WL4 e4024 with a
@@ -748,3 +763,18 @@ consistent heading so future sessions can scan recent changes with simple tools.
 - Next session: implementation (archive-mining script, trainer
   instrumentation, buffer side+ply tagging, worker archive-start,
   WL5 cell wiring, smoke).
+
+## [2026-05-21] perf | eval-only Conv+BatchNorm fusion
+
+- Sampled a live WL5 worker on the M5 Max and found the post-native hot stack
+  now flows mostly through `_mcts_native.c:call_evaluator` into PyTorch/MPS
+  BatchNorm / graph execution rather than C tree traversal.
+- Added `fuse_model_for_inference(model)` and routed eval-only checkpoint
+  loads through it for self-play workers, eval workers, match/CLI/web play,
+  and the perf microbench. Trainer models remain unfused.
+- Direct small-model MPS forward timing under live WL5 load roughly halved for
+  batch sizes 8-128; full generator benches were contention-noisy because WL5
+  was actively running.
+- Appended the evidence and verification receipt to
+  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) and updated
+  [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
