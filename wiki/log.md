@@ -3,6 +3,20 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-21] run | WL5 launched (diagnostics + Go-Exploit archive-start)
+
+- WL5 cell running as wandb run `o6cbjfnr`, resumed from WL4 e4024 with a
+  fresh wandb timeline (stripped wandb_run_id from a copy of the
+  checkpoint). 5000-epoch target. ~11s/cycle, ~320 epochs/h.
+- Added the launch entry to [`../TRAINING_WIKI.md`](../TRAINING_WIKI.md)
+  including the 3-bug triage that gated launch (high_kl positions had
+  ply=0 from buffer backward-compat, causing C MCTS to play action 0 on
+  a full board). Fixes in commit `dc8c38b`: derive-ply at mine time,
+  C-level "no legal action = terminal" safety net, C-level select_action
+  default to first legal action, Python evaluator nan_to_num.
+- Workspace regenerated with WL5 + section 7 (validation archive +
+  H/KL decomposition + per-color/per-ply): https://wandb.ai/jasonyandell-forge42/gomoku?nw=sm5st7cmye2
+
 ## [2026-05-21] docs | mining-validation-archives recipe
 
 - Added [topics/mining-validation-archives.md](topics/mining-validation-archives.md):
