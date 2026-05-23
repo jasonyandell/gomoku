@@ -37,6 +37,47 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L09d R-TRAIN-MEDIUM-ANE REJECT — medium on ANE = 591.7 aug/s (-59.6% vs medium/torch+fp16 baseline)
+
+```yaml
+lane: L09d-medium-on-ane (high-prior follow-up after L09c confirmed amortization mechanism wins at tiny)
+hypothesis: Medium (~1.5M params) is closer to Core ML's design envelope. Per-call compute is larger, so pipeline overhead should amortize even better than at tiny (L09c +33.9%). Combined with the trainer-side MPS-relief mechanism (L09 -56% trainer_step_s_p50 at small; L09c -16% at tiny), the holistic R-TRAIN-MEDIUM-ANE should beat the torch+fp16 baseline. This is the "if ANE pays anywhere for us, here" lane in the production-relevant model size.
+code_ref: 9114c45 on main (post-L09c Reviewer-APPROVE backfill); selfplay_worker / lab_train_cell / Core ML evaluator already shipped
+evaluator (candidate): Core ML / ANE via --evaluator coreml --coreml-compute-units CPU_AND_NE; trainer always fp32 SGD on MPS
+evaluator (baseline): torch / MPS / --fp16-eval (matched precision: Core ML internally runs FLOAT16 too, so fp16-on-torch is the apples-to-apples baseline at this model size)
+dataset_ref: fresh random fused checkpoint (medium, ~1.5M params); live self-play under WL5-shaped recipe but with V=512 (the production-relevant operating point per R-S400-medium = 3,377 aug/s pure-self-play from L06fu-extended); W=8 (medium's L06fu-extended peak); no archive ingest
+baseline_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09d-baseline240-20260523T154931Z --lane L09d-baseline240 --model medium --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 240 --device mps --evaluator torch --fp16-eval
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09d-20260523T155432Z --lane L09d --model medium --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 240 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS (trainer + baseline workers) / MPS (trainer) + ANE (candidate workers via Core ML CPU_AND_NE); idle (pre-flight pgrep clean; arms ran back-to-back so chip thermal state was comparable)
+seed: workers seeded 1000..1007 both arms; trainer seed default both arms
+baseline_metric: R-TRAIN-MEDIUM (torch+fp16 baseline): 1,463.3 aug/s; 5.66 games/s; 0.0042 epochs/s; trainer_step_s_p50=0.2391s; plies_mean=32.5; 3 epochs in 240s; 544 games / 140,768 aug positions
+candidate_metric: R-TRAIN-MEDIUM-ANE (coreml CPU_AND_NE): 591.7 aug/s; 2.33 games/s; 0.0208 epochs/s; trainer_step_s_p50=0.0444s; plies_mean=31.97; 7 epochs in 240s; 507 games / 128,688 aug positions
+delta:
+  - aug/s **-59.6%** (1,463.3 → 591.7) — holistic REJECT
+  - games/s **-58.8%** (5.66 → 2.33)
+  - epochs/s **+395%** (0.0042 → 0.0208) — trainer-side hugely faster on ANE config; epochs/s 5× higher because each epoch's train= field is 2-3s instead of 35-85s
+  - trainer_step_s_p50 **-81.4%** (0.2391s → 0.0444s) — MPS-relief mechanism amplified at medium V=512: workers vacating MPS is enormously valuable to the trainer because medium SGD has lots of compute per step
+  - plies_mean -1.6% (32.5 → 31.97) — clean, no game-shape drift (Reviewer's L09c watch-flag confirmed null at L09d)
+  - Mechanism (sharp split): trainer side wins ENORMOUSLY (train=2-3s/epoch on ANE config vs 11-86s on torch+fp16 — the trainer flies when MPS is uncontended). Worker side loses ENORMOUSLY (gen=30-40s/epoch on ANE vs ~6s/epoch on torch+fp16 at medium V=512). The worker loss dominates the trainer gain by 2.5× — bad bet.
+confidence: medium-high. Single trial each arm, 240s measurement (3 baseline epochs / 7 candidate epochs — different epoch counts reflect the trainer-side speedup; not a confidence issue, but the receipt should note that the baseline's 3-epoch span includes the heaviest end-of-buffer-fill epochs while the candidate's 7-epoch span captures more steady-state gen-bound epochs). Strengths: matched-shape comparison ran back-to-back (10 min total wall); plies_mean drift is null (-1.6%, well within sampling band); the mechanism is mechanically clean in both trainer logs (train= field collapse for candidate, gen= field explosion for candidate). Caveats: Core ML's internal compute-precision is FLOAT16 vs torch+fp16-eval — matched precision in principle, but baseline was tuned (L06-followup observed +97% from --fp16-eval on small/V=512), and the candidate uses Core ML's internal fp16 which may have different ops coverage (some ops could be demoted to CPU/GPU silently; see L09e diagnostic queued for this question).
+artifacts:
+  - sweep_logs/lab-L09d-20260523T155432Z/{summary.tsv,metadata.txt,cell_train_medium_W08_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/*}} (candidate; symlink lab-L09d-latest)
+  - sweep_logs/lab-L09d-baseline240-20260523T154931Z/{summary.tsv,metadata.txt,cell_train_medium_W08_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/*}} (baseline; symlink lab-L09d-baseline240-latest)
+  - sweep_logs/lab-L09d-baseline-20260523T154538Z/ (initial 120s baseline; superseded by 240s rerun for matched-window science but artifacts retained for archaeology — same number to within 2% so the 240s extension didn't materially change the baseline conclusion)
+commands_run:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09d-baseline-20260523T154538Z --lane L09d-baseline --model medium --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator torch --fp16-eval  (initial baseline; 2 epochs in window — too few for matched-window comparison so re-dispatched at 240s)
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09d-baseline240-20260523T154931Z --lane L09d-baseline240 --model medium --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 240 --device mps --evaluator torch --fp16-eval
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09d-20260523T155432Z --lane L09d --model medium --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 240 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+decision: reject
+next_action:
+  - **Envelope is now sharply mapped.** ANE pays at TINY only (L09c +33.9%), not at SMALL (L09 -41.5%), not at MEDIUM (L09d -59.6%). The L09d "larger compute amortizes pipeline overhead better" hypothesis is **FALSIFIED**. Opposite seems closer to true in our envelope: bigger per-call workloads expose ANE's lower per-forward throughput vs torch/MPS+fp16, and that loss dominates the trainer-side MPS-relief gain.
+  - Open NEW reference point R-TRAIN-MEDIUM (torch+fp16 baseline) = 1,463.3 aug/s — envelope-mapping ref for medium under live training. R-TRAIN-MEDIUM-ANE = 591.7 aug/s recorded as a strikethrough/rejected ref (not promoted) for envelope-completeness.
+  - Promote L09e (compute-units routing sweep) priority: at medium V=512 it's now diagnostically valuable to know whether the candidate's bad number is "ANE is just slow at this size" or "Core ML silently demoted ops to CPU/GPU" — the latter would suggest a different routing strategy could rescue the lane. Priority bumped from 1.5 → 3.0 (still Tier 3, still diagnostic-only).
+  - Demote L09c-V512 priority slightly: if V-axis amortization doesn't pay at medium V=512, it might still pay at tiny V=512 (smaller model), but the prior is now weaker. Priority kept at 4.5 (the L09c +33.9% finding is still load-bearing for the tiny-axis V-test).
+  - The L11b' R-TRAIN-LEAN-fp16 recipe (+152.9% vs WL5) remains the perf cycle's headline R-TRAIN finding; ANE-offload is not the path to the next R-TRAIN promote at production-quality model size.
+  - consecutive_rejects: 0 → 1.
+```
+
 ### 2026-05-23 — L09c R-TRAIN-TINY-ANE PROMOTE — tiny on ANE = 10,762.6 aug/s (+33.9% vs tiny/torch baseline)
 
 ```yaml
