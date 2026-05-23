@@ -315,3 +315,66 @@ instead of transplanting CUDA recipes.
 5. **Engine-overlap experiment** — unblocks once ANE rail is real.
    The wave=128 throughput default is the right MPS-side baseline
    for that experiment.
+
+## [2026-05-23] lab | L01 wave extrapolation — V=512 is the plateau knee, +49.5% cumulative on R-S400
+
+First lab-dispatched lane under the charter. 4 cells × 5 min, all ok.
+
+| cell | aug/s | vs V=128 | vs WL5 V=64 |
+|---|---|---|---|
+| V=384  | 4,452 | +10.0% | +39.6% |
+| **V=512**  | **4,765** | **+17.7%** | **+49.5%** |
+| V=768  | 4,761 | +17.6% | +49.4% |
+| V=1024 | 4,756 | +17.5% | +49.2% |
+
+V=512 is the plateau knee. V=768/1024 are flat — eval overhead caps
+further wave gains on this exact hardware. The lab will stop sweeping
+V > 512 unless something else (model size, MPS heap config, ANE
+engine) shifts the eval-overhead floor (L07 tiny contour will check
+the model-size dependency).
+
+**Promotion: small / W=8 / G=8 / sims=400 / V=128 → V=512** at R-S400.
+Pending Reviewer signoff per
+[perf-lab-reviewer-role](../topics/perf-lab-reviewer-role.md).
++17.7% over yesterday's V=128 promote. +49.5% cumulative since the
+WL5 production V=64. No behavior change; eval batch shape only.
+
+**Auto-queued compounds** (per the charter's Tier-1-after-promote
+discipline): L02 (W × V=512: W ∈ {4,12,16}), L03 (S × V=512: S ∈
+{100,200}). Both rescoped to drop V=128/V=256 cells that L01 now
+dominates. L02's E[delta] dropped from 800 to 400 aug/s and P from
+0.6 to 0.5 since the workers axis was already shown to be near-flat
+past W=8 in the canonical sweep — most likely outcome is "V=512 holds
+across W". L03 stayed high-priority because S × wave was the most
+under-explored cross in the canonical sweep.
+
+Process notes:
+- L01 was originally Tier-1 in the day-1 queue; the charter v2 tier
+  refactor demoted it to Tier-3 (single-axis speculation past a known
+  win). The run completed before the refactor landed; archived as
+  Tier-3 in retrospect.
+- Reviewer Gate is on for all subsequent receipts. L01's receipt has
+  `reviewer: PENDING`; a Reviewer spawn will audit and the verdict
+  appended before the next commit closing the receipt.
+
+## [2026-05-23] lab | charter v2 — tier system + R-TRAIN family + Reviewer Gate
+
+After L01 launched but before it landed, Jason gave four new
+directives that reshape the lab:
+
+1. **Live training cells allowed** — ≤ 5 min/cell, multi-cell stitch
+   for warmup + measure. Opens the R-TRAIN-* metric family
+   (epochs/sec under live trainer). This is the holistic metric
+   that matters for elo gain, not just isolated self-play.
+2. **Reviewer role** — codified in
+   [perf-lab-reviewer-role](../topics/perf-lab-reviewer-role.md).
+   Spawned per lane + every ~5 lanes for discipline audit. APPROVE
+   / REVISE / BLOCK. No promote without signoff.
+3. **/loop 10m check-in** — periodic auto-tick: read queue, file
+   receipts, dispatch next-priority lane.
+4. **ANE / engine isolation > batch sizes** — explicit tier rule.
+   Architectural lanes (L09 ANE-offload, L10 trainer bench, L11
+   end-to-end) can't be leapfrogged by knob lanes on raw priority
+   alone.
+
+Charter v2 committed in `7491401`. Queue reranked.

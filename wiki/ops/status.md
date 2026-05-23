@@ -4,9 +4,11 @@ This page is the current control-room summary for bounded Gomoku performance wor
 
 ## Current Focus
 
-**Canonical 5-axis sweep complete (`canonical-sweep-mainframe` lane, 2026-05-23).** 23/23 cells passed under idle-box conditions, sweep_logs/canonical-sweep-20260523T015614Z. Headline finding: **wave_size is materially under-tuned in production.** Going from the WL5-era default (small W=8 G=8 sims=400 wave=64 = 3,188 aug pos/s) to wave=128 gives **+27%** (4,048 aug/s) with no behavior change; wave=256 gives +38% (4,409). The workers axis is near-flat past W=8; sims scales perfectly inversely (pure quality knob); per-step model scaling is 2.3× (tiny→small→medium). Full receipt in [experiment-ledger.md](experiment-ledger.md) "2026-05-23 — canonical 5-axis M5 Max contour sweep".
+**Autonomous perf lab running.** Charter v2 + Reviewer Gate + tier system committed in `7491401`. Current cumulative win on R-S400 (the WL5-anchor cell): **3,188 → 4,765 aug/s = +49.5% cumulative across two promotes (V=64 → V=128 yesterday, V=128 → V=512 today via L01).** Plateau knee at V=512; V=768/1024 are flat — eval overhead caps further wave gains on this exact hardware.
 
-**Promoted throughput default:** small / W=8 / G=8 / sims=400 / **wave=128**. The next behavior-changing run that adopts this needs a canary cycle reporting `val/policy_ce` + `val/policy_kl` against `archives/wl5_validation_v1.pt` per the Training-Quality Promotion Gate.
+**Latest promotion:** small / W=8 / G=8 / sims=400 / **wave=512** at R-S400 (lane L01-wave-extrapolation; reviewer APPROVE). No behavior change — eval batch shape only. Per the Training-Quality Promotion Gate, the first live-training cell that adopts V=512 (L11) still owes a canary against `archives/wl5_validation_v1.pt`, but only one cycle since the change is purely structural.
+
+**Up next:** Tier 1 architectural lanes — L09 (Core ML eval-worker prototype, scaffolding in worktree), L10 (R-TRAIN-WL5 first measurement), L11 (V=512 end-to-end cell). Auto-queued compounds against V=512: L02 W×V=512, L03 S×V=512.
 
 Use the frontier lab commands from pi:
 
@@ -38,7 +40,8 @@ BFS by default: current-main baseline receipts and production contour are now do
 | ANE residency rail proof | blocked | Needs cached/passwordless sudo for same-window `powermetrics` plus Vision positive control / CPU_ONLY negative. |
 | Production engine-overlap | blocked | Wait for ANE-metered or explicit CPU-only isolation candidate; do not launch from `CPU_AND_NE` labels alone. |
 | Replay-buffer width cheap test | active in another session | BAB1-buf-ablation-1p5M live as of 2026-05-22; trainer PID 27579, e10215/10700 at last check. See [perf-log.md](perf-log.md). |
-| Canonical 5-axis M5 Max contour sweep | completed / promote | 23/23 cells in `sweep_logs/canonical-sweep-20260523T015614Z`; wave=128 promoted as new throughput default (+27% over V=64); receipt in [experiment-ledger.md](experiment-ledger.md); contour/axes/model_compare PNGs alongside summary. |
+| Canonical 5-axis M5 Max contour sweep | completed / promote | 23/23 cells; wave=128 promoted as new R-S400 default (+27% over V=64); receipt in [experiment-ledger.md](experiment-ledger.md). |
+| L01-wave-extrapolation | completed / promote | 4/4 cells; **wave=512** promoted as new R-S400 default (+17.7% over V=128; +49.5% cumulative). Plateau confirmed at V=512 (V=768/1024 flat). Reviewer: APPROVE. |
 
 ## Next Action
 

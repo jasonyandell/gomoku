@@ -10,7 +10,7 @@ quality point).
 
 | ref | quality pin | current best cell | aug/s | promoted | from receipt |
 |---|---|---|---|---|---|
-| **R-S400** | small / S=400 | small / W=8 / G=8 / S=400 / **V=128** | 4,048 | 2026-05-23 | canonical-sweep-mainframe |
+| **R-S400** | small / S=400 | small / W=8 / G=8 / S=400 / **V=512** | 4,765 | 2026-05-23 | L01-wave-extrapolation |
 | **R-S200** | small / S=200 | small / W=8 / G=8 / S=200 / V=64 | 6,006 | 2026-05-23 | canonical-sweep-mainframe |
 | **R-S100** | small / S=100 | small / W=8 / G=8 / S=100 / V=64 | 11,151 | 2026-05-23 | canonical-sweep-mainframe |
 | R-S400-tiny | tiny / S=400 | tiny / W=8 / G=8 / S=400 / V=64 | 7,326 | 2026-05-23 | canonical-sweep-mainframe |
@@ -34,6 +34,10 @@ the headline number in [status.md](status.md).
 
 Newest first. Append on every promote; never overwrite an old row.
 
+- **2026-05-23** — `R-S400`: V=128 → **V=512** (4,048 → 4,765 aug/s,
+  **+17.7%**; **+49.5%** cumulative since WL5 V=64). No behavior
+  change; eval batch size only. Plateau knee at V=512 (V=768/1024
+  flat). Source: L01-wave-extrapolation. Reviewer: APPROVE.
 - **2026-05-23** — `R-S400`: V=64 → V=128 (3,188 → 4,048 aug/s, +27%).
   No behavior change; eval batch size only. Source:
   canonical-sweep-mainframe.

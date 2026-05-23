@@ -65,6 +65,10 @@ Purpose: separate evaluator/native-search time from post-search Python in a boun
 | 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, model axis at default W8 G8 S400 V64 | aug pos/s | tiny=7,326; small=3,188; medium=1,393 (≈2.3× per step) | same dir, cell_{tiny,small,medium}_W08_G08_S400_V064 |
 | 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, workers axis at small G8 S400 V64 | aug pos/s, per-worker efficiency | W1=1,111 / W2=1,497 / W4=2,583 / W8=3,188 / W12=3,243 / W16=3,411; per-worker eff falls W1=1,111→W16=213 (contention dominates by W=2) | same dir |
 | 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, max-throughput corner cell | aug pos/s | tiny_W16_G16_S100_V32 = 19,346 (infrastructure ceiling; not a quality-comparable cell) | same dir, cell_tiny_W16_G16_S100_V032 |
+| 2026-05-23 | `7491401` main | M5 Max / MPS / idle | L01 wave-extrapolation, small W=8 G=8 S=400 V=384 | aug pos/s | 4,452 aug pos/s; 10,470 games; plies_mean 15.96 | `sweep_logs/lab-L01-wave-extrapolation-20260523T051548Z/{summary.tsv, cell_small_W08_G08_S400_V384}` |
+| 2026-05-23 | `7491401` main | M5 Max / MPS / idle | L01 wave-extrapolation, same cell with **V=512** (new R-S400 default) | aug pos/s | **4,765 aug pos/s**; 11,208 games; plies_mean 15.96; **+17.7% vs V=128**; **+49.5% vs WL5 V=64** | same dir, cell_small_W08_G08_S400_V512 |
+| 2026-05-23 | `7491401` main | M5 Max / MPS / idle | L01 wave-extrapolation, same cell with V=768 | aug pos/s | 4,761 aug pos/s (flat with V=512) | same dir, cell_small_W08_G08_S400_V768 |
+| 2026-05-23 | `7491401` main | M5 Max / MPS / idle | L01 wave-extrapolation, same cell with V=1024 | aug pos/s | 4,756 aug pos/s (flat with V=512; plateau confirmed) | same dir, cell_small_W08_G08_S400_V1024 |
 
 ## Engine-Isolation / Residency References
 

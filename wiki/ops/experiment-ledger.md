@@ -176,3 +176,38 @@ next_action: |
   5. Open-note follow-ups: (a) re-run the W x G cross at V128 to verify the wave-size win compounds at higher worker counts, (b) sims-vs-wave interaction at S=200 (faster cycles + wider waves might be the real next-cell shape), (c) repeat the sweep at the next stable checkpoint to confirm trained-model throughput shape matches infrastructure shape.
 ```
 
+### 2026-05-23 — L01 wave extrapolation (V > 256 plateau search)
+
+```yaml
+lane: L01-wave-extrapolation
+tier: 3
+hypothesis: Wave gains continue past V=256; find the plateau or inflection.
+reference: R-S400 (small / W=8 / G=8 / S=400; V=128 baseline = 4,048 aug/s)
+code_change: false
+baseline_command: |
+  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L01-wave-extrapolation-20260523T051548Z --cells-from <same dir>/cells.csv --lane L01-wave-extrapolation --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same (4-cell sweep at V in {384, 512, 768, 1024})
+hardware: M5 Max / MPS / idle box
+seed: per-worker 1000..1007
+baseline_metric: R-S400 was V=128 = 4,048 aug/s (canonical-sweep promote). Canonical-sweep V=256 corner = 4,409 aug/s.
+candidate_metric: |
+  V=384  = 4,452 aug/s  (+1.0% over V=256, +10.0% over V=128)
+  V=512  = 4,765 aug/s  (+8.1% over V=256, +17.7% over V=128, +49.5% over WL5 V=64)
+  V=768  = 4,761 aug/s  (flat with V=512; -0.1%)
+  V=1024 = 4,756 aug/s  (flat with V=512; -0.2%)
+delta: V=512 is the new R-S400 best. +17.7% over yesterday's V=128 promote; +49.5% cumulative over original WL5 V=64. V=768/1024 are flat — clear plateau knee at V=512.
+confidence: medium-high. 5-min cells per the charter; idle box; monotone within experimental noise (V=768/1024 track V=512 within <0.2%). All cells hit plies_mean=15.96 (random weights + max-plies=16) so this is infrastructure throughput. Wave-size win is eval-batch-shape-dependent, not game-shape-dependent.
+artifacts: sweep_logs/lab-L01-wave-extrapolation-20260523T051548Z/{summary.tsv, cells.csv, metadata.txt, driver.log, cell_small_W08_G08_S400_V{384,512,768,1024}/{records,logs}}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L01-wave-extrapolation-20260523T051548Z --cells-from ... --lane L01-wave-extrapolation
+decision: promote
+reviewer: APPROVE (general-purpose agent, 2026-05-23). "L01 V=512 promote math checks; surfaces consistent; plateau call sound; L02/L03 rescoped; +49.5% cumulative on R-S400."
+next_action: |
+  1. Promote V=512 as new R-S400 default. Old: V=128 (4,048). New: V=512 (4,765). best-cells.md updated.
+  2. Auto-queued compounds (perf-queue.md rescoped after L01):
+     - L02 now W in {4,12,16} at V=512 only (V=128/V=256 cells dropped — V=512 dominates).
+     - L03 now S in {100,200} at V=512 only.
+  3. V=128 -> V=512 is no-behavior-change (eval batch shape only). First live-training cell adopting V=512 (L11) needs one canary cycle against archives/wl5_validation_v1.pt per the Training-Quality Promotion Gate.
+  4. Plateau knee at V=512: future wave sweeps stop at V=512 on this hardware unless model size, MPS heap config, or engine (Core ML / ANE) shifts the eval-overhead floor. L07 (tiny contour) probes model-size dependency.
+```
+
