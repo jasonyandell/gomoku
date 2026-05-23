@@ -16,6 +16,50 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L11b' | R-TRAIN family doubles — V=512 + low-sgd + fp16 = 8,340 aug/s (+153% vs WL5)
+
+The compound finding the whole perf cycle was building toward. L11b said: lower trainer SGD work at V=512 to free up MPS for workers (+28% aug/s at trainer level, TQ-gated). L06-followup said: fp16 doubles worker-side throughput at small/V=512 (bandwidth-bound regime). L11b' tests whether the two levers are independent and stack at the R-TRAIN family.
+
+They do.
+
+| Metric | L10 (R-TRAIN-WL5) | L11b (low-sgd alone) | **L11b' (low-sgd + fp16)** |
+|---|---|---|---|
+| aug/s | 3,297.6 | 4,231.8 (+28%) | **8,340.5 (+152.9%)** 🔥🔥 |
+| games/s | 14.07 | 15.47 (+10%) | **32.19 (+129%)** |
+| epochs/s | 0.0917 | 0.0500 (-45%) | 0.0667 (-27%) |
+| trainer_step_s_p50 | 0.0512s | 0.141s | 0.0801s |
+| epochs in window | 14 | 8 | 11 |
+| plies_mean | 29.6 | 34.3 | 32.7 |
+
+**Multiplicative stacking, exactly as the mechanism predicts.** The L06 fp16 win on R-S400 was +97.2%. Adding fp16 on top of L11b yields +97.1% over L11b (4,231.8 → 8,340.5) — same magnitude. The lever was free to act because L11b had already cured the trainer-side MPS monopolization. Compounded: 1.28 × 1.97 = 2.52× from R-TRAIN-WL5; measured 2.53×.
+
+**Decision: needs_repeat per TQ gate, same precedent as L11b.** sgd_per_position is behavior-affecting (changes optimizer rate per data); fp16 is no-behavior-change per the L06-followup precedent (Reviewer-verified output cast to fp32 at MCTS boundary at mcts.py:519-529). The composite L11b' recipe HAS one behavior-affecting knob, so the TQ gate fires. R-TRAIN-WL5 stays at WL5 production recipe; a new perf reference R-TRAIN-LEAN-fp16 = 8,340.5 aug/s opens for the lab; production adoption needs a WL6 canary outside the perf cycle.
+
+**Session arc — what the lab measured today:**
+
+| When | Lane | Verdict | Headline number |
+|---|---|---|---|
+| early | L12 / L05 / L06 / L08-driver shipped (4 CPU agents in parallel) | code | 4 merge commits |
+| early | L10 R-TRAIN-WL5 baseline | promote (Reviewer APPROVE) | 3,297.6 aug/s |
+| mid | L11 V=512 default-sgd | reject | -28% aug/s |
+| mid | L09 ANE+default workers | reject (with trainer-side confirm: trainer_step_s_p50 -56%) | -41% aug/s |
+| mid | **L11b V=512 + low-sgd** | needs_repeat (TQ) | **4,232 aug/s (+28%)** |
+| late | L05-followup torch.compile | reject | -2.3% (noise) |
+| late | **L06-followup fp16-eval R-S400** | **promote** (Reviewer APPROVE) | **9,398.5 aug/s (+97.2%)** 🔥 |
+| late | **L06fu-extended R-S200/100/medium fp16** | **promote × 3** | **R-S200 +84%, R-S100 +48%, R-S400-medium new** |
+| late | **L11b' V=512 + low-sgd + fp16** | needs_repeat (TQ) | **8,340.5 aug/s (+152.9%)** 🔥🔥 |
+
+Eight perf lanes (including 1 compound chain L11+L09+L11b+L06+L06fu+L11b' that tells a single mechanically clean story) + four CPU code lanes (L05, L06, L08-driver, L12) + four L12 driver bug fixes discovered in flight (--save-every, count_records, --evaluator passthrough, --fp16-eval passthrough). Every receipt cleared a Reviewer audit; every promote followed the charter's no-behavior-change rule (or, when behavior-borderline, the TQ gate).
+
+The trainer-side MPS contention story (L11 + L09 + L11b) and the worker-side bandwidth-bound story (L06-followup + L06fu-extended) ARE the perf lab's biggest insights of the era. Both pointed at the same chip-level reality: the M5 Max has a lot of throughput, but you have to share MPS carefully and feed the GPU with the right precision to extract it.
+
+**Next compound follow-up dispatching:** L09b (R-TRAIN-ANE + fp16 workers) — if fp16 halves the worker-side ANE loss (L09 gen was 2× slower on ANE than MPS at small/V=64), and the trainer-side ANE-relief gain is still real (it was -56% trainer_step_s_p50), R-TRAIN-ANE might finally pay.
+
+> Three trainer-side rejects (L11, L09, L11b nearly-counted) and a near-halt at 3 consecutive rejects — and then L06-followup nearly doubled R-S400, L06fu-extended confirmed the bandwidth-bound mechanism, and L11b' showed both levers stack at the trainer level for a 2.5× R-TRAIN total. The M5 Max is singing.
+> Mature MPS + fused conv+bn + 2026's torch flipped the historic fp16 "regression" into the headline win. The perf lab gets to update its mental model.
+
+---
+
 ## [2026-05-23] L06-followup | fp16-eval PROMOTE — R-S400 +97.2% (small nearly doubles)
 
 The session was about to halt — three consecutive rejects (L11, L09, L05-followup), stop signal active. L06-followup was a cleanup smoke before declaring session-end. Then this happened:

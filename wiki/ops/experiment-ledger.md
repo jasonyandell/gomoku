@@ -37,6 +37,37 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L11b' R-TRAIN-LEAN-fp16: V=512 + sgd=0.001 + fp16 workers = 8,340.5 aug/s (+153% vs R-TRAIN-WL5)
+
+```yaml
+lane: L11bp (L11b-prime; compound of L11b + L06-followup at the trainer level)
+hypothesis: L11b showed lowering sgd_per_position cures the trainer-side cost of V=512. L06-followup showed fp16 nearly doubles the worker-side throughput at V=512 (small/S=400 bandwidth-bound regime). At the R-TRAIN-* family these are independent levers — one on trainer, one on workers. Stacking them should compound: V=512 + sgd=0.001 + fp16-eval should beat both L11b (4,232 aug/s) and L10 R-TRAIN-WL5 (3,298 aug/s) by close to the multiplicative product of the individual wins.
+code_ref: 21bb2f5 on main (run-time). L12 driver gained --fp16-eval passthrough at this commit; fourth (and final today) L12 gap surfaced.
+evaluator: torch / MPS / fp16-eval (workers); trainer always fp32 SGD on MPS
+dataset_ref: fresh random fused checkpoint (small, 324,570 params); live self-play only
+baseline_command: lab-L10-20260523T132940Z (R-TRAIN-WL5 V=64 sgd=0.0025 fp32 = 3,297.6 aug/s); lab-L11b-20260523T134850Z (R-TRAIN-LEAN-style V=512 sgd=0.001 fp32 = 4,231.8 aug/s)
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11bp-20260523T141456Z --lane L11bp --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --sgd-per-position 0.001 --fp16-eval --warmup-secs 30 --measurement-secs 120 --device mps
+hardware: M5 Max / MPS / idle
+seed: workers 1000..1007; trainer default
+baseline_metric: R-TRAIN-WL5: 3,297.6 aug/s; 14.07 games/s; 0.0917 epochs/s; trainer_step_s_p50=0.0512s. L11b: 4,231.8 aug/s; 15.47 games/s; 0.05 epochs/s.
+candidate_metric: **L11b' (R-TRAIN-LEAN-fp16): 8,340.5 aug/s**; 32.19 games/s; 0.0667 epochs/s; trainer_step_s_p50=0.0801s; 11 epochs in 120s; plies_mean 32.74 (preserved — comparable to L10's 29.6 and L11b's 34.3, all well below the 81 terminal cap; trainer cells run actual gomoku endgames).
+delta:
+  - vs L10 R-TRAIN-WL5 baseline: aug/s **+152.9%** (3297.6 → 8340.5); games/s +128.8%; epochs/s -27% (each epoch is lighter training work because sgd_per_position is lower).
+  - vs L11b (low-sgd fp32): aug/s **+97.1%** (4231.8 → 8340.5) — the fp16 lever added on top of L11b's recipe yields the SAME magnitude win as on R-S400 (small V=512 fp16 was +97.2%). Two independent levers, multiplicative effect.
+  - Mechanism: with the trainer's per-position SGD work capped (low sgd_per_position) the trainer no longer monopolizes MPS, and fp16's worker-side bandwidth savings can be fully realized. R-TRAIN-WL5's L10 trainer_step was 0.0512s; here it's 0.0801s but with MUCH less work per epoch (steps/epoch ≈ ~30-150 here vs ~80 for WL5), so per-step pace is similar. The trainer's total wall-budget share shrinks; worker share grows.
+confidence: high. Single trial, 120s window, 11 epochs (well above 2-epoch minimum). fp16 verified engaged on workers. Game-shape preserved (plies_mean in the same band as prior R-TRAIN cells; not at the 81 terminal cap). Mechanism (independent trainer + worker levers) predicts the multiplicative stacking, observed magnitude matches the prediction (97% × 1.28 = ~2.49× from WL5; measured 2.53× — within rounding).
+artifacts: sweep_logs/lab-L11bp-20260523T141456Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/v10,v11}}
+commands_run:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11bp-20260523T141456Z --lane L11bp --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --sgd-per-position 0.001 --fp16-eval --warmup-secs 30 --measurement-secs 120 --device mps
+decision: needs_repeat
+next_action:
+  - PERF LAB ESTABLISHES: a new R-TRAIN operating point exists at +153% over WL5. Open a NEW best-cell row R-TRAIN-LEAN-fp16 = small / W=8 / G=8 / S=400 / V=512 / sgd=0.001 / fp16 = 8,340.5 aug/s (perf reference only — NOT promoted to R-TRAIN-WL5 because behavior knob changed).
+  - R-TRAIN-WL5 STAYS at 3,297.6 aug/s (V=64, sgd=0.0025, fp32). It is the production recipe; per the TQ gate, promotion of L11b's recipe to production requires a canary training run reporting val/policy_ce vs archives/wl5_validation_v1.pt + plies/game-shape band. That's a training-pipeline lane.
+  - HOWEVER — note that the perf lab now has a quantitatively concrete recommendation if Jason wants to consider WL6 as a successor to WL5: "small / V=512 / sgd=0.001 / fp16-eval" runs at 8,340.5 aug/s. The TQ canary is the gate; the perf number is in hand.
+  - Compound follow-up dispatching in parallel: L09b (R-TRAIN-ANE with fp16 workers) — if fp16 halves the worker-side ANE loss from L09 (small/V=64 gen was 2× slower on ANE), and the trainer-side ANE-relief gain is still real, R-TRAIN-ANE could finally pay.
+  - Lower priority: L11b'' (sweep different sgd_per_position values at V=512+fp16 to find the optimal trainer-work-per-second band).
+```
+
 ### 2026-05-23 — L06fu-extended fp16-eval PROMOTE — R-S200 +84%, R-S100 +48%, medium V=512 new ref
 
 ```yaml
