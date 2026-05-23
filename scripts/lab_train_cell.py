@@ -60,7 +60,7 @@ CANONICAL_PARAM_FIELDS = [
 ]
 TRAIN_PARAM_FIELDS = [
     "ema_tau", "grad_accum_steps", "wave_mode", "sgd_per_position",
-    "batch_size",
+    "batch_size", "trainer_amp",
 ]
 CELL_PARAM_FIELDS = CANONICAL_PARAM_FIELDS + TRAIN_PARAM_FIELDS
 
@@ -75,6 +75,10 @@ def cell_id_of(cell: dict) -> str:
         f"_WM{1 if cell['wave_mode'] else 0}"
         f"_B{cell['batch_size']:03d}"
     )
+    # Ltrain-amp: only tag the cell_id when AMP is on, so fp32 (off) cell_ids
+    # stay byte-identical to pre-Ltrain-amp ids (baseline rows keep matching).
+    if cell.get("trainer_amp", "off") != "off":
+        tail += f"_AMP{cell['trainer_amp']}"
     return (
         f"train_{cell['model']}_W{cell['workers']:02d}"
         f"_G{cell['games_per_batch']:02d}_S{cell['n_simulations']:03d}"
@@ -396,6 +400,10 @@ def build_trainer_cmd(cell: dict, dirs: dict) -> list[str]:
         cmd += ["--ema-tau", str(cell["ema_tau"])]
     if cell["grad_accum_steps"] > 1:
         cmd += ["--grad-accum-steps", str(cell["grad_accum_steps"])]
+    # Ltrain-amp: only append when != off so the fp32 baseline command is
+    # byte-identical to pre-Ltrain-amp invocations.
+    if cell.get("trainer_amp", "off") != "off":
+        cmd += ["--trainer-amp", cell["trainer_amp"]]
     return cmd
 
 
@@ -694,6 +702,7 @@ def make_cell_from_args(args: argparse.Namespace) -> dict:
         wave_mode=args.wave_mode,
         sgd_per_position=args.sgd_per_position,
         batch_size=args.batch_size,
+        trainer_amp=args.trainer_amp,
         evaluator=args.evaluator,
         coreml_compute_units=args.coreml_compute_units,
         fp16_eval=args.fp16_eval,
@@ -728,6 +737,18 @@ def main() -> None:
     p.add_argument("--no-wave-mode", dest="wave_mode", action="store_false")
     p.add_argument("--sgd-per-position", type=float, default=0.0025)
     p.add_argument("--batch-size", type=int, default=512)
+    # Ltrain-amp lever: trainer-side mixed-precision autocast. Forwarded to
+    # gomoku.train --trainer-amp only when != off (so fp32 baseline cells stay
+    # byte-identical). This changes TRAINING NUMERICS, so any production
+    # adoption is Training-Quality-gated; the lab only measures speed and files
+    # needs_repeat. bf16 is the primary target on the M5 Max / MPS.
+    p.add_argument("--trainer-amp", type=str, default="off",
+                   choices=["off", "bf16", "fp16"],
+                   help="Trainer SGD autocast precision (Ltrain-amp lane). "
+                        "off (default) = fp32, byte-identical to legacy. bf16 = "
+                        "torch.autocast bfloat16 (no GradScaler). fp16 = autocast "
+                        "float16 + GradScaler (falls back to off if unsupported "
+                        "on device). Optimizer state always fp32.")
     # Evaluator backend for the self-play workers. The trainer always uses
     # torch on --device; this controls what backend the workers' eval model
     # runs on. coreml routes inference through CPU_AND_NE (the ANE) so the

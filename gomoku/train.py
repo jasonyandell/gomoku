@@ -45,32 +45,60 @@ def train_step(
     zero_grad: bool = True,
     side: torch.Tensor | None = None,
     ply: torch.Tensor | None = None,
+    amp_dtype: "torch.dtype | None" = None,
+    amp_device_type: str = "cpu",
+    grad_scaler=None,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
     those: pass accum_scale=1/N to scale loss before backward, zero_grad=True
     only on the first microbatch of an accumulation window, and
-    do_optimizer_step=True only on the last microbatch."""
+    do_optimizer_step=True only on the last microbatch.
+
+    Ltrain-amp lever: when amp_dtype is not None, the FORWARD + LOSS run under
+    torch.autocast(device_type=amp_device_type, dtype=amp_dtype). Optimizer
+    state stays fp32 (autocast only changes the op-level compute dtype). When a
+    grad_scaler is supplied (fp16 path), backward/step go through it for loss
+    scaling. amp_dtype=None reproduces the legacy fp32 path byte-for-byte (the
+    autocast context manager is never entered)."""
     model.train()
     if zero_grad:
         optimizer.zero_grad(set_to_none=True)
-    logits, v = model(planes)
-    logp = F.log_softmax(logits, dim=-1)
-    # Per-sample policy CE so we can split by side/ply without a second pass.
-    per_policy_ce = -(pi * logp).sum(dim=-1)
-    pl = per_policy_ce.mean()
-    per_value_se = (v - z) ** 2
-    vl = per_value_se.mean()
-    loss = pl + value_weight * vl
-    if l2_weight > 0:
-        l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
-        loss = loss + l2_weight * l2
+    # autocast wraps FORWARD + LOSS only. With amp_dtype=None we enter no
+    # context at all (contextlib.nullcontext), so default behavior is unchanged.
+    import contextlib
+    amp_ctx = (
+        torch.autocast(device_type=amp_device_type, dtype=amp_dtype)
+        if amp_dtype is not None
+        else contextlib.nullcontext()
+    )
+    with amp_ctx:
+        logits, v = model(planes)
+        logp = F.log_softmax(logits, dim=-1)
+        # Per-sample policy CE so we can split by side/ply without a second pass.
+        per_policy_ce = -(pi * logp).sum(dim=-1)
+        pl = per_policy_ce.mean()
+        per_value_se = (v - z) ** 2
+        vl = per_value_se.mean()
+        loss = pl + value_weight * vl
+        if l2_weight > 0:
+            l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
+            loss = loss + l2_weight * l2
     # Scale loss BEFORE backward when accumulating, so the summed gradient
     # over N microbatches equals the gradient of the mean loss over N*B
     # examples (modulo the L2 reg, which is identical across microbatches).
-    (loss * accum_scale).backward()
-    if do_optimizer_step:
-        optimizer.step()
+    # backward/step run OUTSIDE autocast (the standard AMP recipe). Optimizer
+    # params stay fp32; grads are computed in fp32 (autocast casts back at the
+    # context boundary).
+    if grad_scaler is not None:
+        grad_scaler.scale(loss * accum_scale).backward()
+        if do_optimizer_step:
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
+    else:
+        (loss * accum_scale).backward()
+        if do_optimizer_step:
+            optimizer.step()
     with torch.no_grad():
         pred = logits.argmax(dim=-1)
         target = pi.argmax(dim=-1)
@@ -305,6 +333,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--value-weight", type=float, default=1.0)
     p.add_argument("--l2", type=float, default=1e-4)
+    p.add_argument("--trainer-amp", type=str, default="off",
+                   choices=["off", "bf16", "fp16"],
+                   help="Ltrain-amp lever: trainer-side mixed-precision autocast "
+                        "for the SGD forward+loss. 'off' (default) = pure fp32, "
+                        "byte-identical to legacy behavior (no autocast wrapping). "
+                        "'bf16' wraps forward+loss in torch.autocast(dtype=bfloat16) "
+                        "— no GradScaler needed; primary target on M5 Max / MPS. "
+                        "'fp16' uses torch.autocast(dtype=float16) + a GradScaler "
+                        "for loss-scaling stability; if GradScaler is unsupported "
+                        "on the device an audit line is printed and it falls back "
+                        "to off (fp32). Optimizer state always stays fp32. NOTE: "
+                        "this changes TRAINING NUMERICS — any production adoption "
+                        "is Training-Quality-gated; the perf lab only measures speed.")
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
                         "trainer maintains an EMA copy of the model "
@@ -431,6 +472,32 @@ def main() -> None:
     args = parse_args()
     device = pick_device(args.device)
     print(f"device = {device}")
+
+    # --- Ltrain-amp lever: resolve trainer-side autocast config -------------
+    # amp_dtype=None => pure fp32 (no autocast); byte-identical to legacy.
+    # amp_device_type is the torch.autocast device_type string ("mps"/"cpu"/"cuda").
+    amp_dtype = None
+    amp_device_type = device.type if hasattr(device, "type") else str(device)
+    grad_scaler = None
+    if args.trainer_amp == "bf16":
+        amp_dtype = torch.bfloat16
+        print(f"trainer-amp = bf16 (autocast device_type={amp_device_type}, "
+              f"optimizer state fp32, no GradScaler)")
+    elif args.trainer_amp == "fp16":
+        # fp16 needs a GradScaler for stability. GradScaler + MPS is dicey;
+        # probe support and fall back to fp32 (off) with a clear audit line if
+        # it can't be constructed/used on this device.
+        amp_dtype = torch.float16
+        try:
+            grad_scaler = torch.amp.GradScaler(device=amp_device_type)
+            print(f"trainer-amp = fp16 (autocast device_type={amp_device_type}, "
+                  f"GradScaler enabled, optimizer state fp32)")
+        except Exception as e:  # noqa: BLE001 — any failure = unsupported here
+            print(f"[trainer-amp] fp16 GradScaler not supported on "
+                  f"device_type={amp_device_type} ({type(e).__name__}: {e}); "
+                  f"falling back to off (fp32). bf16 is the supported AMP path.")
+            amp_dtype = None
+            grad_scaler = None
 
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
@@ -1029,6 +1096,9 @@ def main() -> None:
                     zero_grad=is_first_in_window,
                     side=side,
                     ply=ply,
+                    amp_dtype=amp_dtype,
+                    amp_device_type=amp_device_type,
+                    grad_scaler=grad_scaler,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)
