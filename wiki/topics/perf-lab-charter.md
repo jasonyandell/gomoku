@@ -20,26 +20,61 @@ follow-ups from the results.
 
 ## Success metric
 
-Single primary number: `aug_pos_per_sec` measured by
-`scripts/canonical_sweep.py` under default knobs (`--secs-per-cell 300
---max-plies 16 --device mps`).
+Two metric families, each with reference points. A win at *either*
+moves the lab toward the mission.
 
-Tracked at three quality reference points:
+### R-S* — generator throughput (aug-positions per second)
+
+Pure self-play under `scripts/canonical_sweep.py`. Fresh random fused
+checkpoint, no trainer running. Default knobs:
+`--secs-per-cell 300 --max-plies 16 --device mps`.
 
 | ref point | cell shape | current best (2026-05-23) |
 |---|---|---|
-| **R-S400** | small / W=8 / G=8 / sims=400 / wave=128 | 4,048 aug/s (just promoted) |
-| **R-S200** | small / W=8 / G=8 / sims=200 / wave=64 | 6,006 aug/s (canonical-sweep baseline) |
-| **R-S100** | small / W=8 / G=8 / sims=100 / wave=64 | 11,151 aug/s (canonical-sweep baseline) |
+| **R-S400** | small / W=8 / G=8 / sims=400 / wave=128 | 4,048 aug/s |
+| **R-S200** | small / W=8 / G=8 / sims=200 / wave=64 | 6,006 aug/s |
+| **R-S100** | small / W=8 / G=8 / sims=100 / wave=64 | 11,151 aug/s |
 
-Promotion at a quality point requires a *no-behavior-change* knob
-movement that improves the number. Lanes that change sims, model size,
-or anything semantic are explorations, not promotions to a quality
-point.
+### R-TRAIN-* — trainer + concurrent generator (the holistic metric)
 
-A secondary visible number per session: number of receipts filed,
-number of promotes, number of rejects. Three consecutive rejects with
-no compound follow-up = stop signal.
+Live training with self-play workers via `gomoku.train`. Bounded ≤ 5
+min/cell: ~30s warmup, then a 60-90s measurement window, then SIGTERM.
+Measures the END-TO-END throughput that matters for actual elo gain.
+Per Jason's 2026-05-23 directive: training-side wins compound across
+the entire run, so this family is **higher tier than knob lanes on
+the generator side**.
+
+| ref point | cell shape | current best |
+|---|---|---|
+| **R-TRAIN-WL5** | small / W=8 / G=8 / sims=400 / V=64 / EMA τ=0.99 / grad_accum=4 (WL5 production recipe) | TBD (first measurement in L10) |
+| **R-TRAIN-LEAN** | same but V=128 (today's promoted gen default) | TBD (L11) |
+| **R-TRAIN-ANE** | same but workers on Core ML eval | TBD (L09) |
+
+Reported per cell: `epochs/sec`, `games/sec`, `aug_pos/sec`,
+`trainer_step_s_p50`, `worker_wave_s_p50`. The product
+`epochs/sec × steps_per_epoch` is the trainer's true throughput.
+
+### Promotion rules
+
+A promotion at any reference point requires a *no-behavior-change*
+knob movement that improves the number. Lanes that change sims, model
+size, or anything semantic are explorations, not promotions.
+
+A secondary visible number per session: receipts filed, promotes,
+rejects. Three consecutive rejects with no compound follow-up = stop
+signal.
+
+### Cell time ceiling
+
+**Strict 5 min per cell.** For measurements that need a longer
+warmup (trainer cells, torch.compile graph capture, ANE first-load),
+**split into two back-to-back cells**: a warmup cell (no measurement
+recorded; `cell_status: warmup`) + a measure cell. The driver runs
+them under the same lane; the receipt aggregates.
+
+Per Jason 2026-05-23: "we can tell perf after a warmup, some seconds.
+but you may want more time" — multi-cell stitch honors the 5-min
+boundary while letting any measurement breathe.
 
 ## Operating loop (autonomous)
 
@@ -65,37 +100,63 @@ while queue:
         break
 ```
 
-## Priority function
+## Priority function and tier system
 
 ```
-priority = (E[delta_aug_pos] × P[lane succeeds]) / wall_cost_seconds
+priority = (E[delta] × P[lane succeeds]) / wall_cost_seconds
 ```
 
-Default seeds per lane in the queue:
-- `E[delta_aug_pos]` — gut estimate in aug/s. Refined as similar lanes
-  resolve.
-- `P[lane succeeds]` — gut estimate of probability the lane improves
-  the relevant reference point. Single-axis pivots near recent wins:
-  high (0.5-0.8). Speculative cross-axis combinations: 0.2-0.4.
-  Architectural changes: 0.1-0.3 but with very high delta when they
-  hit.
+But raw priority is *gated by tier*. A Tier-2 lane cannot leapfrog a
+Tier-1 lane on score alone — Tier-1 always runs first when unblocked.
+This is the explicit "architectural levers > knob tuning" rule from
+Jason's 2026-05-23 directive.
+
+### Tiers
+
+| Tier | What lives here | Examples |
+|---|---|---|
+| **1 — Architectural / holistic** | Lanes that change which engine, runtime, or workload split the chip uses. Wins here compound across every other lane. | ANE-offload, trainer step bench (new R-TRAIN family), end-to-end production cell, custom Metal kernel, fp16/bf16 training, model parallelism. |
+| **2 — Compound knob wins** | Lanes that cross two existing axes near a known win to verify it compounds. | W × wave, sims × wave, G × wave, model × wave. |
+| **3 — Speculative knob lanes** | Single-axis lanes with low prior probability of moving the number, but cheap. | torch.compile, fp16 eval, heap ratio, exotic env vars. |
+| **bg — Calibration / reference** | Lanes that exist to ground future work (e.g., tiny model contour as the ANE-comparison reference). Run when nothing else needs the GPU. | Tiny contour, medium contour. |
+
+Within a tier, the priority function picks the next lane. Re-rank
+after every completed lane. A just-landed Tier-1 win generates Tier-1
+compound follow-ups, which immediately go to the top.
+
+### Default seeds per lane
+
+- `E[delta]` — gut estimate in the relevant unit (aug/s for R-S*,
+  epochs/sec for R-TRAIN-*). Refined as similar lanes resolve.
+- `P[lane succeeds]` — single-axis pivot near a recent win: high
+  (0.5-0.8). Speculative cross-axis: 0.2-0.4. Architectural: 0.1-0.3
+  but with very high delta when they hit.
 - `wall_cost_seconds` — `n_cells × secs_per_cell + 30 × n_cells`
   (setup margin).
-
-Re-rank after every completed lane. A new high-value compound from a
-just-promoted axis can leapfrog older speculative lanes.
 
 ## Autonomy boundaries
 
 | Autonomous | Manual confirm |
 |---|---|
 | Designing cells | Promoting a candidate into a live training run (Training-Quality Gate applies) |
-| Running ≤ 30 cells per session unattended | Structural code changes (custom Metal kernels, ANE port, native code rewrites) |
+| Running ≤ 30 cells per session unattended | Custom Metal kernels, native C extensions, model architecture changes |
+| Live-training cells ≤ 5 min each (trainer + workers + eval) | Long training runs (>5 min, anything epoch-counted) |
 | Worktree create / merge / remove on `feat/perf-*` branches | Anything that changes `pyproject.toml`, CI, or external deps |
+| Scaffolding evaluator backends (Core ML, BNNS, CPU) behind existing CLI flags | Modifying wandb project, archives, or trained-model artifacts |
 | `git merge --no-ff` integrations | `git rebase`, `git push --force`, `git reset --hard` — never |
-| Promoting a new "best cell" at a quality point | Modifying wandb project, archives, or trained-model artifacts |
-| Filing receipts, baseline rows, perf-log entries | Modifying the charter (this page) — surface it first |
-| Opening, closing, reprioritizing lanes | Stopping the buffer-curation / external-engines / ANE-rail lanes that another workstream owns |
+| Promoting a new "best cell" at a quality point | Modifying the charter (this page) — surface it first |
+| Filing receipts, baseline rows, perf-log entries | Stopping the buffer-curation / external-engines / ANE-rail lanes that another workstream owns |
+| Opening, closing, reprioritizing lanes | |
+
+### Reviewer gate
+
+**No promote, no commit-touching-receipt without Reviewer
+sign-off.** After every lane (and on a periodic discipline check),
+spawn a Reviewer agent per
+[perf-lab-reviewer-role](perf-lab-reviewer-role.md). The Reviewer
+returns APPROVE / REVISE / BLOCK; BLOCK surfaces to the user. The
+loop does not commit a `promote` decision until the Reviewer
+approves.
 
 ## File and directory contract
 

@@ -1,12 +1,12 @@
 # Best Cells per Reference Point
 
 Single source of truth for the current best cell at each quality
-reference point. Updated on every promote per the
+reference point. Updated on every Reviewer-approved promote per the
 [perf-lab-charter](../topics/perf-lab-charter.md). Promotion requires
 a no-behavior-change knob movement (sims and model size pin the
 quality point).
 
-## Reference points
+## R-S* — generator throughput (aug-pos/sec)
 
 | ref | quality pin | current best cell | aug/s | promoted | from receipt |
 |---|---|---|---|---|---|
@@ -15,6 +15,17 @@ quality point).
 | **R-S100** | small / S=100 | small / W=8 / G=8 / S=100 / V=64 | 11,151 | 2026-05-23 | canonical-sweep-mainframe |
 | R-S400-tiny | tiny / S=400 | tiny / W=8 / G=8 / S=400 / V=64 | 7,326 | 2026-05-23 | canonical-sweep-mainframe |
 | R-S100-tiny | tiny / S=100 | tiny / W=16 / G=16 / S=100 / V=32 | 19,346 | 2026-05-23 | canonical-sweep-mainframe |
+
+## R-TRAIN-* — trainer + concurrent generator (epochs/sec)
+
+The holistic metric. Live-training cells; cell-budget-stitched (warmup
+cell + measure cell) per the charter's cell-time ceiling.
+
+| ref | quality pin | current best cell | epochs/sec | games/sec | promoted | from receipt |
+|---|---|---|---|---|---|---|
+| **R-TRAIN-WL5** | full WL5 production recipe | small / W=8 / G=8 / S=400 / V=64 / EMA τ=0.99 / grad_accum=4 | TBD | TBD | pending | L10 first measurement |
+| **R-TRAIN-LEAN** | WL5 with V=128 | small / W=8 / G=8 / S=400 / V=128 / same EMA + grad-accum | TBD | TBD | pending | L11 first measurement |
+| **R-TRAIN-ANE** | WL5 with workers on Core ML | WL5 recipe but workers use --evaluator coreml | TBD | TBD | pending | L09 first measurement |
 
 R-S400 is the primary metric — it's the WL5-era production shape and
 the headline number in [status.md](status.md).
