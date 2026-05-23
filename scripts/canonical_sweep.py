@@ -664,13 +664,19 @@ def main() -> None:
     cells_path = out_dir / "cells.csv"
     meta_path = out_dir / "metadata.txt"
 
+    # Cell list resolution (in order of precedence):
+    #  1. --cells-from explicit: load from the given path, rewrite cells.csv.
+    #  2. cells.csv already in out_dir (a resumed lane): trust the on-disk
+    #     list as the source of truth so --status doesn't clobber it.
+    #  3. fresh canonical sweep: use build_cells(), write the snapshot.
     if args.cells_from:
         cells = load_cells_csv(args.cells_from.resolve())
+        write_cells_csv(cells_path, cells)
+    elif cells_path.exists():
+        cells = load_cells_csv(cells_path)
     else:
         cells = build_cells()
-    # Keep the cells.csv snapshot fresh even on --status calls so it
-    # reflects the current cell list.
-    write_cells_csv(cells_path, cells)
+        write_cells_csv(cells_path, cells)
 
     if args.status:
         print_status(cells, summary_path)
