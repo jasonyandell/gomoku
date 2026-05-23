@@ -88,6 +88,16 @@ Per Jason's 2026-05-23 directive: training-side wins compound across
 the entire run, so this family is **higher tier than knob lanes on
 the generator side**.
 
+> ⚠️ **METRIC-VALIDITY FLAG (2026-05-23, LF1): this cold-window R-TRAIN-*
+> measurement is NON-PREDICTIVE of real training and can HIDE a runaway.**
+> The 120s window measures ~8 epochs in the COLD-BUFFER, pre-runaway regime.
+> The R-TRAIN-LEAN-fp16 "+152%" was promoted on it — but in a real run that
+> recipe diverged (per-epoch wall 20s→7.3min and climbing; steps/epoch
+> 25→3236) once the buffer filled. **Do not trust an R-TRAIN-* number from a
+> cell that ends before buffer-fill + several post-fill epochs.** Fix queued
+> as LF1-followups lane #1 (warm-buffer metric). See
+> [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md).
+
 | ref point | cell shape | current best |
 |---|---|---|
 | **R-TRAIN-WL5** | small / W=8 / G=8 / sims=400 / V=64 / EMA τ=0.99 / grad_accum=4 (WL5 production recipe) | **3,297.6 aug/s** / 0.0917 epochs/s / 14.07 games/s (L10, 2026-05-23, Reviewer APPROVE) |
