@@ -18,6 +18,50 @@ it runs ≤ 5-minute production-shape self-play cells against
 fresh-random fused checkpoints, measures throughput, and chains
 follow-ups from the results.
 
+## Vocabulary
+
+The lab's vocabulary stack, ordered from "what humans see on the board"
+to "what the SGD loop actually consumes":
+
+- **stone**: a single piece placed on the board. Atomic unit.
+- **move / ply**: one stone-placement turn. A 9×9 free-style gomoku
+  game played to ~32 plies typical (per the L09/L10/L11 trainer logs);
+  capped at 16 plies for pure-self-play perf cells (`--max-plies 16`).
+- **game**: one full self-play sequence from empty board to terminal
+  (or to the ply cap in perf cells).
+- **position / raw ply**: a single board state recorded during a game.
+  `total_raw_plies = total_games × plies_mean`.
+- **aug / augmented position**: a raw position multiplied through the
+  **D4 symmetry group of the square** (4 rotations × 2 reflections =
+  8 examples per raw position). This is what the SGD loop actually
+  sees — every game generates `plies × 8` training examples. The
+  augmentation is correct (gomoku is rotationally + reflectively
+  symmetric on a square board, so a winning policy at one orientation
+  is a winning policy at all 8).
+- **aug/s / aug-positions per second**: the lab's headline throughput
+  metric. `aug/s = total_aug_examples / wall_secs`. Directly
+  proportional to gradient-steps-per-second × batch-fill-rate, which
+  is what training velocity cares about. Reported for both R-S*
+  (pure self-play) and R-TRAIN-* (trainer + concurrent generator)
+  cells. R-TRAIN-* uses a post-warmup span-based formula at
+  `scripts/lab_train_cell.py:534-540`, not the bare `total/wall`.
+
+**Why aug/s, not games/s or positions/s, as the headline:**
+
+- `games/s` undercounts what the trainer sees by 8× (no D4 multiplier).
+- `positions/s` matches what humans count looking at the board but
+  doesn't match what gets fed into SGD.
+- `aug/s` is the per-second feed-rate of training examples into the
+  optimizer — the quantity that, in the limit, sets the elo-per-hour
+  ceiling of the training run. That's why we tune the chip against it.
+
+Cross-ref: the D4 `augment()` function lives in `gomoku/game.py`
+(imported as `from gomoku.game import ... augment` in `self_play.py:11`)
+and is applied at record-write time in the workers (`self_play.py:298-301,
+464-465, 605-606`), not at SGD time in the trainer. So the
+`total_aug_examples` count on disk under `<cell>/records/v*/` already
+includes the ×8 D4 multiplier.
+
 ## Success metric
 
 Two metric families, each with reference points. A win at *either*
