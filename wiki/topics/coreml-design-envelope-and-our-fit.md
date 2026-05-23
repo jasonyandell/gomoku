@@ -37,6 +37,47 @@ Three things the data settles, at today's stack (today's Core ML version + today
 
 **The L09c PROMOTE is a `coreml-isolated` win at the engine-isolation level, NOT an ANE-residency claim.** Anything downstream that reads R-TRAIN-TINY-ANE = 10,762.6 aug/s should know that's the cap.
 
+### External research: hollance/neural-engine (folded in 2026-05-23, post-session-resume)
+
+Jason flagged [hollance/neural-engine](https://github.com/hollance/neural-engine) — Matthijs Hollance's community resource ("Everything we actually know about the Apple Neural Engine"). Hollance authored the *Core ML Survival Guide* and has been one of the longest-active third-party voices on ANE. The repo is a curated collection of what's been learned about ANE behavior through experimentation, since Apple doesn't document the framework's internals.
+
+Folded into our model below as updated priors. Findings unchanged; framing tightened.
+
+**What hollance confirms about our setup:**
+
+- **Our model is structurally ANE-friendly.** Hollance's "problematic layers" list (custom layers, RNN/LSTM/GRU, gather, dilated convs, broadcastable/ND layers, big pools, weird upsampling) — none of these appear in `gomoku/model.py`. We use Conv2d + BatchNorm (fused at eval via `fuse_conv_bn_eval`) + ReLU + Linear. ResBlock + stem + policy/value heads. All standard, all on the supported list.
+- **ANE is fp16 throughout** — confirms what we knew about Core ML's `compute_precision=FLOAT16`. Our `--fp16-eval` flag is correctly off when `--evaluator coreml` (per the L09b fix). Activations in our trained gomoku resnet should stay in the `1e-2` to `1e1` band — well inside fp16's safe range.
+- **Quantization is for storage, not compute, on ANE.** INT8 weights save disk but compute still happens at fp16. This *retroactively explains* why the ane-int8-inference.md plan never produced a clear INT8-vs-FP16 inference-speed win — the speedup we hoped for from INT8 ops doesn't materialize on ANE (it's an iOS deployment-size benefit, not an inference-throughput benefit).
+
+**What hollance changes about our framing:**
+
+- **Core ML's GPU path goes through MPS** (Metal Performance Shaders) — same Metal infrastructure as our torch/MPS trainer. So our `coreml-isolated` cap clearance (trainer_step_s_p50 down 16-81% across L09 family) tells us *the Core ML workers were not on the GPU* — if they were, the trainer would still be fighting MPS contention. The workers must be on either ANE or CPU. This sharpens the residency question: it's ANE-vs-CPU, not three-way.
+- **`.all` is Apple's recommended setting for "I want ANE if possible."** CPU_AND_NE excludes the GPU entirely — so when Core ML hits an unsupported op, the fallback goes to *CPU* (slow), not GPU. This may explain L09e ALL's +3.1% over CPU_AND_NE: with ALL, fallback ops route to the GPU instead of the slow CPU. **Implication for any future ANE work: try `.all` first.** Our L09c PROMOTE was at CPU_AND_NE; a re-run at ALL might widen the win.
+- **Core ML can split a model across processors.** A "Core ML ran on the ANE" claim doesn't mean the *whole* forward ran on ANE — Core ML may run part on ANE and part on CPU at every call, with switching overhead. This is consistent with our pipeline-overhead-bound interpretation at small/V=64.
+- **The new ML-program / `mlprogram` converter (which we use via `convert_to="mlprogram"`) prefers broadcastable/ND layers** that don't run on ANE. We might be inadvertently generating ANE-hostile ops in the `.mlpackage` even though our PyTorch source code is clean. **Inspectable via coremltools** — L09i lane added to queue.
+
+**No-sudo techniques for residency proof — major L09e' unblocker:**
+
+Hollance documents three ways to check whether Core ML is using the ANE *without* `powermetrics` (i.e., no sudo required):
+
+1. **Thread-name check.** Pause the process in a debugger (or `ps -M <pid>`); look for a thread named `H11ANEServicesThread`. If it exists, Core ML is using the Neural Engine for at least some portion. **No sudo. No debugger if `ps -M` works.**
+2. **Symbolic breakpoint on `-[_ANEModel program]`.** If it hits, ANE is used.
+3. **Espresso engine attribution.** Core ML internally dispatches through `Espresso::ANERuntimeEngine` (ANE), `Espresso::MPSEngine` / `Espresso::MetalLowmemEngine` (GPU), or `Espresso::BNNSEngine` (CPU). Per-engine stack frames in `lldb` tell us which parts of the model ran where.
+
+The thread-name check (option 1) is the cheapest. It resolves the L09c residency question **today**, without waiting on cached sudo.
+
+**Implications for the lab's research lanes:**
+
+- **L09e' (residency proof for L09c) is now UNBLOCKED** — swap the powermetrics dependency for the thread-name check. New dispatch shape: re-run L09c with `lab_train_cell`, while workers are running, `ps -M <worker_pid>` and check for `H11ANEServicesThread`. Per-worker thread audit captured in artifact. Caps elevated from `coreml-isolated` → `ane-metered` (if rail bright) or pinned at `coreml-isolated` (if rail dark).
+- **L09i (mlpackage op inspection) added** — diagnostic to check whether `convert_to="mlprogram"` is generating ND-broadcastable ops that prevent full ANE residency. Code-queue lane; no GPU needed.
+- **L09c-ALL (re-run L09c at `--coreml-compute-units ALL`) added** — given hollance's `.all` recommendation and L09e's marginal +3.1% finding, retesting L09c at ALL might widen the +33.9% win further. Cheap (1 cell, 3 min wall).
+- **The "tiny model fits the ANE design center" narrative is now testable.** If L09e' shows ANE-resident at tiny/V=64, the design-envelope hypothesis (small per-call work + pipeline-overhead-bound regime) holds. If ANE is dark and CPU is bright, the win is engine-isolation via Core ML's CPU fallback — different mechanism, different framing for what shapes might pay in the future.
+
+**Open questions still open after this absorption:**
+
+- Does our medium model's `.mlpackage` have more ND-broadcastable ops than tiny's? (Could explain L09d's -59.6% — if Core ML is silently demoting more of the medium model to slow CPU than tiny's, the worker-side throughput collapse makes sense.) L09i diagnostic would resolve this.
+- Why does L09e ALL's marginal +3.1% over CPU_AND_NE not extend to a bigger gap? Either Core ML's auto-routing is conservative, or the GPU portions are small relative to the rest of the work. L09e' could illuminate this through Espresso engine attribution.
+
 ## Future-shape framing — this is a snapshot, not a verdict
 
 Per Jason 2026-05-23: "definitely any of your findings are valid, it's future shape I'm encouraging you to remain optimistic about." The empirical envelope above is time-stamped to today's Core ML version + today's evaluator pipeline + today's model-arch family. Specific re-measurement triggers that should reactivate the queued lanes:
@@ -195,15 +236,52 @@ Result: CPU_AND_GPU = 1,908.3 (-1.1% vs L09 CPU_AND_NE); ALL = 1,989.8 (+3.1%). 
 
 **Important diagnostic gap exposed by L09e:** the 4.3% across-routing spread tells us that for our workload at small/V=64, Core ML's effective compute is similar across CPU_AND_NE, CPU_AND_GPU, and ALL routings. This is *consistent with* "Core ML uses similar hardware regardless of routing hint" but doesn't prove ANE residency one way or the other. The `ane-metered` cap remains unproven for any L09* result.
 
-### L09e' — ANE residency proof via powermetrics (REACTIVATABLE)
+### L09e' — ANE residency proof via thread-name (UNBLOCKED post-hollance-absorption)
 
-**Status: QUEUED — newly added 2026-05-23 (session-resume).**
+**Status: UNBLOCKED 2026-05-23 (post-hollance-absorption) — ready to dispatch.**
 
-Hypothesis: elevate at least one L09* receipt from `coreml-isolated` to `ane-metered` by re-running with `powermetrics ane_power` evidence in a matched window. Most informative target: re-run L09c (the lone holistic win) under powermetrics to determine whether the win is actually ANE-resident or running on CPU/GPU portions of the CPU_AND_NE routing.
+Hypothesis: elevate L09c (lone PROMOTE) from `coreml-isolated` to `ane-metered` by detecting `H11ANEServicesThread` in worker process threads during the measurement window. If the thread exists, Core ML is using ANE for at least part of the forward pass. Per [hollance/neural-engine § Is my model using the ANE?](https://github.com/hollance/neural-engine/blob/master/docs/is-model-using-ane.md), this is a no-sudo equivalent of the `powermetrics ane_power` check.
 
-Pre-requisite: cached or passwordless `sudo` for `powermetrics` (per `coreml-ane-residency-lab.md`'s blocked-2026-05-22 lane 03 note).
+**Dispatch shape:**
+1. `lab_train_cell.py` at L09c shape: tiny / W=16 / G=8 / S=400 / V=64 / `--evaluator coreml --coreml-compute-units CPU_AND_NE` / 30s warmup + 120s measure.
+2. During the measurement window, `ps -M <worker_pid>` for each of the 16 worker PIDs. Capture thread list for each.
+3. Optional: also run `lldb -p <worker_pid>` and `image list Espresso` to inspect which Espresso engines were loaded; helps disambiguate ANE-only vs mixed-engine.
+4. Receipt: tabulate per-worker thread audit results in the L09e' yaml. Cap elevation:
+   - All 16 workers show `H11ANEServicesThread` → ANE is being used; cap elevates to `ane-metered`.
+   - 0/16 workers show it → ANE is dark; L09c PROMOTE narrative reframes to "Core ML CPU+ANE dispatch beats MPS contention at tiny/V=64" — engine-isolation only, not ANE-residency. Both are real engine wins.
+   - Mixed (some show, some don't) → flaky thread spawn; need longer observation window or multiple `ps -M` samples.
 
-**Why this matters:** the L09c PROMOTE narrative is currently capped at `coreml-isolated` — if L09c's win turns out to NOT be ANE-resident, the "tiny model fits the ANE design center" framing collapses to "tiny model fits Core ML's CPU+GPU dispatch better than MPS contention." Both are valid engine-isolation wins, but they motivate different next moves.
+**Pre-requisite:** none beyond the existing `--evaluator coreml` flag and `ps`. (The original powermetrics-based version of this lane was blocked on sudo; the thread-name technique bypasses that.)
+
+**Why this matters:** the L09c PROMOTE narrative is currently capped at `coreml-isolated`. If L09e' confirms ANE residency, the "tiny model fits the ANE design center better than small" framing has empirical support. If ANE is dark, the L09c win is via Core ML's CPU fallback being faster than MPS-contended torch — different mechanism, different future-research implications. Both readings are durable; both inform what shapes might pay when the inbound new ANE research lands.
+
+### L09c-ALL — Re-run L09c at `--coreml-compute-units ALL` (auto-queued post-hollance-absorption)
+
+**Status: QUEUED — small follow-up; cheap (1 cell, 3 min wall).**
+
+Hypothesis: per hollance's "How do I make my model run on the ANE?" page, `.all` (ALL) is Apple's recommended setting for "I want ANE if possible" — with `CPU_AND_NE`, Core ML can only fall back to slow CPU for unsupported ops, but with `ALL` it can fall back to the GPU. L09e measured ALL marginally beating CPU_AND_NE by +3.1% at small/V=64. At tiny/V=64 (where L09c PROMOTE landed at +33.9% under CPU_AND_NE), ALL might widen the win further if any micro-fallback ops are routing to slow CPU under CPU_AND_NE.
+
+**Dispatch shape:** `lab_train_cell.py` at the L09c recipe but with `--coreml-compute-units ALL` instead of `CPU_AND_NE`. Compare aug/s and trainer_step_s_p50 vs L09c's CPU_AND_NE numbers.
+
+**Expected outcome:** marginal-to-modest improvement (likely +0% to +5%) if any fallback ops exist. If the gain is large (>10%), L09c's mechanism narrative shifts toward "fallback to GPU" rather than "ANE wins at tiny."
+
+**Constraint:** trainer must still be on MPS (default for `lab_train_cell`); ALL routing in Core ML means workers could share the GPU with the trainer — defeating the engine-isolation property. **Need to inspect trainer_step_s_p50 carefully** — if it doesn't drop the L09c-equivalent ~16% relative to a torch baseline, ALL is putting workers on the GPU and L09c-ALL is not a fair compare. Add a matched torch baseline if Core ML auto-routes to GPU.
+
+### L09i — `.mlpackage` op inspection (coreml-queue / code; no GPU needed)
+
+**Status: QUEUED — diagnostic; cheap (no perf cell required).**
+
+Hypothesis: `coremltools.convert(..., convert_to="mlprogram")` may emit ANE-hostile broadcastable / ND-layered ops in our exported `.mlpackage`, even though `gomoku/model.py` is structurally ANE-friendly (Conv+BN-fused + ReLU + Linear). Per hollance's "Which Core ML layers are not supported by the ANE?" page, the new ML-program converter has a tendency to prefer ND-broadcastable layers that fall back to CPU/GPU instead of running on ANE.
+
+**Diagnostic approach:**
+1. Export the gomoku model to a `.mlpackage` via the existing `coreml_evaluator.export_model_to_coreml` (FP16, `convert_to="mlprogram"`).
+2. Inspect the ML-program ops via `coremltools.models.MLModel(...)` and `.get_spec()` (or via `proto.MLPackage`).
+3. List op types; flag any in hollance's problematic list (Broadcastable, ND variants, gather, dilated convs).
+4. If problematic ops exist, propose model surgery: replace ND ops with their non-ND equivalents in the export path.
+
+**Cells:** 3 inspection runs — tiny, small, medium model exports. Compare op-type distributions across model sizes. Worth a CPU-queue agent fan-out.
+
+**Why this matters:** if tiny's `.mlpackage` is cleanly ANE-friendly while medium's `.mlpackage` has more ND-broadcastable ops, that mechanically explains L09d's -59.6% reject at medium (more ops fall back to slow CPU). Possible rescue: identify and surgically replace the ND ops in the medium export.
 
 ### L09f — Larger wave sizes on Core ML beyond L09c-V512 (REACTIVATABLE)
 

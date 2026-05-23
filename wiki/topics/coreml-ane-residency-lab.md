@@ -31,10 +31,22 @@ Every Core ML measurement that has landed in [experiment-ledger.md](../ops/exper
 
 **Implications:**
 
-- The L09c PROMOTE narrative ("ANE pays at tiny+V=64") is **`coreml-isolated`-cap correct** but **`ane-metered`-cap unproven**. Equivalently safe wording: "Core ML at CPU_AND_NE routing pays at tiny+V=64; whether the gain comes from ANE residency or from CPU/GPU dispatch under CPU_AND_NE routing is not yet resolved."
+- The L09c PROMOTE narrative ("ANE pays at tiny+V=64") is **`coreml-isolated`-cap correct** but **`ane-metered`-cap unproven**. Equivalently safe wording: "Core ML at CPU_AND_NE routing pays at tiny+V=64; whether the gain comes from ANE residency or from CPU dispatch under CPU_AND_NE routing is not yet resolved." (Note post-hollance: under CPU_AND_NE the alternative to ANE is **CPU**, not GPU — `CPU_AND_NE` excludes the GPU entirely. The GPU-via-MPS path is only reachable via `CPU_AND_GPU` or `ALL`.)
 - The L09 (small) and L09d (medium) rejects are **`coreml-isolated`-cap correct rejects** — the data shows the Core ML offload doesn't pay holistically at those shapes, regardless of which silicon Core ML actually ran on. Residency proof wouldn't change the rejection.
-- **The next ANE-evidence-elevating lane is L09e'** (residency proof via powermetrics on L09c, the lone PROMOTE) — see [coreml-design-envelope-and-our-fit.md § L09e'](coreml-design-envelope-and-our-fit.md#l09e--ane-residency-proof-via-powermetrics-reactivatable). Pre-requisite is cached/passwordless sudo (per the 2026-05-22 lane 03 blocker note below).
+- **The next ANE-evidence-elevating lane is L09e'** (residency proof for L09c). **UNBLOCKED 2026-05-23 (post-hollance-absorption)** via the no-sudo `H11ANEServicesThread` technique from [hollance/neural-engine](https://github.com/hollance/neural-engine/blob/master/docs/is-model-using-ane.md). See [coreml-design-envelope-and-our-fit.md § L09e'](coreml-design-envelope-and-our-fit.md#l09e--ane-residency-proof-via-thread-name-unblocked-post-hollance-absorption). Original powermetrics version retained as a fallback if thread-name evidence is inconclusive.
 - Future Core ML or ANE research dropping (e.g., new ANE features, new residency-instrumentation APIs) should default to the `ane-metered`-or-better cap when re-running these shapes.
+
+**Updated no-sudo proof-of-residency techniques (folded from hollance/neural-engine 2026-05-23):**
+
+| Technique | Sudo needed? | What it proves | What it doesn't |
+|---|---|---|---|
+| `ps -M <pid>` showing `H11ANEServicesThread` | NO | Core ML uses ANE for at least part of the model | Doesn't tell you what fraction is on ANE vs CPU |
+| `powermetrics ane_power` > idle | YES (sudo) | ANE rail drew power during the measurement window | Same caveat — fraction unknown without per-engine timing |
+| `lldb` + breakpoint on `-[_ANEModel program]` | NO | ANE is being invoked at least once per inference | Same caveat |
+| `lldb` + `image list Espresso` + Espresso symbols | NO | Which Core ML engines (ANE / MPS / BNNS) were loaded | Doesn't tell you which engine ran which layer |
+| Instruments Time Profiler call tree | NO | Per-call attribution to engine via stack symbols | Requires Instruments setup; heavier than `ps -M` |
+
+Cheapest for our lab's needs: **`ps -M <pid>`** during the measurement window of any running `lab_train_cell` cell with `--evaluator coreml`. L09e' uses this as the primary technique.
 
 ## Definition Of Cap
 

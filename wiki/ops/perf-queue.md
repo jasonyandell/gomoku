@@ -131,27 +131,68 @@ status: COMPLETED 2026-05-23 REJECT — R-TRAIN-LEAN V=512 = 2,362.8 aug/s (-28.
 notes: The L11 yaml's own caveat ("R-S* metrics need humility") was confirmed. Pure-gen R-S* promotes (V=512) remain valid for non-trainer self-play but do NOT free-ride to live training. Follow-up L11b candidate: V=512 + lower sgd_per_position (to match V=64's SGD work per second). Lower priority than L09 — the headline finding (gen wins don't free-ride) is the load-bearing insight.
 ```
 
-#### L09e' — ANE residency proof via powermetrics on L09c (cap elevation: `coreml-isolated` → `ane-metered`)
+#### L09e' — ANE residency proof via thread-name on L09c (cap elevation: `coreml-isolated` → `ane-metered`); UNBLOCKED post-hollance-absorption
 
 ```yaml
 id: L09e-prime (L09e')
 tier: 1
-hypothesis: Re-run L09c (the lone L09* PROMOTE: tiny / W=16 / V=64 / coreml CPU_AND_NE = 10,762.6 aug/s, +33.9% vs torch baseline) under matched-window powermetrics ane_power. Elevate from `coreml-isolated` cap to `ane-metered` cap if ANE rail is nonzero during the candidate's measurement window — confirming the win comes from ANE silicon, not from CPU/GPU under CPU_AND_NE routing. If the rail is flat (zero ANE samples), the L09c win is engine-isolation via Core ML's CPU/GPU dispatch, not ANE; both readings are valid as engine-isolation findings but motivate different next moves (deployment story; future ANE-targeting).
-references_affected: R-TRAIN-TINY-ANE cap (currently `coreml-isolated`; would elevate to `ane-metered` or stay capped depending on rail evidence).
-code_change: false (uses existing `--evaluator coreml --coreml-compute-units CPU_AND_NE` flags + the residency-lab's `scripts/coreml_ane_residency_scout.py` companion for powermetrics in a matched window).
-depends_on: cached or passwordless sudo for `powermetrics` (the same blocker that stopped the 2026-05-22 lane 03 residency scout). Without sudo, this lane is BLOCKED and can't run.
-prep_cells:
-  - 2026-05-22 Vision positive control (already exists at /tmp/vision-ane-powermetrics-1779421070.txt; 25 ANE samples mean 4474 mW). Re-run a fresh Vision positive in adjacent window before the L09c re-measure, per residency-lab discipline.
+hypothesis: Re-run L09c (lone L09* PROMOTE: tiny / W=16 / V=64 / coreml CPU_AND_NE = 10,762.6 aug/s, +33.9% vs torch baseline) and use the `ps -M <worker_pid>` thread-name check (per hollance/neural-engine) to detect `H11ANEServicesThread` in each worker process during the measurement window. If the thread exists in workers, Core ML is using the ANE for at least part of the forward → cap elevates `coreml-isolated` → `ane-metered`. If thread absent in all 16 workers, the L09c win is engine-isolation via Core ML's CPU fallback (under CPU_AND_NE, the alternative to ANE is CPU since GPU is excluded by the routing flag) — both readings are durable, but the framing for future ANE-targeting work differs.
+references_affected: R-TRAIN-TINY-ANE cap (currently `coreml-isolated`; would elevate to `ane-metered` or stay capped depending on thread evidence).
+code_change: false (uses existing `--evaluator coreml --coreml-compute-units CPU_AND_NE` flags + standard `ps -M` for thread inspection).
+depends_on: nothing beyond existing infrastructure. **No sudo required** (hollance technique bypasses the sudo-powermetrics blocker that grounded the 2026-05-22 lane 03 attempt).
+prep_cells: none (the thread-name technique doesn't need a sanity control — either the thread is present in the running process or it isn't).
 measurement_cells:
-  - Re-run L09c shape (tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE / live training) with `powermetrics ane_power` sampling in the matched 120s measurement window
-  - Companion fresh Vision positive control immediately before or after, to prove the meter can see ANE on this Mac in this session
-n_cells: 2 (Vision sanity + L09c re-measure)
-wall_cost_min: 5
-E_delta_aug_per_sec: 0 (diagnostic; aug/s should match L09c's 10,762.6 within session-thermal noise)
-P_success: 0.9 (the experiment will produce either positive ANE evidence OR a clean negative — both are informative; only failure mode is the sudo blocker)
-priority: 5.0 (Tier 1 diagnostic; the load-bearing question for the L09c PROMOTE narrative)
-status: queued (blocked on cached/passwordless sudo for powermetrics)
-notes: This lane is the load-bearing test for whether L09c's PROMOTE narrative ("ANE pays at tiny+V=64") is residency-correct or merely engine-isolation-correct. Either result is durable. See [coreml-design-envelope-and-our-fit.md § L09e'](../topics/coreml-design-envelope-and-our-fit.md#l09e--ane-residency-proof-via-powermetrics-reactivatable) for the conceptual framing and [coreml-ane-residency-lab.md § Cap status](../topics/coreml-ane-residency-lab.md#cap-status-of-the-perf-lab-l09-receipts-2026-05-23) for the cap-ladder pin.
+  - Re-run L09c shape (tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE / live training, 30s warmup + 120s measure)
+  - During the measurement window, snapshot `ps -M <pid>` for each of the 16 worker PIDs (~3 samples spaced through the window to catch any transient threads)
+  - Optional: `lldb -p <pid>` against one worker + `image list Espresso` to log which Espresso engines are loaded (ANERuntimeEngine / MPSEngine / BNNSEngine)
+n_cells: 1 (single L09c shape; thread-name probe is in-band)
+wall_cost_min: 3
+E_delta_aug_per_sec: 0 (diagnostic; aug/s should match L09c's 10,762.6 within session-thermal noise — verify reproducibility along the way)
+P_success: 0.95 (the experiment will produce either positive ANE evidence OR a clean negative — both are informative; failure modes: (a) workers complete too fast to capture threads, mitigated by sampling 3× through the window; (b) Espresso engines lazy-load and only appear after first inference)
+priority: 5.0 (Tier 1 diagnostic; load-bearing for the L09c PROMOTE narrative)
+status: UNBLOCKED 2026-05-23 (post-hollance-absorption); ready to dispatch
+notes: This lane is the load-bearing test for whether L09c's PROMOTE narrative ("ANE pays at tiny+V=64") is residency-correct or merely engine-isolation-correct. Either result is durable. Threadname technique sourced from [hollance/neural-engine § is-model-using-ane.md](https://github.com/hollance/neural-engine/blob/master/docs/is-model-using-ane.md). See [coreml-design-envelope-and-our-fit.md § L09e'](../topics/coreml-design-envelope-and-our-fit.md#l09e--ane-residency-proof-via-thread-name-unblocked-post-hollance-absorption) for full framing and [coreml-ane-residency-lab.md § Cap status](../topics/coreml-ane-residency-lab.md#cap-status-of-the-perf-lab-l09-receipts-2026-05-23) for the cap ladder.
+```
+
+#### L09c-ALL — Re-run L09c at `--coreml-compute-units ALL` (post-hollance-absorption)
+
+```yaml
+id: L09c-ALL
+tier: 1
+hypothesis: hollance recommends `.all` as the right setting for "I want ANE if possible." `CPU_AND_NE` excludes the GPU entirely, so when Core ML hits an unsupported op the fallback goes to slow CPU. With `ALL`, fallback ops can go to the GPU instead (faster). L09e measured ALL marginally beating CPU_AND_NE by +3.1% at small/V=64. At tiny/V=64 (L09c's shape), ALL might widen the +33.9% win further if any fallback ops exist.
+references_affected: R-TRAIN-TINY-ANE (potential lift if ALL > CPU_AND_NE at tiny).
+code_change: false (existing `--coreml-compute-units ALL` flag).
+prep_cells: none (compare directly against L09c's 10,762.6 baseline)
+measurement_cells:
+  - tiny / W=16 / G=8 / S=400 / V=64 / coreml ALL / 30s warmup + 120s measure
+n_cells: 1
+wall_cost_min: 3
+E_delta_aug_per_sec: 0-300 (marginal-to-modest improvement expected; if large, L09c's mechanism narrative shifts toward "GPU fallback" rather than "ANE win")
+P_success: 0.7 (cheap to run; informative regardless)
+priority: 3.5 (Tier 1 follow-up; below L09e' in priority because L09e' is the load-bearing diagnostic)
+status: queued
+notes: **Important caveat:** under ALL, Core ML can route workers to the GPU, which means workers share Metal with the trainer — potentially defeating engine-isolation. Verify by inspecting trainer_step_s_p50 against L09c's 0.0267s; if trainer_step regresses to torch-baseline-equivalent (~0.0319s), workers are on the GPU and ALL is a different experiment than expected. See [coreml-design-envelope-and-our-fit.md § L09c-ALL](../topics/coreml-design-envelope-and-our-fit.md#l09c-all--re-run-l09c-at---coreml-compute-units-all-auto-queued-post-hollance-absorption).
+```
+
+#### L09i — `.mlpackage` op inspection (CPU queue / no GPU; diagnostic)
+
+```yaml
+id: L09i
+tier: 3
+hypothesis: `coremltools.convert(..., convert_to="mlprogram")` may emit ANE-hostile broadcastable / ND-layered ops in our exported `.mlpackage`, even though `gomoku/model.py` is structurally ANE-friendly. If tiny's `.mlpackage` has fewer ND-broadcastable ops than small's or medium's, that mechanically explains the L09c PROMOTE / L09 + L09d REJECT pattern: tiny stays mostly ANE-resident, larger models fall back to slow CPU more.
+references_affected: diagnostic — could motivate model-surgery rescue lanes for medium and small if ND ops are the culprit.
+code_change: false (uses coremltools.models.MLModel + .get_spec() to enumerate ML-program ops)
+measurement_cells: NOT GPU cells — CPU-queue inspection.
+  - Tiny: export then enumerate ops; flag any in hollance's problematic list (Broadcastable, ND, gather, dilated, big pools)
+  - Small: same
+  - Medium: same
+n_cells: 3 (model-export inspections; <30s each)
+wall_cost_min: 2 (no GPU; runs as a CPU-queue agent fan-out)
+E_delta_aug_per_sec: 0 (diagnostic; possible rescue follow-ups motivated)
+P_success: 1.0 (will produce op-list data regardless of outcome)
+priority: 2.5 (Tier 3 diagnostic; cheap)
+status: queued
+notes: If problematic ops exist, propose model-surgery rescue lanes per hollance's "How to replace unsupported layers" guidance. See [coreml-design-envelope-and-our-fit.md § L09i](../topics/coreml-design-envelope-and-our-fit.md#l09i--mlpackage-op-inspection-coreml-queue--code-no-gpu-needed).
 ```
 
 ### Tier 2 — Compound knob wins
