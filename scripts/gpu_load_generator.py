@@ -26,16 +26,19 @@ def main() -> None:
     ap.add_argument("--matrix", type=int, default=8192, help="square matrix dim for matmul")
     ap.add_argument("--device", default="mps")
     ap.add_argument("--report-every", type=float, default=10.0, help="seconds between throughput prints")
+    ap.add_argument("--dtype", choices=["fp32", "fp16"], default="fp32",
+                    help="matmul operand dtype (fp16 doubles FLOPs/byte at similar power)")
     args = ap.parse_args()
 
     dev = torch.device(args.device)
     n = args.matrix
-    a = torch.randn(n, n, device=dev, dtype=torch.float32)
-    b = torch.randn(n, n, device=dev, dtype=torch.float32)
-    # one matmul = 2*n^3 FLOPs
+    mm_dtype = torch.float16 if args.dtype == "fp16" else torch.float32
+    a = torch.randn(n, n, device=dev, dtype=mm_dtype)
+    b = torch.randn(n, n, device=dev, dtype=mm_dtype)
+    # one matmul = 2*n^3 FLOPs (independent of operand dtype)
     flops_per_matmul = 2.0 * (n ** 3)
 
-    print(f"[gpu-load] device={dev} matrix={n}x{n} secs={args.secs} "
+    print(f"[gpu-load] device={dev} matrix={n}x{n} dtype={args.dtype} secs={args.secs} "
           f"(~{flops_per_matmul/1e9:.1f} GFLOP/matmul)", flush=True)
 
     t_start = time.time()
@@ -61,7 +64,7 @@ def main() -> None:
             count_at_report = count
             # reseed occasionally so values don't blow up to inf/nan and
             # turn the matmul into a degenerate (cheap) op
-            a = torch.randn(n, n, device=dev, dtype=torch.float32)
+            a = torch.randn(n, n, device=dev, dtype=mm_dtype)
 
     print(f"[gpu-load] done: {count} matmuls in {time.time()-t_start:.1f}s", flush=True)
 
