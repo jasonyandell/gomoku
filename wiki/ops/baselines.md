@@ -76,6 +76,7 @@ Purpose: separate evaluator/native-search time from post-search Python in a boun
 | 2026-05-23 | `177f0b3` main | M5 Max / MPS / idle | L07 tiny contour, tiny W=8 G=8 S=400 V axis | aug pos/s | V=128=9,407; V=256=14,461; V=512=17,088; V=1024=17,012 (V=512 plateau, same shape as small) | `sweep_logs/lab-L07-tiny-contour-20260523T065429Z/cell_tiny_W08_G08_S400_V{128,256,512,1024}` |
 | 2026-05-23 | `177f0b3` main | M5 Max / MPS / idle | L07 tiny contour, **tiny W=16 G=8 S=400 V=512** (new R-S400-tiny default) | aug pos/s | **22,088 aug pos/s**; 52,095 games; plies_mean 15.96; **+201.5% vs tiny V=64=7,326** | `sweep_logs/lab-L07-tiny-contour-20260523T065429Z/cell_tiny_W16_G08_S400_V512` |
 | 2026-05-23 | `177f0b3` main | M5 Max / MPS / idle | L07 tiny contour, tiny W=16 G=8 S=400 V=256 | aug pos/s | 16,375 aug pos/s (+123.5% vs V=64; -25.9% vs W=16 V=512) | `sweep_logs/lab-L07-tiny-contour-20260523T065429Z/cell_tiny_W16_G08_S400_V256` |
+| 2026-05-23 | `630b037` main | M5 Max / MPS / idle | L13 tiny W-peak probe, tiny G=8 S=400 V=512, W axis | aug pos/s (no promote — W=16 stays optimal) | W=12=20,560 (-6.9%); W=16=22,088 (ref); W=20=21,553 (-2.4%); W=24=20,970 (-5.1%). Tiny W-axis smooth bump shape with W∈[12,20] within 7% of peak. | `sweep_logs/lab-L13-tiny-W-peak-probe-20260523T073525Z/cell_tiny_W{12,20,24}_G08_S400_V512` |
 
 ## Engine-Isolation / Residency References
 

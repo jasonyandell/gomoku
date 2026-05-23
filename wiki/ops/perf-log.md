@@ -459,6 +459,30 @@ consecutive_rejects: 2 → 0 (any promote resets per stop rule).
 
 Reviewer: APPROVE — "L07 promote math clean (+201.5%); 2-axis move decomposed via cell matrix; surfaces consistent; L13/L14 well-scoped."
 
+## [2026-05-23] lab | L13 tiny W-peak probe reject — W=16 confirmed; tolerance band W∈[12,20] within 7%
+
+3/3 cells ok. Fine-grained peak confirmation.
+
+| cell | aug/s | vs W=16 V=512 ref (22,088) |
+|---|---|---|
+| W=12 V=512 | 20,560 | -6.9% |
+| **W=16 V=512** | **22,088** | reference (L07) |
+| W=20 V=512 | 21,553 | -2.4% |
+| W=24 V=512 | 20,970 | -5.1% |
+
+W=16 is confirmed the tiny V=512 peak, with W=20 a very close second (within 2.4%). The whole W ∈ [12, 20] band is within 7% of peak — tiny's W-axis at V=512 is a smooth bump, not a sharp saturation drop.
+
+**Compound finding (L02 + L07 + L13)** — model size determines BOTH the W-peak location AND the tolerance shape at V=512:
+- **small**: peak W=8, sharp drop (W=16=-5.5%, W=4=-8.4%, narrow tolerance)
+- **tiny**: peak W=16, gentle bump (W=12=-6.9%, W=20=-2.4%, W=24=-5.1%, wide tolerance)
+
+Direct implication: L09 ANE-offload worker tuning has more wiggle room with tiny than the small data suggested. The optimal under Core ML/ANE is probably also in the W ∈ [12, 20] band rather than a single sharp peak.
+
+consecutive_rejects: 0 → 1.
+Next dispatch: L14 (G axis at tiny W=16 V=512).
+
+Reviewer: APPROVE — "L13 reject clean: math/plies/units verified, W=16 confirmed peak, surfaces consistent, no spurious follow-ups."
+
 ## [2026-05-23] lab | charter v2 — tier system + R-TRAIN family + Reviewer Gate
 
 After L01 launched but before it landed, Jason gave four new

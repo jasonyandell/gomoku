@@ -186,27 +186,6 @@ notes: Rescoped from V=128 to V=512. Blocked-on-driver because cells.csv schema 
 
 ### Background — Calibration / reference
 
-#### L13-tiny-W-peak-probe (auto-queued 2026-05-23 after L07 promote)
-
-```yaml
-id: L13-tiny-W-peak-probe
-tier: bg
-hypothesis: L07 showed tiny W=16 V=512 beats tiny W=8 V=512 (+29.4%). Probe finer around W=16 to find the actual peak — W ∈ {12, 16, 20, 24} all at tiny G=8 S=400 V=512.
-reference: R-S400-tiny (current best = tiny W=16 G=8 S=400 V=512 = 22,088 aug/s after L07)
-code_change: false
-cells:
-  - tiny W=12 G=8 S=400 V=512
-  - tiny W=20 G=8 S=400 V=512
-  - tiny W=24 G=8 S=400 V=512
-n_cells: 3 (W=16 already measured at 22,088)
-wall_cost_min: 17
-E_delta_aug_per_sec: 2000
-P_success: 0.5
-priority: 58.8 (highest unblocked after L07 promote; +29% jump at W=16 suggests further compounds possible)
-status: queued
-notes: New auto-queued follow-up to L07. If W=20 or W=24 beats W=16, the W-axis "saturation point" at tiny is even higher than expected, which is important for L09 ANE worker-count tuning.
-```
-
 #### L14-tiny-G-at-W16-V512 (auto-queued 2026-05-23 after L07)
 
 ```yaml
@@ -232,6 +211,7 @@ notes: Lower priority than L13 (peak-probe is more targeted) but cheap.
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L13-tiny-W-peak-probe | reject | best = tiny W=16 V=512 = 22,088 (unchanged). W=12=20,560 (-6.9%); W=20=21,553 (-2.4%); W=24=20,970 (-5.1%). Smooth bump W∈[12,20] within 7% of peak. | APPROVE | Tiny W tolerance is wider than small's sharper drop — more headroom for L09 ANE tuning. consecutive_rejects: 0→1. |
 | 2026-05-23 | L07-tiny-contour | promote | R-S400-tiny: tiny W=16 G=8 V=512 = 22,088 aug/s (+201.5% vs V=64=7,326). | APPROVE | Model-dependent W peak at V=512 — tiny W=16 BEATS W=8 (opposite of small). consecutive_rejects: 2→0. Auto-queued L13 (W peak probe) + L14 (tiny G axis). |
 | 2026-05-23 | L04-G-x-wave | reject | best = W=8 G=8 V=512 = 4,765 (unchanged). G=4=4,608; G=16=4,541; G=32=4,514. G mildly non-monotone at V=512 (flat at V=64) but peak still G=8. | APPROVE | Compound finding with L02: at V=512 BOTH W and G axes peak at the canonical defaults. consecutive_rejects: 1→2. |
 | 2026-05-23 | L02-W-x-wave-compound | reject | best = W=8 V=512 = 4,765 (unchanged). W=4=4,367; W=12=4,501; W=16=4,504 — wave saturation moved MPS-dispatch peak from W=16 to W=8 at V=512. | APPROVE | New finding: knob wins interact non-monotonically at chip envelope. consecutive_rejects: 0→1. |
@@ -241,8 +221,8 @@ notes: Lower priority than L13 (peak-probe is more targeted) but cheap.
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **0** (L07 promote reset the counter)
-- queue empty + no followups pending: false (L13 + L14 auto-queued post-L07; L05/L06/L08 blocked-on-driver-equivalents; L12 needs human session)
+- consecutive_rejects: **1** (L13 reject after L07 promote reset)
+- queue empty + no followups pending: false (L14 still queued; L05/L06/L08 blocked-on-driver-equivalents; L12 needs human session)
 - last halt reason: n/a (loop running; cron ce6fb88e scheduled `7,17,27,37,47,57 * * * *`)
 
 ## Loop dispatch rule under "blocked-on-driver"

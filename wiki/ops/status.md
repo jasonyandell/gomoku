@@ -52,6 +52,7 @@ BFS by default: current-main baseline receipts and production contour are now do
 | L02-W-x-wave-compound | completed / reject | 3/3 cells; W=8 V=512 stays optimal (4,765). W=4=4,367; W=12=4,501; W=16=4,504. **Wave saturation INVERTED the W-axis peak** (was W=16 at V=64; now W=8 at V=512). Knob wins interact non-monotonically at chip envelope. Reviewer: APPROVE. |
 | L04-G-x-wave | completed / reject | 3/3 cells; G=8 V=512 stays optimal. G=4=4,608 (-3.3%); G=16=4,541 (-4.7%); G=32=4,514 (-5.3%). G mildly non-monotone at V=512 (was flat at V=64). **Compound finding with L02**: at V=512 BOTH W and G axes peak at canonical defaults — wider perimeter exploration won't beat the center. Reviewer: APPROVE. |
 | L07-tiny-contour | completed / promote | 6/6 cells; **R-S400-tiny: tiny W=16 G=8 V=512 = 22,088 aug/s (+201.5% vs V=64)**. V=512 plateau holds for tiny too. **Critical: W=16 BEATS W=8 at tiny V=512 (+29.4%) — opposite of small at V=512.** Model-dependent W peak has direct implications for L09 ANE worker tuning. Reviewer: APPROVE. |
+| L13-tiny-W-peak-probe | completed / reject | 3/3 cells; W=16 confirmed peak. W=12=20,560 (-6.9%); W=20=21,553 (-2.4%); W=24=20,970 (-5.1%). Tiny W tolerance W∈[12,20] within 7% — wider than small's sharper drop. Reviewer: APPROVE. |
 
 ## Next Action
 

@@ -352,3 +352,39 @@ next_action: |
   6. Primary R-S* targets are now exhausted of single-axis tweaks at small (W and G confirmed at peak, V at plateau, model is the only knob left that moves the needle — and tiny is a different quality regime). The next big mover is architectural: L09 ANE-offload (when L12 driver lands) and L05/L06 worktree code lanes.
 ```
 
+### 2026-05-23 — L13 tiny W peak probe (reject; W=16 confirmed; tolerance W∈[12,20] within 7%)
+
+```yaml
+lane: L13-tiny-W-peak-probe
+tier: bg
+hypothesis: L07 showed W=16 beats W=8 by +29% at tiny V=512. Probe finer at W ∈ {12, 20, 24} to see if peak is even higher than W=16.
+reference: R-S400-tiny (current best = tiny W=16 G=8 S=400 V=512 = 22,088 aug/s from L07)
+code_change: false
+baseline_command: |
+  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L13-tiny-W-peak-probe-20260523T073525Z --cells-from <same dir>/cells.csv --lane L13-tiny-W-peak-probe --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same (3-cell sweep at W in {12, 20, 24} with tiny G=8 V=512)
+hardware: M5 Max / MPS / idle box
+seed: per-worker 1000..1023
+baseline_metric: tiny W=16 G=8 V=512 = 22,088 aug/s (L07)
+candidate_metric: |
+  W=12 V=512 = 20,560 aug/s (-6.9% vs W=16)
+  W=16 V=512 = 22,088 aug/s (L07 reference)
+  W=20 V=512 = 21,553 aug/s (-2.4% vs W=16)
+  W=24 V=512 = 20,970 aug/s (-5.1% vs W=16)
+delta: REJECT. W=16 confirmed as the tiny V=512 peak. W=20 is a close second (within 2.4%); tolerance band W ∈ [12, 20] within 7% of peak. The tiny W-axis is a smooth bump (vs small's sharper saturation drop past W=8 per L02).
+confidence: high. 4-W-value scan brackets the peak cleanly with monotone shape on both sides.
+artifacts: sweep_logs/lab-L13-tiny-W-peak-probe-20260523T073525Z/{summary.tsv, cells.csv, metadata.txt, driver.log, cell_tiny_W{12,20,24}_G08_S400_V512/{records,logs}}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L13-tiny-W-peak-probe-20260523T073525Z --cells-from ... --lane L13-tiny-W-peak-probe
+decision: reject
+reviewer: APPROVE (general-purpose agent, 2026-05-23). "L13 reject clean: math/plies/units verified, W=16 confirmed peak, surfaces consistent, no spurious follow-ups."
+next_action: |
+  1. Best-cells.md unchanged. tiny W=16 G=8 V=512 = 22,088 stays the R-S400-tiny default.
+  2. **Compound finding with L02 + L07**: model size determines BOTH the W-peak location AND the W-axis tolerance shape at V=512:
+     - small: peak W=8, sharp drop (W=16 = -5.5%; W=4 = -8.4%)
+     - tiny: peak W=16, gentle bump (W=12 = -6.9%; W=20 = -2.4%; W=24 = -5.1%)
+     Tiny's wider tolerance band means L09 ANE worker-count tuning has more headroom than small's tuning had.
+  3. consecutive_rejects: 0 -> 1.
+  4. Next dispatch (priority order): L14 G axis at tiny W=16 V=512 (bg, priority 16.5).
+```
+
