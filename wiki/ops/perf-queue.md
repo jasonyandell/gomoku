@@ -186,31 +186,12 @@ notes: Rescoped from V=128 to V=512. Blocked-on-driver because cells.csv schema 
 
 ### Background — Calibration / reference
 
-#### L14-tiny-G-at-W16-V512 (auto-queued 2026-05-23 after L07)
-
-```yaml
-id: L14-tiny-G-at-W16-V512
-tier: bg
-hypothesis: L07 promote was at G=8. G axis at tiny W=16 V=512 might also be non-monotone with a different peak than G=8 (recall L04 found G axis is mildly non-monotone at V=512 even on small).
-reference: R-S400-tiny (W=16 V=512 G=8 = 22,088)
-code_change: false
-cells:
-  - tiny W=16 G=4  S=400 V=512
-  - tiny W=16 G=16 S=400 V=512
-  - tiny W=16 G=32 S=400 V=512
-n_cells: 3
-wall_cost_min: 17
-E_delta_aug_per_sec: 800
-P_success: 0.35
-priority: 16.5
-status: queued
-notes: Lower priority than L13 (peak-probe is more targeted) but cheap.
-```
 
 ## Completed
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L14-tiny-G-at-W16-V512 | reject | best = tiny W=16 G=8 V=512 = 22,088 (unchanged). G=4=22,261; G=16=22,164; G=32=22,076. 0.83% total spread — G axis flat. | APPROVE | Knob-tuning exhausted at chip envelope. Remaining lanes need code work. consecutive_rejects: 1→2. |
 | 2026-05-23 | L13-tiny-W-peak-probe | reject | best = tiny W=16 V=512 = 22,088 (unchanged). W=12=20,560 (-6.9%); W=20=21,553 (-2.4%); W=24=20,970 (-5.1%). Smooth bump W∈[12,20] within 7% of peak. | APPROVE | Tiny W tolerance is wider than small's sharper drop — more headroom for L09 ANE tuning. consecutive_rejects: 0→1. |
 | 2026-05-23 | L07-tiny-contour | promote | R-S400-tiny: tiny W=16 G=8 V=512 = 22,088 aug/s (+201.5% vs V=64=7,326). | APPROVE | Model-dependent W peak at V=512 — tiny W=16 BEATS W=8 (opposite of small). consecutive_rejects: 2→0. Auto-queued L13 (W peak probe) + L14 (tiny G axis). |
 | 2026-05-23 | L04-G-x-wave | reject | best = W=8 G=8 V=512 = 4,765 (unchanged). G=4=4,608; G=16=4,541; G=32=4,514. G mildly non-monotone at V=512 (flat at V=64) but peak still G=8. | APPROVE | Compound finding with L02: at V=512 BOTH W and G axes peak at the canonical defaults. consecutive_rejects: 1→2. |
@@ -221,9 +202,10 @@ notes: Lower priority than L13 (peak-probe is more targeted) but cheap.
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **1** (L13 reject after L07 promote reset)
-- queue empty + no followups pending: false (L14 still queued; L05/L06/L08 blocked-on-driver-equivalents; L12 needs human session)
+- consecutive_rejects: **2** (L13 + L14)
+- queue empty + no followups pending: false (technically) — but ALL remaining lanes (L05/L06/L08/L12 + their gated children L09/L10/L11) need code work the cron can't do. Loop is effectively at a no-op pause.
 - last halt reason: n/a (loop running; cron ce6fb88e scheduled `7,17,27,37,47,57 * * * *`)
+- **PAUSE STATE**: human session needed for L05/L06/L08/L12. PushNotification sent on L14 commit.
 
 ## Loop dispatch rule under "blocked-on-driver"
 

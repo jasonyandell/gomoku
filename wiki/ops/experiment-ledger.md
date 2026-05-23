@@ -388,3 +388,41 @@ next_action: |
   4. Next dispatch (priority order): L14 G axis at tiny W=16 V=512 (bg, priority 16.5).
 ```
 
+### 2026-05-23 — L14 G-x-axis at tiny W=16 V=512 (reject; G axis flat at the tiny peak)
+
+```yaml
+lane: L14-tiny-G-at-W16-V512
+tier: bg
+hypothesis: L04 found G axis is mildly non-monotone at small V=512. L13 found tiny W-axis has gentle bump. G axis at tiny W=16 V=512 may also have a non-G=8 peak.
+reference: R-S400-tiny (current best = tiny W=16 G=8 V=512 = 22,088 aug/s from L07)
+code_change: false
+baseline_command: |
+  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L14-tiny-G-at-W16-V512-20260523T080354Z --cells-from <same dir>/cells.csv --lane L14-tiny-G-at-W16-V512 --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same (3-cell sweep at G in {4, 16, 32} with tiny W=16 V=512)
+hardware: M5 Max / MPS / idle box
+seed: per-worker 1000..1015
+baseline_metric: tiny W=16 G=8 V=512 = 22,088 aug/s (L07)
+candidate_metric: |
+  G=4  V=512 = 22,261 aug/s (+0.78% vs G=8)
+  G=8  V=512 = 22,088 aug/s (L07 reference)
+  G=16 V=512 = 22,164 aug/s (+0.34%)
+  G=32 V=512 = 22,076 aug/s (-0.06%)
+delta: REJECT. G axis is essentially flat at tiny W=16 V=512. Total spread G=4→G=32 is 0.83% (185 aug/s). The nominal G=4 lead of +0.78% is within the unmeasured run-to-run noise floor and not a defensible promote.
+confidence: high. Flatness is unambiguous (4 cells within <1% of each other; no monotone direction).
+artifacts: sweep_logs/lab-L14-tiny-G-at-W16-V512-20260523T080354Z/{summary.tsv, cells.csv, metadata.txt, driver.log, cell_tiny_W16_G{04,16,32}_S400_V512/{records,logs}}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L14-tiny-G-at-W16-V512-20260523T080354Z --cells-from ... --lane L14-tiny-G-at-W16-V512
+decision: reject
+reviewer: APPROVE (general-purpose agent, 2026-05-23). "L14 reject correct — G axis spread 0.83% within noise; surfaces consistent; pause state cleanly logged."
+next_action: |
+  1. Best-cells.md unchanged. tiny W=16 G=8 V=512 = 22,088 stays the R-S400-tiny default.
+  2. **Knob-tuning exhausted at chip envelope.** Across L02 (small W axis at V=512), L04 (small G axis at V=512), L13 (tiny W finer probe), and L14 (tiny G at peak), no further single-axis exploration of W or G has produced a promote. The remaining headroom is structural:
+     - L09 ANE-offload (blocked on L12 driver)
+     - L05 torch.compile (needs worktree code)
+     - L06 fp16 (needs worktree code)
+     - L08 heap ratio (needs per-cell env var driver support)
+     - L12 live-training cell driver (Tier 1 gating; needs human session)
+  3. consecutive_rejects: 1 -> 2. Even with 3+ consecutive rejects the loop wouldn't halt (queue has lanes that just need code work), but this marks the natural pause point for the autonomous tick chain.
+  4. PushNotification the user: cron has exhausted no-code unblocked lanes. Human session needed for L05/L06/L08/L12.
+```
+

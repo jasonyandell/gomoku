@@ -483,6 +483,45 @@ Next dispatch: L14 (G axis at tiny W=16 V=512).
 
 Reviewer: APPROVE — "L13 reject clean: math/plies/units verified, W=16 confirmed peak, surfaces consistent, no spurious follow-ups."
 
+## [2026-05-23] lab | L14 G axis flat — knob-tuning exhausted at chip envelope
+
+3/3 cells ok. G axis at tiny W=16 V=512 is essentially flat:
+
+| cell | aug/s | vs G=8 ref (22,088) |
+|---|---|---|
+| G=4  V=512 | 22,261 | +0.78% |
+| G=8  V=512 | 22,088 | reference |
+| G=16 V=512 | 22,164 | +0.34% |
+| G=32 V=512 | 22,076 | -0.06% |
+
+Total spread 0.83% — within unmeasured run-to-run noise. G=4 nominal lead of +0.78% is not a defensible promote.
+
+**The headline finding across L02 + L04 + L13 + L14 is now decisive: at V=512 (the new structural default), single-axis knob exploration of W and G has been exhausted for both small and tiny models.** No further knob tweaks within the {W ∈ [4, 24]} × {G ∈ [4, 32]} envelope produce a promote. The wave-size lever was the regime-changing knob; everything else is fine-tuning noise relative to it.
+
+**Cumulative lab state**:
+
+| reference | best cell | best aug/s | cumulative speedup |
+|---|---|---|---|
+| R-S400 | small W=8 G=8 V=512 | 4,765 | +49.5% |
+| R-S200 | small W=8 G=8 S=200 V=512 | 9,156 | +52.5% |
+| R-S100 | small W=8 G=8 S=100 V=512 | 15,082 | +35.2% |
+| R-S400-tiny | tiny W=16 G=8 V=512 | 22,088 | +201.5% |
+
+**Remaining headroom is structural, not knob**:
+- L09 ANE-offload (blocked on L12)
+- L05 torch.compile (worktree code)
+- L06 fp16 (worktree code)
+- L08 heap ratio (per-cell env var driver work)
+- L12 live-training cell driver (Tier 1 gating)
+- L10 R-TRAIN-WL5 baseline (blocked on L12)
+- L11 R-TRAIN-LEAN end-to-end (blocked on L12)
+
+All require human-session code work. Cron is at a natural pause point. PushNotification sent.
+
+consecutive_rejects: 1 → 2.
+
+Reviewer: APPROVE — "L14 reject correct — G axis spread 0.83% within noise; surfaces consistent; pause state cleanly logged."
+
 ## [2026-05-23] lab | charter v2 — tier system + R-TRAIN family + Reviewer Gate
 
 After L01 launched but before it landed, Jason gave four new
