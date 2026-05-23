@@ -9,7 +9,7 @@ Open-source-repo rationale, same as the throughput-regimes page: someone searchi
 ## TL;DR
 
 - **Core ML runs our gomoku model on the CPU (BNNS), not the ANE** — confirmed by process sampling (L09e'). Despite `--coreml-compute-units CPU_AND_NE`, no `H11ANEServicesThread` spawns and the hot path is `E5RT::Ops::BnnsCpuInferenceOperation::ExecuteSync`. Under `CPU_AND_GPU` it *still* picks CPU. Core ML's cost model chooses CPU for our tiny/V=64 model regardless of the routing hint.
-- **The L09c "engine-isolation" win (+33.9%) is real but load-fragile.** It works because our tiny-model trainer barely loads the GPU, leaving headroom for the CPU workers. **Saturate the GPU with a synthetic hog and the CPU workers collapse −82%** (10,432 → 1,905 aug/s) while the trainer barely moves (+14% trainer_step). The engines are compute-isolated but **share *some* package-level resource** — most likely the power/thermal envelope (the trainer-vs-worker asymmetry points there), possibly also unified-memory bandwidth. The exact mechanism is **not yet cleanly pinned**: the intensity sweep that would distinguish power-throttle from scheduling got swamped by session-thermal drift (see Part 2). The qualitative coupling is solid; the mechanism is inferred.
+- **The L09c "engine-isolation" win (+33.9%) is real but load-fragile.** It works because our tiny-model trainer barely loads the GPU, leaving headroom for the CPU workers. **Saturate the GPU with a synthetic hog and the CPU workers collapse −82%** (10,432 → 1,905 aug/s) while the trainer barely moves (+14% trainer_step). The engines are compute-isolated but **share a package-level resource**. **Mechanism now RESOLVED (Lpwr2 + Lpwr2b): the throttle tracks the GPU's working-set size / sustained occupancy, NOT its compute throughput.** A 3.5×-higher-FLOP fp16 hog at matched matrix size throttled the workers no more than the fp32 hog (−14.8% vs −15.9%, inside noise), while throttle scales with matrix *size* (−8.8%→−26%, 2048→8192). **Compute-power-draw is ruled out**; the lever is GPU memory footprint/occupancy, not FLOP count (see Part 2). The qualitative coupling was always solid; the mechanism is now pinned.
 - **ANE-resident workers also throttle under GPU load, and the coupling is bidirectional.** A clean pure-self-play A/B (L09i-fix-load-v2, no trainer → no wave-barrier confound) shows ANE workers **−35%** under a GPU hog (3,548 → 2,307 aug/s) — the ANE is **not** contention-immune. Notably the coupling runs both ways: the 16 busy ANE-resident worker processes (Core ML eval + CPU-side MCTS — total worker package load, not the ANE engine specifically; this cell can't isolate which) throttle the GPU hog from ~10.7 down to **~2.72 TFLOP/s** (~4×), so worker↔GPU package load browns out in both directions and settles at an equilibrium (workers −35%, hog −75%). Because the hog intensities aren't matched (~2.72 here vs ~11 in Lpwr), the ANE reads gentler than the CPU/BNNS −82% but **the intensities differ — not a clean fragility ranking**. (This supersedes the earlier "generation held / positive lean" reading, which was a trainer-barrier artifact.) See `wiki/ops/experiment-ledger.md` 2026-05-23 "L09i-fix-load-v2".
 - **Production implication:** a heavier production trainer (15×15 board, bigger net) that actually saturates the GPU would throttle the CPU self-play workers, erasing the L09c win. The engine-isolation benefit is conditional on GPU power headroom.
 - This is the "where does the machine break" the mainframe philosophy is built to find. We can't light all three engines at full tilt simultaneously — they draw from one power budget.
@@ -117,6 +117,21 @@ To distinguish power/thermal coupling (smooth with load) from a scheduling cliff
 
 **The surviving nuance:** the haircut may be **engine-specific** — GPU-resident work (R-S400, R-TRAIN-WL5) sustains its clocks; CPU/BNNS-resident work (tiny/V=64 Core ML workers) *may* throttle under sustained heat/power load. That fits the Lpwr power-coupling story (the CPU is the thermally-sensitive path). It's one messy post-hog data point on a non-production shape — needs a clean re-test (Lhot2) before it's a claim. See [[feedback-heat-soaked-is-production]].
 
+### Mechanism RESOLVED — occupancy/working-set, not compute power (Lpwr2, Lpwr2b, 2026-05-23)
+
+The intensity sweep above was confounded by thermal drift; the clean re-tests pin the mechanism. **Lpwr2** swept hog matrix size on a cooled chip with interleaved A/B pairs: the throttle scales with **matrix SIZE** (−8.8% at 2048 → −26% at 8192), the GPU's memory footprint / sustained occupancy — not a step (no scheduling cliff).
+
+**Lpwr2b** then ran the decisive discriminator — fp16 vs fp32 hog at matched matrix 4096 (pure self-play, ANE workers, bracketed no-hog, 120s cells, which cut cross-cell noise to 6.6%):
+
+| hog | TFLOP/s | byte-traffic | ANE workers |
+|---|---|---|---|
+| fp32 @ 4096 | 1.98 | 1× | **−15.9%** |
+| fp16 @ 4096 | **7.03** (3.5×) | ~1.75× | **−14.8%** |
+
+**3.5× more FLOPs produced ~zero extra throttle** (−15.9% vs −14.8% — 1.3% apart, inside the 6.6% no-hog noise). So the cross-engine throttle is **FLOP-rate-INDEPENDENT** — and since fp16 also carried ~1.75× the byte-traffic-rate with no extra throttle, it isn't cleanly byte-bandwidth-rate-driven either. Combined with Lpwr2's size-scaling, the coupling tracks the GPU's **working-set size / sustained occupancy** ("is the GPU pinned busy, and how big is its memory footprint"), NOT its compute throughput. **Compute-power-draw is ruled out as the driver.**
+
+**Actionable takeaway:** to cut the contention a heavy GPU trainer inflicts on CPU/ANE workers, **shrink the GPU's memory working-set / occupancy, not its FLOP count** — a lower-FLOP trainer at the same footprint won't help; a smaller-footprint trainer (or one that yields occupancy) will. Full receipt: `wiki/ops/experiment-ledger.md` 2026-05-23 "Lpwr2b".
+
 ### Independent confirmation: ANE is 0% (system GPU monitor)
 
 A system GPU monitor (Stats-style menu-bar reading, captured 2026-05-23 during the load tests) independently corroborates the L09e' `sample` finding:
@@ -147,10 +162,10 @@ The GPU has headroom during a light-trainer Core ML-CPU-worker cell, but filling
 
 ## Open questions
 
-- Is the coupling power/thermal (smooth with load) or scheduling (cliff)? → the intensity sweep above.
+- ~~Is the coupling power/thermal (smooth with load) or scheduling (cliff)?~~ **Resolved (Lpwr2 + Lpwr2b): neither compute-power nor a scheduling cliff — it's smooth with GPU working-set *size*/occupancy and FLOP-rate-independent. See Part 2 "Mechanism RESOLVED."**
 - ~~Does the same throttle hit ANE workers (if we ever get the model ANE-resident)?~~ **Answered (L09i-fix-load-v2): yes — ANE workers throttle −35% under a GPU hog in clean pure self-play, and the busy worker processes (total package load — Core ML eval + CPU-side MCTS, not the ANE engine specifically) throttle the hog ~4× back (bidirectional package-power coupling). The ANE is not contention-immune. See Part 2.** (Open follow-up: where the workers↔GPU equilibrium lands under a *real* trainer's GPU load vs the synthetic hog.)
 - What's the optimal load balance? E.g., a heterogeneous worker pool (some torch/MPS on GPU, some Core ML/CPU) tuned to the power ceiling. A real lane once the mechanism is confirmed.
-- Does fp16 GPU load (lower power per FLOP) throttle the CPU less than fp32 at the same TFLOP/s? Would separate "power" from "FLOPs" as the coupling variable.
+- ~~Does fp16 GPU load (lower power per FLOP) throttle the CPU less than fp32 at the same TFLOP/s? Would separate "power" from "FLOPs" as the coupling variable.~~ **Answered (Lpwr2b): at matched matrix size, the 3.5×-FLOP fp16 hog throttled no more than fp32 (−14.8% vs −15.9%, inside noise) — FLOPs are not the coupling variable; working-set/occupancy is. See Part 2.**
 
 ## Cross-refs
 
