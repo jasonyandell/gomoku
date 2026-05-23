@@ -37,6 +37,28 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L05-followup torch.compile rejects — neutral on MPS at V=512 (both shapes)
+
+```yaml
+lane: L05-followup-compile-cells
+hypothesis: torch.compile on the eval-only model improves aug/s on MPS without quality change. Smoke at R-S400 (small / W=8 / G=8 / S=400 / V=512) and R-S400-tiny (tiny / W=16 / G=8 / S=400 / V=512); no-compile references are L01 = 4,765 and L07 = 22,088.
+code_ref: 3ed4577 on main (uses --compile passthrough that landed in L05 / commit 9f60c42)
+dataset_ref: pure self-play; fresh random fused checkpoint per model; no trainer; 60s/cell smoke
+baseline_command: R-S400 (lab-L01-wave-extrapolation = 4,765 aug/s at small W=8 G=8 S=400 V=512); R-S400-tiny (lab-L07-tiny-contour = 22,088 aug/s at tiny W=16 G=8 S=400 V=512)
+candidate_command: python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L05fu-20260523T135545Z --cells-from <2-row csv> --lane L05-followup --secs-per-cell 60 --compile
+hardware: M5 Max / MPS / idle
+seed: workers seeded 1000..1015; same canonical_sweep seeding as L01/L07
+baseline_metric: small V=512 no-compile = 4,765 aug/s; tiny V=512 no-compile = 22,088 aug/s
+candidate_metric: small V=512 --compile = 4,657 aug/s; tiny V=512 --compile = 22,001 aug/s; both at plies_mean=15.97 (pure self-play, fresh checkpoint, 16-ply cap)
+delta: small -2.3% (within noise floor ~±2%); tiny -0.4% (within noise). Neither shape benefits from torch.compile on MPS; if anything they're a tick slower, plausibly because the compiled graph capture adds first-call overhead that doesn't amortize in a 60s smoke. torch.compile on the EVAL-ONLY path (worker-side) is essentially a noop at these shapes on the M5 Max with mature MPS.
+confidence: medium. Single 60s smoke per cell; noise floor of the established R-S400 measurements is ~±2% from prior canonical-sweep work, so the small -2.3% is at the edge of noise. The tiny -0.4% is solidly null. The directional consistency (both shapes slightly negative) suggests the compile-graph overhead is real, not just noise — but the magnitude is small enough that a longer cell could show a tighter null.
+artifacts: sweep_logs/lab-L05fu-20260523T135545Z/{summary.tsv,cells.csv,metadata.txt,cell_small_W08_G08_S400_V512,cell_tiny_W16_G08_S400_V512}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L05fu-20260523T135545Z --cells-from cells.csv --lane L05-followup --secs-per-cell 60 --compile
+decision: reject
+next_action: torch.compile stays available behind the `--compile` flag for diagnostic use (e.g. dev-machine A/B), but no production runs should turn it on by default. Don't queue further `--compile` lanes — the chip-level conclusion is "torch.compile on MPS at these eval-graph shapes is neutral-to-slightly-negative". The L05 code change still earned its keep by making the test cheap to run; the test concluded the lever is unproductive at these operating points. Pair with L06-followup (fp16) which is dispatching now; if both reject we have the full Tier-3 R-S* picture and the session reaches its natural halt per the charter (3+ consecutive rejects without a compound follow-up).
+```
+
 ### 2026-05-23 — L11b R-TRAIN-LEAN V=512 + low sgd_per_position: +28% aug/s, needs_repeat per TQ gate
 
 ```yaml
