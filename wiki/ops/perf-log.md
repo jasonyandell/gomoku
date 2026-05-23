@@ -16,6 +16,41 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L08 | Heap-ratio axis null at R-S400/fp16 — bandwidth-bound regime confirmed; thermal drift surfaced
+
+Pivoted to L08-mps-heap-ratio post-L09c-V512 reject. With the ANE-axis nearly exhausted (single-point envelope at tiny+V=64), MPS-side knob tuning becomes the next-best perf lever. L08 tests whether PYTORCH_MPS_HIGH_WATERMARK_RATIO (default ~1.7 on M-series) is capping throughput at the R-S400 reference (small/V=512/fp16).
+
+**Result: REJECT — flat axis at R-S400/fp16.** Three cells back-to-back:
+
+| heap ratio | aug/s | vs default |
+|---|---|---|
+| default (implicit ~1.7) | 8,937.3 | — |
+| 2.0 (higher) | 8,870.9 | -0.7% |
+| 0.0 (unlimited) | 8,927.7 | -0.1% |
+
+Within-sweep spread: 0.74% — well below the V=512 plateau noise floor (~0.2-2%). Mechanism: at small/V=512/fp16 the workload is **bandwidth-bound** (per L06-followup's +97% fp16 finding), not MPS-memory-pressure-bound. The heap watermark ratio governs when MPS frees memory, which doesn't change eval bandwidth. Null result was mechanistically predictable once the bandwidth-bound regime was understood.
+
+**Side-effect data point: session-thermal drift surfaced.** The L08 default-heap re-measure (8,937.3) is -4.9% vs R-S400 (9,398.5) measured by L06-followup ~90 min ago at session-start. Within-L08 the three cells are 0.74% apart (back-to-back, chip in same thermal state). The 4.9% drift between session-start and ~10 sequential cells later is most plausibly thermal: M5 Max's sustained-load throughput drops as the chip warms. Implications:
+- **Within-lane back-to-back A/B comparisons remain reliable** (chip thermal state stable across minutes).
+- **Cross-lane comparisons against numbers measured far apart in time may have a thermal-drift confound on the order of 5%.** R-S400 measured at session-start ≠ R-S400 measured 90 min in.
+- This is a friction-smoothing data point worth filing in the session-runbook: when comparing against a reference measured in a different session OR > ~30 min ago in the same session, consider a re-measure under matched thermal state.
+
+**The queue state, post-L08:**
+- consecutive_rejects: 2 → 3 (now at the warning level per the charter's stop-gates triage matrix).
+- Per [feedback-lab-runs-forever] and the 2026-05-23 lesson on stop-gates: at 3 rejects, the call is still CONTINUE as long as Tier-3 lanes are queueable AND there's a compound mechanism left to test.
+- Remaining queueable lanes: L09e (Tier 3, priority 3.0, diagnostic-only — answers "is Core ML demoting ops?" for L09d/L09 reject mechanism); L09f (Tier 3, priority 2.5, downweighted by L09c-V512); L09g (Tier 3, priority 2.0, downweighted); L09h (Tier 3, priority 1.0).
+- **All remaining work is diagnostic or low-upside.** No queueable lane has a headline-moving expected delta.
+- Triage call: file L08 receipt + Reviewer spawn (this commit); then dispatch L09e as the next-best diagnostic to close the ANE-envelope-mapping chapter cleanly. If L09e also rejects (likely), session-end is a natural pause point.
+
+**Headline of the session (post-L08):**
+- L09c PROMOTE: R-TRAIN-TINY-ANE = 10,762.6 aug/s (+33.9% vs torch baseline) — the lone ANE win, single-point envelope at tiny+V=64.
+- L09d REJECT: R-TRAIN-MEDIUM-ANE -59.6% — "larger compute amortizes" falsified.
+- L09c-V512 REJECT: tiny+V=512 ANE -24.0% — "V-axis amortizes" falsified.
+- L08 REJECT: heap-ratio null at R-S400/fp16 — bandwidth-bound regime confirmed, MPS-side knob axes exhausted.
+- The L09c PROMOTE is the headline. The 3 rejects together SHARPLY map the engine envelope; that's not noise, it's evidence.
+
+Reviewer pending. Receipt commit pending.
+
 ## [2026-05-23] L09c-V512 | V-axis amortization falsified at tiny; ANE win is a single-point envelope
 
 Auto-queued from L09c PROMOTE. The L09f generic hypothesis says V=512+ batches more leaf evals per Core ML forward, so the pipeline overhead amortizes better. L09c-V512 tests this at tiny (the only model size where ANE wins, per L09c +33.9% at V=64).

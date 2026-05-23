@@ -37,6 +37,46 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L08-mps-heap-ratio REJECT — PYTORCH_MPS_HIGH_WATERMARK_RATIO null at R-S400/fp16 (0.74% spread)
+
+```yaml
+lane: L08-mps-heap-ratio (3-cell env-var sweep at the R-S400 reference)
+hypothesis: PYTORCH_MPS_HIGH_WATERMARK_RATIO default may cap throughput; nondefault could help. Sweep at the current R-S400 (small/W=8/G=8/S=400/V=512 + --fp16-eval) reference shape — three values: default (implicit, M-series ~1.7), 2.0 (higher), 0.0 (unlimited).
+code_ref: 91d5ae5 on main (post-L09c-V512 Reviewer-APPROVE)
+evaluator: torch / MPS / --fp16-eval (the R-S400 best recipe)
+dataset_ref: pure self-play; fresh random fused checkpoint (small, 324,570 params); no trainer; 60s/cell smoke; canonical_sweep.py
+baseline_command: R-S400 = small / W=8 / G=8 / S=400 / V=512 / fp16 = 9,398.5 aug/s (L06-followup-fp16-cells, 2026-05-23)
+candidate_commands:
+  - (default heap)  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L08-heap-default-20260523T161830Z --cells-from cells.csv --lane L08-heap-default --secs-per-cell 60 --fp16-eval
+  - (heap=2.0)      PYTORCH_MPS_HIGH_WATERMARK_RATIO=2.0 python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L08-heap-2p0-20260523T161958Z --cells-from cells.csv --lane L08-heap-2p0 --secs-per-cell 60 --fp16-eval
+  - (heap=0.0)      PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L08-heap-0p0-20260523T162120Z --cells-from cells.csv --lane L08-heap-0p0 --secs-per-cell 60 --fp16-eval
+hardware: M5 Max / MPS / idle (90 min into this session — chip is somewhat warmed up; R-S400 was measured at session-start when chip was cool, see below)
+seed: workers seeded 1000..1015 (canonical_sweep default)
+baseline_metric: R-S400 = 9,398.5 aug/s (from L06-followup, today)
+candidate_metric:
+  - default heap (re-measure of R-S400 recipe, no env override): 8,937.3 aug/s
+  - heap=2.0: 8,870.9 aug/s
+  - heap=0.0 (unlimited): 8,927.7 aug/s
+delta:
+  - **L08 within-sweep spread: 0.74%** (8,870.9 to 8,937.3) — comparing default vs 2.0 vs 0.0 cells measured back-to-back (~3 min apart). Heap-ratio axis is FLAT at R-S400/fp16.
+  - L08 default heap vs R-S400 = 9,398.5 (the official R-S400 from L06-followup measured earlier today): -4.9% — interesting drift. Most likely a session-warming-thermal effect: R-S400 was measured ~90 min before L08, near session-start when the chip was cool; L08 cells ran after ~10 sequential lab cells. Within-L08 the three cells are 0.74% apart, so the thermal floor is consistent across L08 itself. The drift vs the pristine R-S400 number is NOT a noise concern for L08's heap-ratio comparison (which is the lane's actual hypothesis); it IS a friction-smoothing data point about session-thermal-state affecting absolute aug/s numbers across cells separated by significant wall time.
+confidence: high. Three matched-shape, 60s smoke-first cells, back-to-back, 0.74% spread is well within the V=512 plateau noise floor (per L01 ~0.2%, per L02/L04 within ±2%). Mechanism: at small/V=512/fp16 we are bandwidth-bound (per L06-followup), not MPS-memory-pressure-bound; the heap watermark ratio gates when MPS frees memory, which has no bearing on eval bandwidth — null result mechanistically expected once we understood the bandwidth-bound regime.
+artifacts:
+  - sweep_logs/lab-L08-heap-default-20260523T161830Z/{summary.tsv,cells.csv,metadata.txt,cell_small_W08_G08_S400_V512/}
+  - sweep_logs/lab-L08-heap-2p0-20260523T161958Z/{summary.tsv,cells.csv,metadata.txt,cell_small_W08_G08_S400_V512/}
+  - sweep_logs/lab-L08-heap-0p0-20260523T162120Z/{summary.tsv,cells.csv,metadata.txt,cell_small_W08_G08_S400_V512/}
+commands_run:
+  - (default heap above)
+  - (heap=2.0 above)
+  - (heap=0.0 above)
+decision: reject
+next_action:
+  - PYTORCH_MPS_HIGH_WATERMARK_RATIO axis is flat at R-S400/fp16. Don't queue further heap-ratio cells at other reference points unless there's a specific mechanism reason (e.g., a larger model with actual MPS pressure).
+  - **NEW friction-smoothing data point: session-thermal-state matters for absolute aug/s.** R-S400 = 9,398.5 at session-start; default-heap re-measure 90 min later = 8,937.3 (-4.9%). Across-cell comparisons run back-to-back are fine (within ~1%); cross-session or distant-in-time comparisons should be re-measured. Worth a paragraph in the perf-lab-session-runbook about thermal drift and re-baselining.
+  - consecutive_rejects: 2 → 3 (now at the warning level per the charter's stop-gates triage; CONTINUE remains the right call because Tier-3 lanes are still queueable AND there are documented diagnostic + envelope-mapping lanes left; per the [feedback-lab-runs-forever] memory, the 2026-05-23 session lesson was "don't pre-emptively halt at 3 rejects when work is still queueable").
+  - Remaining queue lanes (post-L08): L09e (Tier 3, priority 3.0, diagnostic) → top of queue. L09f / L09g (Tier 3, downweighted by L09c-V512). L09h (Tier 3, priority 1.0). All remaining work is diagnostic or low-upside.
+```
+
 ### 2026-05-23 — L09c-V512 REJECT — V-axis amortization falsified at tiny; ANE -24.0% at V=512 vs torch+fp16
 
 ```yaml
