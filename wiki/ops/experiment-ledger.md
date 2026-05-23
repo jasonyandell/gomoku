@@ -37,6 +37,28 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L10 R-TRAIN-WL5 first-ever live-training baseline
+
+```yaml
+lane: L10-trainer-step-bench
+hypothesis: First-ever R-TRAIN-WL5 measurement. Full WL5 production recipe (trainer + 8 workers + EMA τ=0.99 + grad_accum=4 + V=64), 30s warmup + 120s measure, report epochs/sec, games/sec, aug/sec, trainer_step_s_p50.
+code_ref: 4a825f18ef1421d5f7378ff8525b6ffc270bf1b3 on main
+dataset_ref: fresh random fused checkpoint (small, stem_padding=1, 324,570 params); live self-play only, no archive ingest
+baseline_command: n/a — first measurement at this reference point
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L10-20260523T132940Z --lane L10 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps
+hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS; idle (pre-flight pgrep clean)
+seed: workers seeded 1000..1007 (w0..w7); trainer seed default
+baseline_metric: n/a
+candidate_metric: aug_pos_per_sec=3,297.6; games_per_sec=14.074; epochs_per_sec=0.0917; trainer_step_s_p50=0.0512s; plies_mean=29.61; 14 epochs in 120s window; 1,489 games / 348,888 aug positions
+delta: vs R-S400 pure-gen (4,765 aug/s): trainer contention costs -30.8% on aug/s. R-TRAIN-WL5 is the END-TO-END number; the contention is the point.
+confidence: medium-high; smoke-first 120s window, 14 epochs span (well above the 2-epoch minimum to compute a rate); single trial. The L12 driver had two startup bugs (--save-every=1M froze worker_weights publish; count_records undercounted because trainer ingests/deletes), both fixed in commits 1dc4abb and 4a825f1 prior to this measurement.
+artifacts: sweep_logs/lab-L10-20260523T132940Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V064_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/v13,v14}}
+commands_run:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L10-20260523T132940Z --lane L10 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps
+decision: promote
+next_action: Update best-cells.md R-TRAIN-WL5 row; spawn Reviewer for receipt audit; dispatch L11 (R-TRAIN-LEAN at V=512) for the V=64→V=512 compounding test. Quality gate (val/policy_ce vs wl5_validation_v1.pt) NOT required — this is a perf-only baseline at the WL5 quality pin; no behavior-changing knob movement.
+```
+
 ### 2026-05-22 — production WL1-shaped self-play throughput seed
 
 ```yaml

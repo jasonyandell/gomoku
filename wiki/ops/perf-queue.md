@@ -18,7 +18,7 @@ Reference points (current bests):
 | **R-S200** | small / W=8 / G=8 / S=200 / **V=512** | **9,156 aug/s** (L03) | **+52.5%** |
 | **R-S100** | small / W=8 / G=8 / S=100 / **V=512** | **15,082 aug/s** (L03) | **+35.2%** |
 | **R-S400-tiny** | tiny / W=16 / G=8 / S=400 / **V=512** | **22,088 aug/s** (L07) | **+201.5% vs tiny V=64=7,326** |
-| **R-TRAIN-WL5** | full WL5 recipe | TBD (L10) | — |
+| **R-TRAIN-WL5** | full WL5 recipe | **3,297.6 aug/s** / 0.0917 ep/s / 14.07 g/s (L10) | — |
 | **R-TRAIN-LEAN** | WL5 with V=512 | TBD (L11) | — |
 | **R-TRAIN-ANE** | WL5 with workers on Core ML | TBD (L09) | — |
 
@@ -78,8 +78,8 @@ wall_cost_min: 5
 E_delta_epochs_per_sec: 0 (baseline, no comparison)
 P_success: 1.0 (baseline measurement, can't fail)
 priority: 10.0
-status: queued (L12 driver landed 2026-05-23; next GPU lane to dispatch)
-notes: Redesigned from "pure trainer" to "full end-to-end" because gomoku.train doesn't have a no-workers mode without invasive changes. The number we actually care about (R-TRAIN-WL5) IS the end-to-end production cell. Dispatch command: `python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L10-... --lane L10 --warmup-secs 30 --measurement-secs 60` (smoke-first; escalate to 240s if read is ambiguous).
+status: COMPLETED 2026-05-23 — R-TRAIN-WL5 = 3,297.6 aug/s; 0.0917 epochs/s; 14.07 games/s; trainer_step_s_p50=0.0512s (14 epochs in 120s; commit 4a825f1; sweep_logs/lab-L10-20260523T132940Z). Reviewer audit pending.
+notes: Redesigned from "pure trainer" to "full end-to-end" because gomoku.train doesn't have a no-workers mode without invasive changes. The number we actually care about (R-TRAIN-WL5) IS the end-to-end production cell. Two L12 driver bugs surfaced and fixed during dispatch: (1) --save-every=1M froze worker_weights publish (1dc4abb); (2) count_records undercounted because trainer ingests/deletes (4a825f1).
 ```
 
 #### L11-end-to-end-cell (R-TRAIN-LEAN at V=512, rescoped 2026-05-23 after L01)
@@ -174,6 +174,7 @@ status: queued (L06 driver flag landed 2026-05-23)
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L10-trainer-step-bench | promote (baseline) | R-TRAIN-WL5 = 3,297.6 aug/s / 0.0917 epochs/s / 14.07 games/s / trainer_step_s_p50=0.0512s (14 epochs in 120s; 30s warmup) | pending Reviewer audit | First-ever end-to-end R-TRAIN-WL5 measurement. Two L12 driver bugs surfaced + fixed during dispatch (--save-every=1M froze worker_weights publish; count_records undercounted because trainer ingests/deletes). consecutive_rejects unchanged at 0. |
 | 2026-05-23 | L12-write-lab-train-cell-driver | promote (code) | scripts/lab_train_cell.py (726 LOC) — live-training cell driver matching canonical_sweep resumability contract; smoke green (help, dry-run, unit test on synthetic trainer logs). Companion `scripts/lab_train_cell_smoke.py` runs in <1s with no GPU. | pending Reviewer audit | Gating lane: unblocks L09/L10/L11. Branched off 8eb7e5c, merged --no-ff at 56b6... (see graph). Trainer already emits `^epoch (\d+)/M` natively (gomoku/train.py:1135) so no shim needed. |
 | 2026-05-23 | L08-driver-per-cell-envvars | promote (code) | scripts/canonical_sweep.py + tests/test_canonical_sweep_envvars.py (14 tests) — optional `env` column on cells.csv (semicolon-separated KEY=VAL pairs). All 16 in-flight cells.csv files backward-compat. | pending Reviewer audit | Unblocks L08-mps-heap-ratio. Heads-up: env not part of cell_id_of() — heap-ratio lane needs to disambiguate via separate out-dirs or cell_id suffix. |
 | 2026-05-23 | L06-fp16-eval | promote (code) | gomoku/selfplay_worker.py + scripts/canonical_sweep.py — `--fp16-eval` flag passes fp16=True into make_torch_evaluator at all 4 model-load sites; default off. Smoke: build_model → save → load → fuse → _maybe_half → evaluator returns finite fp32 priors+values. Core ML branch unaffected (already FLOAT16). | pending Reviewer audit | Code merge required manual conflict resolution against L05 in canonical_sweep.py; keep-both. GPU cells queued as L06-followup-fp16-cells. |
@@ -192,7 +193,7 @@ status: queued (L06 driver flag landed 2026-05-23)
 - consecutive_rejects: **0** (4× code-promote on 2026-05-23 reset the counter from 2; next reject restarts the count)
 - queue empty + no followups pending: false (GPU queue has L10, L11, L09, L08-mps-heap-ratio, L05-followup, L06-followup queued)
 - last halt reason: n/a — lab restarted 2026-05-23; four CPU-queue lanes landed in parallel
-- **RESUME STATE**: All CPU-queue lanes from charter-v3 restart are merged. GPU queue now has six queued lanes; top is **L10 (R-TRAIN-WL5 baseline)** at priority 10.0. Dispatch: `python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L10-$(date -u +%Y%m%dT%H%M%SZ) --lane L10 --warmup-secs 30 --measurement-secs 60 --workers 8 --wave-size 64 --n-simulations 400 --ema-tau 0.99 --grad-accum-steps 4`. After L10 lands receipt, L11 (depends_on L10) then L09 (architectural ANE).
+- **RESUME STATE**: L10 R-TRAIN-WL5 baselined at **3,297.6 aug/s** (commit 4a825f1; sweep_logs/lab-L10-20260523T132940Z). Next GPU lane: **L11 (R-TRAIN-LEAN at V=512)** to test whether V=64→V=512's +49.5% gen win compounds at the trainer level. Dispatch: `python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11-$(date -u +%Y%m%dT%H%M%SZ) --lane L11 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps`. After L11, L09 (R-TRAIN-ANE via Core ML eval on workers).
 
 ## Dispatch rule (charter v3)
 

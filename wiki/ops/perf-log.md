@@ -16,6 +16,26 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L10 | R-TRAIN-WL5 baselined at 3,297 aug/s; trainer contention ≈ 30%
+
+First-ever R-TRAIN-WL5 measurement. End-to-end production recipe (small / W=8 / G=8 / sims=400 / V=64 / EMA τ=0.99 / grad_accum=4) under the live trainer + 8 self-play workers competing for MPS. 120s measurement window, 14 epochs:
+
+- **aug_pos_per_sec: 3,297.6** (vs R-S400 pure-gen 4,765 → trainer contention costs ~30.8% on generator throughput)
+- **games_per_sec: 14.07** (vs ~17.7 implied by R-S400's 4,765 / 269 aug-per-game)
+- **epochs_per_sec: 0.0917** (~10.9s wall per epoch in steady state — 50 SGD steps at trainer_step_s_p50=0.051s = 2.56s training plus ~5-6s of barrier-wait for fresh self-play)
+- **trainer_step_s_p50: 0.0512s** (per SGD step; the trainer is GPU-bound here, not blocked on data)
+
+The autonomous lab restart hit two L12 driver bugs in flight, both surfaced and patched:
+
+1. **`--save-every=1000000` froze worker_weights.pt**. `gomoku/train.py:1220` publishes the worker-facing weights file inside the save-every block; with save-every set high "to disable mid-run checkpoint IO", workers stayed on v0 forever and the trainer hung waiting for v1+ games. Fix: `--save-every=1 --keep-last-n=1` (small per-epoch ~4MB writes, auto-pruned; the 1.4GB latest.pt still gated by save-buffer-every=1M). Commit `1dc4abb`.
+2. **`count_records()` at SIGTERM undercounted by ~30×**. The trainer ingests + deletes worker `game*.pt` files as it goes, so the end-of-window file count was ~80 games / 16k aug-positions where the trainer log's cumulative `games=` counter showed ~1,500 games / ~350k positions. Fix: parse the trainer's epoch line directly (cumulative `games=N`, `buf=N`, per-epoch wall `(Xs:`) and prefer those over file counts. Commit `4a825f1`.
+
+Both bugs were invisible to L12's `--dry-run` and synthetic-log smoke tests — only the real workload exposed them. Receipt under L10-trainer-step-bench in the ledger.
+
+Next: dispatch L11 (R-TRAIN-LEAN at V=512) to test whether V=64→V=512's +49.5% gen win compounds at the trainer level. Then L09 (R-TRAIN-ANE via Core ML eval on the workers).
+
+---
+
 ## [2026-05-22] lab | post-WL5 perf era opened
 
 WL5 phase-2 closed at e10200 yesterday. Box is idle for the first time in

@@ -23,7 +23,7 @@ cell + measure cell) per the charter's cell-time ceiling.
 
 | ref | quality pin | current best cell | epochs/sec | games/sec | promoted | from receipt |
 |---|---|---|---|---|---|---|
-| **R-TRAIN-WL5** | full WL5 production recipe | small / W=8 / G=8 / S=400 / V=64 / EMA τ=0.99 / grad_accum=4 | TBD | TBD | pending | L10 first measurement |
+| **R-TRAIN-WL5** | full WL5 production recipe | small / W=8 / G=8 / S=400 / V=64 / EMA τ=0.99 / grad_accum=4 | **0.0917** | **14.07** | 2026-05-23 | L10-trainer-step-bench |
 | **R-TRAIN-LEAN** | WL5 with V=128 | small / W=8 / G=8 / S=400 / V=128 / same EMA + grad-accum | TBD | TBD | pending | L11 first measurement |
 | **R-TRAIN-ANE** | WL5 with workers on Core ML | WL5 recipe but workers use --evaluator coreml | TBD | TBD | pending | L09 first measurement |
 
@@ -34,6 +34,7 @@ the headline number in [status.md](status.md).
 
 Newest first. Append on every promote; never overwrite an old row.
 
+- **2026-05-23** — `R-TRAIN-WL5` **baselined**: small / W=8 / G=8 / S=400 / V=64 / EMA τ=0.99 / grad_accum=4 — **3,297.6 aug/s, 14.07 games/s, 0.0917 epochs/s, trainer_step_s_p50=0.051s**. First-ever end-to-end live-training measurement. Trainer contention costs ~30.8% on aug/s vs R-S400 pure-gen (4,765 aug/s). Source: L10-trainer-step-bench. Reviewer: pending.
 - **2026-05-23** — `R-S400-tiny`: W=8 V=64 → **W=16 V=512** (7,326 →
   22,088 aug/s, **+201.5%**). No behavior change; tiny model, eval
   batch shape + worker count both shifted. **Model-dependent W peak**:
