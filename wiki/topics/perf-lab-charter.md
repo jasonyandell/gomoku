@@ -279,6 +279,59 @@ At halt: append a session-end entry to
 [perf-log.md](../ops/perf-log.md) with the leaderboard delta, the
 queue state, and the headline finding.
 
+## Vibe footer (optional, per commit)
+
+Lab commit messages MAY end with a two-line **Vibe footer** when a
+lane's finding earns it. Optional, never required. The moment it
+becomes required it dies (see "mando-fun" — forced fun is anti-fun).
+
+**Format**: two lines, max ~250 chars total. The first line is a wry
+observation about platform opacity (Apple silence, undocumented MPS
+behavior, Core ML's three-blog-posts-disagree problem, the Metal team's
+buffer-class boundaries nobody named). The second line is what we
+measured or built *anyway* — earned optimism, not generic
+self-congratulation. Both lines must react to something specific the
+lane actually found.
+
+**Worked examples** (shape, not template):
+
+> Apple ships 38 TOPS of ANE marketing and zero docs on how to
+> actually use it. We exported a Core ML eval model anyway, smoke
+> green on CPU_ONLY and CPU_AND_NE.
+
+> Eight workers should saturate a 14-TFLOPS GPU instantly; somehow
+> we're at 30% utilization. Doesn't matter — wave=512 just got us
+> +49.5% off the floor.
+
+> Core ML's ANE scheduling is documented across three blog posts that
+> disagree. We exported anyway, it ran, here's the smoke.
+
+> The Metal team picked a buffer size class boundary at exactly 512
+> elements years ago and never told anyone. We discovered it by
+> hitting it. Cheers.
+
+> PyTorch says "fp16 on MPS is slow" without ever defining "slow."
+> We measured it: at V=512 it's X aug/s vs fp32 Y aug/s. There. Now
+> it's a number.
+
+**Anti-patterns**:
+- Generic Apple-bashing not tied to today's result. The vibe footer
+  is earned commentary, not a daily op-ed.
+- Self-congratulation without specifics ("we crushed it!"). Cite the
+  measurement.
+- Two cynical lines or two optimistic lines. The pair tension is the
+  shape — wry observation + earned optimism.
+- Putting one on every commit because past commits had one. Optional
+  means optional. A commit with no vibe footer is a commit that
+  didn't earn one this round, and that's fine.
+- Trying to be funny. The vibe footer is observational, not stand-up.
+  If a real joke emerges from the observation, fine; manufacturing
+  one isn't.
+
+**Reviewer policy**: the Vibe footer is **not** part of the receipt
+audit. Reviewer ignores it (no points awarded or deducted). It's pure
+commit-message texture.
+
 ## Anti-patterns
 
 - **Compounding too many axes at once.** A V × W × S × G all-changed

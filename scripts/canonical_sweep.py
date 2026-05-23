@@ -282,6 +282,7 @@ def run_cell(
     max_plies: int,
     device: str,
     compile_model: bool = False,
+    fp16_eval: bool = False,
 ) -> dict:
     """Spawn workers for one cell, bound wall time, return measured row.
     Mutates _ACTIVE_PROCS so the signal handler can reach the workers."""
@@ -307,10 +308,11 @@ def run_cell(
     ]
     if compile_model:
         # L05-torch-compile-mps: pass-through to selfplay_worker's existing
-        # --compile flag. Applied uniformly to every worker in every cell of
-        # this invocation. Worker falls back to uncompiled if torch.compile
+        # --compile flag. Worker falls back to uncompiled if torch.compile
         # raises, so this is safe to leave on across diverse cell shapes.
         base_cmd.append("--compile")
+    if fp16_eval:
+        base_cmd.append("--fp16-eval")
 
     procs: list[tuple[str, subprocess.Popen, object]] = []
     started = time.perf_counter()
@@ -527,6 +529,7 @@ def append_metadata(meta_path: Path, args: argparse.Namespace, cells: list[dict]
         f"torch:         {torch.__version__}",
         f"device:        {args.device}",
         f"compile:       {bool(getattr(args, 'compile_model', False))}",
+        f"fp16_eval:     {bool(getattr(args, 'fp16_eval', False))}",
         f"secs_per_cell: {args.secs_per_cell}",
         f"max_plies:     {args.max_plies}",
         f"n_cells:       {len(cells)}",
@@ -673,6 +676,12 @@ def main() -> None:
                         "Worker falls back to uncompiled if compile raises. "
                         "Applies uniformly to all cells in this invocation; "
                         "L05-torch-compile-mps. Do NOT use with the trainer.")
+    p.add_argument("--fp16-eval", action="store_true",
+                   help="L06 perf-lab lane. Pass --fp16-eval through to every "
+                        "spawned selfplay_worker so the eval model runs in "
+                        "torch.float16 (inputs cast inside make_torch_evaluator, "
+                        "outputs cast back to fp32 before host transfer). "
+                        "Default off. See wiki/ops/perf-queue.md L06-fp16-eval.")
     args = p.parse_args()
 
     out_dir = resolve_out_dir(args.out_dir)
@@ -761,6 +770,7 @@ def main() -> None:
                 max_plies=args.max_plies,
                 device=args.device,
                 compile_model=args.compile_model,
+                fp16_eval=args.fp16_eval,
             )
             if _INTERRUPTED:
                 print(f"[drop] {cell['cell_id']} interrupted mid-cell; not recording row")
