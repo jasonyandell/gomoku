@@ -57,6 +57,14 @@ from pathlib import Path
 
 import torch
 
+# Flush each print line so background `nohup ... > driver.log` stays
+# readable mid-run instead of buffering until the buffer fills.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except (AttributeError, OSError):
+    pass
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))

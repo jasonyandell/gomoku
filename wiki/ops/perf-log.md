@@ -190,3 +190,45 @@ buffer-curation arc that BAB1 belongs to is a separate workstream
 This perf-log notes the state only so future readers don't assume
 BAB1 ran to its written cap. The `packed-buffer-cheap-test` lane
 (or its successor) is the canonical place for BAB1 interpretation.
+
+## [2026-05-22] lab | canonical sweep launched
+
+Box is idle, smoke is green, driver is first-class resumable, and the
+user said go. Kicked the 23-cell canonical sweep in background.
+
+- Sweep dir: `sweep_logs/canonical-sweep-20260523T015614Z/`
+- Symlink:   `sweep_logs/canonical-sweep-latest`
+- Driver:    `python scripts/canonical_sweep.py --out-dir
+              sweep_logs/canonical-sweep-20260523T015614Z` (nohup)
+- Defaults:  `--secs-per-cell 300 --max-plies 16 --device mps`
+- Expected:  ~2-3 h wall (23 cells × ~5 min + per-cell setup)
+- Driver log: `<sweep dir>/driver.log` (line-buffered from this commit
+  forward; the in-flight run will only flush when its buffer fills, so
+  use `--status` for live progress instead of tailing the log).
+
+Recipes the user can run at any time during or after the sweep:
+
+```bash
+# Progress + ETA:
+python scripts/canonical_sweep.py --out-dir latest --status
+
+# Re-run any cells that failed (e.g. transient MPS contention):
+python scripts/canonical_sweep.py --out-dir latest --retry-failed
+
+# After the sweep finishes:
+python scripts/plot_canonical_sweep.py --sweep-dir sweep_logs/canonical-sweep-latest
+```
+
+Next-session pickup once the sweep completes (or stalls):
+1. `python scripts/canonical_sweep.py --out-dir latest --status` to
+   confirm 23 ok / 0 pending; if not, `--retry-failed` and let it
+   finish.
+2. `python scripts/plot_canonical_sweep.py --sweep-dir
+   sweep_logs/canonical-sweep-latest` → `contour.png`, `axes.png`,
+   `model_compare.png`.
+3. File a receipt in [experiment-ledger.md](experiment-ledger.md)
+   under the `canonical-sweep-mainframe` lane; add per-cell-class
+   rows to [baselines.md](baselines.md); promote the winning cell
+   in [status.md](status.md); close the lane in
+   `.frontier/lanes.json`; append a "[YYYY-MM-DD] lab | canonical
+   sweep complete" entry here.
