@@ -20,6 +20,7 @@ Reference points (current bests):
 | **R-S400-medium** (new ref) | medium / W=8 / G=8 / S=400 / **V=512 / fp16-eval** | **3,377.2 aug/s** (L06fu-extended) | +142% vs medium V=64=1,393 |
 | **R-S400-tiny** | tiny / W=16 / G=8 / S=400 / **V=512 / fp16-eval** | **22,873.8 aug/s** (L06-followup) | **+212.2% vs tiny V=64=7,326** |
 | **R-TRAIN-WL5** | full WL5 recipe | **3,297.6 aug/s** / 0.0917 ep/s / 14.07 g/s (L10) | — |
+| **R-TRAIN-LEAN-fp16** (new ref; perf-only, TQ-gated for production) | WL5 + V=512 + sgd=0.001 + fp16 workers | **8,340.5 aug/s** / 0.0667 ep/s / 32.19 g/s (L11b') | **+152.9% vs R-TRAIN-WL5** 🔥🔥 |
 | ~~R-TRAIN-LEAN~~ | WL5 with V=512 | **2,362.8 aug/s** / 0.0083 ep/s / 8.42 g/s (L11, REJECT — gen win doesn't compound at trainer) | — |
 | ~~R-TRAIN-ANE~~ | WL5 with workers on Core ML | **1,930.3 aug/s** / 0.0583 ep/s / 8.00 g/s (L09, REJECT holistic; trainer_step_s_p50 -56% confirms MPS-relief, but Core ML worker eval ~2× slower than MPS) | — |
 
