@@ -380,6 +380,28 @@ R-S200 has the biggest gain because S=200 V=64 was particularly under-saturated 
 
 The cron's Speedup Report line is now load-bearing. Reviewer: APPROVE — "L03 double promote math + units verified; all six surfaces consistent; queue clean."
 
+## [2026-05-23] lab | L02 W-x-wave reject — W-axis INVERTS at V=512
+
+3/3 cells ok. No promote — and the absence is itself a finding.
+
+| cell | aug/s | vs W=8 V=512 ref (4,765) |
+|---|---|---|
+| W=4  V=512 | 4,367 | -8.4% |
+| **W=8 V=512** | **4,765** | reference (L01) |
+| W=12 V=512 | 4,501 | -5.5% |
+| W=16 V=512 | 4,504 | -5.5% |
+
+At V=64 the canonical sweep had W=16 as the peak (3,411 vs W=8 3,188 = +7%). At V=512 the peak is W=8, and W=12/W=16 are slightly worse. The wave-saturation pressure shifted the MPS-dispatch sweet spot.
+
+**Implication**: knob wins don't just fail to compound — they actively interact in non-monotone ways at the chip's high end. The tier system's "no leapfrogging" rule is more than aesthetic; it's about not assuming linear combinatorics. Future cells should always re-measure the W axis when V changes substantially, not extrapolate.
+
+Auto-queue updates (in `wiki/ops/perf-queue.md`):
+- L04 G-x-wave bumped from priority 1.4 → 9.0 (G might also be non-monotone at V=512; was flat at V=64).
+- L07 tiny-contour bumped from priority 12 → 36.4 (added V=512 + V=1024 cells; tiny model may extend the wave plateau further because forward pass is cheaper).
+
+consecutive_rejects: 0 → 1.
+Reviewer: APPROVE — "L02 reject math clean (-8.4%/-5.5%/-5.5%); best-cells correctly unchanged; W-inversion insight requeues L04+L07; counter 0→1."
+
 ## [2026-05-23] lab | charter v2 — tier system + R-TRAIN family + Reviewer Gate
 
 After L01 launched but before it landed, Jason gave four new

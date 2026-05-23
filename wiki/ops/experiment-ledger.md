@@ -245,3 +245,37 @@ next_action: |
   5. The two new live-training cells that should adopt V=512 (R-TRAIN-LEAN via L11) need one canary cycle against archives/wl5_validation_v1.pt per the Training-Quality Promotion Gate (still pending L12 driver).
 ```
 
+### 2026-05-23 — L02 W-x-wave at V=512 (reject; W=8 still optimal, surprisingly so)
+
+```yaml
+lane: L02-W-x-wave-compound
+tier: 2
+hypothesis: V=512 (from L01) compounds at higher worker counts (W=12, W=16).
+reference: R-S400 (current best = W=8 V=512 = 4,765 aug/s)
+code_change: false
+baseline_command: |
+  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L02-W-x-wave-20260523T061440Z --cells-from <same dir>/cells.csv --lane L02-W-x-wave --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same (3-cell sweep at W in {4, 12, 16} with V=512)
+hardware: M5 Max / MPS / idle box
+seed: per-worker 1000..1015
+baseline_metric: W=8 V=512 = 4,765 aug/s (L01 reference)
+candidate_metric: |
+  W=4  V=512 = 4,367 aug/s (-8.4% vs W=8)
+  W=12 V=512 = 4,501 aug/s (-5.5% vs W=8)
+  W=16 V=512 = 4,504 aug/s (-5.5% vs W=8)
+delta: REJECT. W=8 V=512 remains the best at R-S400. W=4 too few workers (eval idle), W=12/16 hurt because the V=512 wave is already saturating MPS dispatch — more workers create scheduling pressure, not parallelism.
+confidence: medium-high. 5-min cells, idle box, monotone (W=12 and W=16 within 0.07% of each other = clear plateau). plies_mean=15.96 universal (random weights cap).
+artifacts: sweep_logs/lab-L02-W-x-wave-20260523T061440Z/{summary.tsv, cells.csv, metadata.txt, driver.log, cell_small_W{04,12,16}_G08_S400_V512/{records,logs}}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L02-W-x-wave-20260523T061440Z --cells-from ... --lane L02-W-x-wave
+decision: reject
+reviewer: APPROVE (general-purpose agent, 2026-05-23). "L02 reject math clean (-8.4%/-5.5%/-5.5%); best-cells correctly unchanged; W-inversion insight requeues L04+L07; counter 0→1."
+next_action: |
+  1. Best-cells.md unchanged. W=8 V=512 = 4,765 stays the R-S400 default.
+  2. **New finding worth capturing**: at V=64 the workers axis was monotone (W=16 best); at V=512 the workers axis is INVERTED (W=8 best, W=12/16 slightly worse). The wave-size shift moved the MPS-dispatch saturation point. Implication: tier rule "knob wins don't compound across axes" is more than aesthetic — they actively interact in non-monotone ways at the high end of the chip's envelope.
+  3. Followup queue updates:
+     - L04 (G × V=512) becomes more interesting — G axis was flat at V=64 (3026/3188/3057 across G=4/8/16) but the W-axis non-monotonicity at V=512 suggests G might also have a different shape at V=512. Bump L04 priority.
+     - L07 (tiny contour) should ADD V=512 cells (currently has V=128/V=256 only). The tiny model has cheaper forward pass so the saturation point might be at a higher V. Bump L07 priority since it now also probes whether V=512 plateau extends.
+  4. consecutive_rejects counter: 0 -> 1.
+```
+

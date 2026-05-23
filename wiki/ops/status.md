@@ -49,6 +49,7 @@ BFS by default: current-main baseline receipts and production contour are now do
 | Canonical 5-axis M5 Max contour sweep | completed / promote | 23/23 cells; wave=128 promoted as new R-S400 default (+27% over V=64); receipt in [experiment-ledger.md](experiment-ledger.md). |
 | L01-wave-extrapolation | completed / promote | 4/4 cells; **wave=512** promoted as new R-S400 default (+17.7% over V=128; +49.5% cumulative). Plateau confirmed at V=512 (V=768/1024 flat). Reviewer: APPROVE. |
 | L03-sims-x-wave | completed / promote (2x) | 2/2 cells; **V=512** promoted at R-S200 (+52.5%) AND R-S100 (+35.2%). Wave-size win uniform across sims axis. Reviewer: APPROVE. |
+| L02-W-x-wave-compound | completed / reject | 3/3 cells; W=8 V=512 stays optimal (4,765). W=4=4,367; W=12=4,501; W=16=4,504. **Wave saturation INVERTED the W-axis peak** (was W=16 at V=64; now W=8 at V=512). Knob wins interact non-monotonically at chip envelope. Reviewer: APPROVE. |
 
 ## Next Action
 

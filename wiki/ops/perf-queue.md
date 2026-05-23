@@ -118,48 +118,25 @@ notes: Highest priority in Tier 1 because it unblocks three other Tier 1 lanes. 
 
 ### Tier 2 — Compound knob wins
 
-#### L02-W-x-wave-compound (rescoped 2026-05-23 after L01)
-
-```yaml
-id: L02-W-x-wave-compound
-tier: 2
-hypothesis: V=512 promote (from L01) compounds at higher worker counts.
-reference: R-S400 (best = V=512 = 4,765 aug/s)
-code_change: false
-cells:
-  - small W=4  G=8 S=400 V=512
-  - small W=12 G=8 S=400 V=512
-  - small W=16 G=8 S=400 V=512
-n_cells: 3
-wall_cost_min: 17
-E_delta_aug_per_sec: 400
-P_success: 0.5
-priority: 4.0
-status: queued
-notes: Rescoped after L01 promoted V=512 (V=128/V=256 cells dropped; would not displace V=512). W=8 V=512 is the reference (4,765 aug/s, already measured).
-```
-
-#### L04-G-x-wave
+#### L04-G-x-wave (rescoped 2026-05-23 after L02 reject)
 
 ```yaml
 id: L04-G-x-wave
 tier: 2
-hypothesis: G axis was flat at V=64; wider waves may unflatten it because each worker now needs more games to fill the eval batch.
-reference: R-S400
+hypothesis: G axis was flat at V=64 (3026/3188/3057 across G=4/8/16). L02 revealed the W axis is INVERTED at V=512 vs V=64. G may also be non-monotone at V=512.
+reference: R-S400 (current best = W=8 G=8 S=400 V=512 = 4,765 aug/s)
 code_change: false
 cells:
-  - small W=8 G=4  S=400 V=128
-  - small W=8 G=16 S=400 V=128
-  - small W=8 G=32 S=400 V=128
-  - small W=8 G=4  S=400 V=256
-  - small W=8 G=16 S=400 V=256
-n_cells: 5
-wall_cost_min: 28
-E_delta_aug_per_sec: 400
-P_success: 0.4
-priority: 1.4
+  - small W=8 G=4  S=400 V=512
+  - small W=8 G=16 S=400 V=512
+  - small W=8 G=32 S=400 V=512
+n_cells: 3
+wall_cost_min: 17
+E_delta_aug_per_sec: 350
+P_success: 0.45
+priority: 9.0 (bumped post-L02: non-monotone axis insight makes G at V=512 more interesting than the V=64 flatness suggested)
 status: queued
-notes: G=32 is novel territory.
+notes: Dropped V=128/V=256 cells (V=512 dominates per L01). G=32 is novel territory and the most likely cell to displace G=8 if G axis has a new shape at V=512.
 ```
 
 ### Tier 3 — Speculative knob lanes
@@ -230,44 +207,44 @@ notes: Almost no prior art for MPS heap tuning on M5 Max under AZ.
 
 ### Background — Calibration / reference
 
-#### L07-tiny-contour
+#### L07-tiny-contour (rescoped 2026-05-23 after L02)
 
 ```yaml
 id: L07-tiny-contour
 tier: bg
-hypothesis: Tiny model contour is the speed ceiling reference for ANE/engine-overlap planning.
-reference: new R-S400-tiny
+hypothesis: Tiny model contour is the R-S400-tiny ceiling reference for ANE/engine-overlap planning. Also probes whether the V=512 wave plateau extends further on cheaper-eval models — tiny might extend it to V=768 or V=1024 (where small flatlined at V=512).
+reference: new R-S400-tiny (current best = tiny W=8 G=8 S=400 V=64 = 7,326 aug/s from canonical sweep)
 code_change: false
 cells:
   - tiny W=8  G=8 S=400 V=128
   - tiny W=8  G=8 S=400 V=256
-  - tiny W=16 G=8 S=400 V=128
+  - tiny W=8  G=8 S=400 V=512
+  - tiny W=8  G=8 S=400 V=1024
   - tiny W=16 G=8 S=400 V=256
-  - tiny W=12 G=8 S=400 V=128
-  - tiny W=8  G=16 S=400 V=128
-  - tiny W=8  G=16 S=400 V=256
-n_cells: 7
-wall_cost_min: 39
-E_delta_aug_per_sec: 4000
-P_success: 0.7
-priority: 12.0
+  - tiny W=16 G=8 S=400 V=512
+n_cells: 6
+wall_cost_min: 33
+E_delta_aug_per_sec: 6000
+P_success: 0.8
+priority: 36.4 (bumped — tiny + V=512 is the natural follow-up to L01/L03 and the R-S400-tiny reference for L09 ANE comparison)
 status: queued
-notes: Calibrates the ANE work. Runs when nothing in Tier 1-3 needs GPU.
+notes: Two questions: (a) does V plateau extend for tiny? (b) is W axis inverted for tiny at V=512 like it is for small? Calibrates ANE work.
 ```
 
 ## Completed
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L02-W-x-wave-compound | reject | best = W=8 V=512 = 4,765 (unchanged). W=4=4,367; W=12=4,501; W=16=4,504 — wave saturation moved MPS-dispatch peak from W=16 to W=8 at V=512. | APPROVE | New finding: knob wins interact non-monotonically at chip envelope. consecutive_rejects: 0→1. |
 | 2026-05-23 | L03-sims-x-wave | promote (2x) | R-S200: V=512 = 9,156 aug/s (+52.5%); R-S100: V=512 = 15,082 aug/s (+35.2%) | APPROVE | V=512 carries cleanly to S=200 and S=100. Receipt: 2026-05-23 L03 entry in experiment-ledger.md. |
 | 2026-05-23 | L01-wave-extrapolation | promote | small W8 G8 S400 V=512 = 4,765 aug/s | APPROVE | +17.7% over V=128; +49.5% cumulative; plateau at V=512 (V=768/1024 flat). Receipt: 2026-05-23 entry in experiment-ledger.md. |
 | 2026-05-23 | L00-canonical-sweep | promote | small W8 G8 S400 V=128 = 4,048 aug/s | (pre-reviewer-era; auto-grandfathered) | The kickoff sweep; receipt under canonical-sweep-mainframe lane. |
 
 ## Stop-condition tracker
 
-- consecutive_rejects: 0
+- consecutive_rejects: **1** (L02 reject; counter resets on next promote)
 - queue empty + no followups pending: false
-- last halt reason: n/a (loop running; cron 75e2a58f scheduled `7,17,27,37,47,57 * * * *`)
+- last halt reason: n/a (loop running; cron ce6fb88e scheduled `7,17,27,37,47,57 * * * *`)
 
 ## Loop dispatch rule under "blocked-on-driver"
 
