@@ -37,6 +37,28 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L11b R-TRAIN-LEAN V=512 + low sgd_per_position: +28% aug/s, needs_repeat per TQ gate
+
+```yaml
+lane: L11b-V512-low-sgd-per-position
+hypothesis: L11 showed V=512 hurts at trainer level because 2.4× buffer-fill speedup × fixed sgd_per_position=0.0025 produces 3.36× more SGD steps per epoch, monopolizing MPS. Lowering sgd_per_position to 0.001 (2.5× lower) should cap per-epoch trainer work, freeing MPS for workers, and let V=512's pure-gen win finally compound at the trainer level.
+code_ref: f45a3b1 on main (no new code; uses --sgd-per-position passthrough that was already in L12's CLI)
+dataset_ref: fresh random fused checkpoint (small, 324,570 params); live self-play only; the lower SGD-per-position ratio means each batch of training positions gets less optimizer work
+baseline_command: lab-L10-20260523T132940Z (R-TRAIN-WL5 V=64 sgd=0.0025 = 3,297.6 aug/s; 0.0917 epochs/s) AND lab-L11-20260523T133546Z (R-TRAIN-LEAN V=512 sgd=0.0025 = 2,362.8 aug/s)
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11b-20260523T134850Z --lane L11b --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --sgd-per-position 0.001 --warmup-secs 30 --measurement-secs 120 --device mps
+hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS; idle
+seed: workers 1000..1007; trainer default
+baseline_metric: R-TRAIN-WL5 V=64 sgd=0.0025: 3,297.6 aug/s; 14.07 games/s; 0.0917 epochs/s; trainer_step_s_p50=0.0512s; ~80 steps/epoch
+candidate_metric: R-TRAIN-LEAN V=512 sgd=0.001: 4,231.8 aug/s; 15.47 games/s; 0.05 epochs/s; trainer_step_s_p50=0.1407s; ~50 steps/epoch average (epoch 1=19, epoch 8=90); 8 epochs in 120s; plies_mean=34.27
+delta: aug/s **+28.3%** vs R-TRAIN-WL5 (4231.8 / 3297.6 = 1.283); games/s +9.9%; epochs/s -45% (each epoch represents less SGD work because sgd_per_position is lower); effective SGD-rate ≈ 0.05 × 50 = 2.5 steps/s vs R-TRAIN-WL5's 0.0917 × 80 ≈ 7.3 steps/s. The mechanism predicted by L11+L09 is confirmed: lower sgd_per_position keeps per-epoch trainer time bounded (~11-21s vs L11's ~52s), workers don't starve for MPS, V=512's pure-gen efficiency surfaces.
+confidence: medium. Single 120s trial, 8 epochs span (above the 2-epoch min for rate computation). The aug/s win is mechanically clean — V=512 generates more positions per second AND the trainer doesn't dominate MPS like at V=512+default sgd. The training-rate tradeoff is real: ~57% fewer effective SGD steps per second. Whether more data + less SGD beats less data + more SGD is a TRAINING-QUALITY question this perf lab cannot answer on its own.
+artifacts: sweep_logs/lab-L11b-20260523T134850Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/v7,v8}}
+commands_run:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11b-20260523T134850Z --lane L11b --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --sgd-per-position 0.001 --warmup-secs 30 --measurement-secs 120 --device mps
+decision: needs_repeat
+next_action: PERF FINDING: V=512 + sgd_per_position=0.001 is a real trainer-level operating point that beats R-TRAIN-WL5 on aug/s by +28.3%. The mechanism is well-understood (L11+L09+L11b compound chain). HOWEVER — sgd_per_position is a training-behavior knob (changes the rate of SGD updates per game), so the Training-Quality Promotion Gate applies. Promotion to production cannot happen on this 120s cell alone; needs (a) one canary training run at the new operating point reporting val/policy_ce vs archives/wl5_validation_v1.pt, and (b) plies/game-shape band comparison to the parent run. Recommend opening a separate "WL6 canary" lane outside this perf cycle to evaluate the training-quality side; the perf lab establishes that the lever exists, the training pipeline validates whether to adopt it. For the perf lab itself: do NOT mark this as the R-TRAIN-LEAN best-cell promote (until canary clears). Record the operating point in baselines.md as data; record the +28.3% headline as a finding; do not flip the production recipe.
+```
+
 ### 2026-05-23 — L09 R-TRAIN-ANE rejects — trainer-side wins, worker-side loses
 
 ```yaml

@@ -16,6 +16,46 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L11b | V=512 + sgd_per_position=0.001 = +28% aug/s — needs quality canary
+
+The L11+L09 compound finding pointed at the trainer-side MPS contention as the real lever. L11b directly tests the prediction: cap the trainer's per-epoch SGD work at V=512, free up MPS for workers, recover the gen-side win. Same WL5 recipe as L11 except `--sgd-per-position 0.001` (2.5× lower than default 0.0025, to compensate for V=512's 2.4× buffer-fill speedup).
+
+**Result: the lever works.** Headline aug/s beats R-TRAIN-WL5 by **+28.3%**.
+
+| Metric | L10 (V=64 sgd=.0025) | L11 (V=512 sgd=.0025) | **L11b (V=512 sgd=.001)** |
+|---|---|---|---|
+| aug/s | 3,297.6 | 2,362.8 | **4,231.8** (+28.3% vs L10) |
+| games/s | 14.07 | 8.42 | **15.47** (+9.9% vs L10) |
+| epochs/s | 0.0917 | 0.0083 | 0.05 |
+| trainer_step_s_p50 | 0.0512s | 0.138s | 0.141s |
+| steps/epoch (typical) | ~80 | 306 | ~50 (epoch 1=19, epoch 8=90) |
+| per-epoch wall | ~11s | ~52s | ~11-21s |
+
+**Mechanism check.** L11b epoch 2: `(11.5s: gen=5.0s train=5.5s)`. L11 epoch 2: would be `~30s+ train`. L10 epoch 2: `(~11s: gen=~5s train=~4s)`. So L11b's per-epoch wall is back to L10-like, BUT with V=512's gen efficiency. Workers no longer starve for MPS. The lever predicted by the L11+L09 compound finding is real and movable.
+
+**Tradeoff (the catch).** L11b runs ~57% less effective SGD per second than L10 (2.5 steps/s vs 7.3 steps/s), because each "epoch" represents less optimizer work at the lower sgd-per-position. Whether more *data* + less *SGD* is better than less data + more SGD is a TRAINING-QUALITY question the perf lab cannot answer on its own. **`decision: needs_repeat`** per the Training-Quality Promotion Gate; the lab establishes the perf lever exists; the training pipeline gets to evaluate whether to adopt it (one canary training run reporting `val/policy_ce` vs `archives/wl5_validation_v1.pt` plus plies/game-shape band).
+
+**Net session score so far:**
+- L10 (R-TRAIN-WL5 baseline): promote — Reviewer APPROVE
+- L11 (V=512 sgd_default): reject — gen win doesn't free-ride
+- L09 (Core ML/ANE workers): reject — but trainer_step_s_p50 -56% confirms MPS-relief mechanism
+- L11b (V=512 sgd_low): **+28% aug/s — needs_repeat** — the lever is real
+
+The trio L11+L09+L11b is a genuinely satisfying compound finding. Trainer-side MPS contention is the dominant cost in live training, and there are at least two levers that move it (lower sgd_per_position to cap trainer SGD work; or ANE offload to relocate worker eval). Each individually is a 1-knob change; together they map the design space.
+
+**Charter staleness flagged 3 Reviewers in a row** — `perf-lab-charter.md:50` R-TRAIN-LEAN row still says V=128. Needs user touch (Class B). See perf-queue.md stop-condition tracker.
+
+Next: continue the GPU queue with Tier-3 R-S* follow-ups (L05-followup torch.compile, L06-followup fp16-eval, L08-mps-heap-ratio). Cheap 60s smokes; the heavy-hitter R-TRAIN-* family has produced its first round of receipts.
+
+> Three lanes told the same story from three angles: trainer-side MPS
+> contention is the real cost in live training. Now we know which
+> levers move it — and that the headline R-S* throughput wins from
+> earlier in the day can finally compound at the level that matters,
+> once you stop the trainer from eating its own data faster than
+> the workers can produce it.
+
+---
+
 ## [2026-05-23] L09 | R-TRAIN-ANE REJECT (holistic) — but trainer-side hypothesis CONFIRMED
 
 L09 tested the architectural ANE-offload lever: route worker eval through Core ML on CPU_AND_NE, leaving MPS free for the trainer. The L12 driver gained `--evaluator coreml --coreml-compute-units` passthrough (commit 5c08d3c, third L12 gap of the day) to enable the dispatch. Same WL5 recipe as L10 in every other way; 30s warmup + 120s measure.
