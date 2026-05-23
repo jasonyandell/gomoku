@@ -16,6 +16,22 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] Lhot | Heat-soak measured: production shapes have NO haircut (hypothesis refuted)
+
+Jason: "heat soaked numbers are not bad to know, training will be heat soaked." Correct instinct — so we measured it instead of assuming. Lane Lhot: 8 back-to-back R-S400 cells (small/V=512/fp16, 60s each) to drive the chip to thermal steady state, then 2 R-TRAIN-WL5 cells while heat-soaked.
+
+**Result — the M5 Max sustains production throughput; cold-start refs are trustworthy.**
+
+R-S400 curve (aug/s, iters 1-8): 9641 → 9388 → 9660 → 10029 → 9902 → 9780 → 9781 → 9788. It **wobbles through warmup then settles stable at ~9,783** — no thermal decay over 8 minutes of continuous load. Steady state +4% above the cool-start reference (9,398.5). R-TRAIN-WL5 heat-soaked: 3,384 / 3,379 aug/s, trainer_step 0.052, 14 epochs — +2.5% above cool (3,297.6), and trainer_step matches L10's cool 0.0512.
+
+**Both production shapes are at-or-above their cool-start references after heat-soak.** There is no haircut. The hypothesis (cool-start overstates sustained production) is refuted for the production shapes.
+
+**Self-correction:** I had committed (a813151) a "~18% haircut, cool-start is optimistic" claim, derived from the tiny/V=64 baseline falling 10,431→8,531. That was wrong — that number was a Core ML *CPU/BNNS-worker* shape measured right after the synthetic 14-TFLOP hog (artificial extreme GPU thermal load, non-production shape). Corrected across best-cells, the coupling page, and the memory. The lab working as intended: hypothesis tested, refuted by measurement, surfaces corrected.
+
+**Surviving nuance:** the haircut may be engine-specific — GPU-resident work sustains its clocks; the CPU/BNNS path *may* throttle under sustained heat/power (fits the Lpwr power-coupling story). One messy data point on a non-production shape; Lhot2 would re-test cleanly. The Lpwr GPU-coupling collapse (−82%) remains real but needs EXTREME GPU load — normal training doesn't reach it.
+
+decision: needs_repeat (production conclusion solid; CPU-throttle nuance needs clean re-test). New heat-soaked datapoints: R-S400 ≈ 9,783, R-TRAIN-WL5 ≈ 3,381.
+
 ## [2026-05-23] L09e' + Lpwr | Residency resolved (CPU/BNNS, not ANE) + GPU load collapses CPU workers
 
 Post-session-end addendum, driven by Jason flagging the [hollance/neural-engine](https://github.com/hollance/neural-engine) repo as inbound ANE research. Two findings, both "where the machine breaks" material.

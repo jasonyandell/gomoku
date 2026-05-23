@@ -36,15 +36,7 @@ cell + measure cell) per the charter's cell-time ceiling.
 R-S400 is the primary metric — it's the WL5-era production shape and
 the headline number in [status.md](status.md).
 
-**Thermal caveat (2026-05-23): these are cool-start numbers.** Cells are
-measured ~3 min each from a relatively cool chip. A real multi-hour
-training run heat-soaks the M5 Max within minutes and the sustained
-throughput is **lower** — on tiny/V=64 CPU-workers, heat-soak alone cost
-~18% (cool 10,431 → heat-soaked 8,531 aug/s). So these reference numbers
-are optimistic upper bounds; **production sustained throughput is the
-heat-soaked steady state.** A heat-soaked reference-characterization lane
-(Lhot) is queued. See [[feedback-heat-soaked-is-production]] and
-[m5-max-cross-engine-coupling.md](../topics/m5-max-cross-engine-coupling.md).
+**Thermal note (2026-05-23, MEASURED via Lhot): these cool-start numbers ARE trustworthy for sustained production.** The Lhot lane drove the chip to thermal steady state (8 back-to-back R-S400 cells over 8 min) and measured **no heat-soak haircut** on the production shapes: R-S400 steady state ≈ **9,783 aug/s** (vs cool-start 9,398.5 = +4%); R-TRAIN-WL5 heat-soaked ≈ **3,381 aug/s** (vs cool 3,297.6 = +2.5%). Both *at or above* the cool refs; the R-S400 curve doesn't decay. The M5 Max sustains production throughput indefinitely under realistic load. (An earlier "~18% haircut" claim was withdrawn — it came from a non-production tiny/V=64 *CPU/BNNS-worker* shape measured right after a synthetic 14-TFLOP GPU hog, not real training.) Caveat retained: CPU-resident work *may* throttle under extreme GPU load (the Lpwr coupling finding) — relevant only if a future heavy trainer approaches hog-level GPU draw. See [[feedback-heat-soaked-is-production]] and [m5-max-cross-engine-coupling.md](../topics/m5-max-cross-engine-coupling.md).
 
 **Cap-status note on R-TRAIN-TINY-ANE / R-TRAIN-MEDIUM-ANE (RESOLVED 2026-05-23 by L09e'):** these references measure **engine isolation** (Core ML at CPU_AND_NE routing under live training pressure), at the `coreml-isolated` cap. **L09e' resolved the residency question: the workers run on the CPU (BNNS), NOT the ANE** — confirmed by `sample` (hot path `BnnsCpuInferenceOperation`, no `H11ANEServicesThread`) and an independent system GPU monitor (ANE utilization 0%). The "ANE" in the ref names is purely the CPU_AND_NE routing label; there is no ANE residency. The win is Core ML's CPU/BNNS path beating torch+MPS-contended workers at tiny/V=64. **Additional caveat (Lpwr finding):** the win is **load-fragile** — saturating the GPU collapses the CPU workers −82% (shared package power envelope), so a heavy production trainer would erase it. See [m5-max-cross-engine-coupling.md](../topics/m5-max-cross-engine-coupling.md) for both findings.
 

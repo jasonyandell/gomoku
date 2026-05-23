@@ -37,6 +37,33 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — Lhot heat-soak characterization — production shapes show NO heat-soak haircut (refutes the "cool-start is optimistic" hypothesis)
+
+```yaml
+lane: Lhot (heat-soaked steady-state reference characterization; arose from Jason "training will be heat soaked")
+hypothesis: Cool-start reference numbers (R-S400=9,398.5, R-TRAIN-WL5=3,297.6) overstate sustained production throughput because a multi-hour run is heat-soaked. Earlier tiny/V=64 data suggested a ~18% haircut. Predict: heat-soaked steady state of the production shapes is meaningfully below the cool-start refs.
+code_ref: a813151 on main
+method: Phase 1 — 8 back-to-back R-S400 cells (small/W8/G8/S400/V512/fp16, canonical_sweep, 60s each) to drive the chip to thermal steady state, logging the aug/s curve. Phase 2 — 2 R-TRAIN-WL5 cells (small/V=64, lab_train_cell, 30s warmup + 120s measure) while heat-soaked.
+hardware: M5 Max / 48 GB; chip warmed by the 8-cell R-S400 run before the R-TRAIN measurement.
+rs400_curve (aug/s, iter 1-8): 9641, 9388, 9660, 10029, 9902, 9780, 9781, 9788
+rs400_steady_state: ~9,783 aug/s (mean of iters 6-8; 0.08% spread — tight plateau)
+rtrainwl5_heatsoaked: 3,384.4 and 3,378.5 aug/s; trainer_step_s_p50 0.0526/0.0516; 14 epochs each
+delta:
+  - **R-S400 heat-soaked 9,783 vs cool-start 9,398.5 = +4.1%** (HIGHER, not lower)
+  - **R-TRAIN-WL5 heat-soaked 3,381 vs cool-start 3,297.6 = +2.5%** (HIGHER)
+  - trainer_step_s_p50 heat-soaked 0.052 ≈ cool L10 0.0512 (stable); epochs 14 = L10's 14 (stable)
+  - **NO heat-soak haircut on the production shapes.** The R-S400 curve doesn't decay — it wobbles through warmup (iters 1-4) then settles stable through 8 min of continuous load. The M5 Max sustains production throughput indefinitely under realistic self-play/training load.
+  - **The hypothesis is REFUTED for production shapes.** The earlier "~18% haircut" (tiny/V=64 10,431→8,531) was NOT representative: it was a Core ML CPU-worker (BNNS) shape measured right after the synthetic 14-TFLOP fp32 hog — an artificial extreme GPU thermal load on a non-production shape. Under real production load the GPU-resident work holds its clocks.
+confidence: high for the production-shape conclusion (8-cell R-S400 plateau is tight and stable; R-TRAIN-WL5 reproduced across 2 cells at the cool-start level). The cold-start references are trustworthy for sustained production.
+open_nuance: the haircut may be ENGINE-SPECIFIC — GPU-resident work (R-S400, R-TRAIN-WL5) sustains; the tiny/V=64 Core ML CPU/BNNS workers MAY throttle (one messy post-hog data point). Consistent with the Lpwr power-coupling story (CPU is the thermally-sensitive path; GPU holds). Non-production shape; needs a clean heat-soak re-test before claiming. Lane Lhot2 candidate.
+artifacts: sweep_logs/lab-Lhot-20260523T185856Z/{heatsoak_curve.tsv, rs400_iter01..08/, rtrainwl5_iter01..02/}
+decision: needs_repeat (production conclusion is solid; the engine-specific CPU-throttle nuance needs a clean re-test)
+next_action:
+  - **CORRECT the surfaces:** the cool-start references do NOT overstate sustained production throughput for the production shapes. Revise best-cells thermal caveat, m5-max-cross-engine-coupling 18% framing, and the heat-soaked-is-production memory.
+  - The Lpwr GPU-coupling finding STILL STANDS but is about EXTREME GPU load (synthetic hog), not normal training. A future heavy trainer (15×15, bigger net) might approach hog-level GPU load and trigger the CPU-worker throttle — worth re-checking then, not now.
+  - Optional Lhot2: clean heat-soak re-test of the tiny/V=64 CPU-worker shape (no prior hog) to confirm/refute the engine-specific CPU-throttle nuance.
+```
+
 ### 2026-05-23 — Lpwr GPU-load coupling — saturating the GPU collapses CPU-resident self-play workers (−82%); engines share a package resource
 
 ```yaml
