@@ -13,7 +13,7 @@ quality point).
 | **R-S400** | small / S=400 | small / W=8 / G=8 / S=400 / **V=512** | 4,765 | 2026-05-23 | L01-wave-extrapolation |
 | **R-S200** | small / S=200 | small / W=8 / G=8 / S=200 / **V=512** | 9,156 | 2026-05-23 | L03-sims-x-wave |
 | **R-S100** | small / S=100 | small / W=8 / G=8 / S=100 / **V=512** | 15,082 | 2026-05-23 | L03-sims-x-wave |
-| R-S400-tiny | tiny / S=400 | tiny / W=8 / G=8 / S=400 / V=64 | 7,326 | 2026-05-23 | canonical-sweep-mainframe |
+| R-S400-tiny | tiny / S=400 | tiny / **W=16** / G=8 / S=400 / **V=512** | **22,088** | 2026-05-23 | L07-tiny-contour |
 | R-S100-tiny | tiny / S=100 | tiny / W=16 / G=16 / S=100 / V=32 | 19,346 | 2026-05-23 | canonical-sweep-mainframe |
 
 ## R-TRAIN-* — trainer + concurrent generator (epochs/sec)
@@ -34,6 +34,11 @@ the headline number in [status.md](status.md).
 
 Newest first. Append on every promote; never overwrite an old row.
 
+- **2026-05-23** — `R-S400-tiny`: W=8 V=64 → **W=16 V=512** (7,326 →
+  22,088 aug/s, **+201.5%**). No behavior change; tiny model, eval
+  batch shape + worker count both shifted. **Model-dependent W peak**:
+  at tiny W=16 beats W=8 at V=512 (opposite of small at V=512 per L02).
+  Source: L07-tiny-contour. Reviewer: APPROVE.
 - **2026-05-23** — `R-S100`: V=64 → **V=512** (11,151 → 15,082 aug/s,
   **+35.2%**). No behavior change; eval batch shape only. Source:
   L03-sims-x-wave. Reviewer: APPROVE.

@@ -186,34 +186,53 @@ notes: Rescoped from V=128 to V=512. Blocked-on-driver because cells.csv schema 
 
 ### Background — Calibration / reference
 
-#### L07-tiny-contour (rescoped 2026-05-23 after L02)
+#### L13-tiny-W-peak-probe (auto-queued 2026-05-23 after L07 promote)
 
 ```yaml
-id: L07-tiny-contour
+id: L13-tiny-W-peak-probe
 tier: bg
-hypothesis: Tiny model contour is the R-S400-tiny ceiling reference for ANE/engine-overlap planning. Also probes whether the V=512 wave plateau extends further on cheaper-eval models — tiny might extend it to V=768 or V=1024 (where small flatlined at V=512).
-reference: new R-S400-tiny (current best = tiny W=8 G=8 S=400 V=64 = 7,326 aug/s from canonical sweep)
+hypothesis: L07 showed tiny W=16 V=512 beats tiny W=8 V=512 (+29.4%). Probe finer around W=16 to find the actual peak — W ∈ {12, 16, 20, 24} all at tiny G=8 S=400 V=512.
+reference: R-S400-tiny (current best = tiny W=16 G=8 S=400 V=512 = 22,088 aug/s after L07)
 code_change: false
 cells:
-  - tiny W=8  G=8 S=400 V=128
-  - tiny W=8  G=8 S=400 V=256
-  - tiny W=8  G=8 S=400 V=512
-  - tiny W=8  G=8 S=400 V=1024
-  - tiny W=16 G=8 S=400 V=256
-  - tiny W=16 G=8 S=400 V=512
-n_cells: 6
-wall_cost_min: 33
-E_delta_aug_per_sec: 6000
-P_success: 0.8
-priority: 36.4 (bumped — tiny + V=512 is the natural follow-up to L01/L03 and the R-S400-tiny reference for L09 ANE comparison)
+  - tiny W=12 G=8 S=400 V=512
+  - tiny W=20 G=8 S=400 V=512
+  - tiny W=24 G=8 S=400 V=512
+n_cells: 3 (W=16 already measured at 22,088)
+wall_cost_min: 17
+E_delta_aug_per_sec: 2000
+P_success: 0.5
+priority: 58.8 (highest unblocked after L07 promote; +29% jump at W=16 suggests further compounds possible)
 status: queued
-notes: Two questions: (a) does V plateau extend for tiny? (b) is W axis inverted for tiny at V=512 like it is for small? Calibrates ANE work.
+notes: New auto-queued follow-up to L07. If W=20 or W=24 beats W=16, the W-axis "saturation point" at tiny is even higher than expected, which is important for L09 ANE worker-count tuning.
+```
+
+#### L14-tiny-G-at-W16-V512 (auto-queued 2026-05-23 after L07)
+
+```yaml
+id: L14-tiny-G-at-W16-V512
+tier: bg
+hypothesis: L07 promote was at G=8. G axis at tiny W=16 V=512 might also be non-monotone with a different peak than G=8 (recall L04 found G axis is mildly non-monotone at V=512 even on small).
+reference: R-S400-tiny (W=16 V=512 G=8 = 22,088)
+code_change: false
+cells:
+  - tiny W=16 G=4  S=400 V=512
+  - tiny W=16 G=16 S=400 V=512
+  - tiny W=16 G=32 S=400 V=512
+n_cells: 3
+wall_cost_min: 17
+E_delta_aug_per_sec: 800
+P_success: 0.35
+priority: 16.5
+status: queued
+notes: Lower priority than L13 (peak-probe is more targeted) but cheap.
 ```
 
 ## Completed
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L07-tiny-contour | promote | R-S400-tiny: tiny W=16 G=8 V=512 = 22,088 aug/s (+201.5% vs V=64=7,326). | APPROVE | Model-dependent W peak at V=512 — tiny W=16 BEATS W=8 (opposite of small). consecutive_rejects: 2→0. Auto-queued L13 (W peak probe) + L14 (tiny G axis). |
 | 2026-05-23 | L04-G-x-wave | reject | best = W=8 G=8 V=512 = 4,765 (unchanged). G=4=4,608; G=16=4,541; G=32=4,514. G mildly non-monotone at V=512 (flat at V=64) but peak still G=8. | APPROVE | Compound finding with L02: at V=512 BOTH W and G axes peak at the canonical defaults. consecutive_rejects: 1→2. |
 | 2026-05-23 | L02-W-x-wave-compound | reject | best = W=8 V=512 = 4,765 (unchanged). W=4=4,367; W=12=4,501; W=16=4,504 — wave saturation moved MPS-dispatch peak from W=16 to W=8 at V=512. | APPROVE | New finding: knob wins interact non-monotonically at chip envelope. consecutive_rejects: 0→1. |
 | 2026-05-23 | L03-sims-x-wave | promote (2x) | R-S200: V=512 = 9,156 aug/s (+52.5%); R-S100: V=512 = 15,082 aug/s (+35.2%) | APPROVE | V=512 carries cleanly to S=200 and S=100. Receipt: 2026-05-23 L03 entry in experiment-ledger.md. |
@@ -222,8 +241,8 @@ notes: Two questions: (a) does V plateau extend for tiny? (b) is W axis inverted
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **2** (L02 + L04; counter resets on next promote)
-- queue empty + no followups pending: false (L07 tiny-contour ready; L05/L06/L08 blocked-on-driver-equivalents; L12 needs human session)
+- consecutive_rejects: **0** (L07 promote reset the counter)
+- queue empty + no followups pending: false (L13 + L14 auto-queued post-L07; L05/L06/L08 blocked-on-driver-equivalents; L12 needs human session)
 - last halt reason: n/a (loop running; cron ce6fb88e scheduled `7,17,27,37,47,57 * * * *`)
 
 ## Loop dispatch rule under "blocked-on-driver"

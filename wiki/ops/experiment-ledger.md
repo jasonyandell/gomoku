@@ -312,3 +312,43 @@ next_action: |
   5. Next dispatch: bg L07 (tiny contour with V=512 cells added). Tier 3 L08 (heap ratio) is blocked-on-driver — canonical_sweep doesn't support per-cell env vars yet; add to L12 driver scope or build it as L08-driver task. Tier 3 L05/L06 are blocked-on-worktree code.
 ```
 
+### 2026-05-23 — L07 tiny contour (promote at R-S400-tiny; model-dependent W peak revealed)
+
+```yaml
+lane: L07-tiny-contour
+tier: bg
+hypothesis: Tiny model contour at V=128/V=256/V=512/V=1024 sets the R-S400-tiny ceiling and probes whether V=512 plateau extends with cheaper-eval model AND whether W axis is non-monotone at tiny like at small.
+references_affected: R-S400-tiny (canonical-sweep best = tiny W=8 G=8 S=400 V=64 = 7,326 aug/s)
+code_change: false
+baseline_command: |
+  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L07-tiny-contour-20260523T065429Z --cells-from <same dir>/cells.csv --lane L07-tiny-contour --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same (6-cell tiny contour at V in {128, 256, 512, 1024} for W=8; and V in {256, 512} for W=16)
+hardware: M5 Max / MPS / idle box
+seed: per-worker 1000..1015
+baseline_metric: tiny W=8 G=8 S=400 V=64 = 7,326 aug/s (canonical sweep, R-S400-tiny baseline)
+candidate_metric: |
+  tiny W=8  V=128 =  9,407 aug/s (+28.4% over V=64)
+  tiny W=8  V=256 = 14,461 aug/s (+97.4% over V=64)
+  tiny W=8  V=512 = 17,088 aug/s (+133.2% over V=64)
+  tiny W=8  V=1024= 17,012 aug/s (flat with V=512; same plateau as small)
+  tiny W=16 V=256 = 16,375 aug/s (+123.5%)
+  tiny W=16 V=512 = 22,088 aug/s (+201.5% over V=64; new R-S400-tiny best)
+delta: |
+  R-S400-tiny: V=64 -> W=16 V=512 = +201.5% (7,326 -> 22,088 aug/s). Promote.
+  V=512 plateau holds for tiny too (V=768/1024 won't help, V=1024 cell was flat).
+  **Critical finding**: W=16 V=512 beats W=8 V=512 by +29.4% at tiny. This is the OPPOSITE of L02's result at small where W=16 V=512 was WORSE than W=8 by 5.5%. The W-axis sweet spot at V=512 depends on model size: tiny (cheap eval) can keep more workers fed before MPS-dispatch saturates; small (expensive eval) saturates at W=8.
+confidence: medium-high. 5-min cells, idle box, monotone within experimental noise. Plies cap 15.96 universal.
+artifacts: sweep_logs/lab-L07-tiny-contour-20260523T065429Z/{summary.tsv, cells.csv, metadata.txt, driver.log, cell_tiny_W{08,16}_G08_S400_V{128,256,512,1024}/{records,logs}}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L07-tiny-contour-20260523T065429Z --cells-from ... --lane L07-tiny-contour
+decision: promote (R-S400-tiny only; primary R-S* refs unchanged because they pin model=small)
+reviewer: APPROVE (general-purpose agent, 2026-05-23). "L07 promote math clean (+201.5%); 2-axis move decomposed via cell matrix; surfaces consistent; L13/L14 well-scoped."
+next_action: |
+  1. Promote R-S400-tiny: W=8 V=64 -> **W=16 V=512** (7,326 -> 22,088 aug/s, +201.5%). best-cells.md updated.
+  2. consecutive_rejects: 2 -> 0 (any promote resets per stop rule).
+  3. **Model-dependent W axis finding has direct implications for L09 ANE-offload work**: with workers on Core ML (CPU/ANE), the effective "eval cost" per worker changes. Whether W=8 or W=16 is the peak under the ANE workload is unknown. L09 should compare BOTH W=8 and W=16 at V=512 in its measurement cells, not just one.
+  4. Auto-queue follow-up L13 (new): probe tiny peak finer. W ∈ {12, 16, 20, 24} at tiny G=8 S=400 V=512. 4 cells × 5 min = 22 min wall. Highest E[delta] in current queue because tiny+V=512+W=16 just unlocked a new regime.
+  5. Auto-queue follow-up L14 (new): tiny G axis at V=512 W=16. G ∈ {4, 16, 32} at tiny W=16 S=400 V=512. 3 cells × 5 min = 17 min. Probably moderate E[delta]; G axis was mildly non-monotone at small V=512 (L04).
+  6. Primary R-S* targets are now exhausted of single-axis tweaks at small (W and G confirmed at peak, V at plateau, model is the only knob left that moves the needle — and tiny is a different quality regime). The next big mover is architectural: L09 ANE-offload (when L12 driver lands) and L05/L06 worktree code lanes.
+```
+

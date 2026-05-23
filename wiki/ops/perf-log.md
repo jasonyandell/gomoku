@@ -427,6 +427,38 @@ consecutive_rejects: 1 → 2. One more reject would still NOT halt the loop (the
 
 Reviewer: APPROVE — "L04 reject math clean (-3.3/-4.7/-5.3%); best-cells unchanged; compound W+G finding documented; L08 correctly blocked; counter 1→2."
 
+## [2026-05-23] lab | L07 tiny contour — R-S400-tiny promote +201.5%; W peak is model-dependent at V=512
+
+6/6 cells ok. The lab's biggest single-lane jump so far.
+
+| cell | aug/s | vs tiny V=64=7,326 |
+|---|---|---|
+| tiny W=8  V=128 |  9,407 | +28.4% |
+| tiny W=8  V=256 | 14,461 | +97.4% |
+| tiny W=8  V=512 | 17,088 | +133.2% |
+| tiny W=8  V=1024| 17,012 | flat with V=512 (same plateau as small) |
+| tiny W=16 V=256 | 16,375 | +123.5% |
+| **tiny W=16 V=512** | **22,088** | **+201.5%** ← new R-S400-tiny best |
+
+V=512 plateau holds for tiny (V=1024 flat). But the **model-dependent W peak** is the headline:
+
+| model | best W at V=512 | second-best W |
+|---|---|---|
+| small (L01/L02)  | **W=8** = 4,765 | W=16 = 4,504 (-5.5%) |
+| tiny  (L07)      | **W=16** = 22,088 | W=8 = 17,088 (-22.7%) |
+
+At small, eval cost per worker is high enough that 8 workers saturate MPS dispatch. At tiny, eval cost is ~3× cheaper so MPS can stay fed with 16 workers — the saturation point shifted right.
+
+**Direct implication for L09 ANE-offload**: with workers on Core ML (CPU/ANE), the effective per-worker eval cost changes again. Whether W=8, W=16, or W=24+ is the peak under the ANE workload is unknown a priori — L09's measurement cells should test BOTH W=8 and W=16 at V=512, not just one. Added this note to the L09 queue entry.
+
+**Auto-queued follow-ups** (both bg, both new):
+- L13 (priority 58.8 — highest in current queue): probe tiny peak finer at W ∈ {12, 16, 20, 24}. If W=20 or W=24 beats W=16, even bigger gain available.
+- L14 (priority 16.5): G axis at tiny W=16 V=512.
+
+consecutive_rejects: 2 → 0 (any promote resets per stop rule).
+
+Reviewer: APPROVE — "L07 promote math clean (+201.5%); 2-axis move decomposed via cell matrix; surfaces consistent; L13/L14 well-scoped."
+
 ## [2026-05-23] lab | charter v2 — tier system + R-TRAIN family + Reviewer Gate
 
 After L01 launched but before it landed, Jason gave four new
