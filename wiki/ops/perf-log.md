@@ -16,6 +16,59 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L09e + session-end | Routing axis null at small/V=64; ANE chapter closed
+
+L09e was the final session lane — the routing-rescue diagnostic for L09's small/V=64 -41.5% reject. Two cells under live training:
+
+| compute-units | aug/s | vs L09 CPU_AND_NE (1,930.3) | trainer_step_s_p50 |
+|---|---|---|---|
+| CPU_AND_GPU | 1,908.3 | -1.1% | 0.0226s |
+| ALL (auto) | 1,989.8 | +3.1% | 0.0197s |
+| L09 ref (CPU_AND_NE) | 1,930.3 | — | 0.0227s |
+
+Across-routing spread: 4.3% — within natural noise. **All three routings still ~40% below R-TRAIN-WL5 (3,297.6 aug/s).** ALL is the marginal winner but doesn't approach the torch/MPS baseline. The trainer_step_s_p50 is clustered around 0.02s across all three routings (vs R-TRAIN-WL5's 0.05s) — the MPS-relief mechanism is real in all three routings, consistent with L09's original finding. The worker-side raw eval throughput on Core ML is just slower than torch/MPS at this workload size, and routing hint doesn't change that.
+
+**Engine envelope, decisively mapped now (5 measured comparison points across the ANE family):**
+
+| model / shape | engine config | aug/s | vs matched baseline |
+|---|---|---|---|
+| **tiny / V=64** | **ANE** (CPU_AND_NE) | **10,762.6** | **+33.9%** ← the lone win (L09c) |
+| tiny / V=512 | ANE | 10,609.8 | -24.0% (L09c-V512) |
+| small / V=64 | ANE (CPU_AND_NE) | 1,930.3 | -41.5% vs R-TRAIN-WL5 (L09) |
+| small / V=64 | ANE (CPU_AND_GPU) | 1,908.3 | -42.1% (L09e) |
+| small / V=64 | ANE (ALL) | 1,989.8 | -39.7% (L09e) |
+| medium / V=512 | ANE | 591.7 | -59.6% (L09d) |
+
+**ANE pays at exactly one point: tiny + V=64. Compute-units routing axis is null. V-axis amortization is falsified. Model-size amortization is falsified.** The L09c PROMOTE remains the lone win; the ANE-chapter is closed.
+
+**Session-end summary (12 lanes since session-restart, headline-ordered):**
+
+- **L09c PROMOTE** (the headline): R-TRAIN-TINY-ANE = 10,762.6 aug/s (+33.9% vs matched torch baseline) — Core ML/ANE pays at the tiny model size under live training, where both backends are pipeline-overhead-bound and trainer-side MPS-relief tips the balance.
+- L09d REJECT: medium/V=512 ANE -59.6%; "larger compute amortizes" falsified.
+- L09c-V512 REJECT: tiny/V=512 ANE -24.0%; V-axis amortization falsified.
+- L08 REJECT: heap-ratio axis null at R-S400/fp16; bandwidth-bound regime confirmed.
+- L09e REJECT: compute-units routing null at small/V=64; L09 reject is final.
+
+**Reference points opened in this session:**
+- R-TRAIN-TINY-ANE = 10,762.6 aug/s (engine-mapping ref)
+- R-TRAIN-TINY = 8,039.1 aug/s (engine-mapping ref, torch baseline arm)
+- R-TRAIN-MEDIUM = 1,463.3 aug/s (engine-mapping ref, torch+fp16 baseline arm)
+- R-TRAIN-MEDIUM-ANE = 591.7 aug/s (rejected ref, engine-mapping data point)
+
+**consecutive_rejects: 4** (L09d → L09c-V512 → L08 → L09e). One short of the 5-reject HALT threshold. **Session-end declared by orchestrator** because: (1) the four rejects are all envelope-mapping with clean mechanism (not knob-failure noise); (2) the ANE-chapter has been decisively mapped (L09c PROMOTE + 4 rejects = complete envelope); (3) remaining queueable lanes (L09f, L09g, L09h) are all downweighted or low-upside diagnostic with no compound mechanism left to test; (4) the L11b' R-TRAIN-LEAN-fp16 +152.9% perf-reference from the prior session-portion remains the perf cycle's headline R-TRAIN finding, unaffected.
+
+**Two NEW friction-smoothing lessons surfaced this session-portion, to be filed in the gomoku-perf-lab skill:**
+
+1. **plies_mean is NOT stationary across asymmetric-epoch R-TRAIN cells.** When two arms have very different `epochs_in_window` counts (because the candidate's trainer epoch is much shorter), aggregate plies_mean drift is dominated by within-window training progress, not engine-induced game-shape drift. Future Reviewers' drift-watch should check per-epoch plies values in trainer.log, not just the aggregate. Surfaced in L09c-V512 (-7.3% plies_mean drift; per-epoch trainer.log showed monotonic-from-epoch-3 decline from 33.5 → 27.7 as the candidate's 8 trainer epochs improved the policy).
+
+2. **Session-thermal drift can produce ~5% absolute aug/s drift over 90-min sessions.** Within-lane back-to-back A/B remains reliable (chip stable across minutes). Cross-time comparisons (> ~30 min apart in same session OR across sessions) should re-measure under matched thermal state. Surfaced in L08 (default-heap re-measure -4.9% vs R-S400 measured 90 min earlier).
+
+3. **Env-axis lanes: use the L08-driver cells.csv `env` column, not shell-prefix env.** Shell-prefix env propagates via Popen inheritance but doesn't stamp the env_overrides field in metadata.txt, so the on-disk artifacts don't discriminate which env value each cell ran under. Reviewer flagged this as a soft artifact-capture gap on L08; future env-axis lanes should use the cells.csv `env` column for per-cell stamping.
+
+These three lessons go into the skill's Friction-smoothing log at session-end (next commit).
+
+Reviewer pending for L09e. Session-end commit pending.
+
 ## [2026-05-23] L08 | Heap-ratio axis null at R-S400/fp16 — bandwidth-bound regime confirmed; thermal drift surfaced
 
 Pivoted to L08-mps-heap-ratio post-L09c-V512 reject. With the ANE-axis nearly exhausted (single-point envelope at tiny+V=64), MPS-side knob tuning becomes the next-best perf lever. L08 tests whether PYTORCH_MPS_HIGH_WATERMARK_RATIO (default ~1.7 on M-series) is capping throughput at the R-S400 reference (small/V=512/fp16).

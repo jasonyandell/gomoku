@@ -37,6 +37,46 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L09e REJECT — Core ML compute-units routing axis null at small/V=64 (~4% spread); L09 reject confirmed not-a-routing-issue
+
+```yaml
+lane: L09e (compute-units routing sweep at the L09 reference shape — the rescue diagnostic for L09's small/V=64 -41.5% reject)
+hypothesis: L09 measured CPU_AND_NE at small/V=64 = 1,930.3 aug/s (-41.5% vs R-TRAIN-WL5). Could Core ML have been silently demoting ops to suboptimal routings at that compute-unit setting? Sweep CPU_AND_GPU and ALL to compare. If one routing significantly beats L09's number (e.g., -20% or better vs R-TRAIN-WL5), the L09 reject is "wrong routing" and a different config could rescue ANE-offload at small. If all routings stay near -41%, the L09 reject is genuinely "Core ML is just slow at this workload size".
+code_ref: 7c26506 on main (post-L08 Reviewer-APPROVE)
+evaluator (all arms): Core ML via --evaluator coreml; only --coreml-compute-units differs across cells
+dataset_ref: fresh random fused checkpoint (small, 324,570 params); live self-play under WL5-shaped recipe (S=400, V=64, EMA τ=0.99, grad_accum=4); W=8 (small's L02-confirmed peak at V=512, matching L09's recipe)
+baseline_command (L09 ref): python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09-20260523T134213Z --lane L09 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+candidate_commands:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09e-cpugpu-20260523T162647Z --lane L09e-cpugpu --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_GPU
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09e-all-20260523T162943Z --lane L09e-all --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units ALL
+hardware: M5 Max / MPS (trainer) + ANE/GPU/Mix (candidate workers via Core ML routings) / idle
+seed: workers seeded 1000..1007 each arm; trainer seed default
+baseline_metric (L09 ref): CPU_AND_NE: 1,930.3 aug/s; 8.00 g/s; 0.0583 ep/s; trainer_step_s_p50=0.0227s; 10 epochs in 120s
+candidate_metric:
+  - CPU_AND_GPU: 1,908.3 aug/s; 7.675 g/s; 0.0667 ep/s; trainer_step_s_p50=0.0226s; 11 epochs in 120s; plies_mean 31.38
+  - ALL: 1,989.8 aug/s; 7.709 g/s; 0.0667 ep/s; trainer_step_s_p50=0.0197s; 11 epochs in 120s; plies_mean 32.54
+delta:
+  - CPU_AND_GPU vs CPU_AND_NE: aug/s -1.1% (1,908.3 vs 1,930.3); trainer_step_s_p50 ~identical (0.0226 vs 0.0227)
+  - ALL vs CPU_AND_NE: aug/s +3.1% (1,989.8 vs 1,930.3); trainer_step_s_p50 -13.2% (0.0197 vs 0.0227)
+  - Across-routing spread: 4.3% (1,908.3 to 1,989.8) — within the natural noise band for R-TRAIN-* cells (L09 vs L09c-baseline-style trainer cells show ~5% trial-to-trial variability)
+  - **All three routings are still ~40% below R-TRAIN-WL5 (3,297.6 aug/s).** ALL is the marginal winner among the coreml routings but doesn't approach the torch/MPS baseline.
+  - Hypothesis result: routing axis is FLAT-to-MILDLY-helpful (~4% upside from ALL); does NOT rescue the L09 reject. The L09 reject is genuinely "Core ML is just slow at this workload size", not "wrong compute-units routing".
+confidence: high. Two-cell sweep against the L09 baseline establishes the routing axis is null. Even the best routing (ALL) leaves a ~40% gap to torch/MPS at small/V=64. Combined with L09d's medium-V=512 result (-59.6%) and L09c-V512's tiny-V=512 result (-24%), the engine envelope is now decisively mapped: ANE wins at exactly tiny+V=64; nothing else.
+artifacts:
+  - sweep_logs/lab-L09e-cpugpu-20260523T162647Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V064_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log}}
+  - sweep_logs/lab-L09e-all-20260523T162943Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V064_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log}}
+commands_run:
+  - (CPU_AND_GPU above)
+  - (ALL above)
+decision: reject
+next_action:
+  - **The L09 reject is FINAL.** Compute-units routing doesn't rescue ANE-offload at small/V=64. Combined with L09d (medium/V=512 reject) and L09c-V512 (tiny/V=512 reject), the engine envelope is decisively mapped: ANE wins at tiny+V=64 ONLY (L09c +33.9%).
+  - L09f (broader V-axis sweep) and L09g (broader model-size sweep) at coreml remain in queue at low priority but are predicted to be rejects per the envelope mapping. No headline upside expected.
+  - L09h (.mlpackage re-export cost diagnostic) remains queued at priority 1.0; cheap (1 cell) and informative if anyone wants to revisit ANE-offload later.
+  - consecutive_rejects: 3 → 4 (one short of the 5-reject HALT threshold). Per stop-gates triage: this is the natural session-end. The remaining queueable lanes have no compound mechanism upside; the ANE-chapter is closed cleanly with the L09c PROMOTE as its lone win and L09e as the rescue-diagnostic confirmation.
+  - Session-end entry to be filed in perf-log.md; friction-smoothing lessons to be batched to the gomoku-perf-lab skill.
+```
+
 ### 2026-05-23 — L08-mps-heap-ratio REJECT — PYTORCH_MPS_HIGH_WATERMARK_RATIO null at R-S400/fp16 (0.74% spread)
 
 ```yaml
