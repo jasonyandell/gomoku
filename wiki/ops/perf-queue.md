@@ -239,50 +239,37 @@ status: **COMPLETED 2026-05-23 — NO haircut on production shapes.** R-S400 ste
 notes: Per [[feedback-heat-soaked-is-production]] — Jason 2026-05-23: "heat soaked numbers are not bad to know, training will be heat soaked." Follow-up Lhot2 (optional): clean heat-soak re-test of the tiny/V=64 Core ML CPU-worker shape (no prior hog) to confirm/refute the engine-specific CPU-throttle nuance.
 ```
 
+#### Lhot2 — Clean heat-soak re-test of the tiny/V=64 CPU-worker shape (engine-specific throttle?)
+
+```yaml
+id: Lhot2
+tier: 1
+hypothesis: Lhot showed NO heat-soak haircut on the GPU-resident production shapes (R-S400, R-TRAIN-WL5 both sustained at/above cool refs). But the one tiny/V=64 Core ML CPU/BNNS-worker data point fell 10,431→8,531 (~18%) under heat-soak — measured messily right after the synthetic 14-TFLOP hog. If real, the haircut is ENGINE-SPECIFIC: the GPU holds its clocks under sustained load, the CPU/BNNS path throttles. Clean-test it: heat-soak the chip with the tiny/V=64 CPU-worker recipe itself (NO prior hog), watch the curve.
+references_affected: the engine-specific-throttle nuance in m5-max-cross-engine-coupling.md; informs whether CPU-offload self-play is thermally durable.
+code_change: false
+design:
+  - From a cool/idle chip, run N back-to-back tiny/W16/V64/coreml CPU_AND_NE cells (lab_train_cell, 30s warmup + 60s measure), logging the aug/s curve — same protocol as Lhot Phase 1 but on the CPU-worker shape.
+  - If the curve decays and plateaus below the cool-start ~10,400, the CPU/BNNS path throttles under sustained heat → engine-specific haircut confirmed.
+  - If it holds (like R-S400 did), the earlier 8,531 was pure hog-contamination and there's no CPU-specific throttle.
+n_cells: ~6-8 (curve to steady state)
+wall_cost_min: ~10
+E_delta_aug_per_sec: 0 (diagnostic; resolves the engine-specific-throttle nuance)
+P_success: 0.9 (will produce a clean curve)
+priority: 2.5 (Tier 1 diagnostic; below L09i/Lpwr2 — it's a nuance, not load-bearing for production since CPU-worker self-play isn't the production path)
+status: queued
+notes: Per [[feedback-heat-soaked-is-production]] open nuance. The clean version of the contaminated post-hog tiny/V=64 measurement. See m5-max-cross-engine-coupling.md "surviving nuance".
+```
+
 ### Tier 2 — Compound knob wins
 
 ### Tier 3 — Speculative knob lanes
 
-(All Tier-3 lanes in this queue are now CPU-queue tasks that produce
-GPU-queue cells once their patch lands; see CPU queue above. L05/L06
-land code → become GPU cells. L08 unblocks when L08-driver lands.)
-
-
-#### L05-followup-compile-cells (post-L05 GPU follow-up)
-
-```yaml
-id: L05-followup-compile-cells
-tier: 3
-hypothesis: torch.compile on eval-only model improves aug/s without quality change.
-reference: R-S400 (small W=8 G=8 V=512 = 4,765) and R-S400-tiny (W=16 V=512 = 22,088)
-cells:
-  - small W=8 G=8 S=400 V=512 --compile vs --no-compile (60s smoke)
-  - tiny  W=16 G=8 S=400 V=512 --compile vs --no-compile (60s smoke)
-n_cells: 4
-wall_cost_min: 5
-E_delta_aug_per_sec: 200
-P_success: 0.25 (torch.compile + MPS is hit-or-miss)
-priority: 2.5
-status: queued (L05 driver flag landed 2026-05-23)
-```
-
-#### L06-followup-fp16-cells (post-L06 GPU follow-up)
-
-```yaml
-id: L06-followup-fp16-cells
-tier: 3
-hypothesis: fp16 eval reduces memory bandwidth and improves aug/s on MPS without behavior change.
-reference: R-S400 (small W=8 G=8 V=512 = 4,765) and R-S400-tiny (W=16 V=512 = 22,088)
-cells:
-  - small W=8 G=8 S=400 V=512 --fp16-eval vs fp32 (60s smoke)
-  - tiny  W=16 G=8 S=400 V=512 --fp16-eval vs fp32 (60s smoke)
-n_cells: 4
-wall_cost_min: 5
-E_delta_aug_per_sec: 200
-P_success: 0.3 (mature MPS + fused conv+bn may have closed the historic fp16 gap)
-priority: 2.5
-status: queued (L06 driver flag landed 2026-05-23)
-```
+The original MPS knob-lanes (L05 torch.compile, L06 fp16-eval, L08
+heap-ratio) all COMPLETED 2026-05-23 — see the Completed table.
+Outcomes: L05 compile reject (neutral on MPS); L06 fp16 **promote**
+(R-S400 +97%, the headline MPS win); L08 heap-ratio reject (null,
+bandwidth-bound regime). The MPS-side knob axis is exhausted. Remaining
+Tier-3 work is the downweighted Core ML envelope sweeps below.
 
 ### Background — Calibration / reference
 
