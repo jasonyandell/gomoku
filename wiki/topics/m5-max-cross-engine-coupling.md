@@ -10,6 +10,7 @@ Open-source-repo rationale, same as the throughput-regimes page: someone searchi
 
 - **Core ML runs our gomoku model on the CPU (BNNS), not the ANE** — confirmed by process sampling (L09e'). Despite `--coreml-compute-units CPU_AND_NE`, no `H11ANEServicesThread` spawns and the hot path is `E5RT::Ops::BnnsCpuInferenceOperation::ExecuteSync`. Under `CPU_AND_GPU` it *still* picks CPU. Core ML's cost model chooses CPU for our tiny/V=64 model regardless of the routing hint.
 - **The L09c "engine-isolation" win (+33.9%) is real but load-fragile.** It works because our tiny-model trainer barely loads the GPU, leaving headroom for the CPU workers. **Saturate the GPU with a synthetic hog and the CPU workers collapse −82%** (10,432 → 1,905 aug/s) while the trainer barely moves (+14% trainer_step). The engines are compute-isolated but **share *some* package-level resource** — most likely the power/thermal envelope (the trainer-vs-worker asymmetry points there), possibly also unified-memory bandwidth. The exact mechanism is **not yet cleanly pinned**: the intensity sweep that would distinguish power-throttle from scheduling got swamped by session-thermal drift (see Part 2). The qualitative coupling is solid; the mechanism is inferred.
+- **ANE-resident workers also throttle under GPU load, and the coupling is bidirectional.** A clean pure-self-play A/B (L09i-fix-load-v2, no trainer → no wave-barrier confound) shows ANE workers **−35%** under a GPU hog (3,548 → 2,307 aug/s) — the ANE is **not** contention-immune. Notably the coupling runs both ways: the 16 full-tilt ANE workers throttled the hog from ~10.7 down to **~2.72 TFLOP/s** (~4×), so ANE↔GPU brown each other out and settle at an equilibrium (workers −35%, hog −75%). Because the hog intensities aren't matched (~2.72 here vs ~11 in Lpwr), the ANE reads gentler than the CPU/BNNS −82% but **the intensities differ — not a clean fragility ranking**. (This supersedes the earlier "generation held / positive lean" reading, which was a trainer-barrier artifact.) See `wiki/ops/experiment-ledger.md` 2026-05-23 "L09i-fix-load-v2".
 - **Production implication:** a heavier production trainer (15×15 board, bigger net) that actually saturates the GPU would throttle the CPU self-play workers, erasing the L09c win. The engine-isolation benefit is conditional on GPU power headroom.
 - This is the "where does the machine break" the mainframe philosophy is built to find. We can't light all three engines at full tilt simultaneously — they draw from one power budget.
 
@@ -70,6 +71,22 @@ Engine placement confirmed by sampling during the run:
 
 **The CPU workers collapsed 82% when the GPU was saturated — even though they run on the CPU.** The asymmetry is the diagnostic tell: the trainer (GPU, competing directly with the hog for GPU compute) slowed only +14%, while the workers (a "different" processor) slowed −82%. That rules out simple GPU-compute contention (which would hit the trainer hardest) and points at a **shared power/thermal budget**: a GPU pinned at ~11 TFLOP/s consumes the package power envelope, the CPU cores throttle to stay within it, and the BNNS convolutions in the workers run slow.
 
+### The companion result: ANE workers throttle too, and the coupling is bidirectional (L09i-fix-load-v2, 2026-05-23)
+
+Does the same brownout hit the ANE? The first attempt (L09i-fix-load) was confounded by the wave barrier — the trainer stalled under the hog and gated worker output, so the headline −96% measured the trainer, not the workers. **L09i-fix-load-v2 redid the test cleanly:** PURE self-play (`canonical_sweep`, NO trainer → no wave barrier, so aug/s is a *direct* worker rate), interleaved A/B, tiny / W16 / G8 / S400 / V64, ANE-resident workers, with vs without a GPU hog.
+
+| arm | worker aug/s | hog TFLOP/s |
+|---|---|---|
+| A (no hog) | 3,548 | — |
+| B (+ GPU hog) | **2,307** | ~2.72 |
+| delta | **−35%** | — |
+
+- **ANE workers DO throttle under GPU load: −35%.** The ANE is **not** contention-immune. This **supersedes** the earlier "positive lean / generation held" reading, which was a trainer-barrier artifact, not real immunity.
+- **The coupling is bidirectional.** The GPU hog reached only **~2.72 TFLOP/s** here, vs ~10.7 alongside a light trainer in fix-load — i.e. 16 full-tilt ANE workers throttle the hog roughly **4×**. The ANE and GPU brown *each other* out through the shared package power budget and settle at an equilibrium (workers −35%, hog −75%).
+- **This reconciles fix-load:** there the trainer stalled, the workers idled on the wave barrier, and package power was therefore free — which is why the hog reached 10.7 TFLOP/s and generation "held" (only during the non-stalled bursts). Remove the stall confound and the true ANE↔GPU brownout shows up in both directions.
+
+**Caveat — not a clean fragility ranking vs the CPU.** The hog intensities are NOT matched (~2.72 TFLOP/s here vs ~11 in Lpwr, because the ANE workers suppressed the hog), so the ANE's −35% reads **gentler than the CPU/BNNS −82%, but the intensities differ** — do not claim a clean ANE-vs-CPU fragility ranking from these two numbers. What is solid: both engines throttle under GPU load, and the ANE additionally throttles the GPU back. Full receipt: `wiki/ops/experiment-ledger.md` 2026-05-23 "L09i-fix-load-v2".
+
 ### Intensity sweep — attempt to pin the mechanism (confounded by thermal drift)
 
 To distinguish power/thermal coupling (smooth with load) from a scheduling cliff (step), we swept the hog intensity (matrix dimension → GPU power draw) and watched worker throughput. Cells: tiny / W=16 / V=64 / Core ML `CPU_AND_NE`, 30s warmup + 60s measure (the GPU-stress effect is steady within ~2s, so 60s is plenty — confirmed 2026-05-23). The sweep ran 4 cells sequentially — which, as it turned out, is the wrong design for a thermally-sensitive signal.
@@ -115,7 +132,7 @@ The L09c +33.9% engine-isolation win is **conditional on the GPU having spare po
 
 ### For the three-engine-pipeline dream
 
-The [ane-int8-inference.md](ane-int8-inference.md) vision (self-play on ANE, trainer on GPU, MCTS on CPU) assumed the three engines run independently. This finding says they share a power envelope, so **you can't run all three at full tilt simultaneously** — pushing one steals power headroom from the others. The pipeline can still help by *balancing* load across engines, but the total throughput ceiling is set by the package power/thermal budget, not the sum of the three engines' peak rates. "Make the Mac sing" has a power-budget ceiling.
+The [ane-int8-inference.md](ane-int8-inference.md) vision (self-play on ANE, trainer on GPU, MCTS on CPU) assumed the three engines run independently. They do not: the Lpwr finding shows the CPU and GPU share a power envelope (GPU work brownout-throttled the CPU/BNNS workers −82%), and **L09i-fix-load-v2 now confirms the ANE is in the same budget** — ANE workers throttle −35% under a GPU hog, and they throttle the hog ~4× back (bidirectional). So **all three NN engines draw from one package power budget**; you can't run them at full tilt simultaneously. The pipeline can still help by *balancing* load across engines, but the total throughput ceiling is set by the package power/thermal budget, not the sum of the three engines' peak rates. "Make the Mac sing" has a power-budget ceiling.
 
 ### For "lighting the GPU up too"
 
@@ -131,7 +148,7 @@ The GPU has headroom during a light-trainer Core ML-CPU-worker cell, but filling
 ## Open questions
 
 - Is the coupling power/thermal (smooth with load) or scheduling (cliff)? → the intensity sweep above.
-- Does the same throttle hit ANE workers (if we ever get the model ANE-resident)? Likely yes — ANE draws from the same package power.
+- ~~Does the same throttle hit ANE workers (if we ever get the model ANE-resident)?~~ **Answered (L09i-fix-load-v2): yes — ANE workers throttle −35% under a GPU hog in clean pure self-play, and they throttle the hog ~4× back (bidirectional package-power coupling). The ANE is not contention-immune. See Part 2.** (Open follow-up: where the workers↔GPU equilibrium lands under a *real* trainer's GPU load vs the synthetic hog.)
 - What's the optimal load balance? E.g., a heterogeneous worker pool (some torch/MPS on GPU, some Core ML/CPU) tuned to the power ceiling. A real lane once the mechanism is confirmed.
 - Does fp16 GPU load (lower power per FLOP) throttle the CPU less than fp32 at the same TFLOP/s? Would separate "power" from "FLOPs" as the coupling variable.
 

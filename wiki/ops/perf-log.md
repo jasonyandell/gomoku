@@ -16,6 +16,53 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L09i-fix-load-v2 | Clean contention test: ANE workers throttle −35% under GPU load (not immune); the ANE throttles the GPU back
+
+fix-load left a confound: in wave-mode lab_train_cell, aug/s is trainer-gated, so the −96% there was a trainer stall, and the ANE workers' held gen-time looked like a "positive lean." v2 removed the confound — **pure self-play** (canonical_sweep, no trainer, no wave barrier), so aug/s is a direct worker-rate. Interleaved A/B, tiny, with/without a GPU hog.
+
+**ANE workers DO throttle: 3,548 → 2,307 aug/s, −35% under the hog.** So the contention-immunity hope is not supported — the ANE is not a free side-channel; it shares the package power budget. The degradation is gentler than CPU/BNNS (Lpwr −82%), but the hog intensities aren't matched, so that's not a clean ranking.
+
+The striking part is the **second direction of the coupling**: the GPU hog reached only **~2.72 TFLOP/s** here, versus ~10.7 TFLOP/s when it ran next to a light trainer in fix-load. The 16 full-tilt ANE workers draw enough package power to throttle a GPU matmul hog down by ~4×. So the coupling is **bidirectional** — ANE↔GPU each brown the other out, settling at a shared-power equilibrium (workers −35%, hog −75%).
+
+This also reconciles fix-load: there the trainer stalled, the workers idled on the barrier, package power was free, and the hog reached 10.7. The gen=5.1s "held" because the workers were sampled during their brief non-stalled bursts — not because they're immune.
+
+**Strand verdict (clean evidence now):** ANE residency is real (L09i-fix) but offers no self-play win — not throughput (reject at tiny; small re-mapping in progress), not contention-immunity (this lane). The honest close.
+
+decision: reject (no contention-immunity win); "positive lean" retracted. The bidirectional package-power coupling (ANE throttles GPU to 2.7 TFLOP/s) is a new datapoint for the coupling page + Lpwr2. next: finish the clean throughput re-map (reopen-small-b @ batch 96, reopen-medium), then close the strand.
+
+## [2026-05-23] L09i-fix-load | INCONCLUSIVE — the −96% was a GPU-trainer stall, not an ANE-worker collapse (Reviewer caught my misread)
+
+L09i-fix left one hope standing: the ANE-resident path loses on raw throughput but fully vacates the GPU, so maybe its value is *contention-immunity* — surviving a heavy GPU trainer where the CPU/BNNS path (Lpwr: −82%) does not. This lane tried to test that: interleaved A/B, ANE-resident workers, with and without a concurrent ~10.7 TFLOP/s GPU hog. The holistic number cratered — **7,878 → 302 aug/s, −96%** — and I filed it as "contention-immunity falsified, ANE is the most load-fragile path." **That was wrong**, and the Reviewer caught it by reading the trainer.log I hadn't fully attributed.
+
+**What actually happened.** The hog arm's trainer.log: pre-hog epochs `(8.0s: gen=5.1s train=2.5s)`, `(8.1s: gen=5.2s train=2.6s)`; then with the hog active, epoch 4 `(107.9s: gen=5.1s train=99.5s)`. **Worker generation held exactly — gen=5.1s — under the hog. The ANE workers were not throttled at all.** What collapsed was the *MPS trainer*: its epoch train phase went 2.5s → 99.5s. (The per-step `trainer_step_p50` barely moved, 0.0162→0.0202 — so the 99.5s is MPS-command-queue/blocking contention with the hog, not per-step SGD compute.) Because wave-mode synchronizes worker output to the trainer's epoch loop, the stalled trainer gated generation: only 4 epochs completed in the 120s window vs 19 without the hog, so aug/s tanked. The −96% is a trainer stall propagated through the barrier, **not** an ANE-worker collapse.
+
+That inverts the read. The one clean signal here actually *leans positive* for the ANE: its workers kept generating at full speed while the GPU was saturated — the opposite of the CPU/BNNS workers in Lpwr, which genuinely slowed. So the "ANE −96% vs CPU −82%" comparison is invalid (different things collapsed), and **the strand is not closed** — it's reopened, with a positive lean on the worker-resistance question.
+
+The lane is also confounded for the production question: a real heavy trainer is GPU-heavy by doing its *own* SGD, not by a separate hog flooding the MPS command queue. So this synthetic-hog cell doesn't cleanly model "heavy production trainer + ANE workers" anyway.
+
+decision: needs_repeat (inconclusive). Retracted: the "falsified / strand-closed / second-collapse-datapoint" claims. Next: L09i-fix-load-v2 — decouple worker gen-rate from the wave barrier, and use a trainer-representative GPU load. Lesson for me: when a holistic metric collapses, attribute it to a phase (gen vs train) from the log *before* writing the conclusion — the wave barrier makes aug/s a trainer-gated number.
+
+## [2026-05-23] L09i + L09i-fix | The ANE was one symbolic batch dim away the whole time — residency restored, envelope re-opened
+
+The load-bearing diagnostic of the ANE strand, and it paid off. L09e' had resolved that our Core ML self-play workers run on CPU/BNNS, not the ANE — but the 2026-05-22 scout export *had* hit the ANE rail on the same model. So which export property loses residency? L09i diffed the two `.mlpackage` op graphs.
+
+**Finding: they're byte-identical.** No `gather`, no dilated conv, no ND-broadcastable op — the MIL op histograms match exactly. The only ANE-relevant difference is the **input batch dimension**: `coreml_evaluator.export_model_to_coreml` hardwired `ct.RangeDim(1, max_batch)` (a *symbolic* batch), while the scout's `--batch-shape fixed` declares a *static* one. The ANE requires fully static input shapes; with a symbolic dim, Core ML silently compiles the entire program to CPU/BNNS. That single `RangeDim` is why every L09* "ANE" lane (small −41.5%, tiny +33.9%, medium −59.6%) was actually CPU/BNNS. The "ANE" envelope we mapped over five lanes was never the ANE.
+
+**L09i-fix — static batch restores genuine residency.** Swapped `RangeDim` for a single fixed batch dim (the evaluator pads each leaf-batch up to it and slices outputs back; chunks larger ones). `EnumeratedShapes` was the obvious "few sizes, pad to nearest" escape — but it falls back to BNNS too, so a single fixed batch is the only ANE-placeable option. Residency confirmed twice with hollance's no-sudo `sample` technique: in an isolated micro-probe, and **under the live self-play worker** — hot path `AneInferenceOperationImplUsingAnefAPIs` → `_ANEClient doEvaluateDirect` → `AppleNeuralEngine`, zero BNNS lines. First time the lab's workers have actually run on the Neural Engine.
+
+**But out-of-the-box it cratered.** The worker exported at `wave×G×2 = 1024` and the static model pads *every* eval to that one size — over a ~140-leaf wave tile, a ~7× compute tax. L09i-fix: **2,304 aug/s (−78.6%)**, despite the best trainer-step the lab has ever seen (0.0155s — workers fully off the GPU). Sizing the fixed batch to the tile (`wave×3 = 192`) recovered 3.3×:
+
+| cell | fixed batch | aug/s | games/s | epochs/win | trainer_step |
+|---|---|---|---|---|---|
+| L09i-fix | 1024 (~7× pad) | 2,304 | 9.05 | 8 | 0.0155 |
+| **L09i-fix-b** | 192 (~1.37× pad) | **7,698** | 36.45 | **18** | 0.0172 |
+| R-TRAIN-TINY torch | — | 8,039 | 32.48 | 6 | 0.0319 |
+| L09c (CPU/BNNS) | — | 10,762.6 | 49.43 | 7 | 0.0267 |
+
+**Verdict: throughput reject** at tiny/V=64 (7,698 < torch 8,039 < CPU/BNNS 10,762) — but a confirmed capability win that re-opens the whole ANE strand. The standout is the trainer axis: **18 epochs in the window vs 6 (torch) / 7 (CPU/BNNS)** because ANE workers contend for the GPU *not at all*. That's the property that should matter when the trainer is heavy or the GPU is contended — exactly the regime where Lpwr showed CPU/BNNS workers collapse −82% under GPU load. The ANE sits on a different engine; whether that buys contention-immunity is the next headline lane (L09i-fix-load).
+
+decision: L09i RESOLVED; L09i-fix/-b REJECT-on-throughput, mechanism win. next: tighter batch (fix-c); ANE-under-GPU-load (fix-load); re-open L09/L09d (small/medium) with real ANE residency.
+
 ## [2026-05-23] Lhot | Heat-soak measured: production shapes have NO haircut (hypothesis refuted)
 
 Jason: "heat soaked numbers are not bad to know, training will be heat soaked." Correct instinct — so we measured it instead of assuming. Lane Lhot: 8 back-to-back R-S400 cells (small/V=512/fp16, 60s each) to drive the chip to thermal steady state, then 2 R-TRAIN-WL5 cells while heat-soaked.

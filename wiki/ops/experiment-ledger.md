@@ -37,6 +37,140 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L09i-fix-load-v2 — CLEAN contention test: ANE workers throttle −35% under GPU load (NOT immune); bidirectional package-power coupling
+
+```yaml
+lane: L09i-fix-load-v2 (the decoupled re-do of the confounded L09i-fix-load)
+hypothesis: fix-load's "positive lean" (ANE worker gen held under a hog) was a trainer-barrier artifact. Test cleanly in PURE self-play (canonical_sweep, NO trainer → no wave-barrier; aug/s reflects workers directly): do ANE workers throttle under a concurrent GPU hog?
+code_ref: feat/perf-L09i-fix @ 850d432 (canonical_sweep --evaluator coreml passthrough) + static-batch export; scripts/gpu_load_generator.py
+method: interleaved A/B, pure self-play, tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE / 90s/cell / --max-plies 16 (canonical_sweep default). Arm B starts a gpu_load_generator --matrix 8192 hog 18s in, covering the cell.
+arm_A_nohog: aug/s=3,548.0, games/s=27.79, plies_mean=15.96
+arm_B_hog: aug/s=2,307.3, games/s=18.05, plies_mean=15.98. HOG reached only ~2.72-2.75 TFLOP/s.
+delta: ANE worker aug/s 3,548 → 2,307 = −35.0% under the GPU hog. CLEAN worker measurement (no trainer barrier; gen-rate IS the metric in pure self-play).
+key_secondary_finding: the GPU hog reached only ~2.72 TFLOP/s here (vs ~10.7 TFLOP/s when it ran alongside a light trainer in fix-load). The 16 full-tilt ANE workers consume enough package power to SUPPRESS the GPU hog from ~11 → ~2.7 TFLOP/s. Bidirectional package-power coupling: the ANE throttles the GPU and vice-versa.
+mechanism: everything shares the M5 Max package power/thermal budget. ANE workers + GPU hog mutually contend: workers −35%, hog suppressed to 2.7 TFLOP/s, settling at a shared-power equilibrium. This reconciles fix-load: there the trainer stalled and the workers IDLED on the barrier, freeing package power so the hog reached 10.7 — the gen=5.1s "held" because workers were measured during non-stalled moments, not because they're immune.
+confidence: high — pure self-play removes the trainer-barrier confound; the −35% is a direct worker-rate measurement; interleaved A/B; reproducible (arm A ~3,548 is the clean tiny/V64 coreml pure-gen number).
+decision: reject (no contention-immunity win). The "positive lean" from fix-load is RETRACTED — ANE workers DO throttle under GPU contention (−35%), just more gently than CPU/BNNS (−82% Lpwr, though hog intensities differ since the hog auto-throttled here). The ANE is not a separate free resource.
+verdict_for_strand: ANE residency is real (L09i-fix) but offers no clean self-play win — not on throughput (reject at tiny/small) and not on contention-immunity (this lane). The honest close, on clean evidence this time.
+next_action: finish the throughput re-map on clean evidence (L09-reopen-small-b at --coreml-static-batch 96, L09-reopen-medium), then close the ANE-for-self-play strand. The bidirectional package-power coupling is a new datapoint for m5-max-cross-engine-coupling.md / Lpwr2.
+```
+
+### 2026-05-23 — L09-reopen-small — ANE residency confirmed at SMALL; throughput needs_repeat (over-padded confound)
+
+```yaml
+lane: L09-reopen-small (re-map the old L09 small reject on GENUINE ANE residency, not CPU/BNNS)
+hypothesis: L09 (small, R-TRAIN-ANE) rejected at -41.5% — but that was CPU/BNNS. With real ANE residency (L09i-fix static export), does small flip?
+code_ref: feat/perf-L09i-fix (static-batch export, wave*3 sizing); lab_train_cell --evaluator coreml CPU_AND_NE
+cell: small / W=8 / G=8 / S=400 / V=64 / coreml CPU_AND_NE / live training / 30s+120s
+residency: CONFIRMED at small — `sample` worker hot path = AneInferenceOperationImplUsingAnefAPIs / _ANEClient doEvaluateDirect / AppleNeuralEngine, 0 BNNS. The static-batch export keeps the SMALL model ANE-resident (no ANE-unsupported ops at small).
+result: aug/s=1,271.5, games/s=4.84, epochs/s=0.05, trainer_step_s_p50=0.0346, 8 epochs, plies_mean=33.4. Generation-bound (trainer.log gen~15s vs train~2s) → aug/s honestly reflects the ANE worker rate (NOT trainer-gated like fix-load).
+baseline: old L09 CPU/BNNS R-TRAIN-ANE = 1,930.3; R-TRAIN-WL5 torch = 3,297.6.
+delta: -34% vs CPU/BNNS L09; -61% vs torch.
+CONFOUND: the worker exported at wave*3 = 192, but the small wave tile is only ~67 (W=8, tile=66-71 in trainer.log). So every eval padded ~2.9x. The wave*3 heuristic (tuned for tiny W=16, tile~140) over-pads at low-W. Un-padded throughput could be materially higher (gen scales ~with padded batch).
+decision: needs_repeat → RESOLVED by L09-reopen-small-b below.
+RESOLVED (L09-reopen-small-b, --coreml-static-batch 96, tile~80): clean aug/s = **1,833.7** (+44% vs the over-padded 1,271 — padding WAS the confound), games/s=7.625, 10 epochs, plies 30.6, gen~10s/train~2s (still generation-bound = honest worker number). vs old CPU/BNNS L09 (1,930.3) = −5% (≈ ties within noise); vs torch R-TRAIN-WL5 (3,297.6) = −44%. **Verdict: real ANE residency at small roughly TIES the CPU/BNNS path and loses to torch by ~44% — no flip of the L09 reject.** Combined with reject at tiny and no contention-immunity (L09i-fix-load-v2), the ANE offers no self-play win at any measured size. ANE-for-self-play strand CLOSED on clean evidence.
+next_action: L09-reopen-medium is now optional (envelope-curiosity; pattern ANE≈CPU/BNNS<torch likely holds, and medium may hit ANE-unsupported ops). Strand close: residency capability preserved on branch feat/perf-L09i-fix for GPU-idle use only.
+```
+
+### 2026-05-23 — L09i-fix-load — INCONCLUSIVE (needs_repeat): the −96% was a GPU-trainer stall, NOT an ANE-worker collapse; ANE workers' gen-rate held under the hog [CORRECTED post-Reviewer]
+
+```yaml
+lane: L09i-fix-load (interleaved A/B; the reframed thesis after L09i-fix)
+hypothesis: >
+  L09i-fix reframed the ANE's value as contention-immunity (it loses on raw throughput but
+  fully vacates the GPU). Lpwr showed GPU saturation collapses CPU/BNNS workers -82% via a
+  shared package envelope. If the ANE is a genuinely separate resource, ANE-resident workers
+  should resist that collapse — which would be the strand's production justification.
+code_ref: feat/perf-L09i-fix @ 3f658c9 (ANE-resident static export, fixed batch 192); scripts/gpu_load_generator.py
+method: >
+  Interleaved A/B from the worktree (ANE-resident workers). Arm A = ANE workers, no hog.
+  Arm B = same cell + concurrent gpu_load_generator --matrix 8192 (~10.7 TFLOP/s) started after
+  the 30s warmup, covering the 120s measurement window. Back-to-back with a 45s cooldown.
+hardware: M5 Max / 48 GB. tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE / live training / 30s+120s.
+arm_A_nohog: aug/s=7,878, games/s=35.33, epochs/s=0.125, trainer_step_s_p50=0.0162, 19 epochs. (Reproduces L09i-fix-b 7,698 within +2.3% session noise.)
+arm_B_hog: aug/s=302, games/s=1.245, epochs/s=0.0167, trainer_step_s_p50=0.0202, 4 epochs. Hog held ~10.4-10.9 TFLOP/s.
+CORRECTION (post-Reviewer, verified against the hog arm's trainer.log): the holistic −96% is NOT an ANE-worker collapse. Pre-hog epochs read `(8.0s: gen=5.1s train=2.5s)` / `(8.1s: gen=5.2s train=2.6s)`; with the hog active, epoch 4 = `(107.9s: gen=5.1s train=99.5s)`. **Worker generation time held EXACTLY (gen=5.1s) under the hog — the ANE workers were NOT throttled.** What collapsed was the MPS TRAINER (train phase 2.5→99.5s; per-step trainer_step_p50 barely moved 0.0162→0.0202, so the 99.5s is MPS-queue/blocking contention with the hog, not per-step SGD compute). Wave-mode synchronizes worker output to the trainer's epoch loop, so the stalled trainer gated generation → only 4 epochs in the 120s window vs 19 → aug/s tanked.
+delta: >
+  Holistic aug/s 7,878 → 302 (−96%), but the attribution matters: it is a GPU-trainer stall
+  propagated through the wave barrier, not an ANE-worker collapse. ANE worker gen-rate: UNCHANGED
+  (5.1s). The Lpwr comparison (CPU/BNNS workers −81.7%) is INVALID — there the WORKERS slowed; here
+  the workers held and the TRAINER stalled. Different things collapsed; not a matched comparison.
+mechanism: >
+  Two separable effects under a GPU hog: (1) ANE-resident workers' generation is UNAFFECTED
+  (gen=5.1s held) — a genuine contention-RESISTANCE signal, opposite the CPU/BNNS workers in Lpwr
+  which slowed. (2) The MPS trainer's epoch stalls hard (train 2.5→99.5s) via MPS-queue contention
+  with the hog (per-step compute barely moved). Wave-mode couples them, so the holistic metric
+  reflects the trainer stall and masks the worker resistance. CONFOUND: a real heavy production
+  trainer is GPU-heavy by doing its OWN SGD, not by a separate hog flooding the MPS command queue —
+  so this synthetic-hog cell does not cleanly model the production question.
+confidence: low for any contention-immunity verdict (the lane conflates trainer-stall with worker-collapse; the synthetic hog isn't trainer-representative). High only for the narrow fact that ANE worker gen-rate held under the hog.
+decision: needs_repeat — INCONCLUSIVE on worker contention-immunity; does NOT close the ANE-for-self-play strand. The one clean signal (ANE workers' gen held under GPU load) LEANS POSITIVE for contention-resistance — opposite the earlier, now-RETRACTED "falsified" read. Needs a redesigned cell that isolates worker gen-rate from the wave/trainer barrier and uses a trainer-representative GPU load.
+residual_value: >
+  ANE residency remains a documented CAPABILITY (L09i-fix) for GPU-idle use (phone-app deployment;
+  a paced match-eval sidecar). Its viability for concurrent self-play is now OPEN again (the workers
+  resisted the hog) pending the decoupled re-test.
+next_action: >
+  Queue L09i-fix-load-v2 (decoupled: isolate worker gen-rate from the trainer epoch barrier; use a
+  trainer-representative GPU load, not a synthetic matmul hog). Keep L09-ANE-resident-reopen and
+  L09i-fix-c low. Lpwr2 (cold-chip power-coupling mechanism pin) stays motivated by the Lpwr
+  CPU-worker collapse, but the "second ANE datapoint" justification is RETRACTED (this cell did not
+  measure an ANE-worker collapse).
+```
+
+### 2026-05-23 — L09i + L09i-fix — ANE residency RESTORED in our pipeline (RangeDim was the blocker); throughput reject at tiny but the ANE envelope re-opens
+
+```yaml
+lane: L09i (diagnostic) + L09i-fix / L09i-fix-b (static-batch export, code lane)
+hypothesis: >
+  L09i — diff the 2026-05-22 ANE-resident scout export against the lab coreml_evaluator
+  export to find the ANE-hostile op. L09i-fix — switching the export to a static batch
+  shape restores genuine ANE residency (the L09* "ANE" wins were all CPU/BNNS per L09e').
+code_ref: feat/perf-L09i-fix @ 3f658c9 + wave*3 batch-sizing edit; gomoku/coreml_evaluator.py, gomoku/selfplay_worker.py
+finding_L09i: >
+  The two exports emit BYTE-IDENTICAL MIL op graphs (no gather/dilated/ND-broadcastable
+  difference; same conv/linear/relu/add/cast counts). The ONLY ANE-relevant difference is
+  the input batch dim: the lab export hardwired ct.RangeDim(1, max_batch) (SYMBOLIC) at
+  coreml_evaluator.py:267. The ANE requires fully static input shapes, so Core ML compiled
+  the whole program to CPU/BNNS. The scout reached the ANE rail because --batch-shape fixed
+  declares a STATIC batch. Scratch tools: scripts/l09i_op_diff.py, scripts/l09i_batchshape_probe.py.
+fix: >
+  Replace RangeDim with a single fixed batch dim; the evaluator pads each real leaf-batch up
+  to the declared size and slices policy+value back (chunks if larger). EnumeratedShapes does
+  NOT stay ANE-placeable (falls back to BNNS) — a single fixed batch is the only ANE-resident option.
+residency_proof: >
+  Confirmed TWICE via the hollance no-sudo `sample` technique. (1) Isolated micro-probe: hot path
+  AneInferenceOperationImplUsingAnefAPIs / _ANEClient doEvaluateDirect / AppleNeuralEngine, 0 BNNS.
+  (2) UNDER THE LIVE SELF-PLAY WORKER (sample of worker PID mid-measurement): same ANE hot path,
+  0 BNNS lines. First genuine ANE residency in the lab's history.
+hardware: M5 Max / 48 GB; coremltools 9.0; torch 2.11.0; macOS 26.4.1
+cells: tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE / live training / 30s warmup + 120s measure
+  - L09i-fix (fixed batch = wave*G*2 = 1024): aug/s=2,303.9, games/s=9.05, epochs/s=0.05, trainer_step_s_p50=0.0155, epochs_in_window=8, plies_mean=32.09. Every eval padded to 1024 over a ~140-leaf wave tile (~7x waste).
+  - L09i-fix-b (fixed batch = wave*3 = 192): aug/s=7,697.7, games/s=36.453, epochs/s=0.1167, trainer_step_s_p50=0.0172, epochs_in_window=18, plies_mean=26.76. Padding cut to ~1.37x. +234% vs fix-a.
+baseline_metric: R-TRAIN-TINY torch = 8,039.1 aug/s / 0.0333 ep/s / trainer_step 0.0319 / 6 epochs; R-TRAIN-TINY-ANE (CPU/BNNS, L09c) = 10,762.6 aug/s / 0.0417 ep/s / trainer_step 0.0267 / 7 epochs.
+delta: >
+  L09i-fix-b vs torch baseline: aug/s -4.2%, but epochs/s +250% (18 vs 6 epochs/window) and
+  trainer_step_s_p50 -46%. vs CPU/BNNS L09c: aug/s -28.5%, epochs/s +180%, trainer_step -36%.
+  Mechanism: ANE-resident workers FULLY vacate the GPU → maximal trainer relief (best trainer_step
+  the lab has measured), but ANE per-eval at tiny is slower than torch/MPS or CPU/BNNS even at ~1.37x padding.
+plies_note: >
+  L09i-fix-b plies_mean 26.76 < L09c 29.02 is the asymmetric-epoch artifact (18 trainer epochs →
+  policy improves within the window → games shorten; trainer.log shows plies declining 33→28 across
+  epochs), NOT behavior drift. fp16 eval numerically equivalent to torch (MAE ~9e-5 policy / 2e-4 value).
+confidence: high on mechanism + residency (sample evidence, twice, no sudo); single-cell per throughput point (smoke-first; deltas large vs noise).
+decision:
+  - L09i: RESOLVED (diagnostic) — RangeDim is THE ANE blocker; root cause + fix proven.
+  - L09i-fix / L09i-fix-b: REJECT as a throughput promote at tiny/V=64 (best ANE-resident cell 7,698 < torch 8,039 < CPU/BNNS 10,762), but a CONFIRMED capability/mechanism win that re-opens the ANE envelope. NOT a knob-failure reject.
+cap_note: >
+  These cells elevate past `coreml-isolated` — we now have `sample`-confirmed ANE residency under
+  the live worker (hot path on AppleNeuralEngine, not BNNS). Strict `ane-metered` (powermetrics
+  ane_power mW) still pending on sudo, but the engine-placement question is settled by `sample`.
+next_action:
+  - L09i-fix-c: tighter fixed batch (160/144) to chase remaining padding.
+  - L09i-fix-load: re-run the Lpwr GPU-saturation A/B with ANE-resident workers — do they resist the GPU-contention collapse that took CPU/BNNS workers -82%? (potential architectural headline: ANE workers on a different engine than the GPU trainer).
+  - Re-open L09 (small) + L09d (medium) with the ANE-resident export (prior rejects were CPU/BNNS; the ANE design-center favors larger conv compute).
+  - Reviewer to advise whether the static-batch-default merge is sound or should be opt-in.
+```
+
 ### 2026-05-23 — Lhot heat-soak characterization — production shapes show NO heat-soak haircut (refutes the "cool-start is optimistic" hypothesis)
 
 ```yaml

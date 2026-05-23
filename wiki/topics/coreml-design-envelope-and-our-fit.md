@@ -3,7 +3,7 @@
 **This is the canonical entry point for the ANE research strand.** Read here first; the other ANE pages are scoped narrower:
 
 - [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md) — evidence-discipline control plane (Cap ladder for ANE-residency claims; powermetrics receipt schema). Read when you need to know what level of claim a receipt can support.
-- [m5-max-cross-engine-coupling.md](m5-max-cross-engine-coupling.md) — **(2026-05-23) where Core ML actually runs our model (CPU/BNNS, not ANE, per L09e') + the cross-engine power-coupling finding (GPU load collapses CPU workers −82%).** Read for the resolved residency verdict and the load-fragility caveat on the L09c win.
+- [m5-max-cross-engine-coupling.md](m5-max-cross-engine-coupling.md) — the cross-engine power-coupling finding (GPU load collapses CPU workers −82%). **NOTE (2026-05-23, L09i): the "Core ML runs on CPU/BNNS, not ANE" verdict on that page was correct *for the lab export* but is no longer the whole story — L09i found the cause (a symbolic `ct.RangeDim` batch dim silently demoted the program to CPU/BNNS) and L09i-fix restored genuine ANE residency by switching to a fixed static batch. See "Current state" below.**
 - [ane-int8-inference.md](ane-int8-inference.md) — **historical** scoping doc from WL5 era (May 2026). Implementation plan was partly executed (Core ML evaluator shipped 2026-05-23); current-state material has moved here.
 - [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — chip-level MPS findings; Finding 2 (bandwidth-bound vs dispatch-bound regimes) is the MPS analog of L09g for the Core ML path.
 
@@ -11,9 +11,25 @@
 
 We're documenting this for the same reason as the throughput-regimes page: open-source repo, mostly. People searching "what is Core ML for" or "is ANE good for PyTorch inference" or "Core ML small model overhead" should land here and get a real characterization instead of folk wisdom in either direction.
 
-## Current state — what we know after L09c through L09e (2026-05-23 session-resume)
+## Current state — RESIDENCY RESOLVED: the prior envelope was all CPU/BNNS (2026-05-23, L09i + L09i-fix)
 
-The L09 / L09c / L09d / L09c-V512 / L09e measured comparison points map a tight ANE engine envelope. **One important caveat up front:** none of these receipts include `powermetrics ane_power` evidence, so by [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md)'s cap discipline they all sit at `coreml-scheduled` or `coreml-isolated` — *not* `ane-metered`. The "ANE pays" narrative below should be read as **"Core ML at `CPU_AND_NE` routing pays" — engine isolation, not proven ANE residency.** Core ML may be running on the ANE, the GPU, the CPU, or a mix; we have no rail-level evidence either way.
+**The residency question is now resolved — in a new direction. ANE residency IS achievable for our model; the blocker was a one-line export bug; and every prior L09* "ANE" result was actually running on CPU/BNNS, never the Apple Neural Engine.**
+
+L09i (a diagnostic) found that the lab's Core ML self-play export declared a **symbolic `ct.RangeDim` batch dimension** (`gomoku/coreml_evaluator.py:267`, `export_model_to_coreml`). The ANE requires fully static input shapes; a symbolic batch dim **silently demotes the entire Core ML program to CPU/BNNS**. The proof is tight: the lab export and a known-ANE-resident scout export (`scripts/coreml_ane_residency_scout.py --batch-shape fixed`, which hit the ANE power rail on 2026-05-22) emit **byte-identical MIL op graphs** — the *only* difference is RangeDim (symbolic) vs a fixed (static) batch. So L09 (small, −41.5%), L09c (tiny, +33.9%), L09d (medium, −59.6%), L09c-V512, and L09e (routing) were **all CPU/BNNS** — the "ANE" framing on every one of them was wrong. The `coreml-isolated` engine-isolation wins those cells measured are still real (workers vacated MPS), but they were *CPU* isolation, not ANE isolation.
+
+**L09i-fix** swapped `RangeDim` for a single **fixed static batch** (the evaluator pads each leaf-batch up to it and slices outputs back; chunks larger ones). This **restored genuine ANE residency** — the first in the lab's history — confirmed via the hollance no-sudo `sample` technique TWICE: an isolated micro-probe and under the *live* self-play worker. Hot path showed `AneInferenceOperationImplUsingAnefAPIs` / `_ANEClient doEvaluateDirect` / `AppleNeuralEngine` with **zero BNNS lines**. Note: `ct.EnumeratedShapes` (a few discrete sizes) does NOT stay ANE-placeable either — it also falls back to BNNS. **A single fixed batch is the only ANE-resident export option.**
+
+**But throughput is still a reject at tiny/V=64.** The static export pads every eval to one fixed size. At fixed batch 1024 (= wave×G×2), every eval is padded over a ~140-leaf wave tile (~7× tax) → only **2,303.9 aug/s**. Sizing the fixed batch to the tile (wave×3 = 192, ~1.37× pad) recovered to **7,697.7 aug/s (+234%)** — but that is still **−4.2% vs the torch baseline (8,039.1)** and **−28.5% vs the CPU/BNNS L09c (10,762.6)**. So on raw worker throughput, genuine ANE residency loses to both torch/MPS and the (mislabeled-but-real) CPU/BNNS path.
+
+**Where the value re-opens:** the ANE-resident workers **fully vacate the GPU** (separate engine), yielding the best `trainer_step` (0.0172s) and most epochs/window (**18**, vs 6 torch / 7 L09c) the lab has ever measured. So the ANE's plausible value is **contention-immunity under a heavy GPU trainer**, NOT raw eval throughput. This re-opens the envelope along a different axis than the original (throughput) framing. Full receipts: [experiment-ledger.md](../ops/experiment-ledger.md) 2026-05-23 "L09i + L09i-fix" and [perf-log.md](../ops/perf-log.md).
+
+Re-opened follow-up lanes (see Research lanes below): **L09i-fix-load** (does the contention-immunity advantage hold/widen under a deliberately heavy GPU trainer?), **L09i-fix-c** (tune the fixed-batch size to minimize pad tax while staying ANE-resident), **L09-ANE-resident-reopen** (re-map the throughput envelope now that residency is real and tied to a fixed-batch export).
+
+### Prior snapshot — what we thought after L09c through L09e (2026-05-23 session-resume) — NOW SUPERSEDED ON RESIDENCY
+
+*The subsection below is preserved as the pre-L09i reading. Its `coreml-isolated` engine-isolation deltas are still valid, but read every "Core ML @ CPU_AND_NE" / "ANE" label in it as **CPU/BNNS** — the RangeDim bug meant none of these cells ever reached the ANE.*
+
+The L09 / L09c / L09d / L09c-V512 / L09e measured comparison points map a tight ANE engine envelope. **One important caveat up front:** none of these receipts include `powermetrics ane_power` evidence, so by [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md)'s cap discipline they all sit at `coreml-scheduled` or `coreml-isolated` — *not* `ane-metered`. The "ANE pays" narrative below should be read as **"Core ML at `CPU_AND_NE` routing pays" — engine isolation, not proven ANE residency.** Core ML may be running on the ANE, the GPU, the CPU, or a mix; we have no rail-level evidence either way. *(2026-05-23 update: L09i resolved this — it was CPU/BNNS, via the RangeDim bug. See the resolved snapshot above.)*
 
 With that caveat, the empirical envelope as of 2026-05-23:
 
@@ -98,7 +114,8 @@ The single-point envelope is the right reading of today's stack, **not a structu
 - **Our gomoku workload looks very different through that lens.** 325k-param custom ResNet, called thousands of times per second per worker, with weights changing every few seconds as the trainer publishes new versions. By Apple's design-center framing this is research-compute that happens to use ML primitives — not the app-inference shape Core ML was built around.
 - **The L09 result is consistent with the misalignment, not a Core ML failure.** Core ML returned correct numbers and didn't crash. It just couldn't outrun PyTorch/MPS on the worker side at our model scale, because the per-call pipeline overhead doesn't amortize over a forward that small.
 - **The lever the L09 cell mechanically validated** ("workers vacate MPS, trainer-side step time drops 56%") **is real** and we exploited it through a different door at L11b' (`sgd_per_position` capping). ANE-as-concurrent-compute-stream is still a viable framing; ANE-as-faster-eval-than-MPS is not, at this model scale.
-- **Where ANE could still pay for us** is documented at the end of this page, queued as concrete research lanes — most promisingly: medium-model on Core ML (where the bandwidth-bound regime might kick in), routing-units sweeps, and the deployment story (shipping the trained model in a phone app, where Core ML on ANE is exactly the right tool).
+- **MAJOR UPDATE (2026-05-23, L09i):** the entire prior "ANE" envelope was actually **CPU/BNNS** — a symbolic `ct.RangeDim` batch dim in our export silently demoted Core ML off the ANE. **L09i-fix** (RangeDim → fixed static batch) restored the first genuine, `sample`-confirmed ANE residency in the lab. It is **still a throughput reject** (−4.2% vs torch, −28.5% vs the old CPU/BNNS L09c), but ANE-resident workers fully vacate the GPU → best `trainer_step` (0.0172s) and most epochs/window (18) ever. **The ANE's plausible value is contention-immunity under a heavy GPU trainer, not raw eval speed** — see "Current state" and the re-opened L09i-fix-load / L09i-fix-c / L09-ANE-resident-reopen lanes.
+- **Where ANE could still pay for us** is documented at the end of this page, queued as concrete research lanes — now reframed around contention-immunity (engine separation under a heavy trainer) plus the deployment story (shipping the trained model in a phone app, where Core ML on ANE is exactly the right tool). The pre-L09i "medium-model / routing-units" lanes are moot for residency (they were CPU/BNNS) and fold into L09-ANE-resident-reopen.
 
 ## What Core ML / ANE is designed for
 
@@ -268,21 +285,43 @@ Hypothesis: per hollance's "How do I make my model run on the ANE?" page, `.all`
 
 **Constraint:** trainer must still be on MPS (default for `lab_train_cell`); ALL routing in Core ML means workers could share the GPU with the trainer — defeating the engine-isolation property. **Need to inspect trainer_step_s_p50 carefully** — if it doesn't drop the L09c-equivalent ~16% relative to a torch baseline, ALL is putting workers on the GPU and L09c-ALL is not a fair compare. Add a matched torch baseline if Core ML auto-routes to GPU.
 
-### L09i — `.mlpackage` op inspection (coreml-queue / code; no GPU needed)
+### L09i — `.mlpackage` op inspection → ROOT-CAUSE of the false-ANE strand
 
-**Status: QUEUED — diagnostic; cheap (no perf cell required).**
+**Status: COMPLETED 2026-05-23 — RESOLVED the residency question (in a new direction). The blocker was not ND-broadcastable ops; it was a symbolic `ct.RangeDim` batch dimension.**
 
-Hypothesis: `coremltools.convert(..., convert_to="mlprogram")` may emit ANE-hostile broadcastable / ND-layered ops in our exported `.mlpackage`, even though `gomoku/model.py` is structurally ANE-friendly (Conv+BN-fused + ReLU + Linear). Per hollance's "Which Core ML layers are not supported by the ANE?" page, the new ML-program converter has a tendency to prefer ND-broadcastable layers that fall back to CPU/GPU instead of running on ANE.
+Original hypothesis: `convert_to="mlprogram"` may emit ANE-hostile broadcastable / ND ops even though `gomoku/model.py` is structurally clean. **Falsified — and the real cause was more fundamental.**
 
-**Diagnostic approach:**
-1. Export the gomoku model to a `.mlpackage` via the existing `coreml_evaluator.export_model_to_coreml` (FP16, `convert_to="mlprogram"`).
-2. Inspect the ML-program ops via `coremltools.models.MLModel(...)` and `.get_spec()` (or via `proto.MLPackage`).
-3. List op types; flag any in hollance's problematic list (Broadcastable, ND variants, gather, dilated convs).
-4. If problematic ops exist, propose model surgery: replace ND ops with their non-ND equivalents in the export path.
+Finding: the op graph is clean, but the lab export at `gomoku/coreml_evaluator.py:267` (`export_model_to_coreml`) declared a **symbolic `ct.RangeDim` batch dimension**. The ANE requires fully static input shapes; a symbolic batch dim **silently demotes the whole Core ML program to CPU/BNNS**. Proof: the lab export and the known-ANE-resident scout export (`scripts/coreml_ane_residency_scout.py --batch-shape fixed`, ANE-rail-positive 2026-05-22) emit **byte-identical MIL op graphs** — RangeDim (symbolic) vs fixed (static) batch is the *only* delta. Therefore L09, L09c, L09d, L09c-V512, and L09e were **all CPU/BNNS, not ANE.** Receipt: [experiment-ledger.md](../ops/experiment-ledger.md) 2026-05-23 "L09i + L09i-fix".
 
-**Cells:** 3 inspection runs — tiny, small, medium model exports. Compare op-type distributions across model sizes. Worth a CPU-queue agent fan-out.
+**Implication for L09d's -59.6%:** the ND-op explanation is dead; both tiny and medium exports were on CPU/BNNS, so L09d's reject is a CPU/BNNS-vs-torch+fp16 throughput gap, not an ANE-hostile-op story.
 
-**Why this matters:** if tiny's `.mlpackage` is cleanly ANE-friendly while medium's `.mlpackage` has more ND-broadcastable ops, that mechanically explains L09d's -59.6% reject at medium (more ops fall back to slow CPU). Possible rescue: identify and surgically replace the ND ops in the medium export.
+### L09i-fix — switch RangeDim → fixed static batch (restores genuine ANE residency)
+
+**Status: COMPLETED 2026-05-23 — ANE RESIDENCY RESTORED (first in lab history). Throughput still a REJECT; value re-opens on contention-immunity. Cap: `sample`-confirmed ANE residency (above `coreml-isolated`; strict `ane-metered` via powermetrics still pending sudo).**
+
+Mechanism: replaced `ct.RangeDim` with a single **fixed static batch** — the evaluator pads each leaf-batch up to it and slices outputs back, chunking larger ones. Residency confirmed via the hollance no-sudo `sample` technique TWICE (isolated micro-probe + under the live self-play worker): hot path `AneInferenceOperationImplUsingAnefAPIs` / `_ANEClient doEvaluateDirect` / `AppleNeuralEngine`, **zero BNNS lines**. Note: `ct.EnumeratedShapes` also falls back to BNNS — a single fixed batch is the *only* ANE-resident option.
+
+Throughput: at fixed batch 1024 (= wave×G×2), every eval is padded over a ~140-leaf wave tile (~7× tax) → **2,303.9 aug/s**. Sizing the fixed batch to the tile (wave×3 = 192, ~1.37× pad) → **7,697.7 aug/s (+234%)**, but still **−4.2% vs torch baseline (8,039.1)** and **−28.5% vs CPU/BNNS L09c (10,762.6)**.
+
+Where it pays: ANE-resident workers **fully vacate the GPU** → best `trainer_step` measured (**0.0172s**) and most epochs/window ever (**18** vs 6 torch / 7 L09c). The ANE's value is **contention-immunity under a heavy GPU trainer**, not raw eval throughput. Receipt: [experiment-ledger.md](../ops/experiment-ledger.md) 2026-05-23 "L09i + L09i-fix" and [perf-log.md](../ops/perf-log.md).
+
+### L09i-fix-load — does contention-immunity hold under a deliberately heavy GPU trainer? (re-opened)
+
+**Status: QUEUED — the load-bearing test for the re-framed ANE value. Priority high.**
+
+Hypothesis: L09i-fix's contention-immunity (workers off the GPU entirely → 18 epochs/window) is the ANE's only durable edge over torch+fp16, since raw throughput loses. Under a heavier GPU trainer (larger model, bigger SGD batch, more `sgd_per_position`), the engine-separation advantage should widen — the torch/CPU baselines fight the trainer for the GPU/MPS, the ANE workers don't. Measure trainer epochs/window and holistic aug/s for ANE-resident workers vs torch+fp16 vs CPU/BNNS as trainer GPU pressure scales up.
+
+### L09i-fix-c — fixed-batch-size tuning to minimize pad tax while staying ANE-resident (re-opened)
+
+**Status: QUEUED — cheap; directly attacks the −4.2%/−28.5% throughput gap.**
+
+Hypothesis: the pad tax is the whole throughput story (7× at batch 1024 → 1.37× at wave×3=192). Sweep the fixed batch around the wave-tile size (e.g. wave×2, wave×3, wave×4) to find the minimum-pad point that still stays ANE-resident (re-confirm with `sample` each cell — recall a *too-small or non-fixed* shape falls back to BNNS). The win condition is closing the gap to torch+fp16 while keeping zero BNNS lines.
+
+### L09-ANE-resident-reopen — re-map the throughput envelope on the genuine-ANE export (re-opened)
+
+**Status: QUEUED — supersedes the pre-L09i envelope map.**
+
+Hypothesis: every prior envelope point (L09/L09c/L09d/L09c-V512/L09e) was CPU/BNNS, so the model-size and V-axis envelope must be re-measured on the fixed-batch ANE-resident export before any "where ANE pays" claim can stand. Re-run the model-size sweep (tiny/small/medium) and the V-axis sweep, all on the fixed-batch export, all `sample`-confirmed ANE-resident, reporting both holistic aug/s and trainer epochs/window. This rebuilds the [§ Current state] table on genuine-ANE evidence.
 
 ### L09f — Larger wave sizes on Core ML beyond L09c-V512 (REACTIVATABLE)
 
