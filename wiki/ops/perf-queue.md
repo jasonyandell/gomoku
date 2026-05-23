@@ -36,66 +36,84 @@ id: L09-ane-offload-prototype
 tier: 1
 hypothesis: A Core ML eval-worker frees the GPU from inference; even with slower raw eval the concurrent trainer step rate increases and overall R-TRAIN-ANE beats R-TRAIN-WL5.
 references_affected: R-TRAIN-ANE (new); R-S* under engine isolation
-code_change: true
-worktree: ~/code/gomoku-perf-L09-coreml
-patch: |
-  selfplay_worker: --evaluator {torch_mps, coreml} flag. coreml path uses gomoku.coreml_evaluator. Worker reports which engine it used in its log.
-prep_cells:
-  - smoke: 1 worker, tiny, S=100, V=32, coreml evaluator, 5 min — verify a worker produces records via Core ML end-to-end
+code_change: true (scaffold complete, merged 9e2e687)
+worktree: removed
+patch_landed: selfplay_worker --evaluator {torch,coreml} + --coreml-compute-units flag, default CPU_AND_NE. Re-export on every weight reload via gomoku.coreml_evaluator.
+smoke_status: green — CPU_ONLY 6 records / 3 batches; CPU_AND_NE 5 records / 2 batches; both clean exits.
 measurement_cells:
-  - R-TRAIN-ANE warmup: full train+8 workers (coreml), 5 min, no recording
-  - R-TRAIN-ANE measure: full train+8 workers (coreml), 5 min, report epochs/sec + games/sec
-n_cells: 3 (1 scaffold smoke + 2 stitched train cells)
-wall_cost_min: 15 (+ ~30 min code scaffold, parallel-with-L01)
+  - R-TRAIN-ANE-baseline: full train+8 workers --evaluator torch (R-TRAIN-WL5 ref), 5 min stitched (warmup+measure), report epochs/sec
+  - R-TRAIN-ANE-candidate: same recipe but workers --evaluator coreml --coreml-compute-units CPU_AND_NE
+n_cells: 2 (after scaffold; scaffold done)
+wall_cost_min: 10
 E_delta_epochs_per_sec: 0.4
 P_success: 0.35
 priority: 4.0
-status: scaffolding
-notes: The "holistic" lever Jason called out 2026-05-23. Even if Core ML eval is slower (it is — see ane-int8-inference receipts), freeing the GPU from worker eval is the win. The scaffold can run parallel to L01 since it's code work not GPU.
+status: blocked-on-driver (needs scripts/lab_train_cell.py; see task #24)
+notes: The "holistic" lever. Scaffold merged. Measurement cells need the live-training cell driver. The loop should skip this until L10 / L11 / L09 driver lands.
 ```
 
-#### L10-trainer-step-bench
+#### L10-trainer-step-bench (R-TRAIN-WL5 baseline, redesigned 2026-05-23)
 
 ```yaml
 id: L10-trainer-step-bench
 tier: 1
-hypothesis: First-ever R-TRAIN-WL5 measurement. Pure trainer (no self-play workers, replay-buffer warmed from archive), measure epochs/sec at the WL5 recipe.
+hypothesis: First-ever R-TRAIN-WL5 measurement. Full WL5 production recipe (trainer + 8 workers + EMA τ=0.99 + grad_accum=4 + V=64), 30s warmup + 240s measure, report epochs/sec.
 references_affected: R-TRAIN-WL5 (new)
-code_change: false (trainer already supports --no-eval and bounded epochs via timeout)
+code_change: false
 prep_cells:
-  - R-TRAIN-WL5 warmup: trainer with batch=512 grad_accum=4 LR=1e-3, 30s warmup window, no recording
+  - R-TRAIN-WL5 warmup: full WL5 recipe, 30s window, cell_status=warmup (no recording)
 measurement_cells:
-  - R-TRAIN-WL5 measure: same trainer, 4-min measurement window, report epochs/sec + step_s_p50
-n_cells: 2 (warmup + measure)
-wall_cost_min: 10
+  - R-TRAIN-WL5 measure: same recipe, 240s window, record epochs/sec + games/sec + trainer_step_s_p50
+n_cells: 2 (stitched warmup + measure)
+wall_cost_min: 5
 E_delta_epochs_per_sec: 0 (baseline, no comparison)
 P_success: 1.0 (baseline measurement, can't fail)
 priority: 10.0
-status: queued
-notes: Required as the R-TRAIN-WL5 reference before any R-TRAIN-* compound makes sense. Trainer feeds from archives/wl5_validation_v1.pt-backed warmed buffer to avoid the self-play dependency.
+status: blocked-on-driver (needs scripts/lab_train_cell.py; see task #24)
+notes: Redesigned from "pure trainer" to "full end-to-end" because gomoku.train doesn't have a no-workers mode without invasive changes. The number we actually care about (R-TRAIN-WL5) IS the end-to-end production cell.
 ```
 
-#### L11-end-to-end-cell
+#### L11-end-to-end-cell (R-TRAIN-LEAN at V=512, rescoped 2026-05-23 after L01)
 
 ```yaml
 id: L11-end-to-end-cell
 tier: 1
-hypothesis: The full production-shape end-to-end cell (trainer + 8 self-play workers + eval) at V=128 (today's promote) beats the V=64 baseline on epochs/sec + games/sec jointly.
+hypothesis: The V=512 promote (from L01) compounds at the trainer level — full end-to-end recipe with V=512 beats R-TRAIN-WL5 on epochs/sec OR games/sec.
 references_affected: R-TRAIN-LEAN (new); R-TRAIN-WL5 (comparison)
 code_change: false
 depends_on: [L10]
 prep_cells:
-  - R-TRAIN-WL5 baseline warmup: full WL5 recipe (V=64), 30s no-record
-  - R-TRAIN-WL5 baseline measure: 4 min, record epochs/sec + games/sec
-  - R-TRAIN-LEAN warmup: same but V=128
-  - R-TRAIN-LEAN measure: 4 min, record
-n_cells: 4
-wall_cost_min: 20
-E_delta_epochs_per_sec: 0.15
+  - R-TRAIN-LEAN warmup: full WL5 recipe but --wave-size 512, 30s window, cell_status=warmup
+measurement_cells:
+  - R-TRAIN-LEAN measure: same, 240s window, record epochs/sec + games/sec + trainer_step_s_p50
+n_cells: 2
+wall_cost_min: 5
+E_delta_epochs_per_sec: 0.2
 P_success: 0.55
-priority: 7.5
+priority: 11.0 (recomputed after L01)
+status: blocked-on-driver (needs scripts/lab_train_cell.py; see task #24)
+notes: Rescoped from V=128 to V=512 after L01 promoted V=512 as the R-S400 default. First end-to-end validation that today's wave promote compounds at the trainer level. If it doesn't, R-S* metrics need humility — gen throughput isn't the whole story.
+```
+
+#### L12-write-lab-train-cell-driver (NEW, prerequisite)
+
+```yaml
+id: L12-write-lab-train-cell-driver
+tier: 1
+hypothesis: Writing the live-training cell driver unblocks all R-TRAIN-* perf cells (L09, L10, L11). The driver is a code-only task (no GPU); estimated <100 LOC.
+references_affected: enables R-TRAIN-* family
+code_change: true (worktree at feat/perf-L12-train-cell-driver recommended)
+patch: |
+  scripts/lab_train_cell.py: subprocess.Popen(gomoku.train) + N selfplay_worker children; --warmup-secs 30 + --measurement-secs 240; SIGTERM all; parse trainer.log for epoch lines (regex "^epoch (\d+)/"); compute (last - first) / measurement_secs = epochs/sec. Count game*.pt in records dir for games/sec. Write summary.tsv row matching the canonical_sweep schema with extra columns epochs_per_sec, trainer_step_s_p50.
+prep_cells: none
+measurement_cells: none (this lane lands a driver; doesn't run cells)
+n_cells: 0
+wall_cost_min: 0 (code only; no GPU)
+E_delta_epochs_per_sec: gates L09/L10/L11 (multiplier ~1)
+P_success: 0.8
+priority: 100 (gating)
 status: queued
-notes: First end-to-end validation that the V=64 -> V=128 promote (from canonical sweep) actually improves the joint trainer+gen number, not just isolated self-play. If this fails to compound the win, R-S* metrics need a humility correction.
+notes: Highest priority in Tier 1 because it unblocks three other Tier 1 lanes. Pure code work — can be done parallel to any Tier 2 lane that's running.
 ```
 
 ### Tier 2 — Compound knob wins
@@ -268,4 +286,15 @@ notes: Calibrates the ANE work. Runs when nothing in Tier 1-3 needs GPU.
 
 - consecutive_rejects: 0
 - queue empty + no followups pending: false
-- last halt reason: n/a (loop has not yet started auto-dispatch)
+- last halt reason: n/a (loop running; cron 75e2a58f scheduled `7,17,27,37,47,57 * * * *`)
+
+## Loop dispatch rule under "blocked-on-driver"
+
+Tier-1 lanes with `status: blocked-on-driver` are skipped by the dispatch
+heuristic — they don't count as "Tier-1 ready". The loop falls through to:
+1. L12 if not yet started (it unblocks L09/L10/L11 — pure code work).
+2. Tier 2 (L03 highest priority within tier at 16.7 after L01 rescope).
+3. Tier 3 / bg only if everything above is in flight or blocked.
+
+This avoids the loop stalling because Tier-1 needs human-curated code
+work it can't do in a 10-min tick.
