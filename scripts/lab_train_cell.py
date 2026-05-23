@@ -417,6 +417,8 @@ def build_worker_cmd(cell: dict, dirs: dict, worker_id: str, seed: int) -> list[
         cmd += ["--evaluator", cell["evaluator"]]
         if cell["evaluator"] == "coreml":
             cmd += ["--coreml-compute-units", cell.get("coreml_compute_units", "CPU_AND_NE")]
+            if int(cell.get("coreml_static_batch", 0)) > 0:
+                cmd += ["--coreml-static-batch", str(cell["coreml_static_batch"])]
     if cell.get("fp16_eval", False):
         cmd += ["--fp16-eval"]
     return cmd
@@ -696,6 +698,7 @@ def make_cell_from_args(args: argparse.Namespace) -> dict:
         batch_size=args.batch_size,
         evaluator=args.evaluator,
         coreml_compute_units=args.coreml_compute_units,
+        coreml_static_batch=args.coreml_static_batch,
         fp16_eval=args.fp16_eval,
     )
     if args.cell_id:
@@ -739,6 +742,11 @@ def main() -> None:
                    choices=["CPU_AND_NE", "CPU_AND_GPU", "ALL", "CPU_ONLY"],
                    help="Core ML compute-units routing when --evaluator=coreml. "
                         "Default CPU_AND_NE (ANE-first; matches L09 spec).")
+    p.add_argument("--coreml-static-batch", type=int, default=0,
+                   help="Fixed static export batch for --evaluator=coreml. "
+                        "0 (default) = worker auto (wave_size*3). When > 0, "
+                        "pin the single ANE-resident batch dim to this value "
+                        "(size to the cell's observed leaf-tile; L09i-fix).")
     # fp16-eval on the worker side. Outputs cast back to fp32 before MCTS
     # reads them (per gomoku/mcts.py make_torch_evaluator), so the perf-lab
     # treats this as a no-behavior-change knob — verified at L06-followup

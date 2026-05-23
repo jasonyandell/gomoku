@@ -340,6 +340,7 @@ def run_cell(
     fp16_eval: bool = False,
     evaluator: str = "torch",
     coreml_compute_units: str = "CPU_AND_NE",
+    coreml_static_batch: int = 0,
 ) -> dict:
     """Spawn workers for one cell, bound wall time, return measured row.
     Mutates _ACTIVE_PROCS so the signal handler can reach the workers."""
@@ -370,6 +371,9 @@ def run_cell(
         base_cmd += ["--evaluator", evaluator]
         if evaluator == "coreml":
             base_cmd += ["--coreml-compute-units", coreml_compute_units]
+            # > 0 pins the fixed static export batch; 0 keeps worker auto.
+            if int(coreml_static_batch) > 0:
+                base_cmd += ["--coreml-static-batch", str(coreml_static_batch)]
     if compile_model:
         # L05-torch-compile-mps: pass-through to selfplay_worker's existing
         # --compile flag. Worker falls back to uncompiled if torch.compile
@@ -401,6 +405,8 @@ def run_cell(
                 f"n_simulations={cell['n_simulations']} wave_size={cell['wave_size']}\n")
         f.write(f"evaluator: {evaluator}"
                 + (f" coreml_compute_units={coreml_compute_units}" if evaluator == "coreml" else "")
+                + (f" coreml_static_batch={coreml_static_batch}"
+                   if evaluator == "coreml" and int(coreml_static_batch) > 0 else "")
                 + "\n")
         if cell_env_overrides:
             f.write("env_overrides:\n")
@@ -808,6 +814,11 @@ def main() -> None:
                    choices=["CPU_AND_NE", "CPU_AND_GPU", "ALL", "CPU_ONLY"],
                    help="Core ML compute-units routing when --evaluator=coreml. "
                         "Default CPU_AND_NE (ANE-first; matches L09 spec).")
+    p.add_argument("--coreml-static-batch", type=int, default=0,
+                   help="Fixed static export batch for --evaluator=coreml. "
+                        "0 (default) = worker auto (wave_size*3). When > 0, "
+                        "pin the single ANE-resident batch dim to this value "
+                        "(size to the cell's observed leaf-tile; L09i-fix).")
     args = p.parse_args()
 
     out_dir = resolve_out_dir(args.out_dir)
@@ -899,6 +910,7 @@ def main() -> None:
                 fp16_eval=args.fp16_eval,
                 evaluator=args.evaluator,
                 coreml_compute_units=args.coreml_compute_units,
+                coreml_static_batch=args.coreml_static_batch,
             )
             if _INTERRUPTED:
                 print(f"[drop] {cell['cell_id']} interrupted mid-cell; not recording row")

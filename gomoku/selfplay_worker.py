@@ -192,6 +192,12 @@ def parse_args() -> argparse.Namespace:
                         "CPU_AND_NE asks Core ML to schedule on the ANE when it "
                         "can. Use CPU_ONLY to isolate the Core ML path from any "
                         "GPU contention.")
+    p.add_argument("--coreml-static-batch", type=int, default=0,
+                   help="Fixed static export batch size for --evaluator coreml. "
+                        "0 (default) = auto (wave_size*3). When > 0, overrides the "
+                        "auto-default with this exact value so a cell can size the "
+                        "single ANE-resident batch dim to its observed leaf-tile "
+                        "(avoids over-pad waste at low-worker shapes; L09i-fix).")
     args = p.parse_args()
     # --fp16-eval is structurally incompatible AND semantically redundant
     # with --evaluator coreml: Core ML already exports at
@@ -238,7 +244,12 @@ def _build_evaluator(args: argparse.Namespace, model: torch.nn.Module, device: t
         # size the fixed batch to ~3x wave_size: covers the steady-state tile
         # in a single call with ~1.3x padding (vs ~7x at wave*G*2), and the
         # rare larger wave chunks safely in CoreMLEvaluator.evaluate_planes.
-        max_batch = max(1, int(args.wave_size) * 3)
+        # --coreml-static-batch > 0 pins the fixed batch explicitly (a cell
+        # sizes it to its observed leaf-tile); 0/unset keeps the wave*3 auto.
+        if int(args.coreml_static_batch) > 0:
+            max_batch = int(args.coreml_static_batch)
+        else:
+            max_batch = max(1, int(args.wave_size) * 3)
         # On CPU, the original PyTorch model must NOT be the same instance
         # we hand to JIT trace (jit moves it to CPU); pass the already-cpu
         # model so trainer-MPS gradients aren't disturbed.
