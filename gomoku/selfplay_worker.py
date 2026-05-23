@@ -61,6 +61,8 @@ from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import generate_games, generate_games_vs_baseline
 from gomoku.util import pick_device
 
+import tempfile
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
@@ -170,7 +172,69 @@ def parse_args() -> argparse.Namespace:
                         "each (re)load; fallback to uncompiled if compile raises. "
                         "Do NOT set this on the trainer's model — would interfere "
                         "with backward + optimizer.step.")
+    p.add_argument("--evaluator", type=str, default="torch",
+                   choices=["torch", "coreml"],
+                   help="Inference backend. 'torch' = PyTorch on --device (default). "
+                        "'coreml' = export the loaded model to a fresh .mlpackage "
+                        "and use Core ML for leaf evaluation. Re-export on every "
+                        "weight reload. Used by the L09 ANE-offload lane to free "
+                        "the GPU from inference (R-TRAIN-ANE in perf-lab-charter).")
+    p.add_argument("--coreml-compute-units", type=str, default="CPU_AND_NE",
+                   help="Core ML compute-units selection when --evaluator coreml: "
+                        "CPU_ONLY / CPU_AND_NE / CPU_AND_GPU / ALL. Default "
+                        "CPU_AND_NE asks Core ML to schedule on the ANE when it "
+                        "can. Use CPU_ONLY to isolate the Core ML path from any "
+                        "GPU contention.")
     return p.parse_args()
+
+
+def _build_evaluator(args: argparse.Namespace, model: torch.nn.Module, device: torch.device):
+    """Construct an evaluator from a loaded model per --evaluator.
+
+    'torch' returns the PyTorch evaluator on --device (the existing path).
+    'coreml' exports the model to a fresh .mlpackage in a per-worker
+    tempdir and wraps it as a CoreMLEvaluator. Re-export runs on every
+    weight reload because export_model_to_coreml requires a concrete
+    PyTorch module. Per the L09 charter, this is the ANE-offload path."""
+    if args.evaluator == "torch":
+        return make_torch_evaluator(model, device)
+    if args.evaluator == "coreml":
+        from gomoku.coreml_evaluator import (
+            export_model_to_coreml,
+            make_coreml_evaluator,
+        )
+        tmp_root = Path(tempfile.gettempdir()) / f"gomoku_worker_{args.worker_id}_coreml"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        ml_path = tmp_root / "eval.mlpackage"
+        # Cap Core ML's export-side max_batch at wave_size * games_per_batch
+        # * 2 so the model can accept the largest leaf-batch the wave engine
+        # might hand it. Keep it modest because Core ML compile-time scales
+        # with the upper bound.
+        max_batch = max(1, int(args.wave_size) * int(args.games_per_batch) * 2)
+        # On CPU, the original PyTorch model must NOT be the same instance
+        # we hand to JIT trace (jit moves it to CPU); pass the already-cpu
+        # model so trainer-MPS gradients aren't disturbed.
+        export_model_to_coreml(
+            model.cpu(),
+            ml_path,
+            max_batch_size=max_batch,
+            compute_precision="FLOAT16",
+        )
+        # Move back to original device if the caller still wants a torch
+        # reference (we don't here, but be a good citizen).
+        if device.type != "cpu":
+            model.to(device)
+        print(
+            f"[{args.worker_id}] exported Core ML model -> {ml_path} "
+            f"(compute_units={args.coreml_compute_units}, max_batch={max_batch})",
+            flush=True,
+        )
+        return make_coreml_evaluator(
+            ml_path,
+            compute_units=args.coreml_compute_units,
+            max_batch_size=max_batch,
+        )
+    raise ValueError(f"unknown --evaluator {args.evaluator!r}")
 
 
 def _maybe_compile(model: torch.nn.Module, enabled: bool, worker_id: str) -> torch.nn.Module:
@@ -546,7 +610,7 @@ def main() -> None:
 
     model, weights_mtime, model_version = _load_model(args.weights_path, device)
     model = _maybe_compile(model, args.compile, args.worker_id)
-    evaluator = make_torch_evaluator(model, device)
+    evaluator = _build_evaluator(args, model, device)
     print(
         f"[{args.worker_id}] initial weights version={model_version} "
         f"mtime={weights_mtime:.0f}",
@@ -631,7 +695,7 @@ def main() -> None:
                     model, payload = load_checkpoint(args.weights_path, device=device)
                     model = fuse_model_for_inference(model)
                     model = _maybe_compile(model, args.compile, args.worker_id)
-                    evaluator = make_torch_evaluator(model, device)
+                    evaluator = _build_evaluator(args, model, device)
                     weights_mtime = cur_mtime
                     model_version = int(payload.get("epoch", model_version + 1))
                     games_on_version = 0
@@ -748,7 +812,7 @@ def main() -> None:
                 model, payload = load_checkpoint(args.weights_path, device=device)
                 model = fuse_model_for_inference(model)
                 model = _maybe_compile(model, args.compile, args.worker_id)
-                evaluator = make_torch_evaluator(model, device)
+                evaluator = _build_evaluator(args, model, device)
                 weights_mtime = cur_mtime
                 model_version = int(payload.get("epoch", model_version + 1))
                 print(
