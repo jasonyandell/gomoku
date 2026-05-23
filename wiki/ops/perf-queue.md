@@ -217,6 +217,28 @@ status: queued
 notes: The Lpwr sweep (2026-05-23) is the worked example of why sequential sweeps fail for thermally-sensitive signals. This lane is the corrected design. See m5-max-cross-engine-coupling.md "Intensity sweep" + "Methodology notes".
 ```
 
+#### Lhot — Heat-soaked steady-state reference characterization (production-representative numbers)
+
+```yaml
+id: Lhot
+tier: 1
+hypothesis: Our R-S* and R-TRAIN-* reference numbers are cool-start (each cell ~3 min from a relatively cool chip). Production runs heat-soaked for hours. Measure the heat-soaked steady-state throughput for the key production-shaped cells to know the real sustained number, not the cold-start peak. Tiny/V=64 showed ~18% heat-soak haircut (10,431→8,531); the production cells (R-S400 small, R-TRAIN-WL5) need their own measurement.
+references_affected: establishes "*-hot" companion numbers for R-S400, R-TRAIN-WL5, R-TRAIN-LEAN-fp16 — NOT replacing the cool-start refs, but annotating them with the sustained-operation reality.
+code_change: false (just a warmup-to-steady-state protocol around existing cells)
+design:
+  - Warm the chip to thermal steady state first: run the target recipe continuously for ~10-15 min (or until per-cell throughput stops declining cell-over-cell), THEN measure.
+  - Measure R-S400 (small/V=512/fp16) and R-TRAIN-WL5 (small/V=64) at steady state.
+  - Compare to the cool-start best-cells numbers; record the heat-soak haircut per reference.
+  - If powermetrics/sudo available, log package power + Tdie to characterize the steady-state thermal point.
+n_cells: ~4-6 (warmup cells + 2-3 measured references)
+wall_cost_min: ~20 (includes the warmup-to-steady-state period — NOT smoke-first; thermal steady state is the point)
+E_delta_aug_per_sec: 0 (re-characterization; produces production-truth numbers, possibly revises headline claims downward)
+P_success: 0.9 (will produce the heat-soaked numbers)
+priority: 3.5 (Tier 1; production-relevance is high, but below L09i which could re-open the ANE envelope)
+status: queued
+notes: Per [[feedback-heat-soaked-is-production]] — Jason 2026-05-23: "heat soaked numbers are not bad to know, training will be heat soaked." Opportunistic timing: the chip is already heat-soaked at session-end after the L09e'/Lpwr work, so an immediate measurement would be partially warm. See m5-max-cross-engine-coupling.md "Heat-soak IS the production regime".
+```
+
 ### Tier 2 — Compound knob wins
 
 ### Tier 3 — Speculative knob lanes

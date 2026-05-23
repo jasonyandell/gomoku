@@ -90,7 +90,13 @@ To distinguish power/thermal coupling (smooth with load) from a scheduling cliff
 
 **What survives the confound:** the coupling is **real and large** — every hog cell sits far below even the depressed baseline (−43% to −86%). GPU load unambiguously hurts the CPU workers. **What does NOT survive:** the intensity-scaling shape, and therefore the power-vs-scheduling mechanism distinction. On a heat-soaked M5 Max, thermal state dominates over the hog-intensity axis, swamping the signal we were trying to sweep.
 
-**The trustworthy measurement is the earlier tight back-to-back A/B** (10,431 → 1,905, both run within seconds of each other on a cooler chip), NOT this spread-out sweep. **Methodology lesson: a thermally-sensitive signal must be measured with interleaved A/B pairs (hog / no-hog back-to-back) on a cooled chip with cooldowns between intensities — a sequential multi-cell sweep is the wrong design.** This is a concrete instance of friction-lesson #2 (session-thermal drift) defeating an experiment, logged here as a worked example.
+**Two different measurement intents (don't conflate them):**
+
+- **For isolating a non-thermal variable** (here: the GPU-load *intensity* axis), the cool-chip tight back-to-back A/B (10,431 → 1,905, run seconds apart) is the trustworthy design; the spread-out sequential sweep is wrong because thermal drift confounds cross-cell comparison. Methodology fix: interleaved A/B pairs (hog / no-hog back-to-back) on a cooled chip with cooldowns between intensities (lane Lpwr2).
+
+- **For production-representative throughput, heat-soak is a FEATURE, not a confound.** Per Jason 2026-05-23: "heat soaked numbers are not bad to know, training will be heat soaked." A real WL5/WL6 run heat-soaks the M5 Max within minutes and stays there for hours — so the **heat-soaked steady-state numbers are what production actually delivers**, and the cool-start peaks (R-S400 = 9,398, etc.) are an optimistic cold-start transient production only sees for ~the first minute. On this shape, heat-soak alone cost ~18% (cool 10,431 → heat-soaked baseline 8,531). The heat-soaked baseline is the *more* production-relevant absolute number; the sweep's "confound" is partly just production reality showing through.
+
+**Net:** the sequential sweep failed at its stated goal (pin the intensity mechanism) but its baseline drift is a genuine production datapoint. See [[feedback-heat-soaked-is-production]]. The lab should establish heat-soaked steady-state reference variants for production-shaped cells, distinct from the cool-start bests in best-cells.md.
 
 ### Independent confirmation: ANE is 0% (system GPU monitor)
 
