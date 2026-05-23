@@ -50,7 +50,7 @@ hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS; idle
 seed: workers seeded 1000..1007 (w0..w7); trainer seed default
 baseline_metric: R-TRAIN-WL5 V=64: 3,297.6 aug/s; 14.07 games/s; 0.0917 epochs/s; trainer_step_s_p50=0.0512s; 14 epochs in 120s
 candidate_metric: R-TRAIN-LEAN V=512: 2,362.8 aug/s; 8.42 games/s; 0.0083 epochs/s; trainer_step_s_p50=0.138s; 3 epochs in 120s; plies_mean 34.25
-delta: aug/s -28.4%; games/s -40.2%; epochs/s -91%; trainer_step_s_p50 +169%. Buffer fills 2× faster at V=512 (buf=199608 at epoch 3 vs 94496 at V=64 epoch 3), so fixed sgd_per_position=0.0025 produces ~3× more SGD steps per epoch (epoch 3 had steps=306 vs ~89 at V=64). The 43s of train-time per epoch at V=512 starves workers of MPS, dropping games/s by 40%.
+delta: aug/s -28.4%; games/s -40.2%; epochs/s -91%; trainer_step_s_p50 +169%. Buffer fills 2× faster at V=512 (buf=199,608 at epoch 3 vs 83,208 at V=64 epoch 3 — ratio 2.40×), so fixed sgd_per_position=0.0025 produces ~3× more SGD steps per epoch (epoch 3 had steps=306 vs 91 at V=64 — ratio 3.36×). The 43s of train-time per epoch at V=512 starves workers of MPS, dropping games/s by 40%.
 confidence: medium-high. Single trial, smoke-first 120s window. The mechanism is mechanically clear in the trainer log (per-epoch wall jumps from ~11s to ~52s; train= field shows 43s of 51.8s; steps= triples). This is the holistic measurement working as intended — pure-gen wins don't necessarily compound when the trainer fights for MPS.
 artifacts: sweep_logs/lab-L11-20260523T133546Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/v2,v3}}
 commands_run:

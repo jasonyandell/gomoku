@@ -31,7 +31,7 @@ L11 tested whether V=64→V=512's pure-gen +49.5% promote (R-S400, L01) carries 
 | epochs in window | 14 | 3 | — |
 | plies_mean | 29.6 | 34.3 | — |
 
-**Mechanism (clean in the trainer log).** At V=512 workers fill the buffer 2× faster (buf=199,608 at epoch 3 vs 94,496 at V=64 epoch 3). The trainer's `--sgd-per-position 0.0025` is a fixed ratio, so 2× positions = ~3× SGD steps (epoch 3 ran 306 steps vs ~89 at V=64). The per-epoch tail in the trainer log went from `(11s: gen=7s train=3s)` at V=64 to `(52s: gen=6s train=43s)` at V=512. While the trainer monopolizes MPS for 43s of SGD, workers get less GPU time — games/s collapses, aug/s collapses with it.
+**Mechanism (clean in the trainer log).** At V=512 workers fill the buffer 2.4× faster (buf=199,608 at epoch 3 vs 83,208 at V=64 epoch 3). The trainer's `--sgd-per-position 0.0025` is a fixed ratio, so 2.4× positions = 3.36× SGD steps (epoch 3 ran 306 steps vs 91 at V=64). The per-epoch tail in the trainer log went from `(11s: gen=7s train=3s)` at V=64 to `(52s: gen=6s train=43s)` at V=512. While the trainer monopolizes MPS for 43s of SGD, workers get less GPU time — games/s collapses, aug/s collapses with it.
 
 This is the holistic R-TRAIN-* family working as intended. The L11 yaml's own caveat called it: *"If it doesn't, R-S* metrics need humility — gen throughput isn't the whole story."* Confirmed.
 
