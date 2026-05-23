@@ -136,50 +136,230 @@ Commit all three: cell config, wiki entries, workspace script.
 
 ## Phase 5 — Monitoring
 
+Two distinct cadence patterns depending on whether the user is around:
+
+### 5a — Active monitoring (user present)
+
 Start a `/loop` self-paced monitor. The cadence pattern that works:
 **3min for first 30min** (catch any early crashes / spin-up issues),
 **15min for next 3h** (arc behavior visible at this resolution),
 **30min indefinitely** (steady-state).
 
-Per check:
-- `tail` trainer.log for last 3 epoch lines + last 3 eval lines
-- Verify all 10 procs alive (trainer + 8 workers + eval)
-- `grep -c Traceback` on the trainer log; `grep -c "drop wave game"` on
-  worker logs to track race-fix activity
-- Compare key metrics (pl/vl/elo, plies, win rates) to the prior check
-  AND to the baseline run at the same epoch
-- Persist a small state JSON to `$CLAUDE_JOB_DIR/wl_last_check.json` so
-  the next check can diff against it
+### 5b — Overnight / unattended monitoring (CronCreate, fixed cadence)
 
-Push notification only on:
+For long unattended runs (overnight, multi-hour cap chases), prefer
+`CronCreate` over `/loop`. Each tick is independent; the harness doesn't
+re-enter your prompt every time, the cron fires the same self-contained
+check prompt verbatim. Validated against WL5 phase-2 overnight (12.5 hr,
+50 ticks, zero false alarms).
+
+```
+CronCreate({
+  cron: "7,22,37,52 * * * *",                        // every 15 min, off the :00/:15/:30/:45 marks
+  recurring: true,
+  prompt: "<the self-contained check prompt, see below>"
+})
+```
+
+Pick an off-15-minute offset (`7,22,37,52` not `*/15`) for politeness —
+every monitor that fires "on the 15" lands on the API at the same
+instant.
+
+The cron prompt **must be self-contained** because each fire is a fresh
+context. Template:
+
+```
+<RUN> health check. wandb=<id>, cell=<cell-name>. Resumed at e<N> with cap e<M>.
+Steps:
+(1) ps -A | grep -E 'gomoku\.(train|selfplay_worker|eval_worker)' | grep <cell-name> | grep -v grep | wc -l   → should be 10
+(2) tail -8 sweep_logs/<cell-name>/trainer.log   → read epoch, pl, vl, plies, elo
+(3) tail -200 sweep_logs/<cell-name>/trainer.log | grep -iE 'nan|error|traceback|crash' | tail -5   → should be empty
+Reference state: pl~X.XX, vl~X.XX, plies~XX, elo bouncing AAAA-BBBB. Prior ATH elo CCCC.
+Push via PushNotification ONLY on:
+  - process count != 10
+  - NaN/traceback in last 200 lines
+  - sustained plies < 25 (collapse)
+  - new elo > <ATH> ATH
+  - epoch >= <cap> (run end)
+Otherwise report one short text line with epoch/elo/plies and stay quiet — no further scheduling
+(cron handles cadence).
+```
+
+Critical points the WL5 era proved out:
+
+- **Filter `ps` by cell name**, not just `gomoku.*`. Other sessions
+  (frontier perf benches, contour sweeps) routinely spawn additional
+  `gomoku.train` + worker processes in sibling worktrees. A bare
+  `pgrep -fc 'gomoku\.(train|selfplay)'` reports 15 procs when WL5 has
+  10 + a perf bench has 5 — that's a phantom alert. The cell-name
+  filter scopes the count to *this* run.
+- **`ps -A | grep ... | wc -l`**, not `pgrep -fc`. On macOS, `pgrep -fc`
+  with no matches returns empty string (NOT "0"), which breaks
+  `[ "$(pgrep -fc ...)" = "0" ]` polling loops. `wc -l` always returns
+  a number.
+- **One push trigger per protocol section**: only the listed conditions
+  push. Everything else is an inline one-line report. The cron fires
+  again in 15 min; if the operator is around they'll see the report,
+  and if not, only the real alerts wake them.
+
+### Per-check actions (both modes)
+
+- `tail` trainer.log for last 3-8 epoch lines + most recent eval line
+- Verify procs alive (count + cell-name filter as above)
+- Last-200-lines error scan: `grep -iE 'nan|error|traceback|crash'`
+- Compare key metrics (pl/vl/elo, plies) to phase-reference state
+- For active mode only: persist a small state JSON to
+  `$CLAUDE_JOB_DIR/wl_last_check.json` so the next check can diff
+
+### Push (PushNotification) triggers — keep the list tight
+
 - Stall (trainer log hasn't advanced an epoch in 2+ min)
-- Crash (Traceback in trainer or workers, or proc count drops below 10)
-- Heuristic crossing (eval first goes >50% sustained)
-- Plies regrowth (`selfplay/plies_p90` > 30 sustained — defense regime
-  has kicked in)
-- Arc start (heuristic or la4 drops more than 20pp eval-to-eval)
+- Crash (Traceback in trainer or workers, or **cell-filtered** proc
+  count drops below 10)
+- New ATH crossed (eval-side strength milestone)
+- Sustained plies collapse (`< 25` for 3+ evals AND `vl < 0.04` — see
+  [[feedback_absorption_phase]] in session memory: only push on
+  plies-collapsing-with-low-vl, not on h/la2 dips, which oscillate
+  routinely)
+- Run-end (epoch ≥ cap, or process count drops to 0 from a clean exit)
 
-Avoid push for routine progress or single-eval noise.
+Avoid push for: routine progress, single-eval noise, h/la2 dips
+without plies collapse, or proc count going *up* (that's concurrent
+worktree activity, not a problem).
 
 ## Phase 6 — Run end
 
-When the user calls the run (plateau, regression, completed budget):
+Three flavors of "end" — they look similar but the procedure differs:
 
-1. **Stop cleanly** (SIGTERM, never -9):
+| Flavor | What happened | Process state |
+|---|---|---|
+| **Cap-reached** | Trainer hit `--epochs N`, exited cleanly, wandb finalized | Trainer gone; **8 workers + 1 eval still alive and polling** |
+| **User-stopped** | Operator decided to stop | All 10 still alive until SIGTERM'd |
+| **Crash** | Trainer crashed mid-run | Trainer gone; workers + eval polling indefinitely against a stale `worker_weights.pt` |
+
+The non-obvious case is **cap-reached**: the trainer exits cleanly and
+prints the wandb finalize banner, but the 8 self-play workers and the
+1 eval worker keep polling for a new model version that will never
+come. Process count drops 10 → 9 (no trainer) → still consuming MPS.
+This is what the cron monitor will see as `proc count != 10` at the
+tick after the cap.
+
+### Run-end procedure
+
+1. **Stop everything cleanly** (SIGTERM, never -9):
    ```bash
-   pkill -f 'sweep_runs/<CELL>/'
-   # Verify all procs gone
-   pgrep -fa "gomoku" | grep -vE "claude daemon|pgrep"
+   pkill -TERM -f 'sweep_runs/<CELL>/'
+   sleep 3
+   # Verify all procs gone (cell-name-filtered to avoid false positives
+   # from concurrent worktrees)
+   ps -A | grep -E 'gomoku\.(train|selfplay_worker|eval_worker)' | grep <CELL> | grep -v grep | wc -l   # expect 0
    ```
-2. **Stop the /loop monitor** (omit ScheduleWakeup, send final
-   PushNotification).
-3. **Run-end entry in `TRAINING_WIKI.md`**: arc table, validated/refuted
-   hypotheses, reframe, pointer to the next-run design. Preserve the
-   run dirs (`sweep_runs/<CELL>/checkpoints/` may be needed as
-   past-checkpoint source for the next run).
-4. **`wiki/log.md`** maintenance entry summarizing.
-5. **Commit** with the run-end story in the message.
-6. The wandb run stays on the server — don't delete.
+2. **Stop the monitor**:
+   - `/loop` mode: omit ScheduleWakeup at end of turn
+   - Cron mode: `CronDelete({id: "<cron-job-id>"})`
+   - Send a final `PushNotification` summarizing the run end so the
+     operator (if away) hears the news.
+3. **Compute the run-end stats with python**, not awk. macOS's `awk`
+   does not support 3-argument `match()`. Sample script:
+
+   ```python
+   import re
+   from pathlib import Path
+   log = Path("sweep_logs/<CELL>/trainer.log").read_text().splitlines()
+   ep_re = re.compile(r'epoch (\d+)/\d+ games=(\d+) buf=\d+ new=\d+ steps=\d+ pl=([\d.]+) vl=([\d.]+) plies=([\d.]+)')
+   wr_re = re.compile(r'wr\[random=(\d+)% heuristic=(\d+)% vs_lookahead2=(\d+)% vs_lookahead4=(\d+)%\] elo=(\d+)')
+   # filter by START_EPOCH, compute min/mean/max for pl/vl/plies, and
+   # min/median/max + best-epoch for the elo series
+   ```
+
+   (zsh also chokes on bash compound commands containing `==` or `===`,
+   so don't shell-script the stats summary — write it as a `.py` and
+   invoke it.)
+4. **Run-end entry in `TRAINING_WIKI.md`** using the **phase-N close-out
+   template** below. WL5 phase-1 and phase-2 closes are the canonical
+   examples; mirror their structure.
+5. **`wiki/log.md`** maintenance entry summarizing.
+6. **Commit + push** carefully — see [#commit--push-checklist](#commit--push-checklist)
+   below for the deploy-trigger checks.
+7. The wandb run stays on the server — don't delete. The
+   `sweep_runs/<CELL>/checkpoints/` directory may be needed as a
+   past-checkpoint source for the next cell.
+
+### Phase-N close-out template (for TRAINING_WIKI.md)
+
+Used for WL5 phase-1 close (2026-05-21) and WL5 phase-2 close (2026-05-22).
+Mirror this structure:
+
+```
+### <CELL> phase-N close — <one-line subtitle>, <date> (<wall-time>)
+
+<2-3 sentence framing paragraph: what bounded this phase, why it deserves
+its own write-up>
+
+**Phase N final state (e<NNNN>):**
+- <epochs run>, <games generated>
+- <buffer state, run-end metric snapshot>
+- 0 NaN, 0 worker deaths, 0 barrier stalls (or actual counts)
+
+**Phase N stats (n=<epochs> epoch lines):**
+| metric | value | vs prior reference |
+|---|---:|---|
+| wall/epoch (median) | X.Xs | |
+| pl (mean) | X.XXX | |
+| vl (mean) | X.XXX | |
+| plies (mean) | X.X | |
+| elo (mean) | XXXX | |
+| epochs/hr | XXX | |
+
+**Eval scoreboard (<N> eval cycles in segment):**
+| metric | value |
+|---|---:|
+| elo min/median/max | XXXX / XXXX / **XXXX** |
+| la4 min/median/max | XX% / XX% / XX% |
+| ... | |
+| **Best elo: XXXX at e<N>** | la4=X% la2=X% h=X% |
+
+**Run shape, summarized:**
+| sub-phase | epochs | story |
+|---|---|---|
+| <name> | e<N>-e<M> | <one-line behavioral summary> |
+| ... | | |
+
+**What got validated:** <bullets>
+
+**What didn't (yet) happen that we were hoping for:** <bullets>
+
+**Run artifacts:**
+- wandb: `<run-id>` <continuity note>
+- Trainer log: `sweep_logs/<cell>/trainer.log` (this-phase lines: e<N>-e<M>)
+- Last checkpoint: <path> (note keep_last_n pruning if relevant)
+- Commits anchoring this phase: `<sha>` ..., `<sha>` ...
+
+**Cross-refs:** <bullets — design doc, prior phase close, related topic pages>
+```
+
+### Commit + push checklist
+
+Run-end commits often land alongside other-session changes. Defend
+against accidental cross-contamination:
+
+1. `git status` first. If there are uncommitted changes from another
+   session, **commit them as their own commit** before your run-end
+   commit. Their changes have nothing to do with the run-end and
+   reviewing them mixed together is harder.
+2. `git add` specific files, **never** `git add -A` or `git add .`
+   (catches `.env`, secrets, sweep_runs/ binaries, etc.).
+3. **Pre-push deploy-trigger check.** Push to `main` triggers the CF
+   deploy workflow when *any* `app/**` path changes:
+   ```bash
+   git diff --stat origin/main..main -- app/ .github/ | tail -10
+   ```
+   If you see `app/*` files in the diff, decide whether a deploy is
+   intended. If not — don't push (or push the run-end commits to a
+   branch, leave `app/` changes for a separate PR).
+4. `git push origin main`. The 28-commits-ahead state after an
+   overnight run is normal (frontier merges + run-end commits stack);
+   push happily.
 
 ## Leading indicators
 
@@ -354,6 +534,55 @@ to know before touching a paused or crashed run.
   session. **Anything you want a future session to find should live in
   the repo** — either as wiki content, or in `sweep_runs/<cell>.dead-eN/`,
   or as a committed file.
+
+### Concurrent worktree procs inflate `pgrep` (WL5 phase-2 overnight)
+
+- Frontier perf experiments routinely launch their own gomoku training
+  + worker processes from `.frontier/worktrees/...` directories. A
+  monitor that just counts `pgrep -fc 'gomoku\.(train|selfplay_worker)'`
+  will see 15 when WL5 is healthy at 10 + a 5-proc contour sweep is
+  alongside. That looks like an alert; it isn't.
+- Always scope proc counts to the cell: `ps -A | grep -E
+  'gomoku\.(train|selfplay_worker|eval_worker)' | grep <CELL-NAME> |
+  grep -v grep | wc -l`. The cell name appears in `--worker-input-dir`
+  / `--worker-weights-path` / `--checkpoint-dir`, so it's reliably in
+  every WL5-owned process's cmdline.
+- Proc count going *up* from N is concurrent activity. Proc count
+  going *down* is the real alert.
+
+### macOS `awk` doesn't have 3-arg `match()`
+
+- GNU awk supports `match(string, regex, array)` to capture groups.
+  macOS BSD awk only supports `match(string, regex)` returning position +
+  setting `RSTART`/`RLENGTH`. Scripts that worked on Linux silently
+  syntax-error here.
+- For any non-trivial log parsing or stats summary, **write a `python3`
+  one-liner via heredoc**, not awk. Example pattern lives in the run-end
+  procedure above.
+
+### zsh chokes on `==` / `===` inside bash compound commands
+
+- When constructing inline status reports via Bash, zsh (Jason's
+  default shell) errors `(eval):1: == not found` on tests that use
+  bash-style `=` operators. Symptom: command output truncated at the
+  first `=`.
+- Workaround: put the comparison in a python `-c` block, or split the
+  Bash call into separate independent commands.
+
+### Buffer snapshot lags slim checkpoints by `save_buffer_every` epochs
+
+- `latest.pt` (8.8 GB, includes buffer) is written every
+  `save_buffer_every` epochs (default 100). `epochNNNN.pt` (5.3 MB,
+  weights only) is written every `save_every` (default 1).
+- Resuming from `latest.pt` rolls the trainer back to whatever epoch
+  the buffer snapshot was last written — up to 100 epochs behind the
+  most recent slim checkpoint on disk.
+- **This trade-off is fine and often the right call**: 100 epochs of
+  weight drift is recoverable in <30 minutes of wall time; rebuilding
+  the 1.5M-position buffer from empty takes hours. WL5 phase-2 resume
+  burned 49 epochs to keep the buffer warm — no regret.
+- Verify the actual resume-target epoch from trainer.log's first line
+  after resume; don't trust the on-disk slim checkpoint number.
 
 ## Cross-refs
 

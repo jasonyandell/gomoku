@@ -1003,3 +1003,39 @@ consistent heading so future sessions can scan recent changes with simple tools.
   buffer undersized vs generation rate (cycled ~28× by 1M games), and
   20-game-per-baseline eval-cycle sample size is too small to read the
   1500-1700 elo band cleanly.
+
+## [2026-05-22] runbook | formalize WL5-era launch → monitor → close recipe
+
+- The WL5 overnight cycle (launch from cell, cron-based monitor, run-end
+  cleanup, phase-N close-out, commit + push) ran smoothly enough that
+  Jason called it "the recipe." Folded it into the durable docs so the
+  next run doesn't reinvent it.
+- **`wiki/topics/launch-sequence-runbook.md`** (this file's main
+  procedure) updated:
+  - Phase 5 split into 5a (active `/loop` cadence) and 5b
+    (overnight `CronCreate` at `7,22,37,52 * * * *` with a
+    self-contained check prompt template + cell-name-filtered proc
+    counts + tight push-trigger list).
+  - Phase 6 rewritten around the three "end" flavors
+    (cap-reached / user-stopped / crash) and the discovery that
+    cap-reach leaves 8 workers + 1 eval polling; added the **phase-N
+    close-out template** that WL5 phase-1 and phase-2 closes use, and
+    a commit + push checklist with the `app/**` deploy-trigger
+    pre-check.
+  - Handoff friction section extended with WL5-overnight findings:
+    concurrent worktree procs inflating `pgrep`, macOS `awk` lacking
+    3-arg `match()`, zsh `==`/`===` errors, and the buffer-snapshot
+    lag tradeoff (`save_buffer_every` means resume rolls back up to
+    100 epochs of weights — usually the right call).
+- **gomoku-train skill (`~/.claude/skills/gomoku-train/SKILL.md`)**
+  updated:
+  - Cell map extended with WL4 (`44cxzc9d`, plateau ATH 1841) and
+    WL5 (`o6cbjfnr`, two-phase 6199-epoch run, peak 1738).
+  - Production launch summary updated to reference both monitor
+    cadences and the run-end's mandatory worker cleanup.
+  - "Resume from latest" common-asks row corrected — `run_sweep.py`
+    does support `--resume`, used successfully in WL5 phase-2.
+  - New "Friction workarounds learned during WL5 overnight" subsection
+    consolidating the macOS/zsh/proc-filter/cap-reach/buffer-lag/
+    cron-expiry/multi-session-commits/deploy-trigger gotchas in one
+    place.
