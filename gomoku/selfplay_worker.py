@@ -231,11 +231,14 @@ def _build_evaluator(args: argparse.Namespace, model: torch.nn.Module, device: t
         tmp_root = Path(tempfile.gettempdir()) / f"gomoku_worker_{args.worker_id}_coreml"
         tmp_root.mkdir(parents=True, exist_ok=True)
         ml_path = tmp_root / "eval.mlpackage"
-        # Cap Core ML's export-side max_batch at wave_size * games_per_batch
-        # * 2 so the model can accept the largest leaf-batch the wave engine
-        # might hand it. Keep it modest because Core ML compile-time scales
-        # with the upper bound.
-        max_batch = max(1, int(args.wave_size) * int(args.games_per_batch) * 2)
+        # L09i-fix-b: a static-shape (ANE-resident) export has ONE batch size
+        # and the evaluator pads every eval up to it, so an oversized cap is
+        # pure padding waste. The wave engine's actual leaf-tile measured
+        # ~133-156 at wave=64 (~2.2x wave_size), independent of this cap, so
+        # size the fixed batch to ~3x wave_size: covers the steady-state tile
+        # in a single call with ~1.3x padding (vs ~7x at wave*G*2), and the
+        # rare larger wave chunks safely in CoreMLEvaluator.evaluate_planes.
+        max_batch = max(1, int(args.wave_size) * 3)
         # On CPU, the original PyTorch model must NOT be the same instance
         # we hand to JIT trace (jit moves it to CPU); pass the already-cpu
         # model so trainer-MPS gradients aren't disturbed.
