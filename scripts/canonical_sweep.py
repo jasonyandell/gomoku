@@ -338,6 +338,8 @@ def run_cell(
     device: str,
     compile_model: bool = False,
     fp16_eval: bool = False,
+    evaluator: str = "torch",
+    coreml_compute_units: str = "CPU_AND_NE",
 ) -> dict:
     """Spawn workers for one cell, bound wall time, return measured row.
     Mutates _ACTIVE_PROCS so the signal handler can reach the workers."""
@@ -361,6 +363,13 @@ def run_cell(
         "--max-plies", str(max_plies),
         "--wave-mode",
     ]
+    if evaluator != "torch":
+        # L09 ANE-offload lane: route worker leaf eval through Core ML so the
+        # GPU is left free. Mirror lab_train_cell.build_worker_cmd exactly —
+        # only append --coreml-compute-units when the backend is coreml.
+        base_cmd += ["--evaluator", evaluator]
+        if evaluator == "coreml":
+            base_cmd += ["--coreml-compute-units", coreml_compute_units]
     if compile_model:
         # L05-torch-compile-mps: pass-through to selfplay_worker's existing
         # --compile flag. Worker falls back to uncompiled if torch.compile
@@ -390,6 +399,9 @@ def run_cell(
         f.write(f"params: model={cell['model']} workers={cell['workers']} "
                 f"games_per_batch={cell['games_per_batch']} "
                 f"n_simulations={cell['n_simulations']} wave_size={cell['wave_size']}\n")
+        f.write(f"evaluator: {evaluator}"
+                + (f" coreml_compute_units={coreml_compute_units}" if evaluator == "coreml" else "")
+                + "\n")
         if cell_env_overrides:
             f.write("env_overrides:\n")
             for k in sorted(cell_env_overrides):
@@ -623,6 +635,8 @@ def append_metadata(meta_path: Path, args: argparse.Namespace, cells: list[dict]
         f"device:        {args.device}",
         f"compile:       {bool(getattr(args, 'compile_model', False))}",
         f"fp16_eval:     {bool(getattr(args, 'fp16_eval', False))}",
+        f"evaluator:     {getattr(args, 'evaluator', 'torch')}",
+        f"coreml_units:  {getattr(args, 'coreml_compute_units', 'CPU_AND_NE')}",
         f"secs_per_cell: {args.secs_per_cell}",
         f"max_plies:     {args.max_plies}",
         f"n_cells:       {len(cells)}",
@@ -778,6 +792,22 @@ def main() -> None:
                         "torch.float16 (inputs cast inside make_torch_evaluator, "
                         "outputs cast back to fp32 before host transfer). "
                         "Default off. See wiki/ops/perf-queue.md L06-fp16-eval.")
+    # Evaluator backend for the spawned self-play workers. Mirrors
+    # lab_train_cell's flags so pure-self-play (no trainer) can measure
+    # ANE-resident worker throughput WITHOUT the trainer-barrier confound.
+    # coreml routes leaf eval through CPU_AND_NE (the ANE); the L09 lever.
+    p.add_argument("--evaluator", type=str, default="torch",
+                   choices=["torch", "coreml"],
+                   help="Worker eval backend (L09 R-TRAIN-ANE). Default torch. "
+                        "coreml exports the model to a .mlpackage and runs leaf "
+                        "eval on Core ML. Applies uniformly to all cells in this "
+                        "invocation. Pure-self-play (no trainer) so this measures "
+                        "ANE worker throughput without the trainer-barrier "
+                        "confound — unblocks the L09f/L09g/L09i-fix-load lanes.")
+    p.add_argument("--coreml-compute-units", type=str, default="CPU_AND_NE",
+                   choices=["CPU_AND_NE", "CPU_AND_GPU", "ALL", "CPU_ONLY"],
+                   help="Core ML compute-units routing when --evaluator=coreml. "
+                        "Default CPU_AND_NE (ANE-first; matches L09 spec).")
     args = p.parse_args()
 
     out_dir = resolve_out_dir(args.out_dir)
@@ -867,6 +897,8 @@ def main() -> None:
                 device=args.device,
                 compile_model=args.compile_model,
                 fp16_eval=args.fp16_eval,
+                evaluator=args.evaluator,
+                coreml_compute_units=args.coreml_compute_units,
             )
             if _INTERRUPTED:
                 print(f"[drop] {cell['cell_id']} interrupted mid-cell; not recording row")
