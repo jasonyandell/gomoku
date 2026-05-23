@@ -110,6 +110,33 @@ def _axis(name: str, values: list) -> list[dict]:
     return cells
 
 
+def load_cells_csv(path: Path) -> list[dict]:
+    """Read an ad-hoc cell list from a csv. Expected columns: model,
+    workers, games_per_batch, n_simulations, wave_size. cell_id is
+    re-derived; any cell_id in the csv is ignored. Used by --cells-from."""
+    if not path.exists():
+        raise SystemExit(f"--cells-from {path} not found")
+    cells: list[dict] = []
+    with path.open() as f:
+        r = csv.DictReader(f)
+        missing = [c for c in CELL_PARAM_FIELDS if c not in (r.fieldnames or [])]
+        if missing:
+            raise SystemExit(f"--cells-from {path} missing columns: {missing}")
+        for row in r:
+            cell = {
+                "model": row["model"].strip(),
+                "workers": int(row["workers"]),
+                "games_per_batch": int(row["games_per_batch"]),
+                "n_simulations": int(row["n_simulations"]),
+                "wave_size": int(row["wave_size"]),
+            }
+            cell["cell_id"] = cell_id_of(cell)
+            cells.append(cell)
+    if not cells:
+        raise SystemExit(f"--cells-from {path} is empty")
+    return cells
+
+
 def build_cells() -> list[dict]:
     """Build the canonical sweep cell list. Order: default first, then axes,
     then corners/diagonals. cell_id derives from params alone (stable)."""
@@ -504,9 +531,15 @@ def append_metadata(meta_path: Path, args: argparse.Namespace, cells: list[dict]
         f.write("\n".join(block) + "\n")
 
 
-def update_latest_symlink(out_dir: Path) -> None:
-    """Refresh sweep_logs/canonical-sweep-latest -> out_dir."""
-    latest = out_dir.parent / "canonical-sweep-latest"
+def update_latest_symlink(out_dir: Path, lane: str | None = None) -> None:
+    """Refresh sweep_logs/<latest-symlink> -> out_dir.
+
+    Without --lane: refresh `canonical-sweep-latest`. With --lane:
+    refresh `lab-<lane>-latest` only — never clobber
+    canonical-sweep-latest, which is the durable pointer to the
+    actual canonical sweep."""
+    name = f"lab-{lane}-latest" if lane else "canonical-sweep-latest"
+    latest = out_dir.parent / name
     try:
         if latest.is_symlink() or latest.exists():
             latest.unlink()
@@ -519,16 +552,22 @@ def update_latest_symlink(out_dir: Path) -> None:
 
 
 def resolve_out_dir(arg_value: str) -> Path:
-    """Translate `--out-dir latest` (or 'latest') into the symlink target.
-    Reject empty strings to avoid silently writing artifacts into cwd."""
+    """Translate `--out-dir latest` (or 'latest', or 'lab-<lane>-latest')
+    into the symlink target. Reject empty strings to avoid silently
+    writing artifacts into cwd."""
     if not arg_value or not arg_value.strip():
         raise SystemExit("--out-dir must be a non-empty path (or 'latest').")
+    sweep_logs = REPO_ROOT / "sweep_logs"
+    candidates = []
     if arg_value in ("latest", "LATEST"):
-        sweep_logs = REPO_ROOT / "sweep_logs"
-        latest = sweep_logs / "canonical-sweep-latest"
+        candidates.append(sweep_logs / "canonical-sweep-latest")
+    elif arg_value.startswith("lab-") and arg_value.endswith("-latest"):
+        candidates.append(sweep_logs / arg_value)
+    if candidates:
+        latest = candidates[0]
         if not latest.exists():
             raise SystemExit(
-                f"--out-dir latest requested but {latest} does not exist; "
+                f"--out-dir {arg_value} requested but {latest} does not exist; "
                 "start a new sweep with an explicit --out-dir first."
             )
         return latest.resolve()
@@ -609,6 +648,14 @@ def main() -> None:
                         "and removes their row from summary.tsv first).")
     p.add_argument("--status", action="store_true",
                    help="Print sweep progress + ETA and exit without running.")
+    p.add_argument("--cells-from", type=Path, default=None,
+                   help="Read cell list from a csv (columns: model, workers, "
+                        "games_per_batch, n_simulations, wave_size). Replaces "
+                        "the built-in canonical 23-cell list. Use for ad-hoc "
+                        "lab lanes per wiki/topics/perf-lab-charter.md.")
+    p.add_argument("--lane", type=str, default=None,
+                   help="Lane label for autonomous-lab dispatch. Stamps the "
+                        "latest-symlink and the cell metadata.")
     args = p.parse_args()
 
     out_dir = resolve_out_dir(args.out_dir)
@@ -617,9 +664,12 @@ def main() -> None:
     cells_path = out_dir / "cells.csv"
     meta_path = out_dir / "metadata.txt"
 
-    cells = build_cells()
+    if args.cells_from:
+        cells = load_cells_csv(args.cells_from.resolve())
+    else:
+        cells = build_cells()
     # Keep the cells.csv snapshot fresh even on --status calls so it
-    # reflects the current build_cells() definition.
+    # reflects the current cell list.
     write_cells_csv(cells_path, cells)
 
     if args.status:
@@ -627,7 +677,7 @@ def main() -> None:
         return
 
     lock_path = acquire_lock(out_dir)
-    update_latest_symlink(out_dir)
+    update_latest_symlink(out_dir, lane=args.lane)
     append_metadata(meta_path, args, cells)
     _install_signal_handlers()
 
