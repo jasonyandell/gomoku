@@ -174,6 +174,13 @@ EPOCH_RE = re.compile(r"^epoch (\d+)/")
 # Trainer-print tail: "(epoch_s: gen=X.Ys train=Y.Ys)". Pull train= for per-step.
 TRAIN_TAIL_RE = re.compile(r"train=([\d.]+)s\)")
 STEPS_RE = re.compile(r"\bsteps=(\d+)")
+# Cumulative counters on each epoch line. The trainer is the source of truth
+# for R-TRAIN-* throughput because it ingests + deletes records as it goes,
+# so end-of-window file counts undercount drastically.
+GAMES_RE = re.compile(r"\bgames=(\d+)")
+BUF_RE = re.compile(r"\bbuf=(\d+)")
+PLIES_RE = re.compile(r"\bplies=([\d.]+)")
+EPOCH_WALL_RE = re.compile(r"\(([\d.]+)s:")
 
 
 def parse_trainer_log(log_path: Path, warmup_secs: float, measurement_secs: float
@@ -189,6 +196,16 @@ def parse_trainer_log(log_path: Path, warmup_secs: float, measurement_secs: floa
         first_epoch=None, last_epoch=None, epochs_in_window=0,
         epochs_per_sec=0.0, trainer_step_s_p50=0.0,
         first_epoch_t=None, last_epoch_t=None,
+        # Derived from the cumulative games= and buf= counters on each epoch
+        # line plus the per-epoch wall (Xs: in the tail). These are the
+        # authoritative R-TRAIN-* throughput numbers because the trainer
+        # ingests and deletes worker game*.pt files as it goes, so the
+        # end-of-window record-file count is always near zero.
+        games_per_sec_trainer=0.0,
+        aug_pos_per_sec_trainer=0.0,
+        plies_mean_trainer=0.0,
+        total_games_trainer=0,
+        total_aug_trainer=0,
     )
     if not log_path.exists():
         return metrics
@@ -208,6 +225,11 @@ def parse_trainer_log(log_path: Path, warmup_secs: float, measurement_secs: floa
     # than that, return zeros (cell didn't run long enough).
     epoch_ids: list[int] = []
     train_s_per_step: list[float] = []
+    # Per-epoch (cumulative_games, cumulative_buf, plies_mean, epoch_wall_s).
+    # Populated when the line carries all four; unparseable lines are skipped
+    # so an older trainer with a different log shape just leaves these empty
+    # and we fall through to the count_records-based numbers.
+    epoch_rows: list[tuple[int, int, float, float]] = []
     with log_path.open() as f:
         for line in f:
             m = EPOCH_RE.match(line)
@@ -220,6 +242,17 @@ def parse_trainer_log(log_path: Path, warmup_secs: float, measurement_secs: floa
                 steps = int(sm.group(1))
                 if steps > 0:
                     train_s_per_step.append(float(tm.group(1)) / steps)
+            gm = GAMES_RE.search(line)
+            bm = BUF_RE.search(line)
+            pm = PLIES_RE.search(line)
+            wm = EPOCH_WALL_RE.search(line)
+            if gm and bm and pm and wm:
+                epoch_rows.append((
+                    int(gm.group(1)),
+                    int(bm.group(1)),
+                    float(pm.group(1)),
+                    float(wm.group(1)),
+                ))
     metrics["epochs_in_window"] = len(epoch_ids)
     if len(epoch_ids) >= 2:
         # Drop epochs that fell inside the warmup. We approximate by
@@ -249,6 +282,41 @@ def parse_trainer_log(log_path: Path, warmup_secs: float, measurement_secs: floa
             )
     if train_s_per_step:
         metrics["trainer_step_s_p50"] = float(statistics.median(train_s_per_step))
+    # Compute the trainer-log-derived throughput rates. Walk epoch_rows;
+    # cumulative time is the sum of per-epoch walls. The "measurement window"
+    # is whatever fraction of the run remains after `warmup_secs`. Use the
+    # first epoch whose end-time exceeds warmup as the window start.
+    if len(epoch_rows) >= 2:
+        cum_t = 0.0
+        per_epoch_endtimes: list[float] = []
+        for _g, _b, _p, w in epoch_rows:
+            cum_t += w
+            per_epoch_endtimes.append(cum_t)
+        start_idx = None
+        for i, t in enumerate(per_epoch_endtimes):
+            if t > warmup_secs:
+                start_idx = i
+                break
+        if start_idx is not None and start_idx < len(epoch_rows) - 1:
+            g0, b0, _, _ = epoch_rows[start_idx]
+            gN, bN, _, _ = epoch_rows[-1]
+            t0 = per_epoch_endtimes[start_idx]
+            tN = per_epoch_endtimes[-1]
+            span = tN - t0
+            if span > 0:
+                games_delta = max(0, gN - g0)
+                buf_delta = max(0, bN - b0)
+                metrics["games_per_sec_trainer"] = games_delta / span
+                metrics["aug_pos_per_sec_trainer"] = buf_delta / span
+                metrics["total_games_trainer"] = games_delta
+                metrics["total_aug_trainer"] = buf_delta
+                # plies_mean across post-warmup epochs.
+                post = epoch_rows[start_idx:]
+                plies_vals = [r[2] for r in post]
+                if plies_vals:
+                    metrics["plies_mean_trainer"] = (
+                        sum(plies_vals) / len(plies_vals)
+                    )
     return metrics
 
 
@@ -451,10 +519,24 @@ def run_cell(cell: dict, sweep_dir: Path, warmup_secs: int,
         warmup_secs=warmup_secs,
         measurement_secs=measurement_secs,
     )
-    total_games, total_aug, total_plies = count_records(dirs["records"])
-    games_per_sec = total_games / wall_secs if wall_secs else 0.0
-    aug_pos_per_sec = total_aug / wall_secs if wall_secs else 0.0
-    plies_mean = (total_plies / total_games) if total_games else 0.0
+    # The trainer ingests + deletes worker game*.pt files as it goes, so the
+    # on-disk record count at SIGTERM is near-zero — useless for R-TRAIN-*
+    # throughput. Prefer the trainer-log-derived numbers (cumulative games=N
+    # and buf=N counters on each epoch line) when available; fall back to
+    # count_records only if the trainer log is empty (e.g. trainer crashed
+    # before its first epoch, or we ran without a trainer).
+    if parsed["games_per_sec_trainer"] > 0:
+        total_games = parsed["total_games_trainer"]
+        total_aug = parsed["total_aug_trainer"]
+        total_plies = int(parsed["plies_mean_trainer"] * total_games) if total_games else 0
+        games_per_sec = parsed["games_per_sec_trainer"]
+        aug_pos_per_sec = parsed["aug_pos_per_sec_trainer"]
+        plies_mean = parsed["plies_mean_trainer"]
+    else:
+        total_games, total_aug, total_plies = count_records(dirs["records"])
+        games_per_sec = total_games / wall_secs if wall_secs else 0.0
+        aug_pos_per_sec = total_aug / wall_secs if wall_secs else 0.0
+        plies_mean = (total_plies / total_games) if total_games else 0.0
 
     # A cell "failed" iff trainer never emitted a single epoch line.
     cell_status = "ok" if parsed["epochs_in_window"] >= 1 else "failed"
