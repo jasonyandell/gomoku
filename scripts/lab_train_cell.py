@@ -417,6 +417,8 @@ def build_worker_cmd(cell: dict, dirs: dict, worker_id: str, seed: int) -> list[
         cmd += ["--evaluator", cell["evaluator"]]
         if cell["evaluator"] == "coreml":
             cmd += ["--coreml-compute-units", cell.get("coreml_compute_units", "CPU_AND_NE")]
+    if cell.get("fp16_eval", False):
+        cmd += ["--fp16-eval"]
     return cmd
 
 
@@ -694,6 +696,7 @@ def make_cell_from_args(args: argparse.Namespace) -> dict:
         batch_size=args.batch_size,
         evaluator=args.evaluator,
         coreml_compute_units=args.coreml_compute_units,
+        fp16_eval=args.fp16_eval,
     )
     if args.cell_id:
         cell["cell_id"] = args.cell_id
@@ -736,6 +739,16 @@ def main() -> None:
                    choices=["CPU_AND_NE", "CPU_AND_GPU", "ALL", "CPU_ONLY"],
                    help="Core ML compute-units routing when --evaluator=coreml. "
                         "Default CPU_AND_NE (ANE-first; matches L09 spec).")
+    # fp16-eval on the worker side. Outputs cast back to fp32 before MCTS
+    # reads them (per gomoku/mcts.py make_torch_evaluator), so the perf-lab
+    # treats this as a no-behavior-change knob — verified at L06-followup
+    # (commit 1490c2d / Reviewer audit). Compounding with --wave-size 512
+    # and --sgd-per-position is the L11b' compound finding.
+    p.add_argument("--fp16-eval", action="store_true",
+                   help="Pass --fp16-eval to workers (model cast to "
+                        "torch.float16; outputs cast back to fp32 at MCTS "
+                        "boundary). Eval-only — DO NOT use on trainer "
+                        "(trainer always runs fp32 SGD).")
     # Window
     p.add_argument("--warmup-secs", type=int, default=30)
     p.add_argument("--measurement-secs", type=int, default=60)
