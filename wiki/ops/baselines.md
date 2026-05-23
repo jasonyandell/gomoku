@@ -72,6 +72,7 @@ Purpose: separate evaluator/native-search time from post-search Python in a boun
 | 2026-05-23 | `f3bce9e` main | M5 Max / MPS / idle | L03 sims-x-wave, **small W=8 G=8 S=100 V=512** (new R-S100 default) | aug pos/s | **15,082 aug pos/s**; 35,456 games; plies_mean 15.97; **+35.2% vs V=64=11,151** | `sweep_logs/lab-L03-sims-x-wave-20260523T055953Z/cell_small_W08_G08_S100_V512` |
 | 2026-05-23 | `f3bce9e` main | M5 Max / MPS / idle | L03 sims-x-wave, **small W=8 G=8 S=200 V=512** (new R-S200 default) | aug pos/s | **9,156 aug pos/s**; 21,536 games; plies_mean 15.97; **+52.5% vs V=64=6,006** | `sweep_logs/lab-L03-sims-x-wave-20260523T055953Z/cell_small_W08_G08_S200_V512` |
 | 2026-05-23 | `2afb979` main | M5 Max / MPS / idle | L02 W-x-wave at V=512, small G=8 S=400 V=512, W axis | aug pos/s (no promote — W=8 stays optimal) | W=4=4,367; W=8=4,765 (ref); W=12=4,501; W=16=4,504. Wave saturation moved the MPS-dispatch peak from W=16 (at V=64) to W=8 (at V=512). | `sweep_logs/lab-L02-W-x-wave-20260523T061440Z/cell_small_W{04,12,16}_G08_S400_V512` |
+| 2026-05-23 | `b5037ff` main | M5 Max / MPS / idle | L04 G-x-wave at V=512, small W=8 S=400 V=512, G axis | aug pos/s (no promote — G=8 stays optimal) | G=4=4,608 (-3.3%); G=8=4,765 (ref); G=16=4,541 (-4.7%); G=32=4,514 (-5.3%). G axis mildly non-monotone at V=512 (was flat at V=64) but peak still G=8. | `sweep_logs/lab-L04-G-x-wave-20260523T063440Z/cell_small_W08_G{04,16,32}_S400_V512` |
 
 ## Engine-Isolation / Residency References
 

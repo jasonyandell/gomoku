@@ -118,27 +118,6 @@ notes: Highest priority in Tier 1 because it unblocks three other Tier 1 lanes. 
 
 ### Tier 2 — Compound knob wins
 
-#### L04-G-x-wave (rescoped 2026-05-23 after L02 reject)
-
-```yaml
-id: L04-G-x-wave
-tier: 2
-hypothesis: G axis was flat at V=64 (3026/3188/3057 across G=4/8/16). L02 revealed the W axis is INVERTED at V=512 vs V=64. G may also be non-monotone at V=512.
-reference: R-S400 (current best = W=8 G=8 S=400 V=512 = 4,765 aug/s)
-code_change: false
-cells:
-  - small W=8 G=4  S=400 V=512
-  - small W=8 G=16 S=400 V=512
-  - small W=8 G=32 S=400 V=512
-n_cells: 3
-wall_cost_min: 17
-E_delta_aug_per_sec: 350
-P_success: 0.45
-priority: 9.0 (bumped post-L02: non-monotone axis insight makes G at V=512 more interesting than the V=64 flatness suggested)
-status: queued
-notes: Dropped V=128/V=256 cells (V=512 dominates per L01). G=32 is novel territory and the most likely cell to displace G=8 if G axis has a new shape at V=512.
-```
-
 ### Tier 3 — Speculative knob lanes
 
 #### L05-torch-compile-mps
@@ -184,25 +163,25 @@ status: queued
 notes: Tiny.
 ```
 
-#### L08-mps-heap-ratio
+#### L08-mps-heap-ratio (rescoped 2026-05-23 after L02/L04 — V=512 not V=128)
 
 ```yaml
 id: L08-mps-heap-ratio
 tier: 3
-hypothesis: PYTORCH_MPS_HIGH_WATERMARK_RATIO at default (1.7) may cap throughput; nondefault could help.
-reference: R-S400
-code_change: false (env var only)
+hypothesis: PYTORCH_MPS_HIGH_WATERMARK_RATIO at default may cap throughput; nondefault could help.
+reference: R-S400 (now W=8 G=8 V=512 = 4,765)
+code_change: true (canonical_sweep needs per-cell env var support; add to L12 driver scope or carve out an L08-driver task)
 cells:
-  - small W=8 G=8 S=400 V=128 PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
-  - small W=8 G=8 S=400 V=128 PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.4
-  - small W=8 G=8 S=400 V=128 PYTORCH_MPS_HIGH_WATERMARK_RATIO=2.0
+  - small W=8 G=8 S=400 V=512 PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
+  - small W=8 G=8 S=400 V=512 PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.4
+  - small W=8 G=8 S=400 V=512 PYTORCH_MPS_HIGH_WATERMARK_RATIO=2.0
 n_cells: 3
 wall_cost_min: 17
 E_delta_aug_per_sec: 150
 P_success: 0.3
 priority: 2.6
-status: queued
-notes: Almost no prior art for MPS heap tuning on M5 Max under AZ.
+status: blocked-on-driver (canonical_sweep needs per-cell env var support; see notes)
+notes: Rescoped from V=128 to V=512. Blocked-on-driver because cells.csv schema doesn't carry env vars and PYTORCH_MPS_HIGH_WATERMARK_RATIO must be set before python starts. Workaround: run as 3 separate canonical_sweep invocations with `PYTORCH_MPS_HIGH_WATERMARK_RATIO=X python scripts/canonical_sweep.py ...` — but that's a manual orchestration task. Add per-cell env var column to cells.csv as part of L12 driver work.
 ```
 
 ### Background — Calibration / reference
@@ -235,6 +214,7 @@ notes: Two questions: (a) does V plateau extend for tiny? (b) is W axis inverted
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L04-G-x-wave | reject | best = W=8 G=8 V=512 = 4,765 (unchanged). G=4=4,608; G=16=4,541; G=32=4,514. G mildly non-monotone at V=512 (flat at V=64) but peak still G=8. | APPROVE | Compound finding with L02: at V=512 BOTH W and G axes peak at the canonical defaults. consecutive_rejects: 1→2. |
 | 2026-05-23 | L02-W-x-wave-compound | reject | best = W=8 V=512 = 4,765 (unchanged). W=4=4,367; W=12=4,501; W=16=4,504 — wave saturation moved MPS-dispatch peak from W=16 to W=8 at V=512. | APPROVE | New finding: knob wins interact non-monotonically at chip envelope. consecutive_rejects: 0→1. |
 | 2026-05-23 | L03-sims-x-wave | promote (2x) | R-S200: V=512 = 9,156 aug/s (+52.5%); R-S100: V=512 = 15,082 aug/s (+35.2%) | APPROVE | V=512 carries cleanly to S=200 and S=100. Receipt: 2026-05-23 L03 entry in experiment-ledger.md. |
 | 2026-05-23 | L01-wave-extrapolation | promote | small W8 G8 S400 V=512 = 4,765 aug/s | APPROVE | +17.7% over V=128; +49.5% cumulative; plateau at V=512 (V=768/1024 flat). Receipt: 2026-05-23 entry in experiment-ledger.md. |
@@ -242,8 +222,8 @@ notes: Two questions: (a) does V plateau extend for tiny? (b) is W axis inverted
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **1** (L02 reject; counter resets on next promote)
-- queue empty + no followups pending: false
+- consecutive_rejects: **2** (L02 + L04; counter resets on next promote)
+- queue empty + no followups pending: false (L07 tiny-contour ready; L05/L06/L08 blocked-on-driver-equivalents; L12 needs human session)
 - last halt reason: n/a (loop running; cron ce6fb88e scheduled `7,17,27,37,47,57 * * * *`)
 
 ## Loop dispatch rule under "blocked-on-driver"

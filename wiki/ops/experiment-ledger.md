@@ -279,3 +279,36 @@ next_action: |
   4. consecutive_rejects counter: 0 -> 1.
 ```
 
+### 2026-05-23 — L04 G-x-wave at V=512 (reject; G=8 stays optimal, same W-axis-style shape)
+
+```yaml
+lane: L04-G-x-wave
+tier: 2
+hypothesis: G axis was flat at V=64 (3026/3188/3057). L02 found W axis is non-monotone at V=512. G might also have a new shape at V=512.
+reference: R-S400 (current best = W=8 G=8 S=400 V=512 = 4,765 aug/s)
+code_change: false
+baseline_command: |
+  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L04-G-x-wave-20260523T063440Z --cells-from <same dir>/cells.csv --lane L04-G-x-wave --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same (3-cell sweep at G in {4, 16, 32} with W=8 V=512)
+hardware: M5 Max / MPS / idle box
+seed: per-worker 1000..1007
+baseline_metric: G=8 V=512 = 4,765 aug/s
+candidate_metric: |
+  G=4  V=512 = 4,608 aug/s (-3.3% vs G=8)
+  G=16 V=512 = 4,541 aug/s (-4.7%)
+  G=32 V=512 = 4,514 aug/s (-5.3%)
+delta: REJECT. G=8 V=512 stays the R-S400 default. G axis IS mildly non-monotone at V=512 (was completely flat at V=64), but the peak is still G=8. Same shape as L02 W axis: the middle-of-explored-values is the MPS-saturation sweet spot at V=512.
+confidence: medium-high. 5-min cells, idle box, monotone decline G=4→G=8→G=16→G=32 with G=8 strict peak.
+artifacts: sweep_logs/lab-L04-G-x-wave-20260523T063440Z/{summary.tsv, cells.csv, metadata.txt, driver.log, cell_small_W08_G{04,16,32}_S400_V512/{records,logs}}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L04-G-x-wave-20260523T063440Z --cells-from ... --lane L04-G-x-wave
+decision: reject
+reviewer: APPROVE (general-purpose agent, 2026-05-23). "L04 reject math clean (-3.3/-4.7/-5.3%); best-cells unchanged; compound W+G finding documented; L08 correctly blocked; counter 1→2."
+next_action: |
+  1. Best-cells.md unchanged. W=8 G=8 V=512 = 4,765 stays the R-S400 default.
+  2. Compound finding (with L02): at V=512 BOTH worker axis AND games-per-worker axis are non-monotone with a peak at the canonical-sweep production-default values (W=8, G=8). The wave saturation has tightened the production-cell envelope around the historical defaults — wider perimeter exploration at V=512 won't beat the center.
+  3. Future single-axis explorations at V=512 should not bother re-measuring W or G — those axes are now CONFIRMED at their peaks. Other axes (model size, sims) remain open.
+  4. consecutive_rejects counter: 1 -> 2. One more reject + queue empty = halt (per stop rule).
+  5. Next dispatch: bg L07 (tiny contour with V=512 cells added). Tier 3 L08 (heap ratio) is blocked-on-driver — canonical_sweep doesn't support per-cell env vars yet; add to L12 driver scope or build it as L08-driver task. Tier 3 L05/L06 are blocked-on-worktree code.
+```
+

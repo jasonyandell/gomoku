@@ -402,6 +402,31 @@ Auto-queue updates (in `wiki/ops/perf-queue.md`):
 consecutive_rejects: 0 → 1.
 Reviewer: APPROVE — "L02 reject math clean (-8.4%/-5.5%/-5.5%); best-cells correctly unchanged; W-inversion insight requeues L04+L07; counter 0→1."
 
+## [2026-05-23] lab | L04 G-x-wave reject — G=8 stays optimal (compound finding with L02)
+
+3/3 cells ok.
+
+| cell | aug/s | vs G=8 V=512 ref (4,765) |
+|---|---|---|
+| G=4  V=512 | 4,608 | -3.3% |
+| **G=8 V=512** | **4,765** | reference |
+| G=16 V=512 | 4,541 | -4.7% |
+| G=32 V=512 | 4,514 | -5.3% |
+
+G axis IS mildly non-monotone at V=512 (was completely flat at V=64: 3026/3188/3057). But the peak is still G=8 — same shape as L02's W-axis result.
+
+**Compound finding with L02 — sharper than either alone**: at V=512 BOTH the workers axis AND the games-per-worker axis peak at the canonical-sweep production defaults (W=8, G=8). Wave-saturation has tightened the production-cell envelope around the historical defaults. Wider perimeter exploration at V=512 won't beat the center.
+
+**Practical implication**: future single-axis explorations at V=512 should not bother re-measuring W or G — those axes are CONFIRMED at their peaks. Open axes for further exploration: model size (L07 tiny), n-sims at V=512 (L03 done), architectural (L09 ANE), engine-isolation (L05/L06 worktrees).
+
+Followup:
+- L08 (MPS heap ratio) marked blocked-on-driver. canonical_sweep doesn't support per-cell env vars; cells.csv schema needs extension. Add to L12 scope or carve out an L08-driver task.
+- Next dispatch: L07 tiny contour (bg priority 36.4 after the L02 bump). The strict tier rule says Tier-3 before bg, but L05/L06/L08 are all blocked-on-code-work, so L07 is the only unblocked lane.
+
+consecutive_rejects: 1 → 2. One more reject would still NOT halt the loop (the stop rule requires `consecutive_rejects ≥ 3 AND queue empty AND no compound follow-ups`; queue is not empty).
+
+Reviewer: APPROVE — "L04 reject math clean (-3.3/-4.7/-5.3%); best-cells unchanged; compound W+G finding documented; L08 correctly blocked; counter 1→2."
+
 ## [2026-05-23] lab | charter v2 — tier system + R-TRAIN family + Reviewer Gate
 
 After L01 launched but before it landed, Jason gave four new
