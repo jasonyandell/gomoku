@@ -87,6 +87,55 @@ DEFAULT = dict(
 
 CELL_PARAM_FIELDS = ["model", "workers", "games_per_batch", "n_simulations", "wave_size"]
 
+# Optional `env` column on cells.csv carries per-cell environment overrides
+# for the spawned selfplay_worker. Format: semicolon-separated KEY=VALUE pairs,
+# e.g. `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0;FOO=bar`. Semicolon was chosen
+# because the csv itself uses commas, and `;` is conventional for shell-style
+# "list of env assignments". Empty / missing column = no overrides (preserves
+# backward compat with pre-L08 cells.csv files).
+ENV_KV_SEP = ";"
+
+
+def parse_cell_env(raw: str | None) -> dict[str, str]:
+    """Parse a cells.csv `env` cell into a {KEY: VALUE} dict.
+
+    Accepts None or empty string (returns {}). Splits on `ENV_KV_SEP` (`;`),
+    strips whitespace, ignores empty segments. Each segment must contain `=`;
+    a segment like `FOO` (no `=`) raises SystemExit so misspellings surface
+    immediately rather than silently dropping. The first `=` is the splitter,
+    so values may themselves contain `=`."""
+    if raw is None:
+        return {}
+    raw = raw.strip()
+    if not raw:
+        return {}
+    out: dict[str, str] = {}
+    for segment in raw.split(ENV_KV_SEP):
+        segment = segment.strip()
+        if not segment:
+            continue
+        if "=" not in segment:
+            raise SystemExit(
+                f"cells.csv env entry missing '=' separator: {segment!r} "
+                f"(expected KEY=VALUE; pairs joined by '{ENV_KV_SEP}')"
+            )
+        key, _, value = segment.partition("=")
+        key = key.strip()
+        if not key:
+            raise SystemExit(
+                f"cells.csv env entry has empty key: {segment!r}"
+            )
+        out[key] = value.strip()
+    return out
+
+
+def format_cell_env(env: dict[str, str]) -> str:
+    """Render a {KEY: VALUE} dict back to the cells.csv `env` column format.
+    Stable key order so re-written cells.csv files are diffable."""
+    if not env:
+        return ""
+    return ENV_KV_SEP.join(f"{k}={env[k]}" for k in sorted(env))
+
 
 def cell_id_of(cell: dict) -> str:
     """Deterministic cell_id from params only — never includes an index.
@@ -112,16 +161,20 @@ def _axis(name: str, values: list) -> list[dict]:
 
 def load_cells_csv(path: Path) -> list[dict]:
     """Read an ad-hoc cell list from a csv. Expected columns: model,
-    workers, games_per_batch, n_simulations, wave_size. cell_id is
-    re-derived; any cell_id in the csv is ignored. Used by --cells-from."""
+    workers, games_per_batch, n_simulations, wave_size. Optional column:
+    env (semicolon-separated KEY=VALUE pairs; see `parse_cell_env`).
+    cell_id is re-derived; any cell_id in the csv is ignored. Used by
+    --cells-from."""
     if not path.exists():
         raise SystemExit(f"--cells-from {path} not found")
     cells: list[dict] = []
     with path.open() as f:
         r = csv.DictReader(f)
-        missing = [c for c in CELL_PARAM_FIELDS if c not in (r.fieldnames or [])]
+        fieldnames = r.fieldnames or []
+        missing = [c for c in CELL_PARAM_FIELDS if c not in fieldnames]
         if missing:
             raise SystemExit(f"--cells-from {path} missing columns: {missing}")
+        has_env_col = "env" in fieldnames
         for row in r:
             cell = {
                 "model": row["model"].strip(),
@@ -129,6 +182,7 @@ def load_cells_csv(path: Path) -> list[dict]:
                 "games_per_batch": int(row["games_per_batch"]),
                 "n_simulations": int(row["n_simulations"]),
                 "wave_size": int(row["wave_size"]),
+                "env": parse_cell_env(row.get("env")) if has_env_col else {},
             }
             cell["cell_id"] = cell_id_of(cell)
             cells.append(cell)
@@ -184,6 +238,7 @@ def build_cells() -> list[dict]:
 
     for c in out:
         c["cell_id"] = cell_id_of(c)
+        c.setdefault("env", {})
     return out
 
 
@@ -305,6 +360,34 @@ def run_cell(
         "--wave-mode",
     ]
 
+    # Per-cell env overrides: start from driver's env, layer cell-specific
+    # keys on top. Driver's env is preserved (we override, never pollute).
+    # Empty override dict → identical to inheriting driver env, no behavioral
+    # change vs. pre-L08.
+    cell_env_overrides: dict[str, str] = dict(cell.get("env") or {})
+    if cell_env_overrides:
+        worker_env: dict[str, str] | None = os.environ.copy()
+        worker_env.update(cell_env_overrides)
+    else:
+        worker_env = None  # Popen default: inherit parent env, no extra copy.
+
+    # Per-cell receipt: stamp the env overrides into the cell_dir so a
+    # reader of the run-tree can reproduce the cell from disk alone.
+    # (See wiki/topics/perf-lab-session-runbook.md §3.)
+    cell_meta = cell_dir / "metadata.txt"
+    with cell_meta.open("w") as f:
+        f.write(f"cell_id: {cell_id}\n")
+        f.write(f"started_at: {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n")
+        f.write(f"params: model={cell['model']} workers={cell['workers']} "
+                f"games_per_batch={cell['games_per_batch']} "
+                f"n_simulations={cell['n_simulations']} wave_size={cell['wave_size']}\n")
+        if cell_env_overrides:
+            f.write("env_overrides:\n")
+            for k in sorted(cell_env_overrides):
+                f.write(f"  {k}={cell_env_overrides[k]}\n")
+        else:
+            f.write("env_overrides: (none)\n")
+
     procs: list[tuple[str, subprocess.Popen, object]] = []
     started = time.perf_counter()
     try:
@@ -317,6 +400,7 @@ def run_cell(
                 cmd, stdout=log_f, stderr=subprocess.STDOUT,
                 cwd=str(REPO_ROOT),
                 start_new_session=True,
+                env=worker_env,
             )
             procs.append((wid, p, log_f))
             _ACTIVE_PROCS.append((wid, p, log_f))
@@ -487,12 +571,21 @@ def wipe_cell_dir(sweep_dir: Path, cell_id: str) -> None:
 # --- Snapshots / metadata -----------------------------------------------------
 
 def write_cells_csv(cells_path: Path, cells: list[dict]) -> None:
+    """Write the cell list snapshot. Emits an `env` column only if at least
+    one cell has env overrides, so canonical sweeps (no env) produce a csv
+    byte-identical to the pre-L08 schema."""
     fields = ["cell_id"] + CELL_PARAM_FIELDS
+    any_env = any(c.get("env") for c in cells)
+    if any_env:
+        fields = fields + ["env"]
     with cells_path.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for c in cells:
-            w.writerow({k: c[k] for k in fields})
+            row = {k: c[k] for k in fields if k != "env"}
+            if any_env:
+                row["env"] = format_cell_env(c.get("env") or {})
+            w.writerow(row)
 
 
 def append_metadata(meta_path: Path, args: argparse.Namespace, cells: list[dict]) -> None:
@@ -652,10 +745,13 @@ def main() -> None:
     p.add_argument("--status", action="store_true",
                    help="Print sweep progress + ETA and exit without running.")
     p.add_argument("--cells-from", type=Path, default=None,
-                   help="Read cell list from a csv (columns: model, workers, "
-                        "games_per_batch, n_simulations, wave_size). Replaces "
-                        "the built-in canonical 23-cell list. Use for ad-hoc "
-                        "lab lanes per wiki/topics/perf-lab-charter.md.")
+                   help="Read cell list from a csv (required columns: model, "
+                        "workers, games_per_batch, n_simulations, wave_size; "
+                        "optional column: env = semicolon-separated KEY=VAL "
+                        "pairs merged into the worker's environment, e.g. "
+                        "'PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0;FOO=bar'). "
+                        "Replaces the built-in canonical 23-cell list. Use "
+                        "for ad-hoc lab lanes per wiki/topics/perf-lab-charter.md.")
     p.add_argument("--lane", type=str, default=None,
                    help="Lane label for autonomous-lab dispatch. Stamps the "
                         "latest-symlink and the cell metadata.")
