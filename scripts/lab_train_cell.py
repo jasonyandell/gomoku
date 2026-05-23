@@ -303,9 +303,15 @@ def build_trainer_cmd(cell: dict, dirs: dict) -> list[str]:
         "--worker-weights-path", str(dirs["worker_weights"]),
         "--worker-min-games", str(cell["workers"] * cell["games_per_batch"]),
         "--checkpoint-dir", str(dirs["checkpoints"]),
-        "--save-every", "1000000",  # disable mid-run checkpoint IO
+        # save-every must be 1: gomoku/train.py:1220 publishes worker_weights.pt
+        # inside the save-every block. With a high value, workers stay on v0,
+        # the trainer waits for v1+ games that never come, and only one epoch
+        # completes regardless of the measurement window. The buffer write
+        # (the expensive part) stays gated by save-buffer-every which we leave
+        # high so the 1.4 GB latest.pt isn't rewritten every cell.
+        "--save-every", "1",
         "--save-buffer-every", "1000000",
-        "--keep-last-n", "0",
+        "--keep-last-n", "1",
         "--no-eval",
         "--no-wandb",
         "--min-training-steps", "16",
