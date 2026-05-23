@@ -232,3 +232,86 @@ Next-session pickup once the sweep completes (or stalls):
    in [status.md](status.md); close the lane in
    `.frontier/lanes.json`; append a "[YYYY-MM-DD] lab | canonical
    sweep complete" entry here.
+
+## [2026-05-23] lab | canonical sweep complete — wave_size is under-tuned
+
+23/23 cells ok in `sweep_logs/canonical-sweep-20260523T015614Z` (also
+at `canonical-sweep-latest`), median 300.5s/cell, 0 failed. All games
+hit `--max-plies 16` (random weights → no learned defense → universal
+cap), so cell numbers are **infrastructure throughput**, not behavior
+throughput. Trained-model production cycles will be slower in
+absolute aug/s; the relative axis shape should hold.
+
+### Axis-by-axis results
+
+| Axis (other params at default) | Cells | Headline |
+|---|---|---|
+| **workers** (small G=8 S=400 V=64) | W1=1,111 → W2=1,497 → W4=2,583 → **W8=3,188** → W12=3,243 → W16=3,411 aug/s | Diminishing returns; W=8 is near-optimal. Per-worker eff falls from 1,111 at W=1 to 213 at W=16; MPS contention dominates by W=2. |
+| **n-simulations** (small W=8 G=8 V=64) | S100=11,151 / S200=6,006 / **S400=3,188** / S800=1,619 | Perfectly inverse: aug/s × sims ≈ const. Pure quality knob. |
+| **wave-size** (small W=8 G=8 S=400) | V32=2,467 / **V64=3,188** / V128=4,048 / V256=4,409 aug/s | **+27% at V128, +38% at V256 over the WL5 default V64.** No behavior change, just bigger eval batches. |
+| **games-per-worker** (small W=8 S=400 V=64) | G4=3,026 / **G8=3,188** / G16=3,057 | Flat. G=8 default is fine. |
+| **model** (W=8 G=8 S=400 V=64) | tiny=7,326 / **small=3,188** / medium=1,393 | ≈2.3× per step. Forward pass dominates. |
+| **max corner** | tiny W16 G16 S100 V32 | 19,346 aug/s — infrastructure ceiling, not quality-comparable. |
+| **min corner** | small W1 G16 S800 V128 | 946 aug/s — single fat worker. |
+
+### Promoted default
+
+**Old throughput default:** small / W=8 / G=8 / sims=400 / **wave=64** → 3,188 aug pos/s
+**New throughput default:** small / W=8 / G=8 / sims=400 / **wave=128** → 4,048 aug pos/s (+27%)
+
+Wave=256 is also viable (+38%). Chose V=128 as the safer step: V=256
+is past the inflection point and may interact poorly with MPS heap
+sizing under sustained training pressure (none of these cells used
+the trainer; production cells should canary the V=128 candidate
+first per the Training-Quality Promotion Gate).
+
+The wave-size win is the single most actionable result from this
+sweep. It is exactly the kind of chip-specific calibration the
+[m5-max-as-mainframe](../topics/m5-max-as-mainframe.md) page predicted
+we'd find by sweeping the production shape on this exact SKU
+instead of transplanting CUDA recipes.
+
+### Caveats and follow-ups
+
+- **All cells hit plies_mean=15.96.** Random weights + max-plies=16
+  meant every game terminated at the cap, so absolute throughput
+  numbers reflect infrastructure (eval batching, worker spawn, file
+  handoff) more than realistic game shape. Wave-size win is
+  eval-batch-shape-dependent (not game-shape-dependent), so it
+  should transfer; worker-axis numbers may shift somewhat with real
+  plies.
+- **W × G cross was not run.** The workers axis fixed G=8 and the
+  games-per-worker axis fixed W=8. Re-running the cross at V=128
+  would verify whether the wave win compounds at higher worker
+  counts.
+- **Sims-vs-wave interaction** is unexplored. S=200 with V=128 or
+  V=256 might be the real next-cell shape if quality holds at lower
+  sims.
+- **Trained-checkpoint re-sweep.** Repeat once a stable post-WL5
+  trained checkpoint exists to confirm trained-model throughput
+  shape matches infrastructure shape.
+
+### Surfaces updated
+
+- Receipt: [experiment-ledger.md](experiment-ledger.md) "2026-05-23
+  — canonical 5-axis M5 Max contour sweep".
+- Baseline rows: [baselines.md](baselines.md) (7 new rows; wave-size,
+  workers axis, model axis, max corner).
+- Status: [status.md](status.md) Current Focus + lane row.
+- Frontier: [frontier.md](frontier.md) + `.frontier/lanes.json`
+  (lane completed/done).
+
+### Suggested next lanes for the lab
+
+1. **W × G cross at V=128** (small focus): ~12 cells × 300s = 1 h.
+   Confirms the wave win compounds.
+2. **Sims-vs-wave interaction**: small W=8 G=8 over
+   S ∈ {100, 200, 400} × V ∈ {64, 128, 256} = 9 cells; ~45 min.
+3. **Trained-checkpoint re-sweep** once post-WL5 training stabilizes
+   on a strong checkpoint. Same 23 cells, swap the staged random
+   weights for the trained ones.
+4. **ANE rail-proof unblocker** — still gated on passwordless sudo
+   for `powermetrics`. Independent of this sweep.
+5. **Engine-overlap experiment** — unblocks once ANE rail is real.
+   The wave=128 throughput default is the right MPS-side baseline
+   for that experiment.

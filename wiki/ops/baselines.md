@@ -20,6 +20,18 @@ python scripts/perf_microbench.py --device mps --size small --stem-padding 1 --g
 
 Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/sec, and positions/sec.
 
+### Canonical 5-axis sweep
+
+```bash
+python scripts/canonical_sweep.py --out-dir sweep_logs/canonical-sweep-$(date -u +%Y%m%dT%H%M%SZ)
+# Defaults: --secs-per-cell 300 --max-plies 16 --device mps. 23 cells, ~2-3 h wall.
+# Resumable: --status anytime, --retry-failed for transients, --max-wall-secs for top-ups.
+# Plot when complete:
+python scripts/plot_canonical_sweep.py --sweep-dir sweep_logs/canonical-sweep-latest
+```
+
+Purpose: produce a per-cell aug-positions/sec contour over workers × games-per-worker × n-simulations × wave-size × model-size, with each cell measured as a bounded multi-worker production-shape self-play batch. The canonical sweep replaces single-process intuition with a calibrated map for the specific M5 Max SKU. See [perf-lab-session-runbook](../topics/perf-lab-session-runbook.md) for the contract; [m5-max-as-mainframe](../topics/m5-max-as-mainframe.md) for the philosophy.
+
 ### Outer-loop worker profile
 
 ```bash
@@ -47,6 +59,12 @@ Purpose: separate evaluator/native-search time from post-search Python in a boun
 | 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / MPS, live WL5 contention | MPS production-shaped microbench, default native | native_mcts=true; native_state_ops=true; fused_eval=true | median 0.626s; 12.79 games/s; 1,637 aug pos/s; plies_mean 16.0 | `sweep_logs/frontier-baselines/20260522T054845Z/mps-microbench-native.txt` |
 | 2026-05-22 | `a418f67` main/frontier worktree | M5 Max / MPS, live WL5 contention | MPS production-shaped microbench with `GOMOKU_DISABLE_NATIVE_MCTS=1` | native_mcts=false; native_state_ops=true; fused_eval=true | median 2.309s; 3.46 games/s; 443 aug pos/s; plies_mean 16.0 | `sweep_logs/frontier-baselines/20260522T054845Z/mps-microbench-fallback.txt` |
 | 2026-05-22 | `5e20aaa` worker / `411ed75` integrated | M5 Max class / MPS | outer-loop worker profile, wave-mode 8 games, 400 sims, wave 64, max 16 plies, seed 0 | wall-share owners | wall 1.064s; evaluator 0.896s / 84.3%; native search excl evaluator 0.117s / 11.0%; post-search Python 0.050s / 4.7%; file handoff 3.2%; D4 0.82%; action sampling 0.30% | `wiki/ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md` |
+| 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, small / W=8 / G=8 / sims=400 / wave=**64** / max-plies 16, 300s wall, fresh random fused-eligible weights | aug pos/s (infrastructure-bound, plies cap 16) | 3,188 aug pos/s; 7,499 games; plies_mean 15.96 | `sweep_logs/canonical-sweep-20260523T015614Z/{summary.tsv,axes.png,contour.png}` |
+| 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, same cell with wave=**128** (proposed throughput default) | aug pos/s (infrastructure-bound) | 4,048 aug pos/s; 9,531 games; plies_mean 15.96; **+27% vs V=64** | same dir, cell_small_W08_G08_S400_V128 |
+| 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, same cell with wave=**256** | aug pos/s (infrastructure-bound) | 4,409 aug pos/s; 10,379 games; plies_mean 15.96; **+38% vs V=64** | same dir, cell_small_W08_G08_S400_V256 |
+| 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, model axis at default W8 G8 S400 V64 | aug pos/s | tiny=7,326; small=3,188; medium=1,393 (≈2.3× per step) | same dir, cell_{tiny,small,medium}_W08_G08_S400_V064 |
+| 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, workers axis at small G8 S400 V64 | aug pos/s, per-worker efficiency | W1=1,111 / W2=1,497 / W4=2,583 / W8=3,188 / W12=3,243 / W16=3,411; per-worker eff falls W1=1,111→W16=213 (contention dominates by W=2) | same dir |
+| 2026-05-23 | `2ca5ab2` main | M5 Max / MPS / idle | canonical sweep, max-throughput corner cell | aug pos/s | tiny_W16_G16_S100_V32 = 19,346 (infrastructure ceiling; not a quality-comparable cell) | same dir, cell_tiny_W16_G16_S100_V032 |
 
 ## Engine-Isolation / Residency References
 

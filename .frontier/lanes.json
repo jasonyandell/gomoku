@@ -117,11 +117,11 @@
   {
     "id": "canonical-sweep-mainframe",
     "title": "Canonical 5-axis M5 Max contour sweep",
-    "stage": "blocked",
-    "heat": "warm",
+    "stage": "completed",
+    "heat": "done",
     "resource": "gpu",
     "goal": "Execute step 4 of wiki/topics/m5-max-as-mainframe.md: 23-cell sweep over workers x games-per-worker x n-simulations x wave-size x model-size, producing contour.png plus per-axis pivot charts as the wall artifact for the post-WL5 perf era.",
-    "nextAction": "Blocked on the active BAB1-buf-ablation-1p5M run (and any paired BAB2 follow-up). When pgrep for gomoku.train/selfplay_worker/eval_worker is empty, re-smoke 2 tiny cells via scripts/canonical_sweep.py --only 19_tiny_W01,14_tiny_W08 --secs-per-cell 60, then launch the full sweep with scripts/canonical_sweep.py --out-dir sweep_logs/canonical-sweep-<TS>; ~2-3 h. Plot with scripts/plot_canonical_sweep.py.",
+    "nextAction": "Completed 2026-05-23 in sweep_logs/canonical-sweep-20260523T015614Z. 23/23 cells ok. Headline: wave=128 is a free +27% over the WL5-era wave=64 default (3188 -> 4048 aug pos/s, no behavior change); wave=256 is +38% with diminishing returns. Workers axis near-flat past W=8. Receipt in wiki/ops/experiment-ledger.md 2026-05-23 entry. Follow-ups (separate lanes): (a) re-run the W x G cross at V128 to verify the wave win compounds at higher worker counts; (b) sims-vs-wave interaction at S=200; (c) re-sweep at the next stable trained checkpoint to confirm shape matches infrastructure shape.",
     "doneShape": [
       "scripts/canonical_sweep.py and scripts/plot_canonical_sweep.py committed",
       "sweep_logs/canonical-sweep-<TS>/summary.tsv has cell_status=ok rows for all 23 cells (or documented skips)",

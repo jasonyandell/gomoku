@@ -4,9 +4,9 @@ This page is the current control-room summary for bounded Gomoku performance wor
 
 ## Current Focus
 
-Frontier run `20260522T061713Z` completed and integrated the post-native outer-loop Python profiling lane. The result is a **reject/no-op for another post-search Python native pass**: action sampling, trajectory staging, D4 augmentation, record creation, and file handoff together accounted for only ~4-5% of wall time in the bounded production-shaped profile.
+**Canonical 5-axis sweep complete (`canonical-sweep-mainframe` lane, 2026-05-23).** 23/23 cells passed under idle-box conditions, sweep_logs/canonical-sweep-20260523T015614Z. Headline finding: **wave_size is materially under-tuned in production.** Going from the WL5-era default (small W=8 G=8 sims=400 wave=64 = 3,188 aug pos/s) to wave=128 gives **+27%** (4,048 aug/s) with no behavior change; wave=256 gives +38% (4,409). The workers axis is near-flat past W=8; sims scales perfectly inversely (pure quality knob); per-step model scaling is 2.3× (tiny→small→medium). Full receipt in [experiment-ledger.md](experiment-ledger.md) "2026-05-23 — canonical 5-axis M5 Max contour sweep".
 
-The next useful perf work is evaluator/engine isolation or deeper `native_search_batch` / evaluator-boundary investigation. Production engine-overlap remains blocked until ANE rail proof can be repeated with `powermetrics`; absent that, no unblocked hot perf lane should be promoted from this receipt.
+**Promoted throughput default:** small / W=8 / G=8 / sims=400 / **wave=128**. The next behavior-changing run that adopts this needs a canary cycle reporting `val/policy_ce` + `val/policy_kl` against `archives/wl5_validation_v1.pt` per the Training-Quality Promotion Gate.
 
 Use the frontier lab commands from pi:
 
@@ -38,7 +38,7 @@ BFS by default: current-main baseline receipts and production contour are now do
 | ANE residency rail proof | blocked | Needs cached/passwordless sudo for same-window `powermetrics` plus Vision positive control / CPU_ONLY negative. |
 | Production engine-overlap | blocked | Wait for ANE-metered or explicit CPU-only isolation candidate; do not launch from `CPU_AND_NE` labels alone. |
 | Replay-buffer width cheap test | active in another session | BAB1-buf-ablation-1p5M live as of 2026-05-22; trainer PID 27579, e10215/10700 at last check. See [perf-log.md](perf-log.md). |
-| Canonical 5-axis M5 Max contour sweep | blocked / warm | Scaffolded this session: `scripts/canonical_sweep.py`, `scripts/plot_canonical_sweep.py`, [perf-lab-session-runbook](../topics/perf-lab-session-runbook.md). Launches when the box clears BAB1+BAB2. |
+| Canonical 5-axis M5 Max contour sweep | completed / promote | 23/23 cells in `sweep_logs/canonical-sweep-20260523T015614Z`; wave=128 promoted as new throughput default (+27% over V=64); receipt in [experiment-ledger.md](experiment-ledger.md); contour/axes/model_compare PNGs alongside summary. |
 
 ## Next Action
 

@@ -132,3 +132,47 @@ commands_run:
 decision: reject
 next_action: Do not start another native pass for action sampling, trajectory staging, D4, record creation, or worker file handoff. Focus next perf work on evaluator/engine overlap after ANE rail proof, or a narrowly scoped native_search_batch/evaluator-boundary profile if needed.
 ```
+### 2026-05-23 — canonical 5-axis M5 Max contour sweep
+
+```yaml
+lane: canonical-sweep-mainframe
+hypothesis: The production self-play default (small / W=8 / G=8 / sims=400 / wave=64) is not the M5 Max's actual throughput peak; chip-specific knobs (especially wave_size) leave material throughput on the floor.
+code_ref: 2ca5ab2 on main (driver + line-buffered output); scripts/canonical_sweep.py + scripts/plot_canonical_sweep.py
+dataset_ref: fresh self-play only from random fused-eligible weights; no training, no strength claim. All games hit --max-plies 16 (plies_mean=15.96 universally), so cells measure infrastructure throughput not behavior throughput.
+baseline_command: |
+  python scripts/canonical_sweep.py \
+    --out-dir sweep_logs/canonical-sweep-20260523T015614Z \
+    --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same; the sweep is itself the candidate space (23 cells across workers x games-per-worker x n-sims x wave-size x model-size)
+hardware: Apple M5 Max; macOS arm64; idle box (BAB1 cleared at 19:45 local)
+seed: per-worker seeds 1000..1000+W-1; same seeds reused across cells
+baseline_metric: small_W08_G08_S400_V064 = 3,188 aug pos/s (the WL5-era production default), 7,499 games, plies_mean 15.96
+candidate_metric: |
+  workers axis (small G8 S400 V64): W1=1,111 / W2=1,497 / W4=2,583 / W8=3,188 / W12=3,243 / W16=3,411 aug pos/s
+  n-sims axis (small W8 G8 V64): S100=11,151 / S200=6,006 / S400=3,188 / S800=1,619
+  wave-size axis (small W8 G8 S400): V32=2,467 / V64=3,188 / V128=4,048 / V256=4,409
+  games-per-worker axis (small W8 S400 V64): G4=3,026 / G8=3,188 / G16=3,057
+  model axis (W8 G8 S400 V64): tiny=7,326 / small=3,188 / medium=1,393
+  corners: tiny_W16_G16_S100_V032=19,346 (max); small_W01_G16_S800_V128=946 (min)
+delta: |
+  Wave-size 64 -> 128 at the production default: +27% (3,188 -> 4,048 aug pos/s) with NO behavior change.
+  Wave-size 64 -> 256: +38% (3,188 -> 4,409). Diminishing returns beyond 128.
+  Workers 8 -> 16 at default: +7% only. The W8 default is near-optimal for workers; the win is wave.
+  Per-worker efficiency falls fast: W1 1,111 / W2 749 / W4 646 / W8 399 / W12 270 / W16 213 aug/s/worker. MPS contention dominates by W=2.
+  N-sims scales perfectly inversely: aug/s * sims ~= const, so sims is purely a quality knob.
+  Tiny is 2.3x small, small is 2.3x medium at the default cell.
+confidence: medium-high. Single bounded 5-min wall per cell on an idle box; results stable enough for relative shape (axis pivots monotone, no flips). All cells hit plies_mean=15.96 because of random weights + max-plies=16, so absolute numbers are infrastructure-bound; trained-model production numbers will be lower in absolute aug/s but the relative axis shape should hold (wave-size win is eval-batch-shape-dependent, not game-shape-dependent).
+artifacts: sweep_logs/canonical-sweep-20260523T015614Z/{summary.tsv,cells.csv,metadata.txt,contour.png,axes.png,model_compare.png,checkpoints/{tiny,small,medium}.pt,cell_*/{records,logs}}; sweep_logs/canonical-sweep-latest symlink
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/canonical-sweep-20260523T015614Z (nohup, ~115 min)
+  - python scripts/canonical_sweep.py --out-dir latest --status  (mid-run progress checks)
+  - python scripts/plot_canonical_sweep.py --sweep-dir sweep_logs/canonical-sweep-latest
+decision: promote
+next_action: |
+  1. Promote wave-size 128 as the new throughput default for next-cell self-play (small W8 G8 S400 V128 = 4,048 aug pos/s, +27% over WL5-era V64). V256 (+38%) is also viable; pick V128 as the safer step.
+  2. Behavior change is structural (eval batch size only, no MCTS semantic change). Per the Training-Quality Promotion Gate, the next cell using V128/V256 should still report val/policy_ce + val/policy_kl against archives/wl5_validation_v1.pt and selfplay/plies_mean for one canary cycle to confirm no surprises before committing a full run.
+  3. Workers axis: keep W8 as the default. W12-16 buys 2-7% and adds OS/process overhead; not worth it for the W8 baseline.
+  4. Quality knobs (n-sims, model size) are separate decisions; this receipt has no opinion on them.
+  5. Open-note follow-ups: (a) re-run the W x G cross at V128 to verify the wave-size win compounds at higher worker counts, (b) sims-vs-wave interaction at S=200 (faster cycles + wider waves might be the real next-cell shape), (c) repeat the sweep at the next stable checkpoint to confirm trained-model throughput shape matches infrastructure shape.
+```
+
