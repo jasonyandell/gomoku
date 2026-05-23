@@ -46,9 +46,10 @@ the generator side**.
 
 | ref point | cell shape | current best |
 |---|---|---|
-| **R-TRAIN-WL5** | small / W=8 / G=8 / sims=400 / V=64 / EMA τ=0.99 / grad_accum=4 (WL5 production recipe) | TBD (first measurement in L10) |
-| **R-TRAIN-LEAN** | same but V=128 (today's promoted gen default) | TBD (L11) |
-| **R-TRAIN-ANE** | same but workers on Core ML eval | TBD (L09) |
+| **R-TRAIN-WL5** | small / W=8 / G=8 / sims=400 / V=64 / EMA τ=0.99 / grad_accum=4 (WL5 production recipe) | **3,297.6 aug/s** / 0.0917 epochs/s / 14.07 games/s (L10, 2026-05-23, Reviewer APPROVE) |
+| ~~R-TRAIN-LEAN~~ at default sgd | same but V=512 with WL5's sgd_per_position=0.0025 | **2,362.8 aug/s** (L11, REJECT — gen win doesn't free-ride to trainer; V=512 fills buffer 2.4× faster → 3× more SGD steps/epoch → trainer monopolizes MPS) |
+| **R-TRAIN-LEAN-fp16** (perf reference only — TQ canary required for production) | WL5 recipe + V=512 + sgd_per_position=0.001 + fp16 workers | **8,340.5 aug/s** / 0.0667 epochs/s / 32.19 games/s (L11b', **+152.9% vs R-TRAIN-WL5**; needs_repeat per TQ gate for production adoption; two independent levers stacked multiplicatively as the mechanism predicted) |
+| ~~R-TRAIN-ANE~~ (naive) | WL5 recipe + workers on Core ML CPU_AND_NE | **1,930.3 aug/s** (L09, REJECT holistic; trainer_step_s_p50 -55.7% **confirms MPS-relief hypothesis** but Core ML worker eval ~2× slower than torch/MPS at this model size — net loss. L09c tiny-on-ANE is the remaining candidate) |
 
 Reported per cell: `epochs/sec`, `games/sec`, `aug_pos/sec`,
 `trainer_step_s_p50`, `worker_wave_s_p50`. The product
@@ -278,6 +279,64 @@ The loop halts when **any** of:
 At halt: append a session-end entry to
 [perf-log.md](../ops/perf-log.md) with the leaderboard delta, the
 queue state, and the headline finding.
+
+## Stop gates and escalation protocol
+
+The lab is designed to **run forever autonomously**. The stop conditions
+above are not "halt and ask the user" by default — they're a triage
+list. For each, the orchestrator picks one of three actions:
+
+- **CONTINUE** (loop self-handles via documented protocol; no user
+  attention needed). The orchestrator updates the receipt / queue /
+  perf-log and pulls the next lane.
+- **ESCALATE** (one-line PushNotification to the user; loop pauses
+  until user resumes or directs). Used for shared-state collisions,
+  potential hardware issues, or decisions outside the lab's scope.
+- **HALT** (clean session-end; perf-log session-end entry filed; loop
+  ends gracefully). Used when there's genuinely nothing left to do
+  that doesn't require user direction.
+
+### Triage matrix
+
+| # | Condition | Action | Self-handle protocol |
+|---|---|---|---|
+| **1** | Queue empty AND no auto-generated follow-ups | **HALT** | File a session-end perf-log entry summarizing the cycle. Note follow-ups that *could* be added next session (Tier-3 lanes, attribution gaps, etc.). User can re-open the queue when ready. |
+| **2a** | Three consecutive `reject` results | **CONTINUE** if any unblocked Tier-2/3/bg lane is queueable | A reject doesn't mean the lab is exhausted — only that the specific lever doesn't pay. Pull the next Tier-3 lane or open a compound follow-up from the mechanism findings of the prior rejects. The 2026-05-23 session had 3 rejects (L11, L09, L05-followup) and then L06-followup nearly doubled R-S400 — the original "3-reject halt" would have missed the headline win. |
+| **2b** | Three consecutive rejects AND no plausible Tier-3 or compound lane exists | **HALT** | Same as #1. |
+| **3** | Box busy with another tenant (`pgrep` finds non-lab `gomoku.train`/`selfplay_worker`/`eval_worker`) | **ESCALATE** | This is a real shared-state signal — the user (or a cron) started something. PushNotification: `gomoku perf lab: box busy with <process>; pausing`. Wait. |
+| **4** | Code-change lane fails to build (import, missing dep) | **CONTINUE** with patch | File a `blocked` receipt, **patch the bug in flight**, continue. The L12 driver had 4 bugs surfaced and patched mid-session 2026-05-23 (--save-every, count_records, --evaluator passthrough, --fp16-eval+coreml). Each was a 5–10 LOC fix; none warranted a session halt. Only escalate if the fix needs an architectural decision (Class C). |
+| **5** | MPS / CUDA error across all workers of a cell | **CONTINUE** (1 retry) | File `failed`, `--retry-failed` once. If still failing after the retry, **ESCALATE** with the worker log tail. |
+| **6** | Cell hits the wall-time cap mid-warmup (zero epochs in trainer log) | **CONTINUE** with longer measurement | The 2026-05-23 L10 first dispatch hit this — 60s measure was shorter than the trainer's first epoch (~12s warmup + ~11s/epoch); only 1 epoch in window so `epochs_per_sec=0`. Re-run with `--measurement-secs 120` (the charter's R-TRAIN-* upper-end). Don't escalate. |
+| **7** | Reviewer returns `REVISE` | **CONTINUE** with fixes | Read the numbered list, apply the corrections (Class A edits to receipt / surfaces), re-spawn the Reviewer. Same lane, same lane-id, same receipt. |
+| **8** | Reviewer returns `BLOCK` | **ESCALATE** | This is the only Reviewer verdict that pauses the loop. PushNotification with the BLOCK reason. |
+| **9** | Charter staleness flagged by ≥ 3 consecutive Reviewers, AND the suggested fix is mechanical (text change in a doc page, no policy shift) | **CONTINUE** with charter edit | Jason 2026-05-23: "the lab should run forever autonomously". Mechanical doc-fixes are Class A even though they touch the charter, because they're just synchronizing the doc with measured reality. If the fix would change lab *policy* (a new tier, a new promotion rule, a new TQ-gate carveout), that's Class B → ESCALATE. |
+| **10** | A `promote` decision requires the Training-Quality Promotion Gate (val/policy_ce + plies/game-shape + canary run) and the lab has only perf evidence | **CONTINUE** with `needs_repeat` | The lab does *not* run quality canaries. File `needs_repeat`, surface the perf finding as a new perf reference (e.g. R-TRAIN-LEAN-fp16), explicitly note "TQ canary required for production adoption — not the lab's job". Do NOT escalate; the lab's job is to find the lever, not to certify it for production. |
+| **11** | A decision would change the production training recipe (R-TRAIN-WL5's current default) | **ESCALATE** | The perf lab proposes operating points; only the user decides when to flip a WL release. |
+| **12** | Class C work surfaces (custom Metal kernel, native C extension, model architecture change, replacing trainer/evaluator backend wholesale) | **ESCALATE** | These are multi-day deep dives outside the lab's normal scope. Surface the proposal; don't start the work. |
+
+### When in doubt
+
+A useful heuristic: **the lab can autonomously do anything that's
+reversible at the file/branch level and doesn't change the production
+training default.** Worktrees, merge commits, receipts, charter doc-
+syncs, lab follow-up queueing — all CONTINUE. Anything that affects
+shared state with humans (the WL release lineage, third-party services,
+the user's calendar) → ESCALATE.
+
+### Escalation format
+
+When ESCALATING, send a one-line PushNotification:
+
+```
+gomoku perf lab: <one-line situation>. <one-line action requested>.
+```
+
+Examples:
+- `gomoku perf lab: box busy with gomoku.train PID 12345; pausing.`
+- `gomoku perf lab: Reviewer BLOCK on L99: <reason>. Awaiting your call.`
+- `gomoku perf lab: L20 found +50% perf at Class C model arch change; needs your design call before continuing.`
+
+Then **pause the loop** (no ScheduleWakeup). Resume on next user prompt.
 
 ## Vibe footer (optional, per commit)
 
