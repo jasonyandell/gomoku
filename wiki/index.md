@@ -17,8 +17,9 @@ reading it front-to-back unless the work actually needs that.
 | Launch, resume, monitor, or stop a run | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | The relevant design page, then the latest run section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
 | Interpret training dynamics | [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) and [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | The run's evidence section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
 | Plan a WL-series follow-up | [topics/training-run-lineage.md](topics/training-run-lineage.md) | [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md), [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md), [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md). |
-| Work on performance or hardware strategy | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md), [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md), [topics/ane-int8-inference.md](topics/ane-int8-inference.md), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md). |
-| Run frontier-lab perf fanout | [ops/status.md](ops/status.md) | [ops/frontier.md](ops/frontier.md), [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), [ops/test-ledger.md](ops/test-ledger.md). |
+| Work on performance or hardware strategy | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | [topics/perf-lab-session-runbook.md](topics/perf-lab-session-runbook.md), [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md), [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md), [topics/ane-int8-inference.md](topics/ane-int8-inference.md), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md). |
+| Run a perf cell or sweep (procedure) | [topics/perf-lab-session-runbook.md](topics/perf-lab-session-runbook.md) | [ops/perf-log.md](ops/perf-log.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), [ops/baselines.md](ops/baselines.md). |
+| Run frontier-lab perf fanout | [ops/status.md](ops/status.md) | [ops/frontier.md](ops/frontier.md), [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), [ops/test-ledger.md](ops/test-ledger.md), [ops/perf-log.md](ops/perf-log.md). |
 | Add or interpret external engine baselines | [topics/external-engine-baselines.md](topics/external-engine-baselines.md) | [sources/gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md), then `gomoku.match` / `gomoku.eval_worker`. |
 | Mine or use validation archives | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) and [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md). |
 | Play a checkpoint | [topics/playing-the-model.md](topics/playing-the-model.md) | Latest plateau/run-end notes in [topics/training-run-lineage.md](topics/training-run-lineage.md). |
@@ -92,6 +93,7 @@ read is:
 | [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Engine-isolation plan and first scout for Core ML / ANE / CPU lanes around MPS training. |
 | [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) | Rail-proof lab for Core ML / ANE residency claims; caps `CPU_AND_NE` label checks below ANE-backed unless powermetrics shows nonzero ANE rail. |
 | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 replay-buffer compression plan: bit-packed planes plus FP16 policy, with cheap-test gate. |
+| [topics/perf-lab-session-runbook.md](topics/perf-lab-session-runbook.md) | End-to-end procedure for running a perf cell or sweep: pre-flight, naming, command surfaces, receipt, surfaces to update. |
 
 ### Operations And Use
 
@@ -112,6 +114,7 @@ read is:
 | [ops/baselines.md](ops/baselines.md) | Benchmark command surfaces and reference results. |
 | [ops/experiment-ledger.md](ops/experiment-ledger.md) | Receipt ledger for promote/reject/block decisions. |
 | [ops/test-ledger.md](ops/test-ledger.md) | Validation command ledger for frontier decisions. |
+| [ops/perf-log.md](ops/perf-log.md) | Day-by-day narrative timeline for the M5 Max perf era. |
 
 ## Layers
 

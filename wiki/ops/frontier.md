@@ -15,7 +15,8 @@ This page is the human-readable board. The frontier lab extension claims lanes f
 | Perf wiki control room curation | completed | done | wiki | Done; stale active-run claims trimmed after manual recovery. |
 | Outer self-play loop profiling | completed | done | cpu | Done in run `20260522T061713Z`; reject/no-op for post-search Python native pass. |
 | Production engine-overlap experiment | blocked-on-ane-residency | blocked | gpu | Do not launch until ANE proof or explicit CPU-only isolation candidate exists. |
-| Replay-buffer width cheap test | seeded | warm | cpu | After WL5 reports out, run 1.5M vs 750k buffer ablation before bit-packing. |
+| Replay-buffer width cheap test | seeded | warm | cpu | After WL5 reports out, run 1.5M vs 750k buffer ablation before bit-packing. Note: BAB1-buf-ablation-1p5M is running in another session as of 2026-05-22; see [perf-log.md](perf-log.md). |
+| Canonical 5-axis M5 Max contour sweep | blocked | warm | gpu | Blocked on BAB1 / BAB2; resume per [perf-log.md](perf-log.md) and the [perf-lab-session-runbook](../topics/perf-lab-session-runbook.md). Driver: `scripts/canonical_sweep.py`. Plot: `scripts/plot_canonical_sweep.py`. |
 
 ## Completed Run 20260522T061713Z
 

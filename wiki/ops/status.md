@@ -37,7 +37,8 @@ BFS by default: current-main baseline receipts and production contour are now do
 | Outer self-play loop profiling | completed / rejected | Run `20260522T061713Z`; no 10-20% post-search Python owner found. |
 | ANE residency rail proof | blocked | Needs cached/passwordless sudo for same-window `powermetrics` plus Vision positive control / CPU_ONLY negative. |
 | Production engine-overlap | blocked | Wait for ANE-metered or explicit CPU-only isolation candidate; do not launch from `CPU_AND_NE` labels alone. |
-| Replay-buffer width cheap test | warm / seeded | Post-WL5 ablation: 1.5M vs 750k buffer before bit-packing. |
+| Replay-buffer width cheap test | active in another session | BAB1-buf-ablation-1p5M live as of 2026-05-22; trainer PID 27579, e10215/10700 at last check. See [perf-log.md](perf-log.md). |
+| Canonical 5-axis M5 Max contour sweep | blocked / warm | Scaffolded this session: `scripts/canonical_sweep.py`, `scripts/plot_canonical_sweep.py`, [perf-lab-session-runbook](../topics/perf-lab-session-runbook.md). Launches when the box clears BAB1+BAB2. |
 
 ## Next Action
 
