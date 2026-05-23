@@ -413,6 +413,11 @@ commit-message texture.
 
 - [m5-max-as-mainframe](m5-max-as-mainframe.md) — the parent
   philosophy; this charter operationalizes it.
+- [m5-max-fp16-and-throughput-regimes](m5-max-fp16-and-throughput-regimes.md)
+  — public-facing writeup of the three surprising chip findings from
+  the 2026-05-23 cycle: fp16 reversal, bandwidth/dispatch regimes,
+  multiplicative lever composition. Use as the "what did the lab find?"
+  reference for external readers.
 - [perf-lab-session-runbook](perf-lab-session-runbook.md) — the
   per-session mechanics (lock, --status, --retry-failed, etc.).
 - [mcts-perf-ceiling](mcts-perf-ceiling.md) — what's already been

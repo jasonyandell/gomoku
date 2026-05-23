@@ -164,6 +164,12 @@ that makes the next step cheaper.
 
 ## Cross-refs
 
+- [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md)
+  — concrete findings from the 2026-05-23 perf cycle: fp16 on MPS is no
+  longer slow (nearly doubles R-S400 small at V=512); the same chip has
+  bandwidth-bound and dispatch-bound regimes depending on model size;
+  independent perf levers compose multiplicatively to four decimals.
+  Numbers, reproduction commands, Reviewer-audited receipts.
 - [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — current perf state,
   what's already been ported from zeb, what hasn't.
 - [activity-monitor-perf-runbook.md](activity-monitor-perf-runbook.md) —
