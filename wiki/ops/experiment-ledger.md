@@ -37,6 +37,28 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L11 R-TRAIN-LEAN V=512 rejects — wave win doesn't compound at trainer
+
+```yaml
+lane: L11-end-to-end-cell
+hypothesis: V=64 → V=512 promote (from L01, R-S400 +49.5%) compounds at the trainer level — full WL5 recipe with V=512 should beat R-TRAIN-WL5 on epochs/sec OR games/sec OR aug/sec.
+code_ref: 4a825f1 on main (same L12 driver as L10)
+dataset_ref: fresh random fused checkpoint (small, 324,570 params); live self-play only
+baseline_command: lab-L10-20260523T132940Z (R-TRAIN-WL5 = 3,297.6 aug/s; 14.07 games/s; 0.0917 epochs/s)
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11-20260523T133546Z --lane L11 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps
+hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS; idle
+seed: workers seeded 1000..1007 (w0..w7); trainer seed default
+baseline_metric: R-TRAIN-WL5 V=64: 3,297.6 aug/s; 14.07 games/s; 0.0917 epochs/s; trainer_step_s_p50=0.0512s; 14 epochs in 120s
+candidate_metric: R-TRAIN-LEAN V=512: 2,362.8 aug/s; 8.42 games/s; 0.0083 epochs/s; trainer_step_s_p50=0.138s; 3 epochs in 120s; plies_mean 34.25
+delta: aug/s -28.4%; games/s -40.2%; epochs/s -91%; trainer_step_s_p50 +169%. Buffer fills 2× faster at V=512 (buf=199608 at epoch 3 vs 94496 at V=64 epoch 3), so fixed sgd_per_position=0.0025 produces ~3× more SGD steps per epoch (epoch 3 had steps=306 vs ~89 at V=64). The 43s of train-time per epoch at V=512 starves workers of MPS, dropping games/s by 40%.
+confidence: medium-high. Single trial, smoke-first 120s window. The mechanism is mechanically clear in the trainer log (per-epoch wall jumps from ~11s to ~52s; train= field shows 43s of 51.8s; steps= triples). This is the holistic measurement working as intended — pure-gen wins don't necessarily compound when the trainer fights for MPS.
+artifacts: sweep_logs/lab-L11-20260523T133546Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/v2,v3}}
+commands_run:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11-20260523T133546Z --lane L11 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps
+decision: reject
+next_action: V=64 stays the R-TRAIN-WL5 default. The pure-gen R-S* promotes (L01/L03/L07 V=512) remain valid for non-trainer self-play (e.g. eval, validation runs) but are NOT recommended for live training. Follow-up lane candidate: L11b "V=512 + lower sgd_per_position" — does reducing trainer work-per-position let V=512's gen win shine through? Lower priority; the headline finding (gen-side wins don't free-ride at trainer level) is the value here.
+```
+
 ### 2026-05-23 — L10 R-TRAIN-WL5 first-ever live-training baseline
 
 ```yaml

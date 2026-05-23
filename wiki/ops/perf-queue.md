@@ -19,7 +19,7 @@ Reference points (current bests):
 | **R-S100** | small / W=8 / G=8 / S=100 / **V=512** | **15,082 aug/s** (L03) | **+35.2%** |
 | **R-S400-tiny** | tiny / W=16 / G=8 / S=400 / **V=512** | **22,088 aug/s** (L07) | **+201.5% vs tiny V=64=7,326** |
 | **R-TRAIN-WL5** | full WL5 recipe | **3,297.6 aug/s** / 0.0917 ep/s / 14.07 g/s (L10) | — |
-| **R-TRAIN-LEAN** | WL5 with V=512 | TBD (L11) | — |
+| ~~R-TRAIN-LEAN~~ | WL5 with V=512 | **2,362.8 aug/s** / 0.0083 ep/s / 8.42 g/s (L11, REJECT — gen win doesn't compound at trainer) | — |
 | **R-TRAIN-ANE** | WL5 with workers on Core ML | TBD (L09) | — |
 
 ## CPU queue (parallel — Agent fan-out, no GPU contention)
@@ -100,8 +100,8 @@ wall_cost_min: 5
 E_delta_epochs_per_sec: 0.2
 P_success: 0.55
 priority: 11.0 (recomputed after L01)
-status: queued (L12 driver landed 2026-05-23; depends_on L10 for R-TRAIN-WL5 baseline)
-notes: Rescoped from V=128 to V=512 after L01 promoted V=512 as the R-S400 default. First end-to-end validation that today's wave promote compounds at the trainer level. If it doesn't, R-S* metrics need humility — gen throughput isn't the whole story.
+status: COMPLETED 2026-05-23 REJECT — R-TRAIN-LEAN V=512 = 2,362.8 aug/s (-28.4% vs R-TRAIN-WL5 3,297.6). V=64 stays the R-TRAIN-WL5 default. Mechanism: V=512 fills buffer 2× faster → 3× more SGD steps per epoch (steps=306 vs ~89) → 43s of train-time per epoch starves workers of MPS → games/s drops 40%. Reviewer audit pending.
+notes: The L11 yaml's own caveat ("R-S* metrics need humility") was confirmed. Pure-gen R-S* promotes (V=512) remain valid for non-trainer self-play but do NOT free-ride to live training. Follow-up L11b candidate: V=512 + lower sgd_per_position (to match V=64's SGD work per second). Lower priority than L09 — the headline finding (gen wins don't free-ride) is the load-bearing insight.
 ```
 
 ### Tier 2 — Compound knob wins
@@ -174,6 +174,7 @@ status: queued (L06 driver flag landed 2026-05-23)
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L11-end-to-end-cell | reject | R-TRAIN-LEAN V=512 = 2,362.8 aug/s / 8.42 g/s / 0.0083 ep/s / trainer_step_s_p50=0.138s (3 epochs in 120s). vs L10 R-TRAIN-WL5: aug/s -28.4%, games/s -40.2%, epochs/s -91%, trainer_step_s_p50 +2.7×. | pending Reviewer audit | The headline holistic finding: pure-gen R-S* V=512 promotes do NOT compound at the trainer level. Buffer fills 2× faster → 3× more SGD steps per epoch → 43s of trainer SGD per epoch starves workers of MPS. V=64 stays the R-TRAIN-WL5 default. consecutive_rejects: 0→1. |
 | 2026-05-23 | L10-trainer-step-bench | promote (baseline) | R-TRAIN-WL5 = 3,297.6 aug/s / 0.0917 epochs/s / 14.07 games/s / trainer_step_s_p50=0.0512s (14 epochs in 120s; 30s warmup) | APPROVE | First-ever end-to-end R-TRAIN-WL5 measurement. Reviewer verified math exact (epochs_per_sec = (14-3)/120 = 0.0917; games_per_sec = 1489/105.8s post-warmup-window span; delta vs R-S400 = -30.8%); all 5 surfaces updated; baseline-promote matches canonical-sweep precedent. Two L12 driver bugs surfaced + fixed during dispatch (--save-every=1M froze worker_weights publish 1dc4abb; count_records undercounted because trainer ingests/deletes 4a825f1). consecutive_rejects unchanged at 0. |
 | 2026-05-23 | L12-write-lab-train-cell-driver | promote (code) | scripts/lab_train_cell.py (726 LOC) — live-training cell driver matching canonical_sweep resumability contract; smoke green (help, dry-run, unit test on synthetic trainer logs). Companion `scripts/lab_train_cell_smoke.py` runs in <1s with no GPU. | pending Reviewer audit | Gating lane: unblocks L09/L10/L11. Branched off 8eb7e5c, merged --no-ff at 56b6... (see graph). Trainer already emits `^epoch (\d+)/M` natively (gomoku/train.py:1135) so no shim needed. |
 | 2026-05-23 | L08-driver-per-cell-envvars | promote (code) | scripts/canonical_sweep.py + tests/test_canonical_sweep_envvars.py (14 tests) — optional `env` column on cells.csv (semicolon-separated KEY=VAL pairs). All 16 in-flight cells.csv files backward-compat. | pending Reviewer audit | Unblocks L08-mps-heap-ratio. Heads-up: env not part of cell_id_of() — heap-ratio lane needs to disambiguate via separate out-dirs or cell_id suffix. |
@@ -190,10 +191,10 @@ status: queued (L06 driver flag landed 2026-05-23)
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **0** (4× code-promote on 2026-05-23 reset the counter from 2; next reject restarts the count)
+- consecutive_rejects: **1** (L11 V=512 rejected at trainer level; L10 baseline-promote is between L11 and prior chain so counter restarted from 0 → 1)
 - queue empty + no followups pending: false (GPU queue has L10, L11, L09, L08-mps-heap-ratio, L05-followup, L06-followup queued)
 - last halt reason: n/a — lab restarted 2026-05-23; four CPU-queue lanes landed in parallel
-- **RESUME STATE**: L10 R-TRAIN-WL5 baselined at **3,297.6 aug/s** (commit 4a825f1; sweep_logs/lab-L10-20260523T132940Z). Next GPU lane: **L11 (R-TRAIN-LEAN at V=512)** to test whether V=64→V=512's +49.5% gen win compounds at the trainer level. Dispatch: `python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11-$(date -u +%Y%m%dT%H%M%SZ) --lane L11 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps`. After L11, L09 (R-TRAIN-ANE via Core ML eval on workers).
+- **RESUME STATE**: L11 R-TRAIN-LEAN V=512 rejected — gen wins don't free-ride to trainer. Next GPU lane: **L09 (R-TRAIN-ANE via Core ML eval on workers)** — the architectural ANE-offload lever. Needs a small L12 driver patch to pass `--evaluator coreml --coreml-compute-units CPU_AND_NE` through to workers (third L12 gap surfaced today). Then dispatch: `python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09-$TS --lane L09 --evaluator coreml --coreml-compute-units CPU_AND_NE --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps`.
 
 ## Dispatch rule (charter v3)
 

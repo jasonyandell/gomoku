@@ -16,6 +16,37 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L11 | R-TRAIN-LEAN V=512 REJECT — gen wins don't compound at trainer
+
+L11 tested whether V=64→V=512's pure-gen +49.5% promote (R-S400, L01) carries through to the holistic R-TRAIN-* family. Same WL5 recipe as L10 but `--wave-size 512`. Same 30s warmup + 120s measure.
+
+**Result: reject.** Every metric got worse:
+
+| Metric | L10 V=64 | L11 V=512 | Δ |
+|---|---|---|---|
+| aug/s | 3,297.6 | 2,362.8 | **-28.4%** |
+| games/s | 14.07 | 8.42 | -40.2% |
+| epochs/s | 0.0917 | 0.0083 | -91% |
+| trainer_step_s_p50 | 0.051s | 0.138s | +2.7× |
+| epochs in window | 14 | 3 | — |
+| plies_mean | 29.6 | 34.3 | — |
+
+**Mechanism (clean in the trainer log).** At V=512 workers fill the buffer 2× faster (buf=199,608 at epoch 3 vs 94,496 at V=64 epoch 3). The trainer's `--sgd-per-position 0.0025` is a fixed ratio, so 2× positions = ~3× SGD steps (epoch 3 ran 306 steps vs ~89 at V=64). The per-epoch tail in the trainer log went from `(11s: gen=7s train=3s)` at V=64 to `(52s: gen=6s train=43s)` at V=512. While the trainer monopolizes MPS for 43s of SGD, workers get less GPU time — games/s collapses, aug/s collapses with it.
+
+This is the holistic R-TRAIN-* family working as intended. The L11 yaml's own caveat called it: *"If it doesn't, R-S* metrics need humility — gen throughput isn't the whole story."* Confirmed.
+
+**Lab implications:**
+- V=64 stays the R-TRAIN-WL5 default. WL5 production recipe is correct as-is.
+- The R-S* V=512 promotes remain valid for *non-trainer* self-play (eval probes, validation rolls, dataset mining). They do NOT free-ride to live training.
+- Follow-up candidate L11b: would lowering `--sgd-per-position` at V=512 (to match V=64's SGD work per second) let the gen win shine? Lower priority than L09 — the headline finding here (gen wins don't free-ride) is already the load-bearing insight.
+
+Next: dispatch L09 (R-TRAIN-ANE via Core ML eval on workers) — the architectural ANE-offload lever. First needs a small L12 driver patch to pass `--evaluator coreml --coreml-compute-units CPU_AND_NE` through to workers.
+
+> Pure-gen wins were the easy half. The trainer is fighting for the same chip, and at V=512 it wins the fight — which is exactly the wrong fight to win.
+> Now we know: any future "what if we crank V higher" idea has to be paired with a sgd-per-position cut, or it costs us at the level that matters.
+
+---
+
 ## [2026-05-23] L10 | R-TRAIN-WL5 baselined at 3,297 aug/s; trainer contention ≈ 30%
 
 First-ever R-TRAIN-WL5 measurement. End-to-end production recipe (small / W=8 / G=8 / sims=400 / V=64 / EMA τ=0.99 / grad_accum=4) under the live trainer + 8 self-play workers competing for MPS. 120s measurement window, 14 epochs:
