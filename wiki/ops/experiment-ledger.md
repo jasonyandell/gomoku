@@ -42,7 +42,7 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 ```yaml
 lane: L06-followup-fp16-cells
 hypothesis: fp16 eval reduces memory bandwidth and improves aug/s on MPS without behavior change. Smoke at R-S400 (small / W=8 / G=8 / S=400 / V=512) and R-S400-tiny (tiny / W=16 / G=8 / S=400 / V=512); historic regression worth re-checking with mature MPS + fused conv+bn.
-code_ref: 36d0f8d on main (run-time); receipt_commit pending. Uses --fp16-eval passthrough from L06 (commit a3fb9ca).
+code_ref: 36d0f8d on main (run-time); receipt_commit 4e1bc2d (lane); Reviewer-APPROVE commit pending. Uses --fp16-eval passthrough from L06 (commit a3fb9ca). Reviewer verified gomoku/mcts.py:519-529 casts forward outputs back to .float() before .cpu().numpy() — MCTS, native search, replay payload, and downstream consumers all see fp32 numbers from a fp16-internal forward.
 evaluator: torch / MPS / fp16-eval (workers cast model to float16; inputs cast to half() inside make_torch_evaluator; outputs cast back to fp32 BEFORE host transfer per the L06 patch design — MCTS reads identical-shape fp32 numbers from a fp16-internal forward)
 dataset_ref: pure self-play; fresh random fused checkpoint per model; no trainer; 60s/cell smoke
 baseline_command: R-S400 (lab-L01-wave-extrapolation = 4,765 aug/s); R-S400-tiny (lab-L07-tiny-contour = 22,088 aug/s)
