@@ -16,7 +16,7 @@ Cross-refs:
 
 ---
 
-## [2026-05-23] L09e + session-end | Routing axis null at small/V=64; ANE chapter closed
+## [2026-05-23] L09e + session-end | Routing axis null at small/V=64; ANE envelope snapshotted (not a verdict)
 
 L09e was the final session lane — the routing-rescue diagnostic for L09's small/V=64 -41.5% reject. Two cells under live training:
 
@@ -39,7 +39,7 @@ Across-routing spread: 4.3% — within natural noise. **All three routings still
 | small / V=64 | ANE (ALL) | 1,989.8 | -39.7% (L09e) |
 | medium / V=512 | ANE | 591.7 | -59.6% (L09d) |
 
-**ANE pays at exactly one point: tiny + V=64. Compute-units routing axis is null. V-axis amortization is falsified. Model-size amortization is falsified.** The L09c PROMOTE remains the lone win; the ANE-chapter is closed.
+**At today's Core ML version + today's evaluator pipeline + today's model arch family, ANE pays at exactly one point in our envelope: tiny + V=64.** Across measured axes (V, model-size, routing), ANE is currently null-to-negative outside that single point. The L09c PROMOTE remains the lone win; the ANE chapter is **paused at a complete current-state snapshot, not concluded** — future ANE research (new ANE features in macOS / Xcode, Core ML major-version updates, evaluator-pipeline changes, model-arch family changes) will warrant a re-measurement of this envelope. Jason flagged inbound ANE research; when it lands, re-run L09c/L09d/L09c-V512/L09e against the new baseline before assuming today's snapshot holds.
 
 **Session-end summary (12 lanes since session-restart, headline-ordered):**
 
@@ -55,9 +55,9 @@ Across-routing spread: 4.3% — within natural noise. **All three routings still
 - R-TRAIN-MEDIUM = 1,463.3 aug/s (engine-mapping ref, torch+fp16 baseline arm)
 - R-TRAIN-MEDIUM-ANE = 591.7 aug/s (rejected ref, engine-mapping data point)
 
-**consecutive_rejects: 4** (L09d → L09c-V512 → L08 → L09e). One short of the 5-reject HALT threshold. **Session-end declared by orchestrator** because: (1) the four rejects are all envelope-mapping with clean mechanism (not knob-failure noise); (2) the ANE-chapter has been decisively mapped (L09c PROMOTE + 4 rejects = complete envelope); (3) remaining queueable lanes (L09f, L09g, L09h) are all downweighted or low-upside diagnostic with no compound mechanism left to test; (4) the L11b' R-TRAIN-LEAN-fp16 +152.9% perf-reference from the prior session-portion remains the perf cycle's headline R-TRAIN finding, unaffected.
+**consecutive_rejects: 4** (L09d → L09c-V512 → L08 → L09e). One short of the 5-reject HALT threshold. **Session-end declared by orchestrator** because: (1) the four rejects are all envelope-mapping with clean mechanism (not knob-failure noise); (2) the current ANE envelope is fully snapshotted (L09c PROMOTE + 4 rejects = complete current-state map); (3) remaining queueable lanes (L09f, L09g, L09h) are all downweighted or low-upside diagnostic with no compound mechanism left to test against today's Core ML; (4) the L11b' R-TRAIN-LEAN-fp16 +152.9% perf-reference from the prior session-portion remains the perf cycle's headline R-TRAIN finding, unaffected. **Future-shape note:** this is the right time to pause the ANE axis because the inbound new ANE research will likely reset the priors; re-running L09c/L09d/L09c-V512/L09e against the new baseline is the natural next-session move when it drops.
 
-**Two NEW friction-smoothing lessons surfaced this session-portion, to be filed in the gomoku-perf-lab skill:**
+**Three NEW friction-smoothing lessons surfaced this session-portion, filed to the gomoku-perf-lab skill:**
 
 1. **plies_mean is NOT stationary across asymmetric-epoch R-TRAIN cells.** When two arms have very different `epochs_in_window` counts (because the candidate's trainer epoch is much shorter), aggregate plies_mean drift is dominated by within-window training progress, not engine-induced game-shape drift. Future Reviewers' drift-watch should check per-epoch plies values in trainer.log, not just the aggregate. Surfaced in L09c-V512 (-7.3% plies_mean drift; per-epoch trainer.log showed monotonic-from-epoch-3 decline from 33.5 → 27.7 as the candidate's 8 trainer epochs improved the policy).
 
@@ -65,9 +65,9 @@ Across-routing spread: 4.3% — within natural noise. **All three routings still
 
 3. **Env-axis lanes: use the L08-driver cells.csv `env` column, not shell-prefix env.** Shell-prefix env propagates via Popen inheritance but doesn't stamp the env_overrides field in metadata.txt, so the on-disk artifacts don't discriminate which env value each cell ran under. Reviewer flagged this as a soft artifact-capture gap on L08; future env-axis lanes should use the cells.csv `env` column for per-cell stamping.
 
-These three lessons go into the skill's Friction-smoothing log at session-end (next commit).
+These three lessons go into the skill's Friction-smoothing log at session-end (companion commit to ~/.claude/skills/gomoku-perf-lab/SKILL.md).
 
-Reviewer pending for L09e. Session-end commit pending.
+Reviewer APPROVE on L09e (math reconciles, routing axis null with ALL marginal-winner at +3.1% but still ~40% below R-TRAIN-WL5; session-end is the correct triage per the envelope-mapping-vs-knob-failure distinction; all 5 surfaces touched under the 5-min cap). Session-end commit landed.
 
 ## [2026-05-23] L08 | Heap-ratio axis null at R-S400/fp16 — bandwidth-bound regime confirmed; thermal drift surfaced
 

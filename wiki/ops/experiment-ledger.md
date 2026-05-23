@@ -70,11 +70,12 @@ commands_run:
   - (ALL above)
 decision: reject
 next_action:
-  - **The L09 reject is FINAL.** Compute-units routing doesn't rescue ANE-offload at small/V=64. Combined with L09d (medium/V=512 reject) and L09c-V512 (tiny/V=512 reject), the engine envelope is decisively mapped: ANE wins at tiny+V=64 ONLY (L09c +33.9%).
-  - L09f (broader V-axis sweep) and L09g (broader model-size sweep) at coreml remain in queue at low priority but are predicted to be rejects per the envelope mapping. No headline upside expected.
-  - L09h (.mlpackage re-export cost diagnostic) remains queued at priority 1.0; cheap (1 cell) and informative if anyone wants to revisit ANE-offload later.
-  - consecutive_rejects: 3 → 4 (one short of the 5-reject HALT threshold). Per stop-gates triage: this is the natural session-end. The remaining queueable lanes have no compound mechanism upside; the ANE-chapter is closed cleanly with the L09c PROMOTE as its lone win and L09e as the rescue-diagnostic confirmation.
-  - Session-end entry to be filed in perf-log.md; friction-smoothing lessons to be batched to the gomoku-perf-lab skill.
+  - **The L09 reject stands at today's Core ML + evaluator pipeline.** Compute-units routing doesn't rescue ANE-offload at small/V=64 under the current stack. Combined with L09d (medium/V=512 reject) and L09c-V512 (tiny/V=512 reject), the **current engine envelope snapshot** is: ANE wins at tiny+V=64 ONLY (L09c +33.9%) at today's Core ML version + evaluator pipeline + model-arch family. **Not a permanent verdict** — the snapshot is time-stamped to today's stack.
+  - **Future-shape re-measurement triggers:** when (a) a new Core ML major version lands, (b) new ANE features become available (Jason flagged inbound new ANE research as of session-end), (c) the gomoku evaluator pipeline changes (e.g., different export path, new compute_precision options, fp32→fp16 internal cast strategy), or (d) the model-arch family changes (e.g., different residual block shape, different stem padding) — re-run L09c / L09d / L09c-V512 / L09e against the new baseline before assuming today's snapshot still holds. The single-point envelope is the right reading of today's stack, NOT a structural ANE limit.
+  - L09f (broader V-axis sweep) and L09g (broader model-size sweep) at coreml remain in queue at low priority; their priors flip back to load-bearing the moment any of the re-measurement triggers above fires.
+  - L09h (.mlpackage re-export cost diagnostic) remains queued at priority 1.0; cheap (1 cell) and informative under any future ANE-payoff scenario where re-export cost might matter for live training.
+  - consecutive_rejects: 3 → 4 (one short of the 5-reject HALT threshold). Per stop-gates triage: natural session-end at a complete current-state ANE snapshot. The four rejects DEFINE the envelope around the L09c PROMOTE — they're the bracketing data points, not a knob-failure streak.
+  - Session-end entry filed in perf-log.md; three friction-smoothing lessons batched to the gomoku-perf-lab skill in companion commit (plies asymmetric-epoch artifact, session-thermal drift, env-axis stamping via cells.csv).
 ```
 
 ### 2026-05-23 — L08-mps-heap-ratio REJECT — PYTORCH_MPS_HIGH_WATERMARK_RATIO null at R-S400/fp16 (0.74% spread)
