@@ -16,6 +16,18 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] Lpwr2 | Cross-engine coupling sweep: mutual throttling confirmed; mechanism hints at bandwidth/footprint (not pure power)
+
+The corrected Lpwr re-run: cold-chip, interleaved (no-hog/hog back-to-back per intensity), pure self-play, ANE-resident workers. Swept hog matrix {2048, 4096, 8192}.
+
+Worker throttle under the hog: −8.8% (m2048), −21.6% (m4096), −26.0% (m8192). And every hog was itself suppressed to 2.2–3.0 TFLOP/s (vs 5.8 / ~10.7 standalone) — the mutual coupling from v2, now across intensities.
+
+The mechanism tell: between m2048 and m4096 the hog reached the **same** ~2.2 TFLOP/s, yet the bigger-footprint hog throttled workers ~2.5× more (−8.8% → −21.6%). If the coupling were pure power/FLOP it should track TFLOP/s (flat); instead it tracks matrix **size** (memory footprint: 16MB → 64MB → 256MB per operand). That points at **memory bandwidth / footprint** as a key coupling channel, not just the power rail.
+
+Honest caveat: the no-hog baseline was noisy (3,550 / 4,256 / 3,960 aug/s, ~20% spread, non-monotonic — run variance in the short 80s ANE cell, not clean thermal). So the matrix-size→throttle trend is suggestive, not pinned; and at m8192 footprint and achieved-TFLOP both rose (confounded). The clean discriminator is fp16-vs-fp32 hog at matched matrix (Lpwr2b, running): fp16@4096 = half the footprint + more FLOPs, so the *sign* of its throttle-vs-fp32 separates bandwidth from power.
+
+decision: needs_repeat (coupling real + reproducible; bandwidth-vs-power hinted, not pinned). Skill note: tiny/V64 coreml pure-self-play aug/s is ~±15-20% noisy at 80s cells — bracket or lengthen. next: Lpwr2b discriminator.
+
 ## [2026-05-23] L09i-fix-load-v2 | Clean contention test: ANE workers throttle −35% under GPU load (not immune); the ANE throttles the GPU back
 
 fix-load left a confound: in wave-mode lab_train_cell, aug/s is trainer-gated, so the −96% there was a trainer stall, and the ANE workers' held gen-time looked like a "positive lean." v2 removed the confound — **pure self-play** (canonical_sweep, no trainer, no wave barrier), so aug/s is a direct worker-rate. Interleaved A/B, tiny, with/without a GPU hog.

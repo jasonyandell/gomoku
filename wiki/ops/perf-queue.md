@@ -307,8 +307,26 @@ wall_cost_min: ~25 (with cooldowns — this one is NOT smoke-first; it needs the
 E_delta_aug_per_sec: 0 (diagnostic; pins the mechanism)
 P_success: 0.7 (cold-chip + interleaving should de-confound; powermetrics would clinch it)
 priority: 3.0 (Tier 1 diagnostic; lower than L09i which could re-open the whole ANE envelope)
-status: queued
-notes: The Lpwr sweep (2026-05-23) is the worked example of why sequential sweeps fail for thermally-sensitive signals. This lane is the corrected design. See m5-max-cross-engine-coupling.md "Intensity sweep" + "Methodology notes".
+status: **COMPLETED 2026-05-23 — needs_repeat.** Cold-chip interleaved sweep (ANE workers, pure self-play), hog matrix {2048,4096,8192}: worker throttle −8.8% / −21.6% / −26.0%; every hog self-suppressed to 2.2-3.0 TFLOP/s. Mutual coupling reproduced across intensities. MECHANISM HINT: at matched ~2.2 TFLOP/s (m2048 vs m4096), the bigger-footprint hog throttled ~2.5× more → bandwidth/footprint, not pure power. But no-hog baseline noisy (~20%, run-variance at 80s cells) → not definitively pinned. → Lpwr2b discriminator below. See experiment-ledger + perf-log "Lpwr2".
+notes: The Lpwr sweep (2026-05-23) is the worked example of why sequential sweeps fail for thermally-sensitive signals; this corrected interleaved design worked but surfaced a NEW noise floor (ANE pure-self-play aug/s ±15-20% at 80s cells). See m5-max-cross-engine-coupling.md.
+
+#### Lpwr2b — fp16-vs-fp32 hog at matched matrix (the power-vs-bandwidth discriminator)
+
+```yaml
+id: Lpwr2b
+tier: 1
+hypothesis: Lpwr2 hinted the cross-engine throttle tracks hog memory FOOTPRINT, not power/FLOPs. Discriminate cleanly: fp16@4096 has HALF the byte-footprint of fp32@4096 but MORE FLOP-rate, so the SIGN of its worker-throttle-vs-fp32 separates the hypotheses — fp16 throttles LESS → bandwidth/footprint dominates; fp16 throttles MORE → FLOPs/power dominates.
+references_affected: the cross-engine coupling mechanism (m5-max-cross-engine-coupling.md); informs whether "reduce total package load" should mean reduce FLOPs or reduce memory traffic.
+code_change: false (fp16 hog mode added commit 8edd16b; --dtype {fp32,fp16})
+design: 120s cells (cut the 80s noise), bracketed no-hog (start+end) for baseline; back-to-back fp32-hog then fp16-hog at matrix 4096 (shared thermal state → directly comparable). Compare the two hog cells' worker aug/s.
+n_cells: 4 (2 no-hog bracket + fp32-hog + fp16-hog)
+wall_cost_min: ~13
+E_delta_aug_per_sec: 0 (diagnostic; pins the mechanism)
+P_success: 0.7
+priority: 3.5 (Tier 1 — completes the mechanism pin Lpwr/Lpwr2 chased)
+status: RUNNING 2026-05-23 (background; runner sweep_logs/run_lpwr2b.sh)
+notes: The clincher for the whole Lpwr strand. If footprint/bandwidth wins, the "light all engines" ceiling is a memory-traffic ceiling, not just a power one.
+```
 ```
 
 #### Lhot — Heat-soaked steady-state reference characterization (production-representative numbers)
@@ -433,6 +451,7 @@ notes: If the cost is significant, motivates a delta-encoding or differential-co
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | Lpwr2 | **needs_repeat — coupling reproduced; mechanism hints bandwidth/footprint > power** | Interleaved ANE-worker sweep: worker throttle −8.8%/−21.6%/−26.0% at hog matrix 2048/4096/8192; hogs self-suppressed to 2.2-3.0 TFLOP/s. At matched ~2.2 TFLOP/s, bigger footprint → ~2.5× more throttle. | pending | Mutual coupling reproduced across intensities. Mechanism hint (footprint, not power) but no-hog baseline noisy (~20% at 80s cells) → Lpwr2b (fp16-vs-fp32 @ matched matrix) is the clincher, running. New noise-floor lesson (ANE pure-self-play ±15-20% at 80s). |
 | 2026-05-23 | L09-reopen-small (+ -b clean) | **REJECT — real ANE residency at small ≈ CPU/BNNS, loses to torch −44% (no flip)** | ANE residency CONFIRMED at small (`sample`). Throughput: first run over-padded (wave×3=192 vs ~67 tile) = 1,271; clean re-run (`--coreml-static-batch 96`) = **1,834 aug/s** ≈ CPU/BNNS L09 (1,930, −5%), −44% vs torch R-TRAIN-WL5 (3,297). | pending | The `--coreml-static-batch` knob (d94fb98) fixed the padding confound (+44%). Real ANE residency does not beat torch at small — roughly ties the CPU/BNNS path. Completes the throughput re-map: ANE loses at tiny AND small. Surfaced the wave×3-mis-sizes-at-low-W friction. reopen-medium left optional. |
 | 2026-05-23 | L09i-fix-load-v2 | **REJECT — clean contention test: ANE workers throttle −35% under GPU load (NOT immune); bidirectional package-power coupling** | Pure self-play (no trainer barrier), interleaved A/B, tiny/coreml: no-hog 3,548 → +GPU-hog 2,307 aug/s = −35%. Hog suppressed to ~2.72 TFLOP/s (vs ~10.7) by the 16 ANE workers. | pending | The decoupled re-do of fix-load. "Positive lean" RETRACTED — ANE is not contention-immune; ANE↔GPU brown each other out via shared package power. Reconciles fix-load (trainer-stall artifact). Hog intensities unmatched, so no clean ANE-vs-CPU ranking. Closes the contention question on clean evidence. |
 | 2026-05-23 | L09i-fix-load | **needs_repeat — INCONCLUSIVE (Reviewer REVISE → corrected). The −96% was a TRAINER stall, not an ANE-worker collapse.** | Interleaved A/B, ANE-resident workers: no-hog = 7,878 aug/s / 19 epochs; +~10.7 TFLOP/s hog = 302 aug/s / 4 epochs. trainer.log: worker gen held EXACTLY (gen=5.1s) under the hog; MPS trainer stalled (train 2.5→99.5s). Wave-mode gates aug/s on the trainer epoch loop → holistic collapse is trainer-driven. | REVISE→corrected | RETRACTED: "contention-immunity falsified / ANE most-fragile / closes strand / 2nd collapse datapoint." Truth: ANE workers were NOT throttled (gen held) — a contention-RESISTANCE signal, opposite the CPU/BNNS workers in Lpwr. Strand REOPENED with a positive lean. Lane confounded (aug/s is trainer-gated in wave-mode; synthetic hog isn't trainer-representative). Re-test → L09i-fix-load-v2 (priority 5.0, decoupled). Restored fix-c (→3.0) and L09-reopen (→3.5). Lesson: attribute holistic collapse to gen-vs-train phase from the log before concluding. |

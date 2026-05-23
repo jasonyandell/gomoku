@@ -37,6 +37,25 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — Lpwr2 — cross-engine coupling intensity sweep: mutual coupling confirmed; mechanism hints at bandwidth/footprint (needs_repeat — noisy baseline)
+
+```yaml
+lane: Lpwr2 (cold-chip interleaved re-run of Lpwr; ANE-resident workers, pure self-play)
+hypothesis: pin the cross-engine coupling mechanism (power-throttle vs scheduling vs memory-bandwidth) via a de-confounded intensity sweep — no-hog/hog interleaved per intensity so each A/B pair shares a thermal state.
+code_ref: feat/perf-L09i-fix (canonical_sweep coreml + static-batch); scripts/gpu_load_generator.py; runner sweep_logs/run_lpwr2.sh
+method: 150s cooldown, then for hog matrix ∈ {2048,4096,8192}: no-hog cell then hog cell back-to-back (80s/cell), 50s cooldown between intensities. tiny/W16/G8/S400/V64/coreml CPU_AND_NE, pure self-play.
+results:
+  - matrix 2048: no-hog 3,550.5 → hog 3,238.5 aug/s (−8.8%); hog reached 2.20 TFLOP/s
+  - matrix 4096: no-hog 4,256.4 → hog 3,337.5 aug/s (−21.6%); hog reached 2.21 TFLOP/s
+  - matrix 8192: no-hog 3,960.0 → hog 2,932.7 aug/s (−26.0%); hog reached 2.99 TFLOP/s
+findings:
+  - MUTUAL COUPLING confirmed: every hog is itself suppressed to 2-3 TFLOP/s (vs 5.8 fp32@2048 / ~10.7 fp32@8192 standalone) while throttling workers −9 to −26%. Reproduces v2's bidirectional picture across intensities.
+  - MECHANISM HINT (bandwidth/footprint > pure power): at MATCHED hog TFLOP/s (~2.2 at both 2048 and 4096), the larger-footprint hog throttles workers MORE (−8.8% → −21.6%). An 8192² fp32 operand is 256MB vs 16MB at 2048² — if throttle were pure power/FLOP it should track TFLOP/s (~flat), but it tracks matrix SIZE. Points at memory bandwidth / footprint as a key coupling channel.
+caveat: the no-hog baseline is NOISY (3,550 / 4,256 / 3,960 = ~20% spread, non-monotonic so not clean thermal — run variance in the short 80s ANE pure-self-play cell). This muddies the exact per-intensity %; the matrix-size→throttle trend is suggestive, not definitively pinned. Also at 8192 both footprint AND achieved TFLOP/s rose, confounding the two there.
+decision: needs_repeat — coupling is real and reproducible; the bandwidth-vs-power mechanism is HINTED (footprint-tracking) but not pinned due to baseline noise + footprint/TFLOP confound at 8192. The clean discriminator is the fp16-vs-fp32 hog at matched matrix (Lpwr2b) with multiple no-hog samples to stabilize the baseline.
+next_action: Lpwr2b — fp16-hog vs fp32-hog at matched matrix (4096), bracketed by no-hog samples. fp16@4096 has HALF the byte-footprint + potentially MORE FLOPs than fp32@4096, so the SIGN separates the hypotheses: if fp16 throttles workers LESS → footprint/bandwidth dominates; if MORE → FLOPs/power dominates. (fp16 hog mode added commit 8edd16b.) Also: longer cells (≥120s) or repeated no-hog to cut the ~20% baseline noise. NOTE for the skill: tiny/V64 coreml pure-self-play aug/s is noisy run-to-run (~±15-20%) at 80s cells — bracket or lengthen.
+```
+
 ### 2026-05-23 — L09i-fix-load-v2 — CLEAN contention test: ANE workers throttle −35% under GPU load (NOT immune); bidirectional package-power coupling
 
 ```yaml
