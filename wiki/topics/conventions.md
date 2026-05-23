@@ -34,6 +34,26 @@ column is exhaustive.
 
 Mirrored in memory: [[feedback-autonomy-denylist]].
 
+### Autonomous loops: triage stops, don't blanket-halt
+
+For autonomous loops (the perf lab is the canonical example), every stop
+condition is one of three actions, not a blanket halt:
+
+- **CONTINUE** — loop self-handles via documented protocol.
+- **ESCALATE** — one-line PushNotification, pause loop.
+- **HALT** — clean session-end + log entry.
+
+Default to CONTINUE. The cost of one wasted cell is small; the cost of
+pre-emptive HALT can be a missed +97% headline (the 2026-05-23 perf
+session would have halted at 3 consecutive rejects, immediately before
+the L06-followup fp16-eval lane that nearly doubled R-S400).
+
+See [perf-lab-charter.md § Stop gates and escalation protocol](perf-lab-charter.md#stop-gates-and-escalation-protocol)
+for the canonical 12-row triage matrix. Other autonomous-loop scopes
+should write their own matrices in the same shape.
+
+Mirrored in memory: [[feedback-lab-runs-forever]].
+
 ## Branch integration: merge-commit, never rebase
 
 Every feature/perf/experiment branch lands on `main` via
