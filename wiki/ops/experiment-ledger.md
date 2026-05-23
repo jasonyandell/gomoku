@@ -37,6 +37,30 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L09b R-TRAIN-ANE + fp16 BLOCKED — code-interaction bug + semantic redundancy
+
+```yaml
+lane: L09b (compound follow-up of L09: ANE workers + fp16-eval)
+hypothesis: L09 showed worker-side ANE eval was ~2× slower than torch/MPS at small/V=64. fp16 nearly doubles worker-side throughput on the torch path (L06-followup). Stacking fp16 on top of Core ML/ANE might recover the worker-side loss while keeping the trainer-side MPS-relief gain (-56% trainer_step_s_p50 from L09).
+code_ref: ba7e345 + 009e2c6 on main (run-time, pre-patch)
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09b-20260523T142143Z --lane L09b --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE --fp16-eval
+result: **BLOCKED — code interaction bug + semantic redundancy.** Worker crashed at startup before any games were generated:
+  ```
+  RuntimeError: Input type (float) and bias type (c10::Half) should be the same
+  at gomoku/coreml_evaluator.py:266 in export_model_to_coreml
+    traced = torch.jit.trace(model.cpu(), dummy)
+  ```
+  Root cause: `selfplay_worker._maybe_half(model, ...)` ran BEFORE `_build_evaluator` and cast the model to fp16; Core ML's `export_model_to_coreml` then calls `torch.jit.trace` with a fp32 dummy input, and the first conv2d hit the fp32-input + fp16-bias mismatch.
+  Semantic redundancy: Core ML already exports at `compute_precision=FLOAT16` internally (see coreml_evaluator.py:285), so even if the crash were fixed, casting the source model to fp16 BEFORE the Core ML export would be a no-op — Core ML's exported graph runs fp16 either way. The L09b lane's hypothesis ("stack fp16 on top of Core ML") was structurally incoherent.
+patch: gomoku/selfplay_worker.py parse_args() now force-sets args.fp16_eval=False when args.evaluator=='coreml', with a printed audit line. This makes the flag combination a graceful no-op instead of a crash; future invocations of L09b-style cells silently get the L09 path with a heads-up note. (Patch will commit alongside this receipt.)
+artifacts: sweep_logs/lab-L09b-20260523T142143Z/{summary.tsv (cell_status=failed),metadata.txt,cell_*/logs/{trainer.log (5 lines; never got past startup),worker-00.log (full traceback)}}
+decision: blocked
+next_action:
+  - L09b is moot as designed (semantically redundant). The remaining ANE-payoff candidate is L09c: tiny model on Core ML / CPU_AND_NE. Tiny's per-eval graph is smaller; ANE pipeline overhead might amortize better. R-S400-tiny already runs at 22,088 fp32 / 22,874 fp16 on torch/MPS; can ANE compete on a smaller graph? Queue for a future session.
+  - Other charter-aligned compounds at session-end: L06fu-medium-AB (clean medium V=512 fp32 vs fp16 attribution; estimated fp16-alone +62% from L06fu-extended); L08-mps-heap-ratio at the new fp16 reference (3-cell env-var sweep — should compound or compose differently with the bandwidth-bound regime).
+  - Lab orchestrator declares session-end after this receipt. See perf-log.md session-end entry.
+```
+
 ### 2026-05-23 — L11b' R-TRAIN-LEAN-fp16: V=512 + sgd=0.001 + fp16 workers = 8,340.5 aug/s (+153% vs R-TRAIN-WL5)
 
 ```yaml

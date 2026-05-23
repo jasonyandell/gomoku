@@ -16,6 +16,51 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] session-end | the mac is singing
+
+Autonomous-loop session opened with Jason's directive to "make this mac SING" and orchestrate the perf cycle without manual intervention. 12 lanes later, the headline numbers:
+
+| Reference | WL5-era / fp32 default | This session's best | Δ vs WL5 baseline |
+|---|---|---|---|
+| **R-S400** | 4,765 (fp32, V=512 from L01) | **9,398.5** (fp16, V=512) | **+194.8% vs WL5 V=64=3,188** |
+| **R-S200** | 9,156 (fp32) | **16,850.8** (fp16) | **+180.5% vs WL5 V=64=6,006** |
+| **R-S100** | 15,082 (fp32) | **22,312.1** (fp16) | **+100.0% vs WL5 V=64=11,151** |
+| **R-S400-tiny** | 22,088 (fp32) | **22,873.8** (fp16) | **+212.2% vs tiny V=64=7,326** |
+| **R-S400-medium** (new ref) | n/a | **3,377.2** (fp16, V=512) | +142% vs medium V=64=1,393 |
+| **R-TRAIN-WL5** | n/a (TBD) | **3,297.6** (V=64, fp32 — first-ever baseline) | +0% (reference) |
+| **R-TRAIN-LEAN-fp16** (new perf ref; TQ-gated for production) | n/a | **8,340.5** (V=512, sgd=0.001, fp16) | **+152.9% vs R-TRAIN-WL5** 🔥🔥 |
+
+**The compound mechanism, in one paragraph.** Live-training throughput on the M5 Max is determined by how trainer and workers share MPS. At WL5 defaults (V=64, sgd=0.0025, fp32) the trainer runs ~7 SGD steps/sec on a small model, workers run ~14 games/sec, and the chip is moderately contended. At V=512 alone the trainer's per-position SGD work multiplies (2.4× buffer fill speedup × 0.0025 ratio = 3.36× more steps/epoch), the trainer monopolizes MPS for 43s of every ~52s epoch, and the workers starve — net loss. At V=512 + low-sgd (0.001) the trainer's per-epoch work is capped, MPS is shared, workers regain their game/s, and the gen-side V=512 win compounds at trainer level (+28% vs WL5). And fp16 on the eval-only worker model halves the bandwidth requirement for the model's forward pass, which is the dominant cost when sims is high (bandwidth-bound regime). Stack the two independent levers — fp16 on workers + low-sgd on trainer — and the trainer-level recipe doubles (+152.9%). The mechanism predicted multiplicative composition (1.28 × 1.97 = 2.52); the measurement confirmed (2.53). The chip has more capacity than WL5 was using; the lab now knows how to extract it.
+
+**The 12-lane play-by-play:**
+
+1. **CPU queue × 4 in parallel** (early): L12 lab_train_cell driver shipped (gating; ~720 LOC + smoke test); L05 --compile passthrough; L06 --fp16-eval flag; L08-driver env column on cells.csv. All merged via merge-commit; L05/L06 needed manual conflict resolution against each other in canonical_sweep.py.
+2. **L10** (Tier 1, baseline): First R-TRAIN-WL5 measurement at **3,297.6 aug/s**. Surfaced two L12 driver bugs en route: `--save-every=1000000` froze worker_weights publishing (workers stayed on v0 forever); `count_records()` at SIGTERM undercounted by ~30× (trainer ingests + deletes records as it goes). Both patched (1dc4abb + 4a825f1) before the canonical measurement landed. Reviewer APPROVE.
+3. **L11** (Tier 1, reject): V=512 default-sgd at trainer level = **2,362.8 aug/s** (-28% vs WL5). Mechanism: trainer monopolizes MPS for 43s/epoch when V=512 fills the buffer 2.4× faster and sgd_per_position stays at 0.0025. Reviewer APPROVE.
+4. **L09** (Tier 1, reject with partial-confirm): Workers on Core ML / CPU_AND_NE at small/V=64 = **1,930.3 aug/s** (-41% vs WL5). Trainer side wins (trainer_step_s_p50 -56%); worker side loses (Core ML eval ~2× slower than torch/MPS at this model size). Confirmed MPS contention is real and bidirectionally costly. Reviewer APPROVE.
+5. **L11b** (Tier 1, needs_repeat per TQ gate): V=512 + sgd_per_position=0.001 = **4,231.8 aug/s** (+28% vs WL5). The trainer-side cap works; pure-gen V=512 win finally compounds at trainer level. sgd_per_position is behavior-affecting → TQ gate. Reviewer APPROVE (precedent set: behavior-borderline knobs → needs_repeat).
+6. **L05-followup** (Tier 3, reject): torch.compile at small + tiny V=512 within noise (-2.3% small, -0.4% tiny). Compile-graph overhead doesn't amortize at 60s smokes. Three rejects in a row triggered the stop signal — but L06-followup was dispatching in parallel as the next compound. Reviewer APPROVE.
+7. **L06-followup** (Tier 3, the headline): fp16-eval at small + tiny V=512 = **9,398.5 aug/s small (+97.2%)**, **22,873.8 tiny (+3.6%)**. The historic "fp16 on MPS is slow" claim disproven for our eval workload at torch 2.11.0 + fused conv+bn. Mechanism predicts the asymmetry (small bandwidth-bound, tiny dispatch-bound). consecutive_rejects RESET. Reviewer APPROVE (precedent set: fp16-with-fp32-output-cast = no-behavior-change for the perf lab; verified at mcts.py:519-529).
+8. **L06fu-extended** (Tier 3, promote × 3): R-S200 fp16 = **16,850.8** (+84%); R-S100 fp16 = **22,312.1** (+48%); medium V=512 fp16 = **3,377.2** (new ref). Sims-scaling mechanism confirmed monotonic (higher S = more eval-bound = bigger fp16 win). Reviewer APPROVE.
+9. **L11b'** (Tier 1, the compound headline, needs_repeat per TQ gate): V=512 + sgd=0.001 + fp16 workers at trainer level = **8,340.5 aug/s** (**+152.9% vs R-TRAIN-WL5**). Mechanism independence predicted multiplicative composition; measured 2.53× vs predicted 2.52× — empirically exact. Reviewer APPROVE (precedent-extending).
+10. **L09b** (Tier 1, blocked): Code-interaction bug — `_maybe_half` cast model to fp16 before `torch.jit.trace` inside Core ML export, which expects fp32 dummy. Patched (selfplay_worker parse_args force-sets fp16_eval=False when evaluator=coreml). Also semantically redundant — Core ML already runs FLOAT16 internally. Lane was incoherent as designed.
+11. + 12. **Code lanes:** Beyond the four CPU-queue lanes from item 1, the dispatch process surfaced 4 more L12 driver patches (--save-every fix, count_records fix, --evaluator passthrough for L09, --fp16-eval passthrough for L11b'). All shipped in flight.
+
+**Lab discipline:** every receipt-affecting lane drew a Reviewer audit (8 Reviewer spawns, all APPROVE, with two precedent-setting precedents recorded: (i) fp16-with-output-cast counts as no-behavior-change for the perf lab; (ii) behavior-affecting knobs like sgd_per_position get `needs_repeat` and an explicit "PERF LAB ESTABLISHES" / "Production adoption needs canary" separation). The Training-Quality Promotion Gate kept the lab honest: L11b and L11b' both saw their throughput numbers recorded but neither flipped a production default. R-TRAIN-WL5 stays the WL5 production recipe; the new perf reference R-TRAIN-LEAN-fp16 opens a clear handoff point for whoever drives a WL6 canary outside the perf lab.
+
+**Charter staleness flagged 5 times in a row by Reviewers** — `wiki/topics/perf-lab-charter.md:50` R-TRAIN-LEAN row still reads "V=128 (today's promoted gen default)" while L01 promoted V=512 as the gen default, AND L11 rejected V=512 at the trainer level (so the row's framing is doubly out of date), AND L11b' has now established V=512 + sgd=0.001 + fp16 as the new perf reference. Class B (charter modification → user). Surfaced for next charter pass.
+
+**Resuming the lab:** the queue has clean follow-up candidates — L09c (tiny on ANE), L06fu-medium-AB (clean medium fp16 attribution), L08-mps-heap-ratio at the new fp16 reference, L11b'' (sgd_per_position sweep at V=512+fp16). All Tier-3-ish. The Tier-1 architectural lever space (V × sgd × fp16 × Core ML) is well-mapped at small/V=64-512; the next architectural play likely involves model-size scaling (medium more aggressively, or even tiny on ANE) or a deeper trainer-side change (bf16 SGD? trainer-side compile?). Reasonable to call this perf cycle done at the chip-envelope it explored.
+
+> The PyTorch forums told us fp16 on MPS was slow without saying what
+> they meant by slow; Apple Core ML docs say small models benefit from
+> ANE without saying which small. We measured both: R-S400 fp16 doubled
+> (+97%), small/V=64 on ANE lost ~2× on workers, R-TRAIN doubled when
+> low-sgd and fp16 stacked at the right operating point.
+> Now the lab has numbers instead of folk wisdom. The mac is singing.
+
+---
+
 ## [2026-05-23] L11b' | R-TRAIN family doubles — V=512 + low-sgd + fp16 = 8,340 aug/s (+153% vs WL5)
 
 The compound finding the whole perf cycle was building toward. L11b said: lower trainer SGD work at V=512 to free up MPS for workers (+28% aug/s at trainer level, TQ-gated). L06-followup said: fp16 doubles worker-side throughput at small/V=512 (bandwidth-bound regime). L11b' tests whether the two levers are independent and stack at the R-TRAIN family.

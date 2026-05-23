@@ -192,7 +192,22 @@ def parse_args() -> argparse.Namespace:
                         "CPU_AND_NE asks Core ML to schedule on the ANE when it "
                         "can. Use CPU_ONLY to isolate the Core ML path from any "
                         "GPU contention.")
-    return p.parse_args()
+    args = p.parse_args()
+    # --fp16-eval is structurally incompatible AND semantically redundant
+    # with --evaluator coreml: Core ML already exports at
+    # compute_precision=FLOAT16, and torch.jit.trace inside export_model_to_coreml
+    # passes a fp32 dummy input — casting model.half() first causes
+    # "Input type (float) and bias type (Half) should be the same" at the
+    # first conv. L09b discovered this at runtime. Force fp16_eval off for
+    # the Core ML path; print a one-line note so the choice is auditable.
+    if args.evaluator == "coreml" and args.fp16_eval:
+        print(
+            f"[{args.worker_id}] --fp16-eval ignored on --evaluator coreml "
+            f"(Core ML is already FLOAT16 internally)",
+            flush=True,
+        )
+        args.fp16_eval = False
+    return args
 
 
 def _build_evaluator(args: argparse.Namespace, model: torch.nn.Module, device: torch.device):
