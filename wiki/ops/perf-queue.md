@@ -33,10 +33,27 @@ Reference points (current bests):
 These run as Agent subagents in worktrees; integrate as merge commits.
 Multiple can be in flight at once. Listed top-down by priority.
 
-*Empty.* All four pre-restart CPU lanes (L12, L05, L06, L08-driver)
-landed on 2026-05-23 — see Completed table below. New code-lane
-follow-ups (e.g. trainer-side `--compile` once trainer-compile is
-desired) will be added here as they surface.
+#### Lshare-ANE — BACKBURNER: public writeup of the ANE findings "for the next person" (Jason 2026-05-23)
+
+```yaml
+id: Lshare-ANE
+tier: bg (backburner — run only when nothing higher-value needs the queue; no GPU)
+purpose: knowledge share-out. Our ANE strand answered questions that are badly under-documented publicly; package the findings so the next person searching "Core ML ANE PyTorch inference residency" / "is the ANE worth it for ML" / "Core ML RangeDim CPU fallback" lands on real measurements.
+the story worth telling (all measured 2026-05-23):
+  - The ANE-residency GOTCHA: a symbolic ct.RangeDim (or EnumeratedShapes) batch dim silently demotes the WHOLE Core ML program to CPU/BNNS regardless of compute_units=CPU_AND_NE. Only a single FIXED static batch is ANE-placeable; the op graph is otherwise identical. Verify residency with no sudo via hollance's `sample <pid>` (AneInferenceOperationImplUsingAnefAPIs/AppleNeuralEngine vs BnnsCpuInferenceOperation).
+  - The ANE is NOT a free lunch for concurrent self-play: even with residency it loses on throughput (≈ CPU/BNNS, loses to torch/MPS at tiny/small) AND shares the package power budget — not contention-immune (−35% under a GPU hog; bidirectional).
+  - The cross-engine coupling mechanism: the throttle is FLOP-rate-INDEPENDENT (occupancy/working-set, not compute-power) → "shrink footprint, not FLOPs."
+form: a public-facing topic page, sibling to m5-max-fp16-and-throughput-regimes.md (the public writeup for the fp16 findings). Pull from coreml-design-envelope-and-our-fit.md + m5-max-cross-engine-coupling.md + the L09i/Lpwr ledger receipts; rewrite for an external reader (strip internal lane IDs).
+code_change: false (pure writeup; CPU-queue agent)
+priority: 0.5 (backburner — do NOT preempt any real perf/training lane)
+status: queued (backburner)
+notes: Jason 2026-05-23 — "put in a backburner idea to share our ANE findings for the next person." The wiki pages already carry the open-source-repo framing; this is the consolidation/externalization pass. No urgency.
+```
+
+*(No other CPU lanes pending. The pre-restart code lanes (L12, L05, L06,
+L08-driver) landed 2026-05-23; the L09i-fix coreml capability +
+canonical_sweep coreml + --coreml-static-batch + fp16-hog + Ltrain-amp bf16
+all landed this session on their worktrees — see Completed table.)*
 
 ## GPU queue (serial — one cell at a time on MPS)
 

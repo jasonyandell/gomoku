@@ -37,6 +37,23 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — Ltrain-amp — trainer-side bf16 autocast: directionally SLOWER, but cell is heat-soak-confounded (needs_repeat)
+
+```yaml
+lane: Ltrain-amp (Tier-1: does trainer-side bf16/fp16 autocast speed the R-TRAIN SGD step?)
+hypothesis: fp16 EVAL gave +97% (L06); trainer-side precision is unexplored. bf16 autocast on the trainer forward+loss might cut trainer_step (the R-TRAIN bottleneck), compounding across the run.
+code_ref: feat/perf-Ltrain-amp @ 4d0988e (torch.autocast on forward+loss; opt-in --trainer-amp {off,bf16,fp16}; off-path bit-identical). bf16 autocast CONFIRMED working on MPS torch 2.11 (finite grads, autocast active).
+cells: small / W=8 / G=8 / S=400 / V=64 / torch workers / live training / 30s+120s. fp32 (off) then bf16, back-to-back, 40s cooldown.
+results:
+  - fp32 (off): aug/s=1,356.5, epochs/s=0.025, trainer_step_s_p50=0.1245, 5 epochs, plies 34.55
+  - bf16: aug/s=824.9, epochs/s=0.0167, trainer_step_s_p50=0.1693, 4 epochs, plies 33.08
+  - bf16 vs fp32: trainer_step +36% (SLOWER), aug/s −39%, epochs/s −33%.
+CONFOUND (load-bearing): the fp32 baseline itself = 1,356 aug/s vs the cool R-TRAIN-WL5 (L10) = 3,297.6 — a −59% drop. Far beyond Lhot's measured ~0% heat-soak haircut (which was an 8-cell / 8-min test). This session ran 20+ cells + multiple sustained ~11 TFLOP/s GPU hogs over a long span → the chip is DEEP heat-soaked. Non-lab tenants ruled OUT (web.server PID 23001 @0.1% CPU/2-day uptime + microscope @0.0%/15-day — both idle). So both arms ran throttled; the bf16-vs-fp32 magnitude is unreliable. (Worktree-train.py off-path overhead not 100% ruled out, but it's bit-identical params + byte-identical dry-run cmd, so unlikely to be 2.4×.)
+mechanism (tentative): bf16-trainer being slower is PLAUSIBLE independent of thermal — autocast inserts fp32↔bf16 casts around each op; for a SMALL model whose SGD step is dispatch/overhead-bound (not bandwidth-bound), the cast overhead can exceed the bf16 matmul speedup. This is the L06 regime logic in reverse: fp16/bf16 helps only in the bandwidth-bound regime; the small-model trainer step likely isn't there.
+decision: needs_repeat — bf16-trainer is directionally SLOWER (+36% trainer_step) and that direction is mechanistically expected, BUT the cell is heat-soak-confounded (−59% baseline). Re-run on a COOLED chip (interleaved) to confirm the magnitude before calling it a clean reject. Also re-baselines the heat-soak (a finding in its own right: extended mixed cell+hog load throttles the M5 Max well beyond the short Lhot test).
+next_action: cooldown (~12 min idle) → re-run worktree fp32 + bf16 A/B; the cooled fp32 cell doubles as a heat-soak re-baseline (recovers toward 3,297 → thermal confirmed + worktree-overhead ruled out). TQ note: trainer-precision changes numerics → production adoption is TQ-gated regardless; the lab only measures speed.
+```
+
 ### 2026-05-23 — Lpwr2b — RESOLVED: cross-engine throttle is FLOP-rate-INDEPENDENT (rules out compute-power; coupling tracks GPU working-set/occupancy)
 
 ```yaml
