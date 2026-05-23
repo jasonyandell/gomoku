@@ -357,6 +357,29 @@ Process notes:
   `reviewer: PENDING`; a Reviewer spawn will audit and the verdict
   appended before the next commit closing the receipt.
 
+## [2026-05-23] lab | L03 sims-x-wave — V=512 carries to every quality point (R-S200 +52.5%, R-S100 +35.2%)
+
+Cron tick caught L03 just-completed. 2/2 ok, ~5 min each.
+
+| cell | aug/s | vs WL5 V=64 |
+|---|---|---|
+| small W=8 G=8 S=100 **V=512** | **15,082** | **+35.2%** over 11,151 |
+| small W=8 G=8 S=200 **V=512** |  **9,156** | **+52.5%** over 6,006  |
+
+**Double promote** — V=512 now wins at every R-S* reference point measured. The wave-size lever is uniform across the sims axis: same speedup mechanism (eval-batch shape) applies regardless of how many MCTS sims feed the batch.
+
+Three reference points are now at V=512:
+
+| ref | best aug/s | speedup vs WL5 V=64 |
+|---|---|---|
+| R-S400 | 4,765  | +49.5% |
+| R-S200 | 9,156  | +52.5% |
+| R-S100 | 15,082 | +35.2% |
+
+R-S200 has the biggest gain because S=200 V=64 was particularly under-saturated on eval (wave was too narrow vs the per-call kernel cost). At S=100 the gain shrinks because games-per-batch × wave already saturated MPS at smaller batch sizes; at S=400 the gain is between because each sim contributes more wall-time but fewer eval calls.
+
+The cron's Speedup Report line is now load-bearing. Reviewer: APPROVE — "L03 double promote math + units verified; all six surfaces consistent; queue clean."
+
 ## [2026-05-23] lab | charter v2 — tier system + R-TRAIN family + Reviewer Gate
 
 After L01 launched but before it landed, Jason gave four new

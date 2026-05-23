@@ -4,11 +4,17 @@ This page is the current control-room summary for bounded Gomoku performance wor
 
 ## Current Focus
 
-**Autonomous perf lab running.** Charter v2 + Reviewer Gate + tier system committed in `7491401`. Current cumulative win on R-S400 (the WL5-anchor cell): **3,188 → 4,765 aug/s = +49.5% cumulative across two promotes (V=64 → V=128 yesterday, V=128 → V=512 today via L01).** Plateau knee at V=512; V=768/1024 are flat — eval overhead caps further wave gains on this exact hardware.
+**Autonomous perf lab running.** Three promotes in two lanes:
 
-**Latest promotion:** small / W=8 / G=8 / sims=400 / **wave=512** at R-S400 (lane L01-wave-extrapolation; reviewer APPROVE). No behavior change — eval batch shape only. Per the Training-Quality Promotion Gate, the first live-training cell that adopts V=512 (L11) still owes a canary against `archives/wl5_validation_v1.pt`, but only one cycle since the change is purely structural.
+| ref | best cell | aug/s | speedup vs WL5 V=64 |
+|---|---|---|---|
+| R-S400 | small W8 G8 S400 **V=512** | 4,765 | **+49.5%** |
+| R-S200 | small W8 G8 S200 **V=512** | 9,156 | **+52.5%** |
+| R-S100 | small W8 G8 S100 **V=512** | 15,082 | **+35.2%** |
 
-**Up next:** Tier 1 architectural lanes — L09 (Core ML eval-worker prototype, scaffolding in worktree), L10 (R-TRAIN-WL5 first measurement), L11 (V=512 end-to-end cell). Auto-queued compounds against V=512: L02 W×V=512, L03 S×V=512.
+**Latest:** L03 sims-x-wave landed double promotes at R-S200 and R-S100 — V=512 wins at every quality point measured so far. The eval-batch-shape benefit dominates regardless of n-sims. Reviewer PENDING on L03; L01 (R-S400) already APPROVE.
+
+**Up next:** Tier 2 L02 (W × V=512) is the next unblocked compound; tests whether the wave win still holds at W=4/12/16. Tier 1 R-TRAIN-* cells stay blocked on L12 (live-training driver). Bg L07 tiny contour at V=512 becomes valuable after L02.
 
 Use the frontier lab commands from pi:
 
@@ -42,6 +48,7 @@ BFS by default: current-main baseline receipts and production contour are now do
 | Replay-buffer width cheap test | active in another session | BAB1-buf-ablation-1p5M live as of 2026-05-22; trainer PID 27579, e10215/10700 at last check. See [perf-log.md](perf-log.md). |
 | Canonical 5-axis M5 Max contour sweep | completed / promote | 23/23 cells; wave=128 promoted as new R-S400 default (+27% over V=64); receipt in [experiment-ledger.md](experiment-ledger.md). |
 | L01-wave-extrapolation | completed / promote | 4/4 cells; **wave=512** promoted as new R-S400 default (+17.7% over V=128; +49.5% cumulative). Plateau confirmed at V=512 (V=768/1024 flat). Reviewer: APPROVE. |
+| L03-sims-x-wave | completed / promote (2x) | 2/2 cells; **V=512** promoted at R-S200 (+52.5%) AND R-S100 (+35.2%). Wave-size win uniform across sims axis. Reviewer: APPROVE. |
 
 ## Next Action
 

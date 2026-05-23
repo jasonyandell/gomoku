@@ -211,3 +211,37 @@ next_action: |
   4. Plateau knee at V=512: future wave sweeps stop at V=512 on this hardware unless model size, MPS heap config, or engine (Core ML / ANE) shifts the eval-overhead floor. L07 (tiny contour) probes model-size dependency.
 ```
 
+### 2026-05-23 — L03 sims-x-wave at V=512 (double promote at R-S200 + R-S100)
+
+```yaml
+lane: L03-sims-x-wave
+tier: 2
+hypothesis: V=512 (from L01 promote) carries to faster quality points S=100 and S=200; opens new R-S200 / R-S100 promoted-defaults.
+reference: R-S200 (baseline 6,006 aug/s at V=64) + R-S100 (baseline 11,151 aug/s at V=64)
+code_change: false
+baseline_command: |
+  python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L03-sims-x-wave-20260523T055953Z --cells-from <same dir>/cells.csv --lane L03-sims-x-wave --secs-per-cell 300 --max-plies 16 --device mps
+candidate_command: same (2-cell sweep at S in {100, 200} with V=512)
+hardware: M5 Max / MPS / idle box
+seed: per-worker 1000..1007
+baseline_metric: |
+  R-S200 was small W=8 G=8 S=200 V=64 = 6,006 aug/s (canonical-sweep)
+  R-S100 was small W=8 G=8 S=100 V=64 = 11,151 aug/s (canonical-sweep)
+candidate_metric: |
+  S=100 V=512 = 15,082 aug/s (+35.2% over R-S100 baseline)
+  S=200 V=512 =  9,156 aug/s (+52.5% over R-S200 baseline)
+delta: Two promotes. V=512 wins at every quality point measured so far. Cumulative speedups: R-S400 +49.5% (L01), R-S200 +52.5%, R-S100 +35.2%. Wave-size win is uniform across the sims axis — the eval-batch shape benefit dominates regardless of how many MCTS sims feed it.
+confidence: medium-high. 5-min cells, idle box, monotone with prior wave findings. Both cells plies_mean=15.97 (random weights cap). The wave-size win continues to be eval-batch-shape-dependent so it should transfer to trained-model production cells.
+artifacts: sweep_logs/lab-L03-sims-x-wave-20260523T055953Z/{summary.tsv, cells.csv, metadata.txt, driver.log, cell_small_W08_G08_S{100,200}_V512/{records,logs}}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L03-sims-x-wave-20260523T055953Z --cells-from ... --lane L03-sims-x-wave
+decision: promote (two reference points)
+reviewer: APPROVE (general-purpose agent, 2026-05-23). "L03 double promote math + units verified (R-S100 +35.2%, R-S200 +52.5%); all six surfaces consistent; queue clean."
+next_action: |
+  1. Promote R-S200: V=64 -> V=512 (6,006 -> 9,156 aug/s, +52.5%). best-cells.md updated.
+  2. Promote R-S100: V=64 -> V=512 (11,151 -> 15,082 aug/s, +35.2%). best-cells.md updated.
+  3. Wave-size dominance now confirmed at three quality points (S=100, S=200, S=400). Future cells should use V=512 as the structural default; only deviate with explicit hypothesis.
+  4. Auto-queued compound: L02 (W x V=512) is next-priority unblocked Tier 2. After that, L07 (tiny contour at V=128/256/512) becomes high-value to set the R-S400-tiny ceiling for the L09 ANE comparison.
+  5. The two new live-training cells that should adopt V=512 (R-TRAIN-LEAN via L11) need one canary cycle against archives/wl5_validation_v1.pt per the Training-Quality Promotion Gate (still pending L12 driver).
+```
+

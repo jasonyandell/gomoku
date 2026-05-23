@@ -14,11 +14,11 @@ Reviewer gates every promote: see
 
 Reference points (current bests):
 
-| ref | cell | best |
-|---|---|---|
-| **R-S400** | small / W=8 / G=8 / S=400 / **V=512** | **4,765 aug/s** (L01 promote, reviewer APPROVE) |
-| **R-S200** | small / W=8 / G=8 / S=200 / V=64  | 6,006 aug/s |
-| **R-S100** | small / W=8 / G=8 / S=100 / V=64  | 11,151 aug/s |
+| ref | cell | best | speedup vs WL5 V=64 |
+|---|---|---|---|
+| **R-S400** | small / W=8 / G=8 / S=400 / **V=512** | **4,765 aug/s** (L01) | **+49.5%** |
+| **R-S200** | small / W=8 / G=8 / S=200 / **V=512** | **9,156 aug/s** (L03, reviewer APPROVE) | **+52.5%** |
+| **R-S100** | small / W=8 / G=8 / S=100 / **V=512** | **15,082 aug/s** (L03, reviewer APPROVE) | **+35.2%** |
 | **R-TRAIN-WL5** | full WL5 recipe | TBD (first measure in L10) |
 | **R-TRAIN-LEAN** | WL5 with V=128 | TBD (L11) |
 | **R-TRAIN-ANE** | WL5 with workers on Core ML | TBD (L09) |
@@ -137,26 +137,6 @@ P_success: 0.5
 priority: 4.0
 status: queued
 notes: Rescoped after L01 promoted V=512 (V=128/V=256 cells dropped; would not displace V=512). W=8 V=512 is the reference (4,765 aug/s, already measured).
-```
-
-#### L03-sims-x-wave (rescoped 2026-05-23 after L01)
-
-```yaml
-id: L03-sims-x-wave
-tier: 2
-hypothesis: At the new V=512 plateau, S=100 / S=200 open new promoted-default cells faster than R-S200 / R-S100.
-reference: R-S200 + R-S100
-code_change: false
-cells:
-  - small W=8 G=8 S=100 V=512
-  - small W=8 G=8 S=200 V=512
-n_cells: 2
-wall_cost_min: 12
-E_delta_aug_per_sec: 2000
-P_success: 0.5
-priority: 16.7
-status: queued
-notes: Smallest version. Tests whether V=512 carries to the faster-quality cells. Highest E[delta]/cost in Tier 2 after rescope.
 ```
 
 #### L04-G-x-wave
@@ -279,6 +259,7 @@ notes: Calibrates the ANE work. Runs when nothing in Tier 1-3 needs GPU.
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L03-sims-x-wave | promote (2x) | R-S200: V=512 = 9,156 aug/s (+52.5%); R-S100: V=512 = 15,082 aug/s (+35.2%) | APPROVE | V=512 carries cleanly to S=200 and S=100. Receipt: 2026-05-23 L03 entry in experiment-ledger.md. |
 | 2026-05-23 | L01-wave-extrapolation | promote | small W8 G8 S400 V=512 = 4,765 aug/s | APPROVE | +17.7% over V=128; +49.5% cumulative; plateau at V=512 (V=768/1024 flat). Receipt: 2026-05-23 entry in experiment-ledger.md. |
 | 2026-05-23 | L00-canonical-sweep | promote | small W8 G8 S400 V=128 = 4,048 aug/s | (pre-reviewer-era; auto-grandfathered) | The kickoff sweep; receipt under canonical-sweep-mainframe lane. |
 
