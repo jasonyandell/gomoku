@@ -22,7 +22,7 @@ fix-load left a confound: in wave-mode lab_train_cell, aug/s is trainer-gated, s
 
 **ANE workers DO throttle: 3,548 → 2,307 aug/s, −35% under the hog.** So the contention-immunity hope is not supported — the ANE is not a free side-channel; it shares the package power budget. The degradation is gentler than CPU/BNNS (Lpwr −82%), but the hog intensities aren't matched, so that's not a clean ranking.
 
-The striking part is the **second direction of the coupling**: the GPU hog reached only **~2.72 TFLOP/s** here, versus ~10.7 TFLOP/s when it ran next to a light trainer in fix-load. The 16 full-tilt ANE workers draw enough package power to throttle a GPU matmul hog down by ~4×. So the coupling is **bidirectional** — ANE↔GPU each brown the other out, settling at a shared-power equilibrium (workers −35%, hog −75%).
+The striking part is the **second direction of the coupling**: the GPU hog reached only **~2.72 TFLOP/s** here, versus ~10.7 TFLOP/s when it ran next to a light trainer in fix-load. The 16 busy worker processes (Core ML/ANE eval + CPU-side MCTS — total package load, not the ANE engine specifically; this cell can't isolate which) draw enough package power to throttle a GPU matmul hog down by ~4×. So the coupling is **bidirectional** — ANE↔GPU each brown the other out, settling at a shared-power equilibrium (workers −35%, hog −75%).
 
 This also reconciles fix-load: there the trainer stalled, the workers idled on the barrier, package power was free, and the hog reached 10.7. The gen=5.1s "held" because the workers were sampled during their brief non-stalled bursts — not because they're immune.
 
