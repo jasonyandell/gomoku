@@ -84,6 +84,55 @@ def _spec_io_names(mlmodel: Any) -> tuple[list[str], list[str]]:
     return inputs, outputs
 
 
+def _discover_static_batch_sizes(mlmodel: Any, input_name: str | None) -> list[int]:
+    """Return the model's allowed (static) input batch sizes, sorted ascending.
+
+    Static-shape ANE models declare either a single fixed batch dimension or a
+    set of ``EnumeratedShapes``. We read those off the model spec so the
+    evaluator can pad each incoming leaf-batch up to a declared size (the ANE
+    only accepts the exact shapes it was compiled for) and slice the outputs
+    back down. Returns ``[]`` for symbolic/flexible-batch models (e.g. the old
+    RangeDim export), in which case the evaluator feeds the real batch as-is.
+    """
+    try:
+        spec = mlmodel.get_spec()
+    except Exception:
+        return []
+    description = getattr(spec, "description", None)
+    if description is None:
+        return []
+    inputs = list(getattr(description, "input", []))
+    chosen = None
+    for item in inputs:
+        if input_name is not None and item.name == input_name:
+            chosen = item
+            break
+    if chosen is None and inputs:
+        chosen = inputs[0]
+    if chosen is None:
+        return []
+    try:
+        multi = chosen.type.multiArrayType
+    except Exception:
+        return []
+    sizes: set[int] = set()
+    try:
+        if multi.HasField("enumeratedShapes"):
+            for shape in multi.enumeratedShapes.shapes:
+                dims = list(shape.shape)
+                if dims:
+                    sizes.add(int(dims[0]))
+    except (AttributeError, ValueError):
+        pass
+    if not sizes:
+        # No enumerated set: a plain static shape has a concrete leading dim,
+        # while a RangeDim/symbolic export leaves it as a non-positive sentinel.
+        dims = list(getattr(multi, "shape", []))
+        if dims and int(dims[0]) > 0:
+            sizes.add(int(dims[0]))
+    return sorted(sizes)
+
+
 def _states_to_batch(states: list[GameState]) -> np.ndarray:
     x = np.empty(
         (len(states), N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE),
@@ -147,6 +196,7 @@ class CoreMLEvaluator:
     value_output_name: str | None = None
     max_batch_size: int | None = None
     mlmodel: Any | None = None
+    static_batch_sizes: list[int] | None = None
 
     def __post_init__(self) -> None:
         if self.mlmodel is None:
@@ -177,6 +227,28 @@ class CoreMLEvaluator:
         if self.value_output_name is None and len(outputs) >= 2:
             self.value_output_name = outputs[1]
 
+        # Static-shape (ANE-resident) models accept only the batch sizes they
+        # were compiled for. Discover them so evaluate_planes can pad-up + slice.
+        # An empty list means a symbolic/flexible-batch model (old RangeDim
+        # export), where the real batch can be fed as-is.
+        if self.static_batch_sizes is None:
+            self.static_batch_sizes = _discover_static_batch_sizes(
+                self.mlmodel, self.input_name
+            )
+        if self.static_batch_sizes:
+            largest_static = self.static_batch_sizes[-1]
+            if self.max_batch_size is None or self.max_batch_size > largest_static:
+                self.max_batch_size = largest_static
+
+    def _static_target(self, batch: int) -> int | None:
+        """Smallest declared static batch size >= ``batch`` (None if symbolic)."""
+        if not self.static_batch_sizes:
+            return None
+        for size in self.static_batch_sizes:
+            if size >= batch:
+                return size
+        return self.static_batch_sizes[-1]
+
     def __call__(self, states: list[GameState]) -> tuple[np.ndarray, np.ndarray]:
         return self.evaluate_planes(_states_to_batch(states))
 
@@ -197,6 +269,18 @@ class CoreMLEvaluator:
             return np.concatenate(prior_chunks, axis=0), np.concatenate(value_chunks, axis=0)
 
         assert self.mlmodel is not None
+        batch = x.shape[0]
+        # Static-shape (ANE) models accept only their declared batch sizes, so
+        # pad the real leaf-batch up to the smallest declared size, then slice
+        # the policy+value outputs back to the real batch. Symbolic models
+        # (static_batch_sizes == []) feed the real batch directly.
+        target = self._static_target(batch)
+        if target is not None and target != batch:
+            padded = np.zeros(
+                (target, x.shape[1], x.shape[2], x.shape[3]), dtype=x.dtype
+            )
+            padded[:batch] = x
+            x = padded
         result = self.mlmodel.predict({self.input_name: x})
         priors = _pick_named_or_first(
             result,
@@ -210,9 +294,14 @@ class CoreMLEvaluator:
             ("value", "values"),
             1,
         )
-        batch = x.shape[0]
-        priors = np.asarray(priors, dtype=np.float32).reshape(batch, -1)
-        values = np.asarray(values, dtype=np.float32).reshape(batch)
+        run_batch = x.shape[0]
+        priors = np.asarray(priors, dtype=np.float32).reshape(run_batch, -1)
+        values = np.asarray(values, dtype=np.float32).reshape(run_batch)
+        # Slice padded rows back off so the MCTS caller gets exactly one
+        # (policy, value) per real leaf.
+        if run_batch != batch:
+            priors = priors[:batch]
+            values = values[:batch]
         if priors.shape != (batch, N_ACTIONS):
             raise ValueError(
                 f"Core ML policy output expected shape ({batch}, {N_ACTIONS}), "
@@ -250,12 +339,29 @@ def export_model_to_coreml(
     output_path: str | Path,
     *,
     max_batch_size: int = 512,
+    batch_sizes: list[int] | None = None,
     input_name: str = DEFAULT_INPUT_NAME,
     policy_output_name: str = DEFAULT_POLICY_OUTPUT_NAME,
     value_output_name: str = DEFAULT_VALUE_OUTPUT_NAME,
     compute_precision: str = "FLOAT16",
 ) -> Path:
-    """Export an eval-only PyTorch model to a flexible-batch Core ML package."""
+    """Export an eval-only PyTorch model to a *static-shape* Core ML package.
+
+    By default the export declares a SINGLE fixed batch dimension equal to
+    ``max_batch_size``. This is the shape that restores Apple Neural Engine
+    residency: a symbolic ``RangeDim`` batch forces Core ML to compile the whole
+    program to CPU/BNNS (lane L09i diagnostic), and on this model+hardware so
+    does ``ct.EnumeratedShapes`` (lane L09i-fix residency probe: enumerated
+    shapes ran on BNNSEngine, a single fixed shape ran on the ANE). The
+    companion ``CoreMLEvaluator`` reads the declared batch size off the model
+    spec and pads each real leaf-batch up to it, then slices the policy+value
+    outputs back to the real batch size.
+
+    ``batch_sizes`` is an opt-in escape hatch: pass an explicit list to emit
+    ``ct.EnumeratedShapes`` over those sizes (kept only for residency
+    experiments — it currently lands on CPU/BNNS for this model). A single-item
+    list emits a fixed shape, identical to the default behaviour.
+    """
     ct = require_coremltools()
     import torch
 
@@ -264,15 +370,35 @@ def export_model_to_coreml(
     model.eval()
     dummy = torch.zeros(1, N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
     traced = torch.jit.trace(model.cpu(), dummy)
-    batch_dim = ct.RangeDim(lower_bound=1, upper_bound=int(max_batch_size))
+
+    if batch_sizes is None:
+        # Single fixed batch == max_batch_size: the only shape confirmed
+        # ANE-resident for this model in the L09i-fix probe.
+        batch_sizes = [int(max_batch_size)]
+    batch_sizes = sorted({int(b) for b in batch_sizes if int(b) >= 1})
+    if not batch_sizes:
+        raise ValueError("batch_sizes must contain at least one positive batch size")
+
+    plane_shape = (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE)
     precision = getattr(ct.precision, compute_precision.upper())
+
+    if len(batch_sizes) == 1:
+        # A single declared batch is the simplest fully-static shape and the
+        # one that stays ANE-placeable.
+        input_shape: Any = (batch_sizes[0], *plane_shape)
+    else:
+        input_shape = ct.EnumeratedShapes(
+            shapes=[(b, *plane_shape) for b in batch_sizes],
+            default=(batch_sizes[-1], *plane_shape),
+        )
+
     mlmodel = ct.convert(
         traced,
         convert_to="mlprogram",
         inputs=[
             ct.TensorType(
                 name=input_name,
-                shape=(batch_dim, N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE),
+                shape=input_shape,
                 dtype=np.float32,
             )
         ],
