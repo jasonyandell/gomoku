@@ -42,7 +42,8 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 ```yaml
 lane: L11b-V512-low-sgd-per-position
 hypothesis: L11 showed V=512 hurts at trainer level because 2.4× buffer-fill speedup × fixed sgd_per_position=0.0025 produces 3.36× more SGD steps per epoch, monopolizing MPS. Lowering sgd_per_position to 0.001 (2.5× lower) should cap per-epoch trainer work, freeing MPS for workers, and let V=512's pure-gen win finally compound at the trainer level.
-code_ref: f45a3b1 on main (no new code; uses --sgd-per-position passthrough that was already in L12's CLI)
+code_ref: f45a3b1 on main (run-time commit; receipt-filing commit ae89934). No new code; uses --sgd-per-position passthrough that was already in L12's CLI.
+evaluator: torch / MPS (workers and trainer; default — no --evaluator override)
 dataset_ref: fresh random fused checkpoint (small, 324,570 params); live self-play only; the lower SGD-per-position ratio means each batch of training positions gets less optimizer work
 baseline_command: lab-L10-20260523T132940Z (R-TRAIN-WL5 V=64 sgd=0.0025 = 3,297.6 aug/s; 0.0917 epochs/s) AND lab-L11-20260523T133546Z (R-TRAIN-LEAN V=512 sgd=0.0025 = 2,362.8 aug/s)
 candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11b-20260523T134850Z --lane L11b --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --sgd-per-position 0.001 --warmup-secs 30 --measurement-secs 120 --device mps
