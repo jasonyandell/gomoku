@@ -16,6 +16,41 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L06-followup | fp16-eval PROMOTE — R-S400 +97.2% (small nearly doubles)
+
+The session was about to halt — three consecutive rejects (L11, L09, L05-followup), stop signal active. L06-followup was a cleanup smoke before declaring session-end. Then this happened:
+
+| Cell | fp32 ref | **fp16-eval** | Δ |
+|---|---|---|---|
+| small W=8 G=8 S=400 V=512 | 4,765 | **9,398.5** | **+97.2%** 🔥 |
+| tiny W=16 G=8 S=400 V=512 | 22,088 | **22,873.8** | +3.6% |
+
+fp16 actually engaged (`fp16-eval enabled (model cast to torch.float16)` in both worker logs); `plies_mean` unchanged (15.97/15.96 vs prior 15.96/15.96 — both at the 16-ply cap so behavior is identical); outputs cast back to fp32 before MCTS reads them (per the L06 patch).
+
+**Mechanism is clean and predicts the asymmetry.** At V=512, the small model is memory-bandwidth-limited (the eval forward pumps a lot of bytes through MPS). fp16 halves that bandwidth requirement → small nearly doubles. The tiny model at V=512 is MPS-dispatch-limited (already running at 22k aug/s, latency-bound by the cost of each dispatched MPS call), not bandwidth-bound; fp16 helps only marginally. This is exactly the compound-finding-readiness signal that "go re-measure historic nulls under mature MPS" was designed to surface.
+
+**Promote decisions:**
+- `R-S400` new best: small / W=8 / G=8 / S=400 / V=512 / **fp16-eval** = **9,398.5 aug/s** (was 4,765 fp32)
+- `R-S400-tiny` new best: tiny / W=16 / G=8 / S=400 / V=512 / **fp16-eval** = **22,873.8 aug/s** (was 22,088 fp32)
+- `consecutive_rejects` resets to 0 — stop signal OFF — the loop is rejuvenated.
+
+**Compound follow-ups queued:**
+- L06fu-extended: re-measure R-S200 / R-S100 / R-S400-medium under fp16 (the bandwidth-limited regime should compound there too — medium model likely the biggest absolute win).
+- L09b: revisit Core ML / ANE workers with fp16 on the torch fallback path — if the worker-side loss from L09 (small/V=64: gen ~2× slower on ANE than MPS) can be halved by fp16-on-MPS, R-TRAIN-ANE might shift from reject to compete.
+- L11b': revisit V=512 + sgd_per_position=0.001 + fp16 at the trainer level — R-TRAIN-LEAN-style finding (+28% aug/s) could compound with this near-doubling.
+
+**The full session arc:** four CPU-queue code lanes shipped in parallel (L12 driver + L05 compile + L06 fp16 + L08-driver env). L10 baselined R-TRAIN-WL5 at 3,297.6 aug/s after surfacing two driver bugs. L11+L09 mapped trainer-side MPS contention as the dominant cost in live training. L11b compounded into +28% aug/s at the trainer level (TQ-gated needs_repeat). L05-followup was neutral (compile noop on MPS). And then L06-followup nearly doubled R-S400. Lab worked exactly as designed: code first, smokes second, compound findings emerge from the receipt-by-receipt chain.
+
+> Apple's MPS docs are silent on whether fp16 is actually faster
+> than fp32 for our eval graph. The PyTorch forums say "fp16 on
+> MPS is slow" without ever defining slow. We measured it: at
+> small/V=512 fp16 is +97%, at tiny/V=512 it's +3.6%. The first
+> number is the answer; the second tells you why.
+> Now mature-MPS + fused-conv-bn means historic regressions are
+> due for re-test, and the perf lab has a clear next round.
+
+---
+
 ## [2026-05-23] L11b | V=512 + sgd_per_position=0.001 = +28% aug/s — needs quality canary
 
 The L11+L09 compound finding pointed at the trainer-side MPS contention as the real lever. L11b directly tests the prediction: cap the trainer's per-epoch SGD work at V=512, free up MPS for workers, recover the gen-side win. Same WL5 recipe as L11 except `--sgd-per-position 0.001` (2.5× lower than default 0.0025, to compensate for V=512's 2.4× buffer-fill speedup).

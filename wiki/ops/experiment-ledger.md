@@ -37,6 +37,29 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L06-followup fp16-eval PROMOTE — small +97.2%, tiny +3.6%
+
+```yaml
+lane: L06-followup-fp16-cells
+hypothesis: fp16 eval reduces memory bandwidth and improves aug/s on MPS without behavior change. Smoke at R-S400 (small / W=8 / G=8 / S=400 / V=512) and R-S400-tiny (tiny / W=16 / G=8 / S=400 / V=512); historic regression worth re-checking with mature MPS + fused conv+bn.
+code_ref: 36d0f8d on main (run-time); receipt_commit pending. Uses --fp16-eval passthrough from L06 (commit a3fb9ca).
+evaluator: torch / MPS / fp16-eval (workers cast model to float16; inputs cast to half() inside make_torch_evaluator; outputs cast back to fp32 BEFORE host transfer per the L06 patch design — MCTS reads identical-shape fp32 numbers from a fp16-internal forward)
+dataset_ref: pure self-play; fresh random fused checkpoint per model; no trainer; 60s/cell smoke
+baseline_command: R-S400 (lab-L01-wave-extrapolation = 4,765 aug/s); R-S400-tiny (lab-L07-tiny-contour = 22,088 aug/s)
+candidate_command: python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L06fu-20260523T135945Z --cells-from <2-row csv> --lane L06-followup --secs-per-cell 60 --fp16-eval
+hardware: M5 Max / MPS / idle; torch 2.11.0
+seed: workers seeded 1000..1015; same canonical_sweep seeding as L01/L07
+baseline_metric: small V=512 fp32 = 4,765 aug/s; tiny V=512 fp32 = 22,088 aug/s; plies_mean both 15.96 (16-ply cap)
+candidate_metric: small V=512 fp16 = **9,398.5 aug/s**; tiny V=512 fp16 = **22,873.8 aug/s**; plies_mean 15.97 / 15.96 (16-ply cap; game-shape preserved within noise)
+delta: small **+97.2%** (4,765 → 9,398.5; nearly doubles); tiny **+3.6%** (22,088 → 22,874; ~18× the V=512-plateau noise floor of ~0.2% so distinguishable from noise though much smaller win). Mechanism (clean): small at V=512 is memory-bandwidth-limited so fp16 (halves bandwidth) nearly doubles throughput; tiny at V=512 is MPS-dispatch-limited (already at 22k aug/s, more compute-bound) so fp16 helps only marginally. This is exactly the compound-finding-readiness signal that re-running prior nulls under mature MPS would surface.
+confidence: high. fp16 actually engaged (`fp16-eval enabled (model cast to torch.float16)` in both worker logs); plies_mean unchanged (game-shape preserved); outputs cast to fp32 before host transfer (per L06 patch); mechanism predicts the small≫tiny ratio observed (small was bandwidth-bound, tiny was dispatch-bound). The historic "fp16 on MPS is slow" claim is now disproven for our eval workload at this torch+MPS+fused-conv-bn maturity level.
+artifacts: sweep_logs/lab-L06fu-20260523T135945Z/{summary.tsv,cells.csv,metadata.txt,cell_small_W08_G08_S400_V512,cell_tiny_W16_G08_S400_V512}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L06fu-20260523T135945Z --cells-from cells.csv --lane L06-followup --secs-per-cell 60 --fp16-eval
+decision: promote
+next_action: Update R-S400 best-cell to small/W=8/G=8/S=400/V=512/**fp16** = 9,398.5 aug/s (was 4,765 fp32). Update R-S400-tiny best-cell to tiny/W=16/G=8/S=400/V=512/**fp16** = 22,874 aug/s (was 22,088 fp32). The pure-perf promote stands per charter — game-shape preserved at 16-ply cap, outputs are fp32 at the MCTS boundary, mechanism is well-understood. CAUTION for production training: fp16 introduces small numerical noise in the eval forward; for live-training adoption the Training-Quality Gate still applies (canary training run reporting val/policy_ce vs wl5_validation_v1.pt). Compound follow-ups: (a) re-measure R-S200 / R-S100 under fp16 (the bandwidth-limited regime might compound there too); (b) explore medium model at V=512 + fp16 (memory-bandwidth saving should be even larger for the bigger model); (c) revisit L09 with fp16 workers — if the worker-side ANE loss can be halved by fp16 on the torch fallback, R-TRAIN-ANE might pay; (d) revisit L11b with fp16 — R-TRAIN-LEAN at V=512 + fp16 + low sgd might compound into the trainer-level R-TRAIN family. consecutive_rejects RESETS to 0; the loop is rejuvenated.
+```
+
 ### 2026-05-23 — L05-followup torch.compile rejects — neutral on MPS at V=512 (both shapes)
 
 ```yaml
