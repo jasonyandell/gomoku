@@ -37,6 +37,28 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L09 R-TRAIN-ANE rejects — trainer-side wins, worker-side loses
+
+```yaml
+lane: L09-ane-offload-prototype
+hypothesis: A Core ML eval-worker frees the GPU from inference; even with slower raw eval the concurrent trainer step rate increases and overall R-TRAIN-ANE beats R-TRAIN-WL5.
+code_ref: 5c08d3c on main (L12 driver gained --evaluator + --coreml-compute-units passthrough; L09's enabling patch)
+dataset_ref: fresh random fused checkpoint (small, 324,570 params); workers run Core ML eval on CPU_AND_NE
+baseline_command: lab-L10-20260523T132940Z (R-TRAIN-WL5 V=64 torch eval = 3,297.6 aug/s)
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09-20260523T134213Z --lane L09 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS (trainer) + ANE (workers via Core ML CPU_AND_NE); idle
+seed: workers seeded 1000..1007; trainer seed default
+baseline_metric: R-TRAIN-WL5 torch: 3,297.6 aug/s; 14.07 games/s; 0.0917 epochs/s; trainer_step_s_p50=0.0512s
+candidate_metric: R-TRAIN-ANE coreml: 1,930.3 aug/s; 8.00 games/s; 0.0583 epochs/s; trainer_step_s_p50=0.0227s; 10 epochs in 120s; plies_mean 30.43
+delta: aug/s -41.5%; games/s -43.1%; epochs/s -36.4%; **trainer_step_s_p50 -55.7% (faster — hypothesis confirmed on the trainer side)**. Per-epoch breakdown in the trainer log: L09 epoch 8 was "(11.9s: gen=10.3s train=1.3s)" vs L10 epoch 8's "(~11s: gen=~5s train=~4s)". The trainer halved its per-epoch SGD time once MPS contention was relieved (1.3s vs 4s), but worker gen time doubled (10.3s vs 5s) — workers are slower on ANE than on torch/MPS at this model size. Net: holistic aug/s drops 41%.
+confidence: medium-high. Single trial; smoke-first 120s; 10 epochs span. The trainer-side win is mechanically clean in the trainer log (train= field halves consistently). The worker-side loss is also clean (gen= field doubles consistently). First-epoch warmup is 22.3s vs steady-state ~12s — Core ML graph capture / ANE first-load overhead. Even at steady state, gen=10s vs torch's gen=5s, so the worker-side gap isn't a warmup artifact alone.
+artifacts: sweep_logs/lab-L09-20260523T134213Z/{summary.tsv,metadata.txt,cell_train_small_W08_G08_S400_V064_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/v9,v10}}
+commands_run:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09-20260523T134213Z --lane L09 --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+decision: reject
+next_action: Holistic R-TRAIN-ANE doesn't beat R-TRAIN-WL5 at small/V=64. **But the trainer-side mechanism works** — MPS contention is real, and offloading workers DOES free the trainer. Follow-up candidates: (a) L09b — try `--coreml-compute-units CPU_AND_GPU` or `ALL` to see if the routing decision matters; (b) L09c — tiny model on ANE (smaller per-eval graph might amortize Core ML overhead better); (c) L11b (queued next, higher priority) — V=512 + lower sgd_per_position to test if the trainer-side cost from L11 can be capped, leveraging the same "free up MPS for workers" intuition. The compound chain (L11+L09) tells the story: pure-gen wins don't free-ride to trainer, and naive worker-offload doesn't pay either — but the trainer-side MPS contention IS real and movable.
+```
+
 ### 2026-05-23 — L11 R-TRAIN-LEAN V=512 rejects — wave win doesn't compound at trainer
 
 ```yaml

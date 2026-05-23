@@ -16,6 +16,44 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L09 | R-TRAIN-ANE REJECT (holistic) — but trainer-side hypothesis CONFIRMED
+
+L09 tested the architectural ANE-offload lever: route worker eval through Core ML on CPU_AND_NE, leaving MPS free for the trainer. The L12 driver gained `--evaluator coreml --coreml-compute-units` passthrough (commit 5c08d3c, third L12 gap of the day) to enable the dispatch. Same WL5 recipe as L10 in every other way; 30s warmup + 120s measure.
+
+**Result: holistic reject, but mechanism partially confirmed.**
+
+| Metric | L10 (torch baseline) | L09 (Core ML/ANE) | Δ |
+|---|---|---|---|
+| aug/s | 3,297.6 | 1,930.3 | **-41.5%** |
+| games/s | 14.07 | 8.00 | -43.1% |
+| epochs/s | 0.0917 | 0.0583 | -36.4% |
+| **trainer_step_s_p50** | **0.0512s** | **0.0227s** | **-55.7%** ✓ |
+| epochs in window | 14 | 10 | -29% |
+| plies_mean | 29.6 | 30.4 | — |
+
+**The trainer-side hypothesis was right.** L09 epoch 8: `(11.9s: gen=10.3s train=1.3s)`. L10 epoch 8: `(11.4s: gen=5.4s train=4.4s)`. Once workers vacated MPS, the trainer's per-epoch SGD time fell from ~4s to ~1.3s — a clean ~3× speedup at the step level. The MPS contention from L11's analysis is real and movable.
+
+**The worker-side hypothesis was wrong (for this model size).** Core ML eval at small/V=64 is ~2× slower than torch/MPS for this workload. Epoch 8: gen=10.3s vs L10's gen=5.4s. Workers can't fill the buffer fast enough; the trainer's MPS-relief gain doesn't get reinvested into more throughput because there are no positions to train on. Net: aug/s drops 41%.
+
+**The compound chain L11+L09 tells the story:**
+- L11: V=512 hurts the trainer side (more SGD per epoch starves MPS).
+- L09: Naive worker-offload hurts the worker side (Core ML at this model size is slower than MPS torch).
+- Synthesis: MPS contention is real and bidirectionally costly. Any future trainer-throughput lane has to keep both sides happy — either by making the trainer's per-position SGD cheaper (so workers aren't starved), or by making worker eval cheaper without taking MPS away (e.g. smaller model on ANE, fp16/Core ML compilation tuning, fused Core ML kernels).
+
+**Follow-up candidates queued (in compound-priority order):**
+- **L11b** (Tier 1, dispatching next): V=512 + lower `sgd_per_position` (e.g. 0.001 vs default 0.0025) — directly tests whether the trainer-side cost from L11 can be capped, leveraging the same "free up MPS for workers" intuition L09 confirmed on the trainer side.
+- L09b (Tier 1, deferred): different `--coreml-compute-units` routing (CPU_AND_GPU, ALL) — does the routing matter? Cheap to run.
+- L09c (Tier 1, deferred): tiny model on ANE — smaller per-eval graph might amortize Core ML overhead better. Pairs with R-S400-tiny's 22,088 aug/s pure-gen win.
+
+> Core ML's ANE scheduling is documented across three blog posts that
+> disagree on whether small models even benefit. We measured it: at
+> small/V=64 the worker side loses ~2× on gen and the trainer side
+> wins ~3× on train. Net says the architectural lever is real but
+> the model-size operating point matters; tiny might be the place
+> this finally pays off.
+
+---
+
 ## [2026-05-23] L11 | R-TRAIN-LEAN V=512 REJECT — gen wins don't compound at trainer
 
 L11 tested whether V=64→V=512's pure-gen +49.5% promote (R-S400, L01) carries through to the holistic R-TRAIN-* family. Same WL5 recipe as L10 but `--wave-size 512`. Same 30s warmup + 120s measure.

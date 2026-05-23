@@ -20,7 +20,7 @@ Reference points (current bests):
 | **R-S400-tiny** | tiny / W=16 / G=8 / S=400 / **V=512** | **22,088 aug/s** (L07) | **+201.5% vs tiny V=64=7,326** |
 | **R-TRAIN-WL5** | full WL5 recipe | **3,297.6 aug/s** / 0.0917 ep/s / 14.07 g/s (L10) | — |
 | ~~R-TRAIN-LEAN~~ | WL5 with V=512 | **2,362.8 aug/s** / 0.0083 ep/s / 8.42 g/s (L11, REJECT — gen win doesn't compound at trainer) | — |
-| **R-TRAIN-ANE** | WL5 with workers on Core ML | TBD (L09) | — |
+| ~~R-TRAIN-ANE~~ | WL5 with workers on Core ML | **1,930.3 aug/s** / 0.0583 ep/s / 8.00 g/s (L09, REJECT holistic; trainer_step_s_p50 -56% confirms MPS-relief, but Core ML worker eval ~2× slower than MPS) | — |
 
 ## CPU queue (parallel — Agent fan-out, no GPU contention)
 
@@ -57,8 +57,29 @@ wall_cost_min: 10
 E_delta_epochs_per_sec: 0.4
 P_success: 0.35
 priority: 4.0
-status: queued (L12 driver landed 2026-05-23; depends_on L10 for the WL5 baseline to compare against)
-notes: The "holistic" lever. Scaffold merged. Driver merged. Sequencing: run L10 first (establish R-TRAIN-WL5 baseline), then L11 (R-TRAIN-LEAN at V=512), then this one to see if Core ML offload beats both.
+status: COMPLETED 2026-05-23 REJECT (holistic) — R-TRAIN-ANE = 1,930.3 aug/s (-41.5% vs R-TRAIN-WL5 3,297.6). But trainer_step_s_p50 -56% (0.0512s→0.0227s) — MPS-relief hypothesis is real on the trainer side; the loss is workers (Core ML eval ~2× slower than MPS torch at small/V=64). Reviewer audit pending. Follow-up candidates: L09b (different compute-units routing), L09c (tiny model on ANE).
+notes: First architectural lane to land a measurement. Mechanism is clean — both sides of the L11+L09 compound finding tell us: MPS contention is real and bidirectional, and the next lane needs to keep both trainer and workers happy. Driver got `--evaluator` + `--coreml-compute-units` passthrough (5c08d3c) — gates any future L09b/L09c.
+```
+
+#### L11b-V512-low-sgd-per-position (NEW, Tier 1 compound follow-up from L09+L11)
+
+```yaml
+id: L11b-V512-low-sgd-per-position
+tier: 1
+hypothesis: L11 showed V=512 hurts at trainer level because the buffer fills 2.4× faster and fixed sgd_per_position=0.0025 then produces 3.36× more SGD steps per epoch, monopolizing MPS. If sgd_per_position is scaled DOWN to match V=64's SGD work per second (~0.001), the trainer's per-epoch SGD time stays bounded and V=512's pure-gen win can finally shine through at the trainer level.
+references_affected: R-TRAIN-LEAN (re-attempt with knob); R-TRAIN-WL5 (comparison)
+code_change: false (--sgd-per-position already in L12 CLI)
+depends_on: [L10, L11]
+prep_cells: none
+measurement_cells:
+  - R-TRAIN-LEAN-b: full WL5 recipe but --wave-size 512 --sgd-per-position 0.001 (2.5× lower than default to compensate for 2.4× buffer-fill speedup); 30s warmup + 120s measure
+n_cells: 1
+wall_cost_min: 3
+E_delta_aug_per_sec: 700 (V=512's pure-gen +50% over V=64; expect partial recovery at trainer level)
+P_success: 0.35 (medium — testing a real chain of mechanism)
+priority: 12.0 (Tier 1, fresh compound)
+status: queued — dispatching now
+notes: Direct mechanistic compound from L09+L11. The L11 yaml's followup ("could lowering sgd_per_position salvage V=512?") is what this lane tests. Low risk; if it works it restores L01's V=512 promote to the trainer level.
 ```
 
 #### L10-trainer-step-bench (R-TRAIN-WL5 baseline, redesigned 2026-05-23)
@@ -174,6 +195,7 @@ status: queued (L06 driver flag landed 2026-05-23)
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L09-ane-offload-prototype | reject (holistic; partial-hypothesis confirmation) | R-TRAIN-ANE = 1,930.3 aug/s / 8.00 g/s / 0.0583 ep/s / trainer_step_s_p50=0.0227s (10 epochs in 120s). vs L10 R-TRAIN-WL5: aug/s -41.5%, games/s -43.1%, epochs/s -36.4%. **trainer_step_s_p50 -55.7%** — trainer-side MPS-relief hypothesis CONFIRMED. | pending Reviewer audit | Holistic reject, mechanism-rich. Core ML eval at small/V=64 is ~2× slower than torch/MPS on the worker side; trainer-side SGD halved once workers vacated MPS. Compound chain L11+L09 says: any future trainer-throughput lane has to keep both sides happy. L11b (V=512 + low sgd_per_position) dispatched next as the natural compound follow-up. consecutive_rejects: 1→2. |
 | 2026-05-23 | L11-end-to-end-cell | reject | R-TRAIN-LEAN V=512 = 2,362.8 aug/s / 8.42 g/s / 0.0083 ep/s / trainer_step_s_p50=0.138s (3 epochs in 120s). vs L10 R-TRAIN-WL5: aug/s -28.4%, games/s -40.2%, epochs/s -91%, trainer_step_s_p50 +2.7×. | APPROVE | The headline holistic finding: pure-gen R-S* V=512 promotes do NOT compound at the trainer level. Buffer fills 2.4× faster (buf=199,608 vs 83,208 at epoch 3) → 3.36× more SGD steps per epoch (306 vs 91) → 43s of trainer SGD per epoch starves workers of MPS. V=64 stays the R-TRAIN-WL5 default. consecutive_rejects: 0→1. |
 | 2026-05-23 | L10-trainer-step-bench | promote (baseline) | R-TRAIN-WL5 = 3,297.6 aug/s / 0.0917 epochs/s / 14.07 games/s / trainer_step_s_p50=0.0512s (14 epochs in 120s; 30s warmup) | APPROVE | First-ever end-to-end R-TRAIN-WL5 measurement. Reviewer verified math exact (epochs_per_sec = (14-3)/120 = 0.0917; games_per_sec = 1489/105.8s post-warmup-window span; delta vs R-S400 = -30.8%); all 5 surfaces updated; baseline-promote matches canonical-sweep precedent. Two L12 driver bugs surfaced + fixed during dispatch (--save-every=1M froze worker_weights publish 1dc4abb; count_records undercounted because trainer ingests/deletes 4a825f1). consecutive_rejects unchanged at 0. |
 | 2026-05-23 | L12-write-lab-train-cell-driver | promote (code) | scripts/lab_train_cell.py (726 LOC) — live-training cell driver matching canonical_sweep resumability contract; smoke green (help, dry-run, unit test on synthetic trainer logs). Companion `scripts/lab_train_cell_smoke.py` runs in <1s with no GPU. | pending Reviewer audit | Gating lane: unblocks L09/L10/L11. Branched off 8eb7e5c, merged --no-ff at 56b6... (see graph). Trainer already emits `^epoch (\d+)/M` natively (gomoku/train.py:1135) so no shim needed. |
@@ -191,10 +213,10 @@ status: queued (L06 driver flag landed 2026-05-23)
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **1** (L11 V=512 rejected at trainer level; L10 baseline-promote is between L11 and prior chain so counter restarted from 0 → 1)
+- consecutive_rejects: **2** (L11 + L09 both reject; L10 baseline-promote preceded them; one more reject without a compound follow-up triggers the stop signal — but L11b is a compound follow-up and is queued / dispatching, so the loop continues)
 - queue empty + no followups pending: false (GPU queue has L10, L11, L09, L08-mps-heap-ratio, L05-followup, L06-followup queued)
 - last halt reason: n/a — lab restarted 2026-05-23; four CPU-queue lanes landed in parallel
-- **RESUME STATE**: L11 R-TRAIN-LEAN V=512 rejected — gen wins don't free-ride to trainer. Next GPU lane: **L09 (R-TRAIN-ANE via Core ML eval on workers)** — the architectural ANE-offload lever. Needs a small L12 driver patch to pass `--evaluator coreml --coreml-compute-units CPU_AND_NE` through to workers (third L12 gap surfaced today). Then dispatch: `python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09-$TS --lane L09 --evaluator coreml --coreml-compute-units CPU_AND_NE --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps`.
+- **RESUME STATE**: L11 + L09 both rejected (gen wins don't free-ride to trainer; naive ANE-offload loses on the worker side). But the compound chain pinpoints the real lever: trainer-side MPS contention. Next GPU lane: **L11b (V=512 + sgd_per_position=0.001)** — directly tests whether capping the trainer's per-epoch SGD work lets V=512's pure-gen win compound at the trainer level. Dispatch: `python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L11b-$TS --lane L11b --model small --workers 8 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --sgd-per-position 0.001 --warmup-secs 30 --measurement-secs 120 --device mps`.
 
 ## Dispatch rule (charter v3)
 

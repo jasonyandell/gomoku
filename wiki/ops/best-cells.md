@@ -25,7 +25,7 @@ cell + measure cell) per the charter's cell-time ceiling.
 |---|---|---|---|---|---|---|
 | **R-TRAIN-WL5** | full WL5 production recipe | small / W=8 / G=8 / S=400 / V=64 / EMA τ=0.99 / grad_accum=4 | **0.0917** | **14.07** | 2026-05-23 | L10-trainer-step-bench |
 | ~~R-TRAIN-LEAN~~ (rejected as a target — V=512 trainer cell measured 2,363 aug/s, worse than R-TRAIN-WL5's 3,298) | WL5 with V=512 | small / W=8 / G=8 / S=400 / V=512 / same EMA + grad-accum | 0.0083 | 8.42 | 2026-05-23 (REJECT) | L11-end-to-end-cell |
-| **R-TRAIN-ANE** | WL5 with workers on Core ML | WL5 recipe but workers use --evaluator coreml | TBD | TBD | pending | L09 first measurement |
+| ~~R-TRAIN-ANE~~ (rejected as a target — naive ANE-offload measured 1,930 aug/s vs R-TRAIN-WL5's 3,298) | WL5 recipe but workers use --evaluator coreml --coreml-compute-units CPU_AND_NE | small / W=8 / G=8 / S=400 / V=64 / coreml workers | 0.0583 | 8.00 | 2026-05-23 (REJECT, with partial-hypothesis confirmation) | L09-ane-offload-prototype |
 
 R-S400 is the primary metric — it's the WL5-era production shape and
 the headline number in [status.md](status.md).
@@ -34,6 +34,7 @@ the headline number in [status.md](status.md).
 
 Newest first. Append on every promote; never overwrite an old row.
 
+- **2026-05-23** — `R-TRAIN-ANE` **rejected** (with partial-hypothesis confirmation): small / W=8 / G=8 / S=400 / V=64 / EMA τ=0.99 / grad_accum=4 / workers on Core ML CPU_AND_NE — measured **1,930.3 aug/s, 8.00 games/s, 0.0583 epochs/s, trainer_step_s_p50=0.0227s** — **-41.5%** vs R-TRAIN-WL5 V=64 torch. Trainer-side hypothesis CONFIRMED: trainer_step_s_p50 dropped 56% (0.051s → 0.023s) once workers vacated MPS. Worker-side hypothesis REJECTED: Core ML eval at small/V=64 is ~2× slower than torch/MPS (epoch 8 gen=10.3s vs L10's gen=~5s), and that loss dominates the trainer-side gain. Mechanism is mechanically clean in both trainer logs. Follow-up candidates: L09b (different `--coreml-compute-units` routing) and L09c (tiny model on ANE — smaller per-eval graph might amortize Core ML overhead better). Source: L09-ane-offload-prototype. Reviewer: pending.
 - **2026-05-23** — `R-TRAIN-LEAN` V=512 **rejected**: small / W=8 / G=8 / S=400 / V=512 / EMA τ=0.99 / grad_accum=4 measured **2,362.8 aug/s, 8.42 games/s, 0.0083 epochs/s, trainer_step_s_p50=0.138s** — **-28.4%** vs R-TRAIN-WL5 V=64. Mechanism: V=512 fills the buffer 2.4× faster (buf=199,608 vs 83,208 at epoch 3) → fixed sgd_per_position=0.0025 produces 3.36× more SGD steps per epoch (306 vs 91) → trainer's 43s of per-epoch SGD starves workers of MPS → games/s drops 40%. Pure-gen R-S* promotes (V=512) do NOT compound at the live-training level. V=64 stays the R-TRAIN-WL5 default. Source: L11-end-to-end-cell. Reviewer: APPROVE.
 - **2026-05-23** — `R-TRAIN-WL5` **baselined**: small / W=8 / G=8 / S=400 / V=64 / EMA τ=0.99 / grad_accum=4 — **3,297.6 aug/s, 14.07 games/s, 0.0917 epochs/s, trainer_step_s_p50=0.051s**. First-ever end-to-end live-training measurement. Trainer contention costs ~30.8% on aug/s vs R-S400 pure-gen (4,765 aug/s). Source: L10-trainer-step-bench. Reviewer: APPROVE.
 - **2026-05-23** — `R-S400-tiny`: W=8 V=64 → **W=16 V=512** (7,326 →
