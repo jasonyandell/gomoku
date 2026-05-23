@@ -37,6 +37,38 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L06fu-extended fp16-eval PROMOTE — R-S200 +84%, R-S100 +48%, medium V=512 new ref
+
+```yaml
+lane: L06fu-extended (compound follow-up of L06-followup)
+hypothesis: The L06-followup +97.2% headline at R-S400/small was mechanistic (bandwidth-bound eval). The same fp16 lever should compound at other points of the R-S* family — proportional to "how eval-bound the workload is": higher S (sims per game) = more eval calls = more bandwidth savings. Test R-S200 + R-S100 + medium V=512 to map the fp16 effect across the operating envelope.
+code_ref: 4e1bc2d on main (run-time)
+evaluator: torch / MPS / fp16-eval
+dataset_ref: pure self-play; fresh random fused checkpoint per model; no trainer; 60s/cell smoke
+baseline_command: R-S200 = 9,156 (L03); R-S100 = 15,082 (L03); medium V=64 = 1,393 (canonical-sweep-mainframe — no medium V=512 fp32 ref exists yet)
+candidate_command: python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L06fu-ext-20260523T140641Z --cells-from cells.csv --lane L06fu-extended --secs-per-cell 60 --fp16-eval
+hardware: M5 Max / MPS / idle; torch 2.11.0
+seed: workers seeded 1000..1015
+baseline_metric: R-S200 fp32 = 9,156 aug/s; R-S100 fp32 = 15,082 aug/s; medium V=64 fp32 = 1,393 aug/s
+candidate_metric: R-S200 fp16 = **16,850.8 aug/s** (plies_mean 15.96); R-S100 fp16 = **22,312.1 aug/s** (plies_mean 15.96); medium V=512 fp16 = **3,377.2 aug/s** (plies_mean 15.95). All at 16-ply cap; game-shape preserved.
+delta:
+  - R-S200 small V=512: **+84.0%** vs fp32 (9156 → 16851)
+  - R-S100 small V=512: **+48.0%** vs fp32 (15082 → 22312)
+  - medium V=512 vs medium V=64 (combined V + fp16): **+142.4%** (1393 → 3377); estimating V=64→V=512 alone at +50% per L01 small extrapolation, medium fp16-only effect ≈ +62% (model-dependent, in the predicted bandwidth-bound regime between R-S100's +48% and R-S400's +97.2%)
+  - Mechanism: fp16's bandwidth savings dominate when the eval forward is the bottleneck. At S=400 (R-S400 small) eval is the loop's dominant cost → +97%; at S=200 it's still dominant → +84%; at S=100 MCTS Python overhead starts diluting eval's share → +48%. Medium model has more bandwidth per eval than small, so should compound bigger; estimated +62% on fp16 alone fits the trend.
+confidence: high. fp16 actually engaged (worker logs explicit at lab-L06fu-ext-*/cell_*/logs/w0.log). plies_mean across all 3 cells = 15.95-15.96 = at the 16-ply cap, game-shape preserved as L06-followup. The R-S200/R-S100 deltas are clean comparisons against L03's same-shape fp32 references. The medium V=512 fp16 number is a NEW reference point (no fp32 V=512 medium baseline exists); attribution between V and fp16 is estimated, not measured.
+artifacts: sweep_logs/lab-L06fu-ext-20260523T140641Z/{summary.tsv,cells.csv,metadata.txt,cell_small_W08_G08_S200_V512,cell_small_W08_G08_S100_V512,cell_medium_W08_G08_S400_V512}
+commands_run:
+  - python scripts/canonical_sweep.py --out-dir sweep_logs/lab-L06fu-ext-20260523T140641Z --cells-from cells.csv --lane L06fu-extended --secs-per-cell 60 --fp16-eval
+decision: promote
+next_action:
+  - Update R-S200 best to small / W=8 / G=8 / S=200 / V=512 / fp16 = 16,850.8 aug/s (was 9,156 fp32 from L03).
+  - Update R-S100 best to small / W=8 / G=8 / S=100 / V=512 / fp16 = 22,312.1 aug/s (was 15,082 fp32 from L03).
+  - Open a NEW reference point R-S400-medium = medium / W=8 / G=8 / S=400 / V=512 / fp16 = 3,377.2 aug/s (no prior best-cell row; medium V=64 fp32 = 1,393 is the only prior medium measurement at S=400).
+  - Compound follow-up candidate L06fu-medium-AB: 2-cell medium V=512 fp32 vs fp16 to cleanly attribute the medium fp16 effect (currently estimated at +62%). Medium-axis is the bandwidth-bound regime; this is the next place to confirm the mechanism.
+  - Bigger compound (dispatching now): L11b' = L11b (V=512 + sgd_per_position=0.001) + workers --fp16-eval. Tests whether the trainer-level R-TRAIN family can compound both finds (L11b's +28% from low-sgd at V=512 + L06-fp's near-doubling at V=512). Could be the R-TRAIN-WL5 promote story this perf cycle has been hunting for.
+```
+
 ### 2026-05-23 — L06-followup fp16-eval PROMOTE — small +97.2%, tiny +3.6%
 
 ```yaml
