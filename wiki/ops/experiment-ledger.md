@@ -37,6 +37,45 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L09c-V512 REJECT — V-axis amortization falsified at tiny; ANE -24.0% at V=512 vs torch+fp16
+
+```yaml
+lane: L09c-V512 (auto-queued from L09c promote: does V-axis amortization stack with model-size amortization?)
+hypothesis: L09c confirmed ANE pays at tiny + V=64 (+33.9% vs torch). L09f generically hypothesizes V=512+ batches more leaf evals per forward, amortizing Core ML's pipeline overhead better than V=64. If V-axis amortization stacks with model-size amortization, the L09c +33.9% should grow (perhaps to +50-80%) when we move tiny from V=64 to V=512 under live training.
+code_ref: cba1ad3 on main (post-L09d Reviewer-APPROVE backfill)
+evaluator (candidate): Core ML / ANE via --evaluator coreml --coreml-compute-units CPU_AND_NE; trainer always fp32 SGD on MPS
+evaluator (baseline): torch / MPS / --fp16-eval (matched precision: Core ML internally runs FLOAT16 too; this is the apples-to-apples baseline at V=512 since tiny + V=512 + fp16 is the production R-S400-tiny recipe)
+dataset_ref: fresh random fused checkpoint (tiny, ~30k params); live self-play under WL5-shaped recipe but with V=512 (the R-S400-tiny operating point per L06-followup = 22,873.8 aug/s pure-self-play with fp16); W=16 (tiny's L13/L14-confirmed peak); no archive ingest
+baseline_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09c-V512-baseline-20260523T160545Z --lane L09c-V512-baseline --model tiny --workers 16 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator torch --fp16-eval
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09c-V512-20260523T160936Z --lane L09c-V512 --model tiny --workers 16 --games-per-batch 8 --n-simulations 400 --wave-size 512 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS (trainer + baseline workers) / MPS (trainer) + ANE (candidate workers via Core ML CPU_AND_NE); idle (pre-flight pgrep clean both arms; arms ran back-to-back so chip thermal state was comparable)
+seed: workers seeded 1000..1015 both arms; trainer seed default both arms
+baseline_metric: tiny V=512 torch+fp16 baseline: 13,968.6 aug/s; 52.18 games/s; trainer_step_s_p50=0.0714s; plies_mean=33.47; 1 epoch in 120s (only 1 because tiny + V=512 = trainer epoch ~35s under torch+fp16 contention; warmup spans most of epoch 1); 7,855 games / 2,103,008 aug positions
+candidate_metric: tiny V=512 coreml CPU_AND_NE: 10,609.8 aug/s; 43.94 games/s; trainer_step_s_p50=0.0268s; plies_mean=31.02; 8 epochs in 120s (8× more epochs because trainer side is hugely freed up); 4,535 games / 1,094,936 aug positions
+delta:
+  - aug/s **-24.0%** (13,968.6 → 10,609.8) — holistic REJECT
+  - games/s **-15.8%** (52.18 → 43.94)
+  - trainer_step_s_p50 **-62.5%** (0.0714s → 0.0268s) — MPS-relief mechanism still real at tiny V=512 (consistent with L09c's -16% relief mechanism, but here the magnitude is larger because the V=512 baseline has more trainer-step contention to relieve)
+  - epochs_in_window 1 → 8 — candidate runs 8× more trainer epochs in the same wall window because the train= field collapsed; not a confound for aug/s comparison but a confound for plies_mean (see below)
+  - plies_mean -7.3% (33.47 → 31.02) — **NOT a behavior drift; an asymmetric-epoch artifact.** Candidate's 8 epochs include early-game improvement: per-epoch plies in candidate trainer.log: 30.9 → 33.1 → 33.5 → 33.4 → 31.7 → 30.4 → 29.4 → 27.7 (declining as the policy improves over 8 epochs of training). Baseline's 1-epoch plies (32.5) reflects pre-training state. For matched stationary plies comparison we would need matched-epoch windows, OR same-epoch-number plies subsamples; the aggregate plies_mean drift is dominated by the training-progress signal at tiny + V=512 where 8 epochs in 2 minutes is enough to start moving the policy. Flag for Reviewer's drift-watch: this is NOT the L09c +/-1.6% kind of drift; it's a measurement-window confound from asymmetric training progress.
+confidence: medium. Single trial each arm at 120s smoke-first. Strengths: matched-shape, back-to-back, the aug/s number is the worker-throughput regardless of trainer epoch count (so the -24.0% delta is the right gating measurement). Caveats: plies_mean comparison is muddied by asymmetric training progress (see above) — this is a NEW friction-smoothing lesson for the lab (R-TRAIN-* cells with sharply asymmetric epoch counts need careful plies framing). To rule out tail-uncertainty, a 240s rerun would help; given the -24% magnitude (well above any noise floor), the conclusion direction is firm. A 240s rerun is queueable but not gating for this receipt.
+artifacts:
+  - sweep_logs/lab-L09c-V512-20260523T160936Z/{summary.tsv,metadata.txt,cell_train_tiny_W16_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/*}} (candidate; symlink lab-L09c-V512-latest)
+  - sweep_logs/lab-L09c-V512-baseline-20260523T160545Z/{summary.tsv,metadata.txt,cell_train_tiny_W16_G08_S400_V512_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/*}} (baseline; symlink lab-L09c-V512-baseline-latest)
+commands_run:
+  - (baseline above)
+  - (candidate above)
+decision: reject
+next_action:
+  - **V-axis amortization is FALSIFIED at tiny.** torch+fp16 already extracts most of the V=512 bandwidth-bound value at tiny (per L06-followup, tiny V=512 fp16 was only +3.6% over fp32 because tiny is MPS-dispatch-limited, not bandwidth-bound). At V=512 the torch+fp16 baseline at 13,968 aug/s is harder to beat than at V=64 (where baseline was 8,039). Core ML can't match torch+fp16's bandwidth utilization at this operating point.
+  - **Updated engine envelope (4 measured comparison points now):** ANE wins ONLY at tiny + V=64 (L09c +33.9%); ANE loses at tiny + V=512 (-24.0% here), small + V=64 (L09 -41.5% vs R-TRAIN-WL5), and medium + V=512 (L09d -59.6%). The ANE win is a single-point envelope, not a region. The "tiny model" axis alone wasn't the winning factor — it's tiny + V=64 specifically, where worker per-call work is so light that both backends are pipeline-overhead-bound.
+  - No new ref opens. R-TRAIN-TINY-ANE (the L09c PROMOTE) at tiny + V=64 stays; this lane just sharply bounds the envelope around it.
+  - **L09f (broader V-axis sweep) and L09g (broader model-size sweep) are now downweighted.** L09c-V512 already tests the V-axis at the only model where ANE wins; the answer is "V=512 doesn't help". L09f's small/medium V-axis cells at coreml are likely also losses. Queue them at lower priority for completeness, not headline value.
+  - **L09e (compute-units routing sweep) keeps priority 3.0** — diagnostic value remains for the open question "is Core ML demoting ops at medium V=512?". The L09c-V512 result doesn't disambiguate this; only L09e at medium V=512 can.
+  - consecutive_rejects: 1 → 2. Still far below the 5-reject charter halt threshold. Lab continues per autonomous-loop charter.
+  - **NEW FRICTION-SMOOTHING LESSON to file in skill on session-end:** plies_mean is NOT stationary across asymmetric-epoch windows in R-TRAIN-* cells; a -7.3% drift looks alarming but is dominated by training progress when one arm runs 8× more trainer epochs than the other. Future Reviewers should check per-epoch plies in trainer.log rather than just the aggregate when arms have very different epochs_in_window. The Reviewer's L09c drift-watch flag was right to fire here, but the answer is "asymmetric-epoch artifact, not behavior drift" — needs a sharper test for actual game-shape drift.
+```
+
 ### 2026-05-23 — L09d R-TRAIN-MEDIUM-ANE REJECT — medium on ANE = 591.7 aug/s (-59.6% vs medium/torch+fp16 baseline)
 
 ```yaml

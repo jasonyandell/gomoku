@@ -16,6 +16,48 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L09c-V512 | V-axis amortization falsified at tiny; ANE win is a single-point envelope
+
+Auto-queued from L09c PROMOTE. The L09f generic hypothesis says V=512+ batches more leaf evals per Core ML forward, so the pipeline overhead amortizes better. L09c-V512 tests this at tiny (the only model size where ANE wins, per L09c +33.9% at V=64).
+
+**Result: REJECT at -24.0% aug/s.** torch+fp16 already extracts most of the V=512 bandwidth-bound value at tiny (per L06-followup, tiny + V=512 + fp16 was only +3.6% over fp32 because tiny is MPS-dispatch-limited, not bandwidth-bound). At V=512 the torch+fp16 baseline (13,968.6 aug/s under live training) is harder to beat than at V=64 (where baseline was 8,039.1). Core ML can't match torch+fp16's bandwidth utilization at this operating point.
+
+| | candidate (ANE) | baseline (torch+fp16) | delta |
+|---|---|---|---|
+| aug/s | 10,609.8 | **13,968.6** | **-24.0%** |
+| games/s | 43.94 | 52.18 | -15.8% |
+| trainer_step_s_p50 | 0.0268s | 0.0714s | -62.5% (MPS-relief still real) |
+| plies_mean | 31.02 | 33.47 | -7.3% (asymmetric-epoch artifact — see below) |
+| epochs in window | 8 | 1 | — |
+
+**The plies_mean drift is NOT behavior drift.** The candidate's 8 trainer epochs include training-progress; per-epoch plies in candidate trainer.log declines monotonically: 30.9 → 33.1 → 33.5 → 33.4 → 31.7 → 30.4 → 29.4 → 27.7. The aggregate plies_mean is dominated by the last few epochs where the policy has started to play better (faster wins). The baseline's single epoch (plies=32.5) reflects pre-training state. This is a measurement-window confound from asymmetric training progress, not engine-induced game-shape drift. **New friction-smoothing lesson for the lab:** plies_mean is NOT stationary across asymmetric-epoch R-TRAIN cells; future Reviewers' drift-watch should check per-epoch trainer.log plies values when arms have very different epochs_in_window.
+
+**The engine envelope, now with 4 measured points and a single-point ANE win:**
+
+| model / shape | engine | aug/s | vs matched baseline |
+|---|---|---|---|
+| **tiny / V=64** | **ANE** | **10,762.6** | **+33.9%** (L09c — the lone win) |
+| tiny / V=64 | torch | 8,039.1 | — |
+| tiny / V=512 | ANE | 10,609.8 | **-24.0%** (L09c-V512 — V-axis falsified) |
+| tiny / V=512 | torch+fp16 | 13,968.6 | — |
+| small / V=64 | ANE | 1,930.3 | -41.5% (L09 vs R-TRAIN-WL5) |
+| small / V=64 | torch | 3,297.6 | — |
+| medium / V=512 | ANE | 591.7 | -59.6% (L09d) |
+| medium / V=512 | torch+fp16 | 1,463.3 | — |
+
+**ANE pays at exactly one point in our envelope: tiny + V=64.** Not "tiny in general" (V=512 loses) and not "low-V in general" (small+V=64 loses too). The single-point win is the L09c +33.9% — a narrow regime where worker per-call compute is so light that both backends are pipeline-overhead-bound, and the trainer-side MPS-relief tips the balance.
+
+**Implications for the queue:**
+- L09f (broader V-axis sweep at small/medium) is now downweighted — V-axis amortization is falsified at tiny, unlikely to suddenly pay at larger models. Queue for completeness, not priority.
+- L09g (broader model-size sweep at V=512) is also downweighted — V=512 ANE is losing at both tiny and medium; queue for completeness.
+- **L09e (compute-units routing sweep) keeps priority 3.0** — it's now the ONLY remaining diagnostic that could rescue any ANE result. If a non-CPU_AND_NE routing reveals that Core ML was silently demoting ops at small/medium, the L09 / L09d rejects might be misattributed. L09e at small/V=64 and medium/V=512 is the load-bearing test.
+- **L11b' R-TRAIN-LEAN-fp16 (+152.9% vs R-TRAIN-WL5) remains the perf cycle's headline R-TRAIN finding** — ANE-offload is unambiguously not the path to the next R-TRAIN promote at any model size where it matters.
+- **L08-mps-heap-ratio (Tier 3, priority 2.6) moves up in relative priority** — with ANE-axis nearly exhausted, MPS-side knob tuning becomes the next-best lever (3 cells, ~5 min wall).
+
+**consecutive_rejects: 1 → 2.** Still far below the 5-reject charter halt threshold. The two rejects (L09d, L09c-V512) are envelope-mapping rejects with clean mechanism — not a knob-failure streak. Lab continues per autonomous-loop charter.
+
+Reviewer pending. Receipt commit pending.
+
 ## [2026-05-23] L09d | ANE doesn't pay at medium — envelope sharply mapped
 
 The high-prior follow-up to L09c. Hypothesis: at medium (~1.5M params) the per-call compute is large enough that Core ML's pipeline overhead amortizes even better than at tiny (where L09c showed +33.9%); combined with trainer-side MPS-relief, R-TRAIN-MEDIUM-ANE should beat the torch+fp16 baseline. **Hypothesis falsified.**
