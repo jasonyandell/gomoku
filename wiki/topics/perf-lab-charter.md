@@ -93,11 +93,17 @@ the generator side**.
 | **R-TRAIN-WL5** | small / W=8 / G=8 / sims=400 / V=64 / EMA τ=0.99 / grad_accum=4 (WL5 production recipe) | **3,297.6 aug/s** / 0.0917 epochs/s / 14.07 games/s (L10, 2026-05-23, Reviewer APPROVE) |
 | ~~R-TRAIN-LEAN~~ at default sgd | same but V=512 with WL5's sgd_per_position=0.0025 | **2,362.8 aug/s** (L11, REJECT — gen win doesn't free-ride to trainer; V=512 fills buffer 2.4× faster → 3× more SGD steps/epoch → trainer monopolizes MPS) |
 | **R-TRAIN-LEAN-fp16** (perf reference only — TQ canary required for production) | WL5 recipe + V=512 + sgd_per_position=0.001 + fp16 workers | **8,340.5 aug/s** / 0.0667 epochs/s / 32.19 games/s (L11b', **+152.9% vs R-TRAIN-WL5**; needs_repeat per TQ gate for production adoption; two independent levers stacked multiplicatively as the mechanism predicted) |
-| ~~R-TRAIN-ANE~~ (naive) | WL5 recipe + workers on Core ML CPU_AND_NE | **1,930.3 aug/s** (L09, REJECT holistic; trainer_step_s_p50 -55.7% **confirms MPS-relief hypothesis** but Core ML worker eval ~2× slower than torch/MPS at this model size — net loss. L09c tiny-on-ANE is the remaining candidate) |
+| ~~R-TRAIN-ANE~~ (naive small/V=64) | WL5 recipe + workers on Core ML CPU_AND_NE | **1,930.3 aug/s** (L09, REJECT holistic; trainer_step_s_p50 -55.7% **confirms MPS-relief hypothesis** at the `coreml-isolated` cap, but Core ML worker eval ~2× slower than torch/MPS at this model size — net loss. L09e confirmed null routing axis: alternate compute-units routings don't rescue.) |
+| **R-TRAIN-TINY-ANE** (engine-isolation; envelope-mapping ref) | tiny / W=16 / G=8 / sims=400 / V=64 / coreml CPU_AND_NE | **10,762.6 aug/s** / 0.0417 epochs/s / 49.43 games/s (L09c, 2026-05-23, **+33.9% vs R-TRAIN-TINY torch baseline**; `coreml-isolated` cap — ANE-residency unproven, L09e' is the residency-elevation lane) |
+| **R-TRAIN-TINY** (envelope-mapping, torch baseline arm for the tiny engine A/B) | tiny / W=16 / G=8 / sims=400 / V=64 / torch | **8,039.1 aug/s** / 0.0333 epochs/s / 32.48 games/s (L09c-baseline, 2026-05-23) |
+| **R-TRAIN-MEDIUM** (envelope-mapping, torch+fp16 baseline arm) | medium / W=8 / G=8 / sims=400 / V=512 / fp16-eval | **1,463.3 aug/s** / 0.0042 epochs/s / 5.66 games/s (L09d-baseline240, 2026-05-23) |
+| ~~R-TRAIN-MEDIUM-ANE~~ (envelope-mapping reject) | medium / W=8 / G=8 / sims=400 / V=512 / coreml CPU_AND_NE | **591.7 aug/s** (L09d, REJECT holistic at -59.6% vs torch+fp16 baseline; trainer_step_s_p50 -81.4% confirms MPS-relief at this shape too, but worker gen 5-7× slower on Core ML — "larger compute amortizes" falsified) |
 
 Reported per cell: `epochs/sec`, `games/sec`, `aug_pos/sec`,
 `trainer_step_s_p50`, `worker_wave_s_p50`. The product
 `epochs/sec × steps_per_epoch` is the trainer's true throughput.
+
+**Engine-isolation refs vs ANE-residency claims (cross-ref to cap discipline):** R-TRAIN-*-ANE refs (currently R-TRAIN-TINY-ANE PROMOTE; R-TRAIN-ANE / R-TRAIN-MEDIUM-ANE REJECT) all sit at the `coreml-isolated` cap defined in [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md) — they prove engine-isolation (workers vacate MPS, trainer faster) but NOT ANE residency (no `powermetrics ane_power` evidence). The "ANE" in these ref names is shorthand for "the CPU_AND_NE Core ML routing," not a residency claim. The L09e' lane (queued, blocked on sudo) is the residency-elevation lane that would re-run the L09c shape with matched-window powermetrics to either confirm `ane-metered` cap or pin the L09c win as engine-isolation only. See [coreml-design-envelope-and-our-fit.md § Current state](coreml-design-envelope-and-our-fit.md#current-state--what-we-know-after-l09c-through-l09e-2026-05-23-session-resume) for the full envelope-snapshot view.
 
 ### Promotion rules
 

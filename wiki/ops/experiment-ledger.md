@@ -198,10 +198,11 @@ next_action:
   - consecutive_rejects: 0 → 1.
 ```
 
-### 2026-05-23 — L09c R-TRAIN-TINY-ANE PROMOTE — tiny on ANE = 10,762.6 aug/s (+33.9% vs tiny/torch baseline)
+### 2026-05-23 — L09c R-TRAIN-TINY-ANE PROMOTE — tiny on Core ML CPU_AND_NE = 10,762.6 aug/s (+33.9% vs tiny/torch baseline); `coreml-isolated` cap
 
 ```yaml
-lane: L09c-tiny-on-ane (second L09 follow-up: smaller per-eval graph might amortize ANE pipeline overhead better)
+lane: L09c-tiny-on-ane (second L09 follow-up: smaller per-eval graph might amortize Core ML pipeline overhead better)
+cap_cleared: coreml-isolated (per coreml-ane-residency-lab.md ladder — trainer slowdown lower with Core ML workers than with torch workers; overlap measurement clean in trainer.log). NOT ane-metered: no `powermetrics ane_power` evidence in this receipt; whether the Core ML offload actually ran on the Apple Neural Engine vs the CPU/GPU portions of the CPU_AND_NE routing is unproven. The "ANE" in R-TRAIN-TINY-ANE is the Core ML routing label, NOT a residency claim. L09e' (queued) is the residency-elevation lane that would re-run this shape with matched-window powermetrics to elevate to `ane-metered` or confirm `coreml-isolated`-only.
 hypothesis: At small/V=64, L09 showed Core ML worker eval is ~2× slower than torch/MPS, dominating the trainer-side MPS-relief gain (trainer_step_s_p50 -56%). At tiny (~30k params) the per-call pipeline overhead amortizes across less per-call compute — but the model is also vastly more compute-light. If the trainer-side MPS-relief still pays AND the worker-side raw-eval gap closes enough, the holistic R-TRAIN-TINY-ANE / R-TRAIN-TINY ratio could flip from L09's -41% to net positive.
 code_ref: 9d4bfa5 on main (Core ML evaluator + --evaluator/--coreml-compute-units already shipped in L09 / L12 / L09b sessions)
 evaluator (candidate): Core ML / ANE via --evaluator coreml --coreml-compute-units CPU_AND_NE; trainer always fp32 SGD on MPS
@@ -230,8 +231,9 @@ commands_run:
 decision: promote
 next_action:
   - Open NEW reference points: **R-TRAIN-TINY-ANE** = tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE = 10,762.6 aug/s; **R-TRAIN-TINY** (torch ref) = 8,039.1 aug/s. Both are envelope-mapping references, NOT R-TRAIN-WL5 substitutes (tiny is a different quality target). best-cells.md updated accordingly.
-  - The L09 + L09c combined finding maps the engine envelope along the model-size axis: ANE LOSES at small/V=64 (L09: -41%), WINS at tiny/V=64 (L09c: +34%). The crossover happens between tiny and small. This sharply elevates the prior on **L09d (medium on ANE)** — if the trend continues monotonically with model size, medium would either be the worst case (deepest amortization deficit) or the best case (largest per-call compute amortizes pipeline overhead best); L09c's data point favors the "best case" hypothesis at the L09d card.
-  - Auto-queue candidate **L09c-V512**: does the V=axis amortize ANE pipeline overhead further? L09f addresses this generically; with L09c confirming the mechanism at tiny/V=64, a dedicated tiny + ANE + V=512 cell is the cheapest amortization test next.
+  - **The L09 + L09c combined finding maps the engine-isolation envelope along the model-size axis at the `coreml-isolated` cap level:** Core ML LOSES at small/V=64 (L09: -41%), WINS at tiny/V=64 (L09c: +34%). The crossover happens between tiny and small. This sharply elevates the prior on **L09d (medium on Core ML)** — if the trend continues monotonically with model size, medium would either be the worst case (deepest amortization deficit) or the best case (largest per-call compute amortizes pipeline overhead best); L09c's data point favors the "best case" hypothesis at the L09d card.
+  - Auto-queue candidate **L09c-V512**: does the V=axis amortize Core ML pipeline overhead further? L09f addresses this generically; with L09c confirming the mechanism at tiny/V=64, a dedicated tiny + Core ML + V=512 cell is the cheapest amortization test next.
+  - **NEW follow-up — L09e' residency proof.** The L09c PROMOTE is at the `coreml-isolated` cap; whether the win is actually ANE-resident (vs Core ML using CPU+GPU under CPU_AND_NE routing) is unproven. Queue L09e' to re-run this shape with matched-window `powermetrics ane_power` evidence — would elevate to `ane-metered` cap if ANE rail is nonzero, or confirm the win is engine-isolation-only otherwise. Depends on cached/passwordless sudo (same 2026-05-22 lane 03 blocker). See [coreml-design-envelope-and-our-fit.md § Current state](../topics/coreml-design-envelope-and-our-fit.md#current-state--what-we-know-after-l09c-through-l09e-2026-05-23-session-resume).
   - consecutive_rejects stays at 0.
 ```
 

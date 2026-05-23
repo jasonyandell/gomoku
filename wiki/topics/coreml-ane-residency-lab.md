@@ -1,31 +1,40 @@
-# Core ML / ANE Residency Lab
+# Core ML / ANE Residency Lab — evidence-discipline control plane
 
-Created 2026-05-22 as the control-plane notebook for the autonomous
-Core ML / ANE residency lab. This page owns the claim discipline and
-sweep shape only. Raw receipts stay in `/tmp`, `sweep_logs/`, or the
-script output paths; durable interpretation can be appended here.
+**Scope of this page:** the **Cap ladder** for ANE-residency claims, the **receipt schema** and **powermetrics protocol** that elevate a receipt past `coreml-scheduled`, and the shape-scouting matrix for residency exploration. This is the evidence-discipline page only.
 
-**Companion pages:**
-- [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md) — the design-context page: what Core ML is built for (the iOS/macOS app ML stack: Vision, Siri, AR, FaceID), where our research-compute workload sits relative to that envelope, where ANE could still pay (deployment; concurrent compute stream; medium-and-larger models), and concrete L09c-L09h research lanes for mapping the envelope's edges. Read this first if you're new to the ANE story in this project.
-- [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — chip-level findings; Finding 2 (bandwidth-bound vs dispatch-bound regimes) is the MPS analog of what L09g would measure for Core ML.
+**Where to read for other ANE topics:**
+- [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md) — the **canonical entry point** for ANE research: strategic framing (what Core ML is built for, where our workload fits), the **current envelope state** (with L09 through L09e measurements folded in), the **research lanes** (status + findings + reactivation triggers), and the **inbound-research landing zone**. **Read that page first** if you're new to the ANE story; come back here for cap discipline and residency-proof workflow.
+- [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — chip-level MPS findings; Finding 2 is the MPS analog of what L09g would measure for Core ML.
+- [ane-int8-inference.md](ane-int8-inference.md) — **historical** (WL5-era) scoping doc; partly executed (Core ML evaluator shipped 2026-05-23).
+
+Created 2026-05-22 as the control-plane notebook for the autonomous Core ML / ANE residency lab. This page owns the claim-cap discipline and the residency-proof workflow. Raw receipts stay in `/tmp`, `sweep_logs/`, or the script output paths; durable interpretation can be appended here. Three-engine pipeline framing has moved to [coreml-design-envelope-and-our-fit.md § Our workload through that lens](coreml-design-envelope-and-our-fit.md#our-workload-through-that-lens) — this page is residency-evidence only.
 
 ## Goal
 
-Find the Core ML model shapes, compute-unit settings, batch geometry,
-and worker pressure patterns that actually make the Apple Neural Engine
-resident for Gomoku-like inference on Jason's M5 Max.
+Determine which Core ML model shapes, compute-unit settings, batch geometries, and worker pressure patterns *actually* make the Apple Neural Engine resident (per `powermetrics ane_power` evidence) for gomoku-like inference on Jason's M5 Max — distinct from claims that merely *request* ANE via `CPU_AND_NE` routing.
 
-The practical target is still the three-engine training loop:
+The residency question is independent of, and complementary to, the engine-isolation question that the [perf-lab](perf-lab-charter.md) measures via the L09* lane family. Engine-isolation (which the perf-lab proves via trainer-step deltas) tells us *whether Core ML offload is worth it holistically*; residency (which this page's cap ladder gates) tells us *whether the Core ML offload is actually running on the ANE silicon* vs CPU/GPU under the CPU_AND_NE routing. Both matter. The perf-lab can produce a `coreml-isolated` win without resolving the residency question; this page's discipline is what would elevate such a win to `ane-metered`.
 
-| Lane | Desired engine | Why |
-|---|---|---|
-| Self-play leaf eval | Core ML on ANE | Keep eval-only worker load off PyTorch/MPS. |
-| Trainer forward/backward | PyTorch on MPS GPU | Preserve the supported gradient path. |
-| Eval sidecar / probes | CPU-only Core ML or BNNS | Keep scheduled probes from stealing GPU or ANE budget. |
+## Cap status of the perf-lab L09* receipts (2026-05-23)
 
-This lab is not trying to prove that Core ML is faster in a naked
-microbench. It is trying to find the production-shaped point where
-engine isolation beats same-engine contention.
+Every Core ML measurement that has landed in [experiment-ledger.md](../ops/experiment-ledger.md) so far sits at `coreml-scheduled` or `coreml-isolated`. None has cleared `ane-metered`. The table below pins the cap each L09* receipt has actually established:
+
+| Receipt | Source | Engine arm | Cap cleared | Evidence | What it'd take to elevate |
+|---|---|---|---|---|---|
+| L09 (R-TRAIN-ANE reject) | 2026-05-23 | small/V=64/CPU_AND_NE | `coreml-isolated` | trainer_step_s_p50 -55.7% vs torch baseline (overlap measurement clean in trainer.log) | Re-run with `powermetrics ane_power` in matched window |
+| L09c (R-TRAIN-TINY-ANE PROMOTE) | 2026-05-23 | tiny/V=64/CPU_AND_NE | `coreml-isolated` | trainer_step_s_p50 -16.3% vs torch baseline | Re-run with `powermetrics ane_power`; see L09e' lane in design-envelope page |
+| L09d (R-TRAIN-MEDIUM-ANE reject) | 2026-05-23 | medium/V=512/CPU_AND_NE | `coreml-isolated` | trainer_step_s_p50 -81.4% vs torch+fp16 baseline | Re-run with `powermetrics ane_power` |
+| L09c-V512 (reject) | 2026-05-23 | tiny/V=512/CPU_AND_NE | `coreml-isolated` | trainer_step_s_p50 -62.5% vs torch+fp16 baseline | Re-run with `powermetrics ane_power` |
+| L09e CPU_AND_GPU | 2026-05-23 | small/V=64/CPU_AND_GPU | `coreml-isolated` | trainer_step_s_p50 similar to L09 | Re-run with `powermetrics ane_power` (would also resolve whether CPU_AND_GPU ever actually uses ANE — known unknown) |
+| L09e ALL | 2026-05-23 | small/V=64/ALL | `coreml-isolated` | trainer_step_s_p50 similar to L09 | Re-run with `powermetrics ane_power` |
+| L09b (blocked) | 2026-05-23 | small/V=64/CPU_AND_NE + fp16-eval | n/a (failed at startup) | Pipeline-order bug in selfplay_worker._maybe_half; fixed and made graceful no-op | Lane semantically redundant; Core ML already uses FLOAT16 internally |
+
+**Implications:**
+
+- The L09c PROMOTE narrative ("ANE pays at tiny+V=64") is **`coreml-isolated`-cap correct** but **`ane-metered`-cap unproven**. Equivalently safe wording: "Core ML at CPU_AND_NE routing pays at tiny+V=64; whether the gain comes from ANE residency or from CPU/GPU dispatch under CPU_AND_NE routing is not yet resolved."
+- The L09 (small) and L09d (medium) rejects are **`coreml-isolated`-cap correct rejects** — the data shows the Core ML offload doesn't pay holistically at those shapes, regardless of which silicon Core ML actually ran on. Residency proof wouldn't change the rejection.
+- **The next ANE-evidence-elevating lane is L09e'** (residency proof via powermetrics on L09c, the lone PROMOTE) — see [coreml-design-envelope-and-our-fit.md § L09e'](coreml-design-envelope-and-our-fit.md#l09e--ane-residency-proof-via-powermetrics-reactivatable). Pre-requisite is cached/passwordless sudo (per the 2026-05-22 lane 03 blocker note below).
+- Future Core ML or ANE research dropping (e.g., new ANE features, new residency-instrumentation APIs) should default to the `ane-metered`-or-better cap when re-running these shapes.
 
 ## Definition Of Cap
 
