@@ -37,6 +37,19 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — LF1 (LEAN-fp16 as a REAL run) — the +152% is COLD-BUFFER generation throughput, NOT training speed (steady-state ~3min/epoch)
+
+```yaml
+lane: LF1-lean-fp16-canary (the R-TRAIN-LEAN-fp16 recipe promoted from perf-bench to a real run_sweep training run; Jason "let's friggin try it")
+context: the perf lab's R-TRAIN-LEAN-fp16 (WL5 + V=512 + sgd_per_position=0.001 + fp16 workers) measured +152% vs R-TRAIN-WL5 (8,340 aug/s, 0.0667 epochs/s ≈ 15s/epoch) in a 120s lab_train_cell window. LF1 runs it for real (run_sweep cell, quality-tracked, wandb h9al2e0k; 100-ep test geft5xmy first).
+finding (load-bearing — caveats the +152% claim): the 0.0667 epochs/s was a COLD-BUFFER TRANSIENT. In the real run, V=512 filled the 1.5M buffer by ~epoch 27; thereafter sgd_per_position × the fast V=512 position-inflow yields ~1300+ (and growing) SGD steps/epoch → each epoch takes ~3 min (train phase ~100-130s), ~10× the perf number. So 1000 epochs ≈ multi-day, not ~4h.
+implication: the perf-lab R-TRAIN-* epochs/s and aug/s measure GENERATION throughput in a short cold window; they do NOT equal training speed. The +152% is real for cold-window aug/s but must NOT be read as "+152% faster training" — steady-state per-epoch cost is set by full-buffer × sgd_per_position → steps/epoch. (This is the L11 mechanism — V=512 fills the buffer faster → more SGD/epoch — at production scale.)
+flip side: it learns FAST per epoch — LF1 hit elo 437→776 around the buffer-full transition (~epoch 28), because each epoch does ~1300 SGD steps. So epochs-to-elo may be FEWER even with higher wall-per-epoch. The only honest "faster recipe" verdict is wall-clock-to-elo + val/policy_ce quality.
+quality so far (100-ep test, early): pl 4.42→3.78, vl down, plies ~27 (healthy), wr climbing (heuristic 0%→50%, elo→776), 0 NaN. Encouraging but early; full TQ verdict pending the 1000-ep LF1 dynamics (val/policy_ce vs wl5_validation_v1.pt, plies-shape, baseline elo trajectory).
+decision: needs_repeat (TQ canary in progress) — AND a standing caveat on the R-TRAIN-LEAN-fp16 "+152%" reference: it's cold-window generation throughput, not a training-speed claim. fp16 + V=512 generation IS faster; the trainer's per-epoch cost is dominated by the SGD step count once the buffer fills.
+cross_ref: gomoku-train skill "Tuning knobs → LEAN-fp16"; [[feedback-self-play-eta]] (the ETA-extrapolation lesson, now with this buffer-fill facet); run wandb h9al2e0k.
+```
+
 ### 2026-05-23 — Ltrain-amp — trainer-side bf16 autocast: directionally SLOWER, but cell is heat-soak-confounded (needs_repeat)
 
 ```yaml
