@@ -413,6 +413,10 @@ def build_worker_cmd(cell: dict, dirs: dict, worker_id: str, seed: int) -> list[
     ]
     if cell["wave_mode"]:
         cmd += ["--wave-mode"]
+    if cell.get("evaluator", "torch") != "torch":
+        cmd += ["--evaluator", cell["evaluator"]]
+        if cell["evaluator"] == "coreml":
+            cmd += ["--coreml-compute-units", cell.get("coreml_compute_units", "CPU_AND_NE")]
     return cmd
 
 
@@ -688,6 +692,8 @@ def make_cell_from_args(args: argparse.Namespace) -> dict:
         wave_mode=args.wave_mode,
         sgd_per_position=args.sgd_per_position,
         batch_size=args.batch_size,
+        evaluator=args.evaluator,
+        coreml_compute_units=args.coreml_compute_units,
     )
     if args.cell_id:
         cell["cell_id"] = args.cell_id
@@ -719,6 +725,17 @@ def main() -> None:
     p.add_argument("--no-wave-mode", dest="wave_mode", action="store_false")
     p.add_argument("--sgd-per-position", type=float, default=0.0025)
     p.add_argument("--batch-size", type=int, default=512)
+    # Evaluator backend for the self-play workers. The trainer always uses
+    # torch on --device; this controls what backend the workers' eval model
+    # runs on. coreml routes inference through CPU_AND_NE (the ANE) so the
+    # MPS GPU is left free for the trainer — the L09 architectural lever.
+    p.add_argument("--evaluator", type=str, default="torch",
+                   choices=["torch", "coreml"],
+                   help="Worker eval backend (L09 R-TRAIN-ANE). Default torch.")
+    p.add_argument("--coreml-compute-units", type=str, default="CPU_AND_NE",
+                   choices=["CPU_AND_NE", "CPU_AND_GPU", "ALL", "CPU_ONLY"],
+                   help="Core ML compute-units routing when --evaluator=coreml. "
+                        "Default CPU_AND_NE (ANE-first; matches L09 spec).")
     # Window
     p.add_argument("--warmup-secs", type=int, default=30)
     p.add_argument("--measurement-secs", type=int, default=60)
