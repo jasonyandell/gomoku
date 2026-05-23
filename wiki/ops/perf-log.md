@@ -16,6 +16,18 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] Lpwr2b | RESOLVED: the cross-engine throttle is FLOP-rate-independent — it's occupancy/working-set, not compute-power
+
+The discriminator. Same matrix (4096), back-to-back fp32-hog then fp16-hog, bracketed by no-hog. fp16@4096 has half the byte-footprint and can push far more FLOPs; the *sign* of its throttle-vs-fp32 was meant to separate the hypotheses.
+
+It came out flat. **fp32-hog: 1.98 TFLOP/s, workers −15.9%. fp16-hog: 7.03 TFLOP/s (3.5×), workers −14.8%.** A 3.5× increase in the hog's compute rate produced ~zero additional worker throttle (1.3% apart, inside the 6.6% no-hog noise). So the cross-engine throttle does **not** scale with the hog's FLOP-rate — and since fp16 also had ~1.75× the byte-traffic-rate, not cleanly with bandwidth-rate either.
+
+Put together with Lpwr2 (throttle grows with matrix *size*: −8.8%→−26% across 2048→8192), the picture is: the coupling tracks the GPU's **working-set size / sustained occupancy** — "is the GPU pinned busy, and how big is its footprint" — not how many FLOPs or bytes/sec it pushes. **Compute-power-draw is ruled out as the driver.** Both 4096 hogs saturate the GPU's occupancy equally regardless of throughput, so they throttle the ANE workers equally.
+
+Actionable "know the machine" takeaway: to cut the cross-engine contention a heavy GPU trainer inflicts on CPU/ANE self-play workers, shrink the GPU's **memory working-set / occupancy**, not its FLOP count. More compute through an already-busy GPU is ~free of extra contention; a bigger footprint is not. (The 120s cells also tightened the no-hog baseline to 6.6% from Lpwr2's 20% — lesson applied.)
+
+decision: resolved (diagnostic) — pins the Lpwr/Lpwr2/Lpwr2b mechanism strand. Both this session's big strands (ANE-for-self-play; cross-engine coupling) are now resolved on clean evidence.
+
 ## [2026-05-23] Lpwr2 | Cross-engine coupling sweep: mutual throttling confirmed; mechanism hints at bandwidth/footprint (not pure power)
 
 The corrected Lpwr re-run: cold-chip, interleaved (no-hog/hog back-to-back per intensity), pure self-play, ANE-resident workers. Swept hog matrix {2048, 4096, 8192}.

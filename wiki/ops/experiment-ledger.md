@@ -37,6 +37,25 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — Lpwr2b — RESOLVED: cross-engine throttle is FLOP-rate-INDEPENDENT (rules out compute-power; coupling tracks GPU working-set/occupancy)
+
+```yaml
+lane: Lpwr2b (the power-vs-bandwidth discriminator; resolves Lpwr2's needs_repeat)
+hypothesis: fp16@4096 (half byte-footprint, ~2x FLOP-rate potential) vs fp32@4096 (full footprint, 1x) at MATCHED matrix dim — the SIGN of the worker-throttle difference separates FLOPs/power from footprint/bandwidth.
+code_ref: feat/perf-L09i-fix (canonical_sweep coreml); scripts/gpu_load_generator.py --dtype (commit 8edd16b); runner sweep_logs/run_lpwr2b.sh
+method: 120s cells (cut the 80s noise), no-hog bracket (start+end), back-to-back fp32-hog then fp16-hog at matrix 4096 (shared thermal state → directly comparable). tiny/W16/G8/S400/V64/coreml CPU_AND_NE pure self-play.
+results:
+  - no-hog bracket: 3,971.6 and 4,234.0 aug/s (mean ~4,103; spread 6.6% — the 120s cells tightened it from Lpwr2's ~20% at 80s)
+  - fp32-hog @4096: 3,451.7 aug/s (−15.9% vs bracket); hog reached 1.98 TFLOP/s
+  - fp16-hog @4096: 3,496.2 aug/s (−14.8% vs bracket); hog reached **7.03 TFLOP/s** (3.5× the fp32)
+finding (DEFINITIVE): the fp16 hog did **3.5× the FLOP-rate** of the fp32 hog (7.03 vs 1.98 TFLOP/s) yet threw the **SAME worker throttle** (−14.8% vs −15.9%, within 1.3% — far inside the ~6.6% no-hog noise). So the cross-engine worker throttle is **independent of the hog's compute rate**. fp16 also had ~1.75× the byte-traffic-rate (half bytes/elem × 3.5× more matmuls) yet ~equal throttle → byte-bandwidth-RATE doesn't cleanly drive it either.
+mechanism (combined Lpwr2 + Lpwr2b): the throttle scales with hog matrix SIZE (Lpwr2: 2048→8192 = −8.8%→−26%) but NOT with FLOP-rate or byte-rate at fixed size (Lpwr2b). Both 4096 hogs keep the GPU saturated/occupied regardless of throughput. → the coupling tracks the GPU's **working-set size / sustained occupancy** ("is the GPU pinned busy, and how big is its footprint"), NOT its arithmetic or bandwidth throughput. **Compute-power-draw is RULED OUT as the primary driver.**
+confidence: high on the FLOP-rate-independence (1.3% apart vs 3.5× FLOP difference; bracketed baseline; back-to-back matched-matrix). The positive channel (occupancy vs memory-working-set vs base-activation-power) is narrowed but not uniquely isolated.
+decision: resolved (diagnostic) — pins the Lpwr/Lpwr2/Lpwr2b mechanism strand: cross-engine throttle is occupancy/working-set-driven, FLOP-rate-independent. Resolves Lpwr2's needs_repeat.
+actionable: to reduce cross-engine contention from the GPU trainer, shrink the GPU's memory working-set / occupancy duration, NOT its FLOP count. Throwing more compute through an already-busy GPU doesn't worsen the throttle; enlarging its footprint does.
+next_action: the coupling mechanism is pinned enough for the lab's purposes. Optional Lpwr2c (vary footprint at fixed occupancy, or memory-bound vs compute-bound hog) only if a future lane needs the exact channel. Update m5-max-cross-engine-coupling.md with the FLOP-rate-independence result.
+```
+
 ### 2026-05-23 — Lpwr2 — cross-engine coupling intensity sweep: mutual coupling confirmed; mechanism hints at bandwidth/footprint (needs_repeat — noisy baseline)
 
 ```yaml
