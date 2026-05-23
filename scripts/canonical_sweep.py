@@ -281,6 +281,7 @@ def run_cell(
     secs_per_cell: int,
     max_plies: int,
     device: str,
+    fp16_eval: bool = False,
 ) -> dict:
     """Spawn workers for one cell, bound wall time, return measured row.
     Mutates _ACTIVE_PROCS so the signal handler can reach the workers."""
@@ -304,6 +305,8 @@ def run_cell(
         "--max-plies", str(max_plies),
         "--wave-mode",
     ]
+    if fp16_eval:
+        base_cmd.append("--fp16-eval")
 
     procs: list[tuple[str, subprocess.Popen, object]] = []
     started = time.perf_counter()
@@ -659,6 +662,12 @@ def main() -> None:
     p.add_argument("--lane", type=str, default=None,
                    help="Lane label for autonomous-lab dispatch. Stamps the "
                         "latest-symlink and the cell metadata.")
+    p.add_argument("--fp16-eval", action="store_true",
+                   help="L06 perf-lab lane. Pass --fp16-eval through to every "
+                        "spawned selfplay_worker so the eval model runs in "
+                        "torch.float16 (inputs cast inside make_torch_evaluator, "
+                        "outputs cast back to fp32 before host transfer). "
+                        "Default off. See wiki/ops/perf-queue.md L06-fp16-eval.")
     args = p.parse_args()
 
     out_dir = resolve_out_dir(args.out_dir)
@@ -746,6 +755,7 @@ def main() -> None:
                 secs_per_cell=args.secs_per_cell,
                 max_plies=args.max_plies,
                 device=args.device,
+                fp16_eval=args.fp16_eval,
             )
             if _INTERRUPTED:
                 print(f"[drop] {cell['cell_id']} interrupted mid-cell; not recording row")
