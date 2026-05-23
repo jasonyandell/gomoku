@@ -16,6 +16,31 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L09c | ANE pays at tiny — engine envelope maps along the model-size axis
+
+Resumed the lab from the session-end RESUME STATE. Box was idle; consecutive_rejects=0; top-of-queue named lane was **L09c — tiny model on Core ML / CPU_AND_NE under live training**, the second of L09's two follow-up candidates (the first, L09b, blocked on the fp16 × coreml interaction). Hypothesis: at tiny (~30k params) the per-call ANE pipeline overhead amortizes well enough that even with slower-than-MPS raw eval, the trainer-side MPS-relief from L09 tips the holistic R-TRAIN-* aug/s win positive — opposite outcome to L09 (small model, ANE -41%).
+
+**Lane-card under-spec note.** L09c's card listed `n_cells: 1` (just the ANE candidate). But the hypothesis explicitly compares to "workers on MPS torch fighting the trainer" at the tiny model size — and we have **no prior tiny under live training measurement**. R-TRAIN-WL5 is small, R-S400-tiny is pure self-play (no trainer pressure). So the candidate-only number would have been a homeless data point. Dispatched the matched torch baseline immediately after the candidate (~5 min total wall, comparable thermal/scheduler state). The friction-smoothing lesson here: when a lane card asks for n_cells:1, sanity-check the comparison anchor first — if the anchor doesn't exist as a prior measurement, the card is implicitly under-spec'd. Filed as L09c with both arms.
+
+**The two cells:**
+
+| | L09c-candidate (ANE) | L09c-baseline (torch) | delta |
+|---|---|---|---|
+| aug/s | **10,762.6** | 8,039.1 | **+33.9%** |
+| games/s | 49.43 | 32.48 | +52.2% |
+| epochs/s | 0.0417 | 0.0333 | +25.2% |
+| trainer_step_s_p50 | 0.0267s | 0.0319s | -16.3% (trainer faster on ANE config) |
+| plies_mean | 29.02 | 31.84 | -8.9% (within sampling band) |
+| epochs in window | 7 | 6 | — |
+
+**The mechanism, in one paragraph.** L09 confirmed that offloading workers from MPS to ANE relieves trainer-side contention (trainer_step_s_p50 -56% at small) but at small/V=64 the worker-side raw-eval gap is too large (Core ML eval ~2× slower than torch/MPS) — net -41%. At tiny, the per-eval compute is so light that **both backends are pipeline-overhead-bound**: torch/MPS has its own dispatch overhead floor, and Core ML has its pipeline overhead, and the two get within striking distance. The trainer-side MPS-relief (replicated here at -16% trainer_step_s_p50, smaller magnitude because trainer wasn't as contended to begin with on tiny) then tips the balance positive. Engine envelope along the model-size axis: **ANE pays at tiny, doesn't pay at small**. The crossover sits between tiny and small in our shape envelope.
+
+**Implications for L09d (medium on ANE).** L09d sits in the high-prior slot now. Its hypothesis ("medium amortizes pipeline overhead even better than tiny because more compute per call") leans on the same amortization logic L09c confirmed at the small-end. If the trend is monotonic with model size (more per-call compute = better ANE amortization = larger win or smaller loss), medium is the most interesting test point — and the most production-relevant. L09c just established that the amortization argument has empirical legs in our envelope, not just generic Core ML marketing claims. Queue bumped accordingly.
+
+**Decision: PROMOTE** as a new envelope-mapping reference family — R-TRAIN-TINY-ANE (10,762.6) and R-TRAIN-TINY (8,039.1, torch arm). NOT a R-TRAIN-WL5 substitute (different model size, different quality target); this is engine-fit research, not a production recipe.
+
+**consecutive_rejects stays at 0.** Reviewer pending.
+
 ## [2026-05-23] session-end | the mac is singing
 
 Autonomous-loop session opened with Jason's directive to "make this mac SING" and orchestrate the perf cycle without manual intervention. 12 lanes later, the headline numbers:

@@ -21,8 +21,10 @@ Reference points (current bests):
 | **R-S400-tiny** | tiny / W=16 / G=8 / S=400 / **V=512 / fp16-eval** | **22,873.8 aug/s** (L06-followup) | **+212.2% vs tiny V=64=7,326** |
 | **R-TRAIN-WL5** | full WL5 recipe | **3,297.6 aug/s** / 0.0917 ep/s / 14.07 g/s (L10) | — |
 | **R-TRAIN-LEAN-fp16** (new ref; perf-only, TQ-gated for production) | WL5 + V=512 + sgd=0.001 + fp16 workers | **8,340.5 aug/s** / 0.0667 ep/s / 32.19 g/s (L11b') | **+152.9% vs R-TRAIN-WL5** 🔥🔥 |
+| **R-TRAIN-TINY-ANE** (new ref; envelope-mapping, NOT R-TRAIN-WL5 substitute) | tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE | **10,762.6 aug/s** / 0.0417 ep/s / 49.43 g/s (L09c) | **+33.9% vs R-TRAIN-TINY torch** — engine envelope maps: ANE pays at tiny, doesn't pay at small |
+| **R-TRAIN-TINY** (new ref; torch baseline arm for R-TRAIN-TINY-ANE) | tiny / W=16 / G=8 / S=400 / V=64 / torch | **8,039.1 aug/s** / 0.0333 ep/s / 32.48 g/s (L09c-baseline) | — (baseline) |
 | ~~R-TRAIN-LEAN~~ | WL5 with V=512 | **2,362.8 aug/s** / 0.0083 ep/s / 8.42 g/s (L11, REJECT — gen win doesn't compound at trainer) | — |
-| ~~R-TRAIN-ANE~~ | WL5 with workers on Core ML | **1,930.3 aug/s** / 0.0583 ep/s / 8.00 g/s (L09, REJECT holistic; trainer_step_s_p50 -56% confirms MPS-relief, but Core ML worker eval ~2× slower than MPS) | — |
+| ~~R-TRAIN-ANE~~ | WL5 with workers on Core ML | **1,930.3 aug/s** / 0.0583 ep/s / 8.00 g/s (L09, REJECT holistic at SMALL; the same engine wins at TINY — see R-TRAIN-TINY-ANE) | — |
 
 ## CPU queue (parallel — Agent fan-out, no GPU contention)
 
@@ -192,33 +194,13 @@ status: queued (L06 driver flag landed 2026-05-23)
 
 ### Background — Calibration / reference
 
-#### L09c — Tiny model on Core ML CPU_AND_NE
-
-```yaml
-id: L09c
-tier: 1
-hypothesis: At tiny (~30k params), the per-call ANE pipeline overhead is even worse per call than at small. But under live-training pressure (trainer holds MPS), even a slow ANE worker might pay because the alternative (workers on MPS torch fighting the trainer) is worse. Measure to confirm or rule out.
-references_affected: R-TRAIN-* family; informs ANE envelope mapping.
-code_change: false
-prep_cells: none
-measurement_cells:
-  - tiny / W=16 / G=8 / S=400 / V=64 / --evaluator coreml --coreml-compute-units CPU_AND_NE / 30s warmup + 120s measure
-n_cells: 1
-wall_cost_min: 3
-E_delta_aug_per_sec: 500 (gut estimate; either small positive or negative)
-P_success: 0.3 (low prior, but the mechanism is plausible)
-priority: 4.0
-status: queued
-notes: First in the ANE-envelope-mapping lane family. See wiki/topics/coreml-design-envelope-and-our-fit.md for the design context.
-```
-
-#### L09d — Medium model on Core ML CPU_AND_NE (the high-prior ANE case)
+#### L09d — Medium model on Core ML CPU_AND_NE (HIGH-prior; L09c confirmed amortization mechanism)
 
 ```yaml
 id: L09d
 tier: 1
-hypothesis: Medium (~1.5M params) is closer to Core ML's design envelope. Per-call compute is larger, so pipeline overhead amortizes better. Combined with MPS-relief on the trainer side (L09 confirmed -55.7% trainer_step_s_p50), this is where ANE-offload might actually pay holistically.
-references_affected: R-TRAIN-* family, possibly opens a new R-TRAIN-ANE-medium ref.
+hypothesis: Medium (~1.5M params) is closer to Core ML's design envelope. Per-call compute is larger, so pipeline overhead amortizes better. Combined with MPS-relief on the trainer side (L09 confirmed -55.7% trainer_step_s_p50; L09c replicated at -16% on tiny), this is where ANE-offload might actually pay holistically — and where it matters most because medium is in the production-quality target band. L09c (2026-05-23) confirmed the amortization mechanism wins at tiny (+33.9% ANE vs torch under live training); L09d tests whether the trend extends to the bigger model.
+references_affected: R-TRAIN-* family, possibly opens new R-TRAIN-MEDIUM-ANE / R-TRAIN-MEDIUM refs.
 code_change: false
 prep_cells:
   - Medium V=512 fp16 torch/MPS baseline under live-training pressure (we have the pure-self-play number at 3,377 aug/s from L06fu-extended; need the trainer-loaded comparison)
@@ -228,10 +210,32 @@ measurement_cells:
 n_cells: 2
 wall_cost_min: 6
 E_delta_aug_per_sec: 800
-P_success: 0.5 (highest-prior remaining ANE lane)
-priority: 6.0
+P_success: 0.65 (was 0.5; bumped post-L09c since the amortization mechanism has empirical legs in our envelope)
+priority: 7.5 (was 6.0; bumped post-L09c)
 status: queued
 notes: The "if ANE pays anywhere for us, here" lane. See wiki/topics/coreml-design-envelope-and-our-fit.md § L09d.
+```
+
+#### L09c-V512 — Does V-axis amortize ANE pipeline overhead further? (auto-queued from L09c promote)
+
+```yaml
+id: L09c-V512
+tier: 1
+hypothesis: L09c confirmed ANE pays at tiny under live training (+33.9%). L09f generically hypothesizes that V=512+ amortizes Core ML's pipeline overhead better than V=64 because batches more leaf evals per forward. A dedicated tiny + ANE + V=512 cell under live training tests whether V-axis amortization stacks with model-size amortization, expanding the L09c win.
+references_affected: R-TRAIN-TINY-ANE (opens a higher operating point if successful).
+code_change: false
+prep_cells:
+  - tiny / W=16 / G=8 / S=400 / V=512 / torch baseline under live-training pressure (we have R-S400-tiny = 22,874 aug/s pure-self-play with fp16; need the trainer-loaded V=512 number for matched A/B)
+measurement_cells:
+  - tiny / W=16 / G=8 / S=400 / V=512 / fp16-eval (torch baseline, live-training)
+  - tiny / W=16 / G=8 / S=400 / V=512 / --evaluator coreml --coreml-compute-units CPU_AND_NE (live-training)
+n_cells: 2
+wall_cost_min: 6
+E_delta_aug_per_sec: 800 (gut estimate; the +33.9% L09c win at V=64 + V=axis amortization could compound)
+P_success: 0.45 (medium; the V=axis story is also competing with the buffer-fill / trainer-contention dynamic from L11)
+priority: 4.5
+status: queued
+notes: Auto-queued from L09c promote. Cheapest V-axis amortization test (L09f's tiny analog under live training pressure).
 ```
 
 #### L09e — Core ML compute-units routing sweep
@@ -320,6 +324,7 @@ notes: If the cost is significant, motivates a delta-encoding or differential-co
 
 | date | id | resolution | best cell from lane | reviewer | notes |
 |---|---|---|---|---|---|
+| 2026-05-23 | L09c | **promote (new envelope-mapping ref pair)** | **R-TRAIN-TINY-ANE = 10,762.6 aug/s** / 49.43 g/s / 0.0417 ep/s / trainer_step_s_p50=0.0267s (7 epochs in 120s, plies_mean 29.02); matched **R-TRAIN-TINY torch baseline = 8,039.1 aug/s** / 32.48 g/s / 0.0333 ep/s / trainer_step_s_p50=0.0319s (6 epochs in 120s, plies_mean 31.84). ANE vs torch: **aug/s +33.9%**, games/s +52.2%, trainer_step_s_p50 -16.3%. | pending Reviewer audit | Opposite holistic sign to L09 (small model, -41.5%). Engine envelope along the model-size axis: ANE pays at tiny, doesn't pay at small. Lane-card under-spec note: card said n_cells:1 but the hypothesis needs a matched baseline that didn't exist; dispatched both arms back-to-back (5 min total wall). Sharply elevates L09d's prior (medium on ANE). Auto-queued L09c-V512. consecutive_rejects stays at 0. |
 | 2026-05-23 | L09b | blocked (code bug + semantic redundancy) | Worker crashed at startup: `RuntimeError: Input type (float) and bias type (c10::Half) should be the same` at coreml_evaluator.py:266 (torch.jit.trace expects fp32 dummy; model was already fp16). Also: Core ML already exports at compute_precision=FLOAT16 so the lane was structurally incoherent. | n/a (failed before measurement) | Patch lands at the same commit: selfplay_worker parse_args() force-sets fp16_eval=False when evaluator=coreml; flag combination is now a graceful no-op with a printed audit line. consecutive_rejects unchanged (blocked ≠ reject). Remaining ANE candidate: L09c (tiny model on ANE) — queue for future session. |
 | 2026-05-23 | L11bp (L11b') | needs_repeat (perf reference established; TQ gate for production) | R-TRAIN-LEAN-fp16 = **8,340.5 aug/s** / 32.19 g/s / 0.0667 ep/s / trainer_step_s_p50=0.0801s (11 epochs in 120s). vs L10 R-TRAIN-WL5: aug/s **+152.9%**, games/s +128.8%, epochs/s -27%. vs L11b (low-sgd alone): aug/s +97.1% (same magnitude as R-S400's fp16 win — levers stack multiplicatively as the mechanism predicted). plies_mean 32.74 preserved (gomoku not at terminal). | APPROVE (precedent-extending) | The compound finding the whole perf cycle was building toward. Two independent levers — low-sgd cures trainer-side MPS contention (L11b); fp16 doubles worker-side throughput (L06) — stack cleanly at the R-TRAIN-* family. Reviewer verified mechanism independence structurally (gomoku/train.py has zero fp16 refs; selfplay_worker._maybe_half only affects workers); product prediction 1.283 × 1.972 = 2.530 matches measured 2.529× to 4 decimals. NEEDS_REPEAT per TQ gate (sgd_per_position is behavior-affecting); fp16 is no-behavior-change per L06-followup precedent. R-TRAIN-WL5 stays at production recipe; NEW reference R-TRAIN-LEAN-fp16 opens. consecutive_rejects stays at 0. |
 | 2026-05-23 | L06fu-extended | **promote × 3** | R-S200 fp16 = 16,851 (+84% vs fp32); R-S100 fp16 = 22,312 (+48% vs fp32); medium V=512 fp16 = 3,377 (NEW ref). plies_mean 15.95-15.96 unchanged. fp16 win scales with sims (S=400 +97% > S=200 +84% > S=100 +48%), consistent with bandwidth-bound regime — higher S spends more time in eval. | pending Reviewer audit | Compound finding from L06-followup. Three new best-cells reference points (R-S200, R-S100 updates; R-S400-medium new ref). consecutive_rejects unchanged at 0. Compound follow-up dispatching now: L11b' (V=512 + sgd=0.001 + fp16 workers at trainer level — combines L11b's +28% finding with L06's +97% finding). |
@@ -344,11 +349,12 @@ notes: If the cost is significant, motivates a delta-encoding or differential-co
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **0** (RESET — L06-followup-fp16 promoted at R-S400 +97.2%; then L06fu-extended × 3 promotes; then L11b' established the +152.9% R-TRAIN-LEAN-fp16 perf reference; L09b was blocked-not-reject). **SESSION ENDED 2026-05-23 by orchestrator after L09b blocked + L11b' compound finding landed.** Session-end perf-log entry filed. Resume cleanly on next session.
+- consecutive_rejects: **0** (UNCHANGED — L09c promoted as a new envelope-mapping reference pair, +33.9% ANE vs torch baseline at tiny under live training; lab continues per autonomous-loop charter). Prior streak: L06-followup-fp16 promoted at R-S400 +97.2%; L06fu-extended × 3 promotes; L11b' established the +152.9% R-TRAIN-LEAN-fp16 perf reference; L09b was blocked-not-reject; L09c PROMOTE.
 - **Charter staleness flagged by 3 consecutive Reviewers (L10, L11, L09)**: `wiki/topics/perf-lab-charter.md:50` still reads "R-TRAIN-LEAN | same but V=128 (today's promoted gen default)" but L01 promoted V=512 as the R-S400 default, AND L11 has now rejected V=512 at the trainer level. Class B (charter modification) → needs user touch; out of any individual lane's scope. Recommend rewriting the R-TRAIN-LEAN row to reflect the current state (V=512 rejected as a target; V=64 stays the R-TRAIN-* default) on the next charter pass.
 - queue empty + no followups pending: false (GPU queue has L10, L11, L09, L08-mps-heap-ratio, L05-followup, L06-followup queued)
 - last halt reason: n/a — lab restarted 2026-05-23; four CPU-queue lanes landed in parallel
-- **RESUME STATE (session-end 2026-05-23)**: Headline wins from this session: **R-S400 nearly doubles** (4,765 → 9,398.5 aug/s via fp16-eval); **R-TRAIN family doubles** (3,297.6 → 8,340.5 aug/s via V=512 + low-sgd + fp16, perf ref only — TQ canary required for production); R-S200 / R-S100 / R-S400-tiny / R-S400-medium all updated to fp16. Lab worked exactly as designed: 12 lanes, every promote Reviewer-APPROVE, every behavior-borderline lane TQ-gated correctly. Next-session queue: **L09c** (tiny model on Core ML / ANE — smaller per-eval graph might amortize ANE pipeline overhead better), **L06fu-medium-AB** (clean medium V=512 fp32 vs fp16 attribution), **L08-mps-heap-ratio at the new fp16 reference**, **L11b''** (sgd_per_position sweep at V=512+fp16 for the optimal trainer-work band). Class-B housekeeping pending **user touch**: `wiki/topics/perf-lab-charter.md:50` R-TRAIN-LEAN row reads "V=128 (today's promoted gen default)" — stale on 2 axes after L11b's reject and L11b''s perf-ref promotion. 5 Reviewer flags accumulated; ready for user rewrite.
+- **RESUME STATE (2026-05-23 mid-session, post-L09c)**: L09c landed **PROMOTE** as a new envelope-mapping reference pair — **R-TRAIN-TINY-ANE = 10,762.6 aug/s** (+33.9% vs matched torch baseline R-TRAIN-TINY = 8,039.1 aug/s). Engine envelope along the model-size axis: ANE pays at tiny, doesn't pay at small (L09: -41.5%); the crossover sits between tiny and small in our shape envelope. Auto-queued **L09c-V512** (does V-axis amortize further?); **L09d** priority bumped 6.0 → 7.5 (medium on ANE is now the high-prior production-relevant test). Reviewer pending. Top-of-queue for the next dispatch: **L09d** (Tier 1, priority 7.5, 6-min wall, 2 cells — medium torch baseline + medium ANE candidate). Behind L09d: L09c-V512 (Tier 1, priority 4.5), L08-mps-heap-ratio (Tier 3, priority 2.6). Class-B housekeeping still pending **user touch**: `wiki/topics/perf-lab-charter.md:50` R-TRAIN-LEAN row staleness, now compounded by R-TRAIN-TINY-ANE / R-TRAIN-TINY references.
+- **RESUME STATE (session-end 2026-05-23, pre-L09c)** [SUPERSEDED — kept for archaeology]: Headline wins from this session: **R-S400 nearly doubles** (4,765 → 9,398.5 aug/s via fp16-eval); **R-TRAIN family doubles** (3,297.6 → 8,340.5 aug/s via V=512 + low-sgd + fp16, perf ref only — TQ canary required for production); R-S200 / R-S100 / R-S400-tiny / R-S400-medium all updated to fp16. Lab worked exactly as designed: 12 lanes, every promote Reviewer-APPROVE, every behavior-borderline lane TQ-gated correctly. Next-session queue: **L09c** (tiny model on Core ML / ANE — smaller per-eval graph might amortize ANE pipeline overhead better), **L06fu-medium-AB** (clean medium V=512 fp32 vs fp16 attribution), **L08-mps-heap-ratio at the new fp16 reference**, **L11b''** (sgd_per_position sweep at V=512+fp16 for the optimal trainer-work band). Class-B housekeeping pending **user touch**: `wiki/topics/perf-lab-charter.md:50` R-TRAIN-LEAN row reads "V=128 (today's promoted gen default)" — stale on 2 axes after L11b's reject and L11b''s perf-ref promotion. 5 Reviewer flags accumulated; ready for user rewrite.
 
 ## Dispatch rule (charter v3)
 

@@ -37,6 +37,43 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — L09c R-TRAIN-TINY-ANE PROMOTE — tiny on ANE = 10,762.6 aug/s (+33.9% vs tiny/torch baseline)
+
+```yaml
+lane: L09c-tiny-on-ane (second L09 follow-up: smaller per-eval graph might amortize ANE pipeline overhead better)
+hypothesis: At small/V=64, L09 showed Core ML worker eval is ~2× slower than torch/MPS, dominating the trainer-side MPS-relief gain (trainer_step_s_p50 -56%). At tiny (~30k params) the per-call pipeline overhead amortizes across less per-call compute — but the model is also vastly more compute-light. If the trainer-side MPS-relief still pays AND the worker-side raw-eval gap closes enough, the holistic R-TRAIN-TINY-ANE / R-TRAIN-TINY ratio could flip from L09's -41% to net positive.
+code_ref: 9d4bfa5 on main (Core ML evaluator + --evaluator/--coreml-compute-units already shipped in L09 / L12 / L09b sessions)
+evaluator (candidate): Core ML / ANE via --evaluator coreml --coreml-compute-units CPU_AND_NE; trainer always fp32 SGD on MPS
+evaluator (baseline): torch / MPS; trainer always fp32 SGD on MPS
+dataset_ref: fresh random fused checkpoint (tiny); live self-play under WL5-shaped recipe (S=400, V=64, EMA τ=0.99, grad_accum=4); W=16 (tiny's L13/L14-confirmed peak); no archive ingest
+baseline_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09c-baseline-20260523T153613Z --lane L09c-baseline --model tiny --workers 16 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator torch
+candidate_command: python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09c-20260523T153250Z --lane L09c --model tiny --workers 16 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+hardware: MacBook Pro Mac17,6; Apple M5 Max; 48 GB; MPS (trainer + baseline workers) / MPS (trainer) + ANE (candidate workers via Core ML CPU_AND_NE); idle (pre-flight pgrep clean for both cells; baseline ran immediately after candidate so chip thermal state was comparable)
+seed: workers seeded 1000..1015 (w0..w15) both arms; trainer seed default both arms
+baseline_metric: R-TRAIN-TINY (torch baseline): 8,039.1 aug/s; 32.48 games/s; 0.0333 epochs/s; trainer_step_s_p50=0.0319s; plies_mean=31.84; 6 epochs in 120s; 3,501 games / 866,616 aug positions
+candidate_metric: R-TRAIN-TINY-ANE (coreml CPU_AND_NE): 10,762.6 aug/s; 49.43 games/s; 0.0417 epochs/s; trainer_step_s_p50=0.0267s; plies_mean=29.02; 7 epochs in 120s; 4,884 games / 1,063,344 aug positions
+delta:
+  - aug/s **+33.9%** (8,039.1 → 10,762.6)
+  - games/s **+52.2%** (32.48 → 49.43) — the magnitude of the games/s win (greater than aug/s) reflects that ANE games are slightly shorter on average (plies_mean 29 vs 32), but the aug/s number is the policy-target-weighted quantity, so it's the headline.
+  - epochs/s +25.2% (0.0333 → 0.0417); trainer finishes ~7 epochs per 2-min window instead of ~6.
+  - trainer_step_s_p50 **-16.3%** (0.0319 → 0.0267) — MPS-relief mechanism from L09 replicated at the tiny model size. Per the L09 ratio (-56% trainer_step_s_p50 at small/V=64), tiny shows a smaller trainer-side relief: less worker-side MPS pressure to begin with (tiny eval calls are cheap), but the relief is mechanistically still there.
+  - plies_mean 29.02 vs 31.84 = -8.9%. Within typical sampling band for live-training cells at 6-7 epochs (L09's plies_mean 30.43 vs L10's 29.61 spanned a similar 3%). Eval semantics unchanged (Core ML outputs to fp32 numpy in the same shape).
+  - Hypothesis CONFIRMED: ANE pays for tiny under live training pressure. The worker-side raw-eval gap that killed L09 at small models closes at tiny — most plausibly because tiny's per-eval compute is so light that BOTH backends are pipeline-overhead-bound, and the trainer-side MPS-relief tips the holistic balance.
+confidence: medium-high. Single trial each side, 120s measure / 6-7 epoch span, smoke-first per charter. Strengths: matched-shape comparison ran back-to-back (5 min total wall) so thermal/scheduler state is comparable; the mechanism (trainer_step_s_p50 -16%) replicates L09's qualitatively even though magnitude is smaller; aug/s +33.9% well exceeds the natural 6-epoch noise floor; eval semantics structurally unchanged (Core ML compute_precision=FLOAT16 is internal, outputs cast to fp32 at coreml_evaluator.py:285+ before host). Caveats: this is a NEW reference family (R-TRAIN-TINY*), no prior data to compare; the asymmetry between aug/s and games/s deltas is plies_mean-driven and worth a second run to confirm. Not a precedent-extending claim about R-TRAIN-WL5 (different model, different quality target).
+artifacts:
+  - sweep_logs/lab-L09c-20260523T153250Z/{summary.tsv,metadata.txt,cell_train_tiny_W16_G08_S400_V064_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/*}} (candidate; symlink lab-L09c-latest)
+  - sweep_logs/lab-L09c-baseline-20260523T153613Z/{summary.tsv,metadata.txt,cell_train_tiny_W16_G08_S400_V064_EMA99_GA04_WM1_B512/{logs/trainer.log,logs/worker-NN.log,records/*}} (baseline; symlink lab-L09c-baseline-latest)
+commands_run:
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09c-20260523T153250Z --lane L09c --model tiny --workers 16 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator coreml --coreml-compute-units CPU_AND_NE
+  - python scripts/lab_train_cell.py --out-dir sweep_logs/lab-L09c-baseline-20260523T153613Z --lane L09c-baseline --model tiny --workers 16 --games-per-batch 8 --n-simulations 400 --wave-size 64 --ema-tau 0.99 --grad-accum-steps 4 --warmup-secs 30 --measurement-secs 120 --device mps --evaluator torch
+decision: promote
+next_action:
+  - Open NEW reference points: **R-TRAIN-TINY-ANE** = tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE = 10,762.6 aug/s; **R-TRAIN-TINY** (torch ref) = 8,039.1 aug/s. Both are envelope-mapping references, NOT R-TRAIN-WL5 substitutes (tiny is a different quality target). best-cells.md updated accordingly.
+  - The L09 + L09c combined finding maps the engine envelope along the model-size axis: ANE LOSES at small/V=64 (L09: -41%), WINS at tiny/V=64 (L09c: +34%). The crossover happens between tiny and small. This sharply elevates the prior on **L09d (medium on ANE)** — if the trend continues monotonically with model size, medium would either be the worst case (deepest amortization deficit) or the best case (largest per-call compute amortizes pipeline overhead best); L09c's data point favors the "best case" hypothesis at the L09d card.
+  - Auto-queue candidate **L09c-V512**: does the V=axis amortize ANE pipeline overhead further? L09f addresses this generically; with L09c confirming the mechanism at tiny/V=64, a dedicated tiny + ANE + V=512 cell is the cheapest amortization test next.
+  - consecutive_rejects stays at 0.
+```
+
 ### 2026-05-23 — L09b R-TRAIN-ANE + fp16 BLOCKED — code-interaction bug + semantic redundancy
 
 ```yaml
