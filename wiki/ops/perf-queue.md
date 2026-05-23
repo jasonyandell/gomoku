@@ -192,6 +192,129 @@ status: queued (L06 driver flag landed 2026-05-23)
 
 ### Background — Calibration / reference
 
+#### L09c — Tiny model on Core ML CPU_AND_NE
+
+```yaml
+id: L09c
+tier: 1
+hypothesis: At tiny (~30k params), the per-call ANE pipeline overhead is even worse per call than at small. But under live-training pressure (trainer holds MPS), even a slow ANE worker might pay because the alternative (workers on MPS torch fighting the trainer) is worse. Measure to confirm or rule out.
+references_affected: R-TRAIN-* family; informs ANE envelope mapping.
+code_change: false
+prep_cells: none
+measurement_cells:
+  - tiny / W=16 / G=8 / S=400 / V=64 / --evaluator coreml --coreml-compute-units CPU_AND_NE / 30s warmup + 120s measure
+n_cells: 1
+wall_cost_min: 3
+E_delta_aug_per_sec: 500 (gut estimate; either small positive or negative)
+P_success: 0.3 (low prior, but the mechanism is plausible)
+priority: 4.0
+status: queued
+notes: First in the ANE-envelope-mapping lane family. See wiki/topics/coreml-design-envelope-and-our-fit.md for the design context.
+```
+
+#### L09d — Medium model on Core ML CPU_AND_NE (the high-prior ANE case)
+
+```yaml
+id: L09d
+tier: 1
+hypothesis: Medium (~1.5M params) is closer to Core ML's design envelope. Per-call compute is larger, so pipeline overhead amortizes better. Combined with MPS-relief on the trainer side (L09 confirmed -55.7% trainer_step_s_p50), this is where ANE-offload might actually pay holistically.
+references_affected: R-TRAIN-* family, possibly opens a new R-TRAIN-ANE-medium ref.
+code_change: false
+prep_cells:
+  - Medium V=512 fp16 torch/MPS baseline under live-training pressure (we have the pure-self-play number at 3,377 aug/s from L06fu-extended; need the trainer-loaded comparison)
+measurement_cells:
+  - Medium V=512 fp16 / lab_train_cell baseline (torch/MPS workers)
+  - Medium V=512 / --evaluator coreml --coreml-compute-units CPU_AND_NE
+n_cells: 2
+wall_cost_min: 6
+E_delta_aug_per_sec: 800
+P_success: 0.5 (highest-prior remaining ANE lane)
+priority: 6.0
+status: queued
+notes: The "if ANE pays anywhere for us, here" lane. See wiki/topics/coreml-design-envelope-and-our-fit.md § L09d.
+```
+
+#### L09e — Core ML compute-units routing sweep
+
+```yaml
+id: L09e
+tier: 3
+hypothesis: L09 used CPU_AND_NE. We don't know if our model is fully ANE-resident or if Core ML silently demoted some ops to CPU/GPU. Sweep CPU_AND_GPU, ALL, CPU_AND_NE, CPU_ONLY at small/V=64 (the L09 reference shape) and compare.
+references_affected: diagnostic — informs whether the L09 result is "ANE specifically slow" or "Core ML generally slow at this scale".
+code_change: false (already supported by L12 driver)
+measurement_cells:
+  - small / W=8 / G=8 / S=400 / V=64 / coreml / CPU_AND_NE (re-measure L09 reference)
+  - small / W=8 / G=8 / S=400 / V=64 / coreml / CPU_AND_GPU
+  - small / W=8 / G=8 / S=400 / V=64 / coreml / ALL
+  - small / W=8 / G=8 / S=400 / V=64 / coreml / CPU_ONLY
+n_cells: 4
+wall_cost_min: 12
+E_delta_aug_per_sec: 200 (diagnostic value > headline value)
+P_success: 0.7 (informative regardless of outcome)
+priority: 1.5
+status: queued
+notes: Pre-requisite for elevating any ANE receipt past the `coreml-scheduled` cap is wiring powermetrics ane_power into metadata (see coreml-ane-residency-lab.md "Definition Of Cap"). Without that, L09e is informative-but-not-residency-proving.
+```
+
+#### L09f — Larger wave sizes on Core ML
+
+```yaml
+id: L09f
+tier: 3
+hypothesis: V=64 is Core ML's worst case for our workload (low per-call work). V=512+ batches more leaf evals per forward, amortizing the pipeline overhead. The amortization may shift the regime where Core ML competes with torch/MPS.
+references_affected: ANE envelope mapping along the V-axis.
+code_change: false
+measurement_cells:
+  - small V=512 / coreml CPU_AND_NE (vs L06-followup torch/MPS = 9,398.5 aug/s)
+  - small V=1024 / coreml CPU_AND_NE
+  - small V=2048 / coreml CPU_AND_NE (if model max_batch supports)
+n_cells: 3
+wall_cost_min: 9
+E_delta_aug_per_sec: 500
+P_success: 0.4
+priority: 2.5
+status: queued
+notes: V-axis is the cheapest amortization test. See wiki/topics/coreml-design-envelope-and-our-fit.md § L09f.
+```
+
+#### L09g — Core ML model-size sweep at V=512 (pure self-play; envelope analog of MPS Finding 2)
+
+```yaml
+id: L09g
+tier: 3
+hypothesis: Map where the bandwidth-bound transition is for Core ML, as we did for MPS torch in Finding 2 (m5-max-fp16-and-throughput-regimes.md). Where does Core ML's per-call overhead stop dominating?
+references_affected: ANE envelope mapping along the model-size axis.
+code_change: false
+measurement_cells (canonical_sweep, pure self-play):
+  - tiny / V=512 / coreml CPU_AND_NE
+  - small / V=512 / coreml CPU_AND_NE
+  - medium / V=512 / coreml CPU_AND_NE
+n_cells: 3
+wall_cost_min: 4 (no trainer; pure self-play 60s cells)
+E_delta_aug_per_sec: 300 (diagnostic value)
+P_success: 0.8 (high — the data will be informative regardless of which size wins)
+priority: 2.0
+status: queued
+notes: The chip-level analog of Finding 2 but for Core ML. See wiki/topics/coreml-design-envelope-and-our-fit.md § L09g.
+```
+
+#### L09h — `.mlpackage` re-export cost amortization (diagnostic)
+
+```yaml
+id: L09h
+tier: 3
+hypothesis: In live training, Core ML re-exports the model on every weight version. That overhead could dominate cell wall time at fast epochs. Measure the re-export cost directly; if > 5% of wall time, propose a caching scheme.
+references_affected: viability of any future R-TRAIN-ANE-medium production lane.
+code_change: instrument gomoku/coreml_evaluator.py to log per-export wall time.
+n_cells: 1 (instrument + re-run an existing L09 cell)
+wall_cost_min: 3
+E_delta_aug_per_sec: n/a (diagnostic)
+P_success: 0.9 (will produce a number)
+priority: 1.0
+status: queued
+notes: If the cost is significant, motivates a delta-encoding or differential-compile cache.
+```
+
 
 ## Completed
 

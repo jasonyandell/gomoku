@@ -170,6 +170,14 @@ that makes the next step cheaper.
   bandwidth-bound and dispatch-bound regimes depending on model size;
   independent perf levers compose multiplicatively to four decimals.
   Numbers, reproduction commands, Reviewer-audited receipts.
+- [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md)
+  — the "where the chip breaks" companion. Characterizes Core ML / ANE's
+  design center (iOS/macOS app ML stack — Vision/Siri/AR/FaceID), shows
+  where our gomoku workload sits relative to that envelope (20-100× above
+  the design call rate, 3-30× below the design model size — worst corner
+  of the pipeline-overhead-to-compute ratio), and queues L09c-L09h
+  research lanes to map the envelope's edges. Mapping where it breaks is
+  the value, even if we don't directly leverage it in the end.
 - [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — current perf state,
   what's already been ported from zeb, what hasn't.
 - [activity-monitor-perf-runbook.md](activity-monitor-perf-runbook.md) —

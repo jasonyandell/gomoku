@@ -3,6 +3,12 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-23] topics | Core ML design-envelope page published + L09c-L09h research lanes queued
+
+- Added [topics/coreml-design-envelope-and-our-fit.md](topics/coreml-design-envelope-and-our-fit.md) — characterizes Core ML / ANE's design center (the iOS/macOS app ML stack: Vision, Siri, AR, FaceID), maps our research-compute gomoku workload against that envelope (20-100× above design call rate, 3-30× below design model size — worst corner), and proposes six concrete research lanes (L09c tiny on ANE, L09d medium on ANE, L09e routing-units sweep, L09f larger-V amortization, L09g model-size sweep at V=512, L09h .mlpackage re-export cost). Frame: "M5 Max as mainframe is learning where it breaks; even if we don't directly leverage it in the end, we'll know."
+- Cross-linked from [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) (parent philosophy), [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) (sister control-plane page; now points at the design-context page as recommended first-read), and the perf-queue Background section (six new lane yamls).
+- Memory `project-coreml-reality` updated with the 2026-05-23 framing: design envelope vs our workload, the MPS-relief mechanism is real but the production lever was elsewhere (L11b' sgd_per_position cap), where Core ML is the right tool for us (deployment, possible match-eval sidecar).
+
 ## [2026-05-23] topics | M5 Max fp16 + throughput regimes findings page published
 
 - Added [topics/m5-max-fp16-and-throughput-regimes.md](topics/m5-max-fp16-and-throughput-regimes.md) — public-facing writeup of three surprising chip findings from the 2026-05-23 perf cycle: (1) fp16 on MPS is no longer slow at torch 2.11.0 + fused conv+bn (small/V=512 +97.2%); (2) same chip has bandwidth-bound and dispatch-bound regimes depending on model size (small bandwidth-bound, tiny dispatch-bound; same V=512); (3) independent perf levers compose multiplicatively (predicted 2.530, measured 2.529 — to four decimals).

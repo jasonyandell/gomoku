@@ -5,6 +5,10 @@ Core ML / ANE residency lab. This page owns the claim discipline and
 sweep shape only. Raw receipts stay in `/tmp`, `sweep_logs/`, or the
 script output paths; durable interpretation can be appended here.
 
+**Companion pages:**
+- [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md) — the design-context page: what Core ML is built for (the iOS/macOS app ML stack: Vision, Siri, AR, FaceID), where our research-compute workload sits relative to that envelope, where ANE could still pay (deployment; concurrent compute stream; medium-and-larger models), and concrete L09c-L09h research lanes for mapping the envelope's edges. Read this first if you're new to the ANE story in this project.
+- [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — chip-level findings; Finding 2 (bandwidth-bound vs dispatch-bound regimes) is the MPS analog of what L09g would measure for Core ML.
+
 ## Goal
 
 Find the Core ML model shapes, compute-unit settings, batch geometry,
