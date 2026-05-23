@@ -3,6 +3,7 @@
 **This is the canonical entry point for the ANE research strand.** Read here first; the other ANE pages are scoped narrower:
 
 - [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md) — evidence-discipline control plane (Cap ladder for ANE-residency claims; powermetrics receipt schema). Read when you need to know what level of claim a receipt can support.
+- [m5-max-cross-engine-coupling.md](m5-max-cross-engine-coupling.md) — **(2026-05-23) where Core ML actually runs our model (CPU/BNNS, not ANE, per L09e') + the cross-engine power-coupling finding (GPU load collapses CPU workers −82%).** Read for the resolved residency verdict and the load-fragility caveat on the L09c win.
 - [ane-int8-inference.md](ane-int8-inference.md) — **historical** scoping doc from WL5 era (May 2026). Implementation plan was partly executed (Core ML evaluator shipped 2026-05-23); current-state material has moved here.
 - [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — chip-level MPS findings; Finding 2 (bandwidth-bound vs dispatch-bound regimes) is the MPS analog of L09g for the Core ML path.
 

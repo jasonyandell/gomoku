@@ -37,6 +37,77 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — Lpwr GPU-load coupling — saturating the GPU collapses CPU-resident self-play workers (−82%); engines share a package resource
+
+```yaml
+lane: Lpwr-gpu-coupling (engine power/thermal coupling investigation; arose from Jason's "what if we artificially load the gpu" question)
+hypothesis: If L09c's Core ML workers run on the CPU (per L09e'), are they isolated from GPU load? Run a synthetic GPU hog (fp32 matmul hot loop on MPS) concurrently with the L09c CPU-worker cell and measure whether worker throughput holds. Engine-isolation predicts the CPU workers should be ~unaffected by GPU load.
+code_ref: scripts/gpu_load_generator.py (new this session) + existing lab_train_cell coreml path
+evaluator: workers = Core ML CPU_AND_NE (CPU/BNNS per L09e'); hog = torch MPS (GPU); trainer = torch MPS (GPU)
+dataset_ref: fresh random fused checkpoint (tiny); live self-play; tiny / W=16 / G=8 / S=400 / V=64
+hardware: M5 Max / 48 GB; engine placement confirmed by `sample`: workers→BnnsCpuInferenceOperation (CPU), hog+trainer→AGXMetalG (GPU). System GPU monitor during run: GPU ~75%, ANE 0% (independent confirmation workers are not ANE-resident).
+baseline_command: lab_train_cell tiny/W16/V64/coreml CPU_AND_NE, no hog (L09e' = 10,431.6 aug/s on a cooler chip; sweep-baseline = 8,531 on the heat-soaked chip)
+candidate_command: same cell + concurrent `python scripts/gpu_load_generator.py --secs 125 --matrix 8192` launched at measurement-window start
+clean_AB_metric (cool chip, back-to-back):
+  - no hog:   10,431.6 aug/s; 46.0 games/s; trainer_step_s_p50=0.0267
+  - hog ~11 TFLOP/s: 1,905.2 aug/s; 7.55 games/s; trainer_step_s_p50=0.0305
+  - delta: worker aug/s **-81.7%**; games/s -84%; trainer_step +14%
+intensity_sweep_metric (heat-soaked chip, sequential — THERMALLY CONFOUNDED):
+  - matrix=0 (baseline): 8,531 aug/s
+  - matrix=2048 (hog 9.34 TFLOP/s): 3,552 aug/s (-58%)
+  - matrix=4096 (hog 11.88 TFLOP/s): 1,172 aug/s (-86%)
+  - matrix=8192 (hog 11.65 TFLOP/s): 4,884 aug/s (-43%) — NON-MONOTONIC (8192 > 4096 despite ~same hog TFLOP/s)
+delta:
+  - **The coupling is real and large.** Every hog cell sits far below baseline (-43% to -86%), in both the clean A/B and the confounded sweep. GPU load unambiguously collapses CPU-resident workers.
+  - **The mechanism is NOT cleanly pinned.** The clean A/B's asymmetry (trainer on GPU only -14%, workers on CPU -82%) points at a shared package power/thermal envelope rather than GPU-compute contention (which would hit the trainer hardest). But the intensity sweep that would confirm power-vs-scheduling got swamped by session-thermal drift: the baseline itself fell 10,431→8,531 over ~20 min, and the sweep is non-monotonic with hog load. On a heat-soaked M5 Max the thermal state dominates the intensity axis.
+  - Possible mechanisms not yet separated: (a) shared power/thermal envelope → CPU clock throttles when GPU draws power; (b) unified-memory bandwidth contention; (c) macOS QoS scheduling. The asymmetry favors (a) but doesn't rule out (b).
+confidence: high on the qualitative coupling (large effect, two measurement modes agree, independent ANE-0% system-monitor confirmation). LOW on the intensity-scaling shape and the precise mechanism (thermal drift confounded the sweep; needs a cold-chip interleaved-A/B design with cooldowns + ideally powermetrics CPU-freq evidence).
+artifacts:
+  - sweep_logs/lab-L09g-prime-gpustress-20260523T182622Z/ (clean A/B stress arm; sample_w0 + hog log)
+  - sweep_logs/lab-Lpwr-gpu-coupling-20260523T183502Z/{sweep_results.tsv, cell_hog{0,2048,4096,8192}/}
+  - scripts/gpu_load_generator.py
+commands_run:
+  - python scripts/gpu_load_generator.py --secs 125 --matrix 8192 (clean A/B hog)
+  - bash sweep over matrix ∈ {0,2048,4096,8192} (intensity sweep; thermally confounded)
+decision: needs_repeat
+next_action:
+  - **Qualitative finding stands and is durable:** GPU load collapses CPU-resident self-play workers; the engines are compute-isolated but share a package-level resource (power/thermal most likely). This reframes the L09c win as **load-fragile** — it depends on the GPU having spare power budget, which a heavy production trainer (15×15, bigger net) would consume.
+  - **For a clean intensity-scaling + mechanism result, re-run on a cold chip** with interleaved A/B pairs (hog/no-hog back-to-back) per intensity + cooldowns between, ideally under `powermetrics` (sudo) to directly observe CPU frequency/power throttle. NOT a sequential sweep — that design was defeated by thermal drift.
+  - Full writeup: wiki/topics/m5-max-cross-engine-coupling.md. This is a "where the machine breaks" mainframe finding per [[feedback-know-the-machine]] and constrains [[project-light-all-engines]].
+```
+
+### 2026-05-23 — L09e' RESIDENCY RESOLVED — L09c runs on CPU/BNNS, not ANE; `coreml-isolated` cap confirmed, `ane-metered` rail dark
+
+```yaml
+lane: L09e' (L09e-prime; ANE residency proof via the no-sudo thread-name / engine-attribution technique from hollance/neural-engine)
+hypothesis: Elevate L09c (lone PROMOTE) from `coreml-isolated` to `ane-metered`, or pin it at `coreml-isolated`, by detecting whether the Core ML workers run on the ANE. Use `sample <pid>` (no sudo) to check for `H11ANEServicesThread` and Espresso engine attribution (ANERuntimeEngine=ANE, MPSEngine=GPU, BNNSEngine=CPU).
+code_ref: 30179b3 on main (post-hollance-absorption) + scripts already in place
+dataset_ref: fresh random fused checkpoint (tiny); live self-play; tiny / W=16 / G=8 / S=400 / V=64 / coreml CPU_AND_NE
+hardware: M5 Max / 48 GB; macOS 26.4.1
+method: re-ran L09c shape; sampled worker w0 at T+76s (46s into measurement) via `sample <pid> 2`
+candidate_metric: 10,431.6 aug/s (replicates L09c's 10,762.6 within session-thermal noise); trainer_step_s_p50=0.0267
+residency_evidence:
+  - **No `H11ANEServicesThread`** in worker (all 9 threads generically named) → ANE not in use (per hollance technique)
+  - **Hot path: `E5RT::Ops::BnnsCpuInferenceOperation::ExecuteSync`** → Espresso BNNS/CPU engine
+  - `com.apple.ANEServices` + `com.apple.ANECompiler` frameworks lazy-linked (Core ML always links them) but no ANE thread, no `ANERuntimeEngine` symbol
+  - Independent confirmation: system GPU monitor showed **ANE utilization 0%** during the load tests
+  - L09c-cpugpu cross-check (tiny/V=64/CPU_AND_GPU = 10,202 aug/s): STILL `BnnsCpuInferenceOperation` — Core ML picks CPU even when GPU is allowed; the MPS frameworks load but never carry the hot path
+delta: cap stays `coreml-isolated`; `ane-metered` rail is DARK.
+confidence: high. Two independent tools agree (process `sample` + system GPU monitor). Cross-checked across routings (CPU_AND_NE and CPU_AND_GPU both land on BNNS-CPU). Sample is a statistical snapshot but 942 stack samples all hit BNNS.
+artifacts:
+  - sweep_logs/lab-L09e-prime-20260523T181123Z/{summary.tsv, sample_w0_T76s.txt}
+  - sweep_logs/lab-L09c-cpugpu-20260523T182038Z/{summary.tsv}
+commands_run:
+  - lab_train_cell tiny/W16/V64/coreml CPU_AND_NE + sample <worker_pid>
+  - lab_train_cell tiny/W16/V64/coreml CPU_AND_GPU + sample <worker_pid>
+decision: reject (residency claim) — i.e., the L09c PROMOTE is NOT ANE-resident; it is engine-isolation via Core ML's CPU/BNNS path
+next_action:
+  - **The "tiny model fits the ANE design center" hypothesis is FALSIFIED.** Core ML chose CPU for our tiny model just as for small/medium. Tiny *wins* and small/medium *lose* because BNNS-CPU is fast enough at tiny/V=64 to beat torch+MPS-contended workers; at larger shapes BNNS-CPU is too slow. ANE was never in play.
+  - The L09c PROMOTE narrative reframes from "ANE pays at tiny" to "Core ML's CPU/BNNS offload pays at tiny when the GPU has power headroom" (combined with the Lpwr coupling finding, the load-fragility caveat).
+  - To actually get our model ANE-resident, L09i (mlpackage op inspection) is the diagnostic — identify which exported op forces CPU fallback, then model-surgery it. Until then, Core ML offload = CPU offload for our workload.
+  - Full writeup: wiki/topics/m5-max-cross-engine-coupling.md Part 1.
+```
+
 ### 2026-05-23 — L09e REJECT — Core ML compute-units routing axis null at small/V=64 (~4% spread); L09 reject confirmed not-a-routing-issue
 
 ```yaml

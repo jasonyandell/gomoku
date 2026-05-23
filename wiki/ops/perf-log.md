@@ -16,6 +16,26 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] L09e' + Lpwr | Residency resolved (CPU/BNNS, not ANE) + GPU load collapses CPU workers
+
+Post-session-end addendum, driven by Jason flagging the [hollance/neural-engine](https://github.com/hollance/neural-engine) repo as inbound ANE research. Two findings, both "where the machine breaks" material.
+
+**L09e' — residency resolved.** hollance documents a no-sudo way to check ANE residency: `sample <pid>` and look for `H11ANEServicesThread` / Espresso engine attribution (ANERuntimeEngine=ANE, MPSEngine=GPU, BNNSEngine=CPU). Re-ran the L09c shape (replicated cleanly at 10,431.6 aug/s) and sampled the workers: **no ANE thread; hot path is `E5RT::Ops::BnnsCpuInferenceOperation::ExecuteSync` — the CPU/BNNS engine.** Independent confirmation: Jason's system GPU monitor showed **ANE utilization 0%** during the run. Cross-checked under CPU_AND_GPU (L09c-cpugpu = 10,202 aug/s) — STILL BNNS-CPU; Core ML picks CPU for our tiny model even when GPU is allowed. **Verdict: the L09c PROMOTE is `coreml-isolated` via CPU/BNNS, NOT ANE residency.** The "tiny model fits the ANE design center" hypothesis is falsified — Core ML chose CPU for tiny just like small/medium; tiny wins only because BNNS-CPU is fast enough at tiny/V=64 to beat torch+MPS-contended workers. ANE was never in play.
+
+**Lpwr — the engines share a package resource.** Jason: "what if we artificially load the gpu... we have it screaming but the gpu has plenty of headroom." Built `scripts/gpu_load_generator.py` (fp32 matmul hot loop, ~11-14 TFLOP/s on MPS) and ran it concurrently with the L09c CPU-worker cell. Clean back-to-back A/B on a cool chip:
+
+| arm | worker aug/s | trainer_step | engine placement (sampled) |
+|---|---|---|---|
+| no hog | 10,431.6 | 0.0267 | workers→CPU/BNNS, trainer→GPU |
+| GPU hog ~11 TFLOP/s | **1,905.2** | 0.0305 | + hog→GPU |
+| delta | **−81.7%** | +14% | — |
+
+**The CPU workers collapsed 82% when the GPU was saturated** — even though they're on the CPU. The asymmetry (trainer on GPU −14%, workers on CPU −82%) points at a shared **power/thermal envelope**: a GPU pinned at ~11 TFLOP/s eats the package power budget, the CPU throttles, BNNS convolutions slow. **This makes the L09c win load-fragile** — it depends on GPU power headroom (true for our light tiny-model trainer; false for a heavy production trainer at 15×15).
+
+**The intensity sweep got thermally confounded** (and that's a finding too). Sweeping hog matrix dim {0,2048,4096,8192} sequentially gave a non-monotonic result (8192 beat 4096 at ~same TFLOP/s) because the baseline itself fell 10,431→8,531 over ~20 min of heat-soak — thermal state dominated the intensity axis. **The trustworthy measurement is the tight cool-chip back-to-back A/B, not the spread-out sweep.** Mechanism (power vs scheduling vs memory-bandwidth) remains unpinned; needs a cold-chip interleaved-A/B design with cooldowns + powermetrics. Logged as a worked example of friction-lesson #2 (session-thermal drift) defeating an experiment.
+
+**Net for the lab:** "make the Mac sing" has a power-budget ceiling — you cannot run CPU + GPU + ANE at full tilt simultaneously; pushing one steals headroom from the others. Engine offload helps by *balancing* load under that ceiling, not by summing peak rates. Full writeup: [m5-max-cross-engine-coupling.md](../topics/m5-max-cross-engine-coupling.md). decision: needs_repeat (clean mechanism pin pending cold-chip re-run). New memory: [[project-light-all-engines]].
+
 ## [2026-05-23] L09e + session-end | Routing axis null at small/V=64; ANE envelope snapshotted (not a verdict)
 
 L09e was the final session lane — the routing-rescue diagnostic for L09's small/V=64 -41.5% reject. Two cells under live training:
