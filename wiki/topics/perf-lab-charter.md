@@ -66,15 +66,63 @@ signal.
 
 ### Cell time ceiling
 
-**Strict 5 min per cell.** For measurements that need a longer
-warmup (trainer cells, torch.compile graph capture, ANE first-load),
-**split into two back-to-back cells**: a warmup cell (no measurement
-recorded; `cell_status: warmup`) + a measure cell. The driver runs
-them under the same lane; the receipt aggregates.
+**Default 60-90s per cell.** Hard cap 5 min when escalation is genuinely
+needed. See the [Smoke-first doctrine](#smoke-first-doctrine) section
+above for the rule of thumb table.
 
-Per Jason 2026-05-23: "we can tell perf after a warmup, some seconds.
-but you may want more time" — multi-cell stitch honors the 5-min
-boundary while letting any measurement breathe.
+For measurements that need a longer warmup (trainer cells, torch.compile
+graph capture, ANE first-load), **split into two back-to-back cells**:
+a warmup cell (no measurement recorded; `cell_status: warmup`) + a
+measure cell. The driver runs them under the same lane; the receipt
+aggregates.
+
+## Two-queue scheduler
+
+The lab is **not** a single-queue "dispatch one cell, wait, dispatch
+next" loop. It's a two-queue scheduler:
+
+| Queue | Concurrency | What goes here | Default cell wall |
+|---|---|---|---|
+| **GPU queue (serial)** | one at a time on MPS | live cells: self-play sweeps, R-TRAIN-* training cells, eval probes | 60-90s (smoke-first; see below) |
+| **CPU queue (parallel)** | many at once via Agent fan-out | code (new scripts, evaluator backends, drivers); wiki edits; charter updates; plot generation; reviewer audits; worktree code work | n/a (subagent time) |
+
+**Orchestrator's job**: keep both queues turning. Block only on GPU;
+never block on code. When a code task surfaces, spawn an Agent in a
+worktree (CPU queue) rather than serializing behind the next GPU cell.
+When the GPU is busy with cell N, the orchestrator is using that wall
+time to fan out code/wiki/review work in parallel.
+
+Mid-conversation, the orchestrator is the live session (multiple `Agent`
+calls in one message). For unattended drift, a cron tick is the MVP —
+but it's a degenerate scheduler that only advances the GPU queue. Prefer
+live-session orchestration when possible.
+
+## Smoke-first doctrine
+
+A 60-90s cell at ~90% confidence beats a 5-min cell at 99.99%
+confidence almost always. Default `--secs-per-cell 60` (or 90). Escalate
+to 5 min only when the smoke result is genuinely ambiguous (delta
+within ~2x of the experimental noise floor).
+
+**Why:** the 23-cell canonical sweep was a one-time map and reasonably
+used 5-min cells. Ongoing lanes inherited that default by reflex; they
+shouldn't have. We were spending 83-min lane budgets to confirm things
+the 17-min version would have shown clearly.
+
+**Rule of thumb for cell time:**
+
+| Need | Cell wall |
+|---|---|
+| Single-axis pivot near a known peak | 60s |
+| New-axis exploration | 90s |
+| Resolving an ambiguous smoke read | 5 min (escalation, not default) |
+| Trainer-loop measurement (R-TRAIN-*) | 30s warmup + 60-120s measure = ≤3 min total |
+| One-time chip-map (e.g. canonical contour) | 5 min per cell, but rare |
+
+**Smoke first; repeat only when needed.** If a lane's first cell is
+clearly above the reference and clearly above noise, that's a promote
+candidate — file the receipt and let the Reviewer audit. Don't run 4
+more cells "for confidence" when the first one already settled it.
 
 ## Operating loop (autonomous)
 
@@ -136,27 +184,31 @@ compound follow-ups, which immediately go to the top.
 
 ## Autonomy boundaries
 
-| Autonomous | Manual confirm |
-|---|---|
-| Designing cells | Promoting a candidate into a live training run (Training-Quality Gate applies) |
-| Running ≤ 30 cells per session unattended | Custom Metal kernels, native C extensions, model architecture changes |
-| Live-training cells ≤ 5 min each (trainer + workers + eval) | Long training runs (>5 min, anything epoch-counted) |
-| Worktree create / merge / remove on `feat/perf-*` branches | Anything that changes `pyproject.toml`, CI, or external deps |
-| Scaffolding evaluator backends (Core ML, BNNS, CPU) behind existing CLI flags | Modifying wandb project, archives, or trained-model artifacts |
-| `git merge --no-ff` integrations | `git rebase`, `git push --force`, `git reset --hard` — never |
-| Promoting a new "best cell" at a quality point | Modifying the charter (this page) — surface it first |
-| Filing receipts, baseline rows, perf-log entries | Stopping the buffer-curation / external-engines / ANE-rail lanes that another workstream owns |
-| Opening, closing, reprioritizing lanes | |
+**Default-allow.** Code work is autonomous, full stop. The deny-list
+below is exhaustive — if an action isn't on it, just do it. See
+[conventions.md](conventions.md) for the full deny-list-as-allow-list
+principle and the risk-class taxonomy (Class A/B/C).
+
+| Class | Examples that apply to this lab | Policy |
+|---|---|---|
+| **A — local, reversible** | files under `scripts/`, `tests/`, `wiki/`; worktrees + merge-commits on `feat/perf-*`; per-cell artifact dirs under `sweep_logs/`; live-training cells ≤ 5 min; opening/closing/reprioritizing lanes; filing receipts | **Just do it. No size limit.** |
+| **B — hard to reverse / shared state** | git push, wandb writes, archive mutations, `pyproject`/CI/deps, settings.json, modifying the charter (this page) | **Confirm with the user.** |
+| **C — architectural / multi-day** | custom Metal kernels, native C extensions, model architecture changes, replacing the trainer or evaluator backend wholesale | **Discuss before starting.** |
+
+Important corollary: **don't conflate timing/context with permission**.
+The cron tick is the wrong *context* for a 100-LOC code task, but this
+charter still *permits* the code. Right move: surface the task as a
+CPU-queue lane (next section) and let the orchestrator fan out an Agent
+to do the code in parallel.
 
 ### Reviewer gate
 
-**No promote, no commit-touching-receipt without Reviewer
-sign-off.** After every lane (and on a periodic discipline check),
-spawn a Reviewer agent per
-[perf-lab-reviewer-role](perf-lab-reviewer-role.md). The Reviewer
-returns APPROVE / REVISE / BLOCK; BLOCK surfaces to the user. The
-loop does not commit a `promote` decision until the Reviewer
-approves.
+**No promote without Reviewer sign-off.** After every lane (and on a
+periodic discipline check), spawn a Reviewer per
+[perf-lab-reviewer-role](perf-lab-reviewer-role.md). Verdict APPROVE /
+REVISE / BLOCK; BLOCK surfaces to the user. The loop does not commit a
+`promote` decision until the Reviewer approves. Reviewer audits a
+*reject* receipt too (catches confounded knobs, missed surfaces).
 
 ## File and directory contract
 

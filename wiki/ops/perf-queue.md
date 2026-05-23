@@ -1,29 +1,82 @@
 # Perf Lab Queue
 
-Live, ordered queue of perf experiments. The autonomous loop reads from
-the **Active** section top-down within each tier; lanes finished or
-rejected move to **Completed** with their resolution.
+Two-queue scheduler per
+[perf-lab-charter](../topics/perf-lab-charter.md#two-queue-scheduler):
+**GPU queue** runs serial cells; **CPU queue** runs code/wiki/scaffold
+work in parallel via Agent fan-out. Reviewer gates every promote
+([perf-lab-reviewer-role](../topics/perf-lab-reviewer-role.md)).
 
-See [perf-lab-charter](../topics/perf-lab-charter.md) for the vision,
-the tier system, and the priority function:
-`priority = (E[delta] × P[succeeds]) / wall_cost_seconds`
-**gated by tier** (Tier-1 always before Tier-2 before Tier-3).
-
-Reviewer gates every promote: see
-[perf-lab-reviewer-role](../topics/perf-lab-reviewer-role.md).
+Within each queue, sort by **tier** (1 architectural > 2 compound > 3
+speculative > bg calibration), then by priority within tier:
+`priority = (E[delta] × P[succeeds]) / wall_cost`.
 
 Reference points (current bests):
 
 | ref | cell | best | speedup vs WL5 V=64 |
 |---|---|---|---|
 | **R-S400** | small / W=8 / G=8 / S=400 / **V=512** | **4,765 aug/s** (L01) | **+49.5%** |
-| **R-S200** | small / W=8 / G=8 / S=200 / **V=512** | **9,156 aug/s** (L03, reviewer APPROVE) | **+52.5%** |
-| **R-S100** | small / W=8 / G=8 / S=100 / **V=512** | **15,082 aug/s** (L03, reviewer APPROVE) | **+35.2%** |
-| **R-TRAIN-WL5** | full WL5 recipe | TBD (first measure in L10) |
-| **R-TRAIN-LEAN** | WL5 with V=128 | TBD (L11) |
-| **R-TRAIN-ANE** | WL5 with workers on Core ML | TBD (L09) |
+| **R-S200** | small / W=8 / G=8 / S=200 / **V=512** | **9,156 aug/s** (L03) | **+52.5%** |
+| **R-S100** | small / W=8 / G=8 / S=100 / **V=512** | **15,082 aug/s** (L03) | **+35.2%** |
+| **R-S400-tiny** | tiny / W=16 / G=8 / S=400 / **V=512** | **22,088 aug/s** (L07) | **+201.5% vs tiny V=64=7,326** |
+| **R-TRAIN-WL5** | full WL5 recipe | TBD (L10) | — |
+| **R-TRAIN-LEAN** | WL5 with V=512 | TBD (L11) | — |
+| **R-TRAIN-ANE** | WL5 with workers on Core ML | TBD (L09) | — |
 
-## Active
+## CPU queue (parallel — Agent fan-out, no GPU contention)
+
+These run as Agent subagents in worktrees; integrate as merge commits.
+Multiple can be in flight at once. Listed top-down by priority.
+
+### L12-write-lab-train-cell-driver (priority: gating)
+
+```yaml
+id: L12-write-lab-train-cell-driver
+class: A (scripts/, no external effects)
+unblocks: L09 (R-TRAIN-ANE), L10 (R-TRAIN-WL5 baseline), L11 (R-TRAIN-LEAN)
+patch: |
+  scripts/lab_train_cell.py: subprocess.Popen(gomoku.train) + N
+  selfplay_worker children; --warmup-secs 30 + --measurement-secs 60-120;
+  SIGTERM all; parse trainer.log for `^epoch (\d+)/` lines; compute
+  epochs/sec, games/sec, trainer_step_s_p50. Write summary.tsv row
+  matching canonical_sweep schema + epochs_per_sec column.
+estimate: ~100 LOC, ~20-40 min Opus-time
+notes: Gating — three GPU-queue Tier-1 lanes are blocked on it. Highest priority CPU lane.
+```
+
+### L05-torch-compile-mps (priority: med)
+
+```yaml
+id: L05-torch-compile-mps
+class: A (worktree on feat/perf-L05-compile)
+patch: --compile flag pass-through in canonical_sweep to selfplay_worker
+estimate: ~30 min Opus-time (mostly already exists in selfplay_worker; just wire and smoke)
+followup_cells: small W=8 G=8 V=512 (--compile) vs (no compile); R-S100-tiny too
+notes: Cheap code; if cells show a win, compounds with everything.
+```
+
+### L06-fp16-eval (priority: med)
+
+```yaml
+id: L06-fp16-eval
+class: A (worktree on feat/perf-L06-fp16)
+patch: --fp16-eval flag passing fp16=True into make_torch_evaluator
+estimate: ~20 min Opus-time
+followup_cells: small W=8 G=8 V=512 (--fp16) vs (fp32); 2-cell smoke
+notes: Cheap. Historic regression; worth re-checking with mature MPS + fused conv+bn.
+```
+
+### L08-driver-per-cell-envvars (priority: low)
+
+```yaml
+id: L08-driver-per-cell-envvars
+class: A (canonical_sweep.py edit)
+patch: extend cells.csv schema with optional `env` column; driver applies env vars in the Popen call
+estimate: ~15 min Opus-time
+unblocks: L08-mps-heap-ratio (GPU lane) and any future env-var experiments
+notes: Strictly an infra enabler. After this lands, L08 becomes a normal GPU-queue lane.
+```
+
+## GPU queue (serial — one cell at a time on MPS)
 
 Lanes listed top-down by **tier**, then by priority within tier.
 
@@ -120,68 +173,27 @@ notes: Highest priority in Tier 1 because it unblocks three other Tier 1 lanes. 
 
 ### Tier 3 — Speculative knob lanes
 
-#### L05-torch-compile-mps
+(All Tier-3 lanes in this queue are now CPU-queue tasks that produce
+GPU-queue cells once their patch lands; see CPU queue above. L05/L06
+land code → become GPU cells. L08 unblocks when L08-driver lands.)
 
-```yaml
-id: L05-torch-compile-mps
-tier: 3
-hypothesis: torch.compile regressed under MPS historically; current torch + fused eval might be neutral or a win.
-reference: R-S400 + R-S100
-code_change: true
-worktree: ~/code/gomoku-perf-L05-compile
-patch: canonical_sweep --compile flag passes through to selfplay_worker.
-cells:
-  - small W=8 G=8 S=400 V=128 (--compile)
-  - small W=8 G=8 S=100 V=64  (--compile)
-n_cells: 2
-wall_cost_min: 12
-E_delta_aug_per_sec: 500
-P_success: 0.3
-priority: 12.5
-status: queued
-notes: High priority within Tier 3 because cheap.
-```
-
-#### L06-fp16-eval
-
-```yaml
-id: L06-fp16-eval
-tier: 3
-hypothesis: fp16 eval on MPS historic regression; may now be small win with mature fused conv+bn.
-reference: R-S400
-code_change: true
-worktree: ~/code/gomoku-perf-L06-fp16
-patch: --fp16-eval flag on selfplay_worker.
-cells:
-  - small W=8 G=8 S=400 V=128 (--fp16-eval)
-n_cells: 1
-wall_cost_min: 6
-E_delta_aug_per_sec: 200
-P_success: 0.25
-priority: 8.3
-status: queued
-notes: Tiny.
-```
-
-#### L08-mps-heap-ratio (rescoped 2026-05-23 after L02/L04 — V=512 not V=128)
+#### L08-mps-heap-ratio (post-L08-driver)
 
 ```yaml
 id: L08-mps-heap-ratio
 tier: 3
 hypothesis: PYTORCH_MPS_HIGH_WATERMARK_RATIO at default may cap throughput; nondefault could help.
 reference: R-S400 (now W=8 G=8 V=512 = 4,765)
-code_change: true (canonical_sweep needs per-cell env var support; add to L12 driver scope or carve out an L08-driver task)
-cells:
+cells (after L08-driver lands per-cell env var support):
   - small W=8 G=8 S=400 V=512 PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
   - small W=8 G=8 S=400 V=512 PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.4
   - small W=8 G=8 S=400 V=512 PYTORCH_MPS_HIGH_WATERMARK_RATIO=2.0
 n_cells: 3
-wall_cost_min: 17
+wall_cost_min: 5 (60s/cell smoke-first per charter v3)
 E_delta_aug_per_sec: 150
 P_success: 0.3
 priority: 2.6
-status: blocked-on-driver (canonical_sweep needs per-cell env var support; see notes)
-notes: Rescoped from V=128 to V=512. Blocked-on-driver because cells.csv schema doesn't carry env vars and PYTORCH_MPS_HIGH_WATERMARK_RATIO must be set before python starts. Workaround: run as 3 separate canonical_sweep invocations with `PYTORCH_MPS_HIGH_WATERMARK_RATIO=X python scripts/canonical_sweep.py ...` — but that's a manual orchestration task. Add per-cell env var column to cells.csv as part of L12 driver work.
+status: blocked on CPU-queue L08-driver
 ```
 
 ### Background — Calibration / reference
@@ -202,18 +214,25 @@ notes: Rescoped from V=128 to V=512. Blocked-on-driver because cells.csv schema 
 
 ## Stop-condition tracker
 
-- consecutive_rejects: **2** (L13 + L14)
-- queue empty + no followups pending: false (technically) — but ALL remaining lanes (L05/L06/L08/L12 + their gated children L09/L10/L11) need code work the cron can't do. Loop is effectively at a no-op pause.
-- last halt reason: n/a (loop running; cron ce6fb88e scheduled `7,17,27,37,47,57 * * * *`)
-- **PAUSE STATE**: human session needed for L05/L06/L08/L12. PushNotification sent on L14 commit.
+- consecutive_rejects: **2** (L13 + L14; will reset on next promote)
+- queue empty + no followups pending: false (CPU queue has L12/L05/L06/L08-driver; GPU queue is paused awaiting those)
+- last halt reason: n/a — cron cancelled by user 2026-05-23; lab will resume on charter v3 model when restarted
+- **RESUME STATE**: charter v3 landed. Next session: orchestrator fans out CPU-queue lanes (L12 highest), GPU queue restarts once L12 unblocks R-TRAIN-*. Default cell time is now 60-90s smoke-first.
 
-## Loop dispatch rule under "blocked-on-driver"
+## Dispatch rule (charter v3)
 
-Tier-1 lanes with `status: blocked-on-driver` are skipped by the dispatch
-heuristic — they don't count as "Tier-1 ready". The loop falls through to:
-1. L12 if not yet started (it unblocks L09/L10/L11 — pure code work).
-2. Tier 2 (L03 highest priority within tier at 16.7 after L01 rescope).
-3. Tier 3 / bg only if everything above is in flight or blocked.
+The orchestrator pulls from both queues simultaneously:
 
-This avoids the loop stalling because Tier-1 needs human-curated code
-work it can't do in a 10-min tick.
+1. **CPU queue**: spawn N Agents in worktrees for the top-N CPU lanes
+   that aren't already running. No serial constraint. Integrate via
+   merge-commit as they return.
+2. **GPU queue**: if no GPU lane is active, pull the top GPU lane
+   that isn't blocked on a CPU lane. Dispatch to canonical_sweep
+   (60-90s/cell default). Wait for completion; file receipt; spawn
+   Reviewer.
+3. Code work surfaced mid-tick goes to the CPU queue, not the GPU
+   queue. Don't serialize code behind cells.
+
+A cron tick is a degenerate orchestrator — it only advances the GPU
+queue. Live-conversation orchestration (you + me with Agent fan-out)
+is the real shape; cron is just for unattended drift.

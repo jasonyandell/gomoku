@@ -633,7 +633,10 @@ def main() -> None:
     p.add_argument("--out-dir", required=True, type=str,
                    help="Sweep directory. Pass `latest` to follow the "
                         "sweep_logs/canonical-sweep-latest symlink.")
-    p.add_argument("--secs-per-cell", type=int, default=300)
+    p.add_argument("--secs-per-cell", type=int, default=60,
+                   help="Wall-clock cap per cell (default 60s smoke-first per "
+                        "charter v3). Escalate to 300s only when the smoke "
+                        "result is within ~2x of the experimental noise floor.")
     p.add_argument("--max-plies", type=int, default=16)
     p.add_argument("--device", type=str, default="mps")
     p.add_argument("--only", type=str, default=None,

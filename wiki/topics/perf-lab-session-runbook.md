@@ -149,7 +149,74 @@ explicitly testing a deviation:
 | `fused_eval` | on | always; Conv+BN fusion is a 1.5x win and there's no reason to leave it off |
 | `native_mcts` | on | likewise; `GOMOKU_DISABLE_NATIVE_MCTS=1` is for A/B receipts |
 | model | small, stem_padding=1 | matches WL5 + production-contour default |
-| per-cell wall | 300 s | enough to amortize startup, short enough that a 30-cell sweep fits in 2-3 h |
+| per-cell wall | **60-90 s** (charter v3 smoke-first) | escalate to 300 s only when smoke is ambiguous (delta within ~2x noise floor) |
+
+## Smoke-first pattern
+
+Per charter v3, the default cell time is **60-90s, not 5 min**. A
+60-90s cell at ~90% confidence beats a 5-min cell at 99.99% confidence
+almost always.
+
+Workflow:
+
+1. **Smoke (60-90s/cell)**: run the lane with `--secs-per-cell 60`. If
+   the result is clearly above the reference and clearly above noise,
+   file the receipt as a promote candidate. If clearly below: reject.
+2. **Escalate only when ambiguous**: if the result is within ~2x of
+   the experimental noise floor (≈±2% on the established benches),
+   re-run the same cells with `--secs-per-cell 300` for a stable read.
+3. **Don't run the long version first**. Past-Claude defaulted to
+   300s because the canonical sweep used it; subsequent lanes
+   inherited that without justification. Charter v3 fixes this.
+
+Example smoke-first lane (typical case):
+
+```bash
+# 3-cell smoke at 60s/cell: ~4 min wall total
+python scripts/canonical_sweep.py \
+  --out-dir sweep_logs/lab-<lane-id>-<TS> \
+  --cells-from <path>/cells.csv \
+  --lane <lane-id> \
+  --secs-per-cell 60
+```
+
+If a cell's delta vs the reference is clear (>5% in either direction),
+that's the answer. File the receipt.
+
+## Fan-out pattern (CPU queue)
+
+When a lane is **code-only** (Class A under
+[conventions.md](conventions.md)) — new script, evaluator backend,
+driver, wiki edit, plot generation — it goes on the CPU queue, not the
+GPU queue. The orchestrator spawns an Agent in a worktree to do the
+code work in parallel with whatever GPU cell is currently running.
+
+Pattern for the orchestrator (live session):
+
+```
+# Suppose GPU is running cell N (~5 min wall).
+# In the same turn, spawn parallel Agents for CPU lanes:
+
+Agent(L12 driver):  worktree feat/perf-L12 → write scripts/lab_train_cell.py → smoke → merge
+Agent(L05 compile): worktree feat/perf-L05-compile → wire flag → smoke → merge
+Agent(L06 fp16):    worktree feat/perf-L06-fp16 → wire flag → smoke → merge
+
+# When GPU cell N finishes, file receipt + spawn Reviewer in parallel
+# with the still-running CPU Agents.
+```
+
+Three CPU Agents + one GPU cell + one Reviewer Agent = 5 parallel
+streams of work. The wall-clock cost is dominated by whichever
+single task is longest — usually the GPU cell at ~5 min.
+
+**Anti-patterns:**
+- Serializing CPU work behind GPU cells. Code doesn't need MPS.
+- Spawning more parallel Agents than the laptop's effective CPU
+  parallelism — 3-5 concurrent code Agents is a reasonable ceiling
+  on the M5 Max.
+- Holding the GPU cell back to "let code lanes finish first" — the
+  GPU lane has its own constraint (one at a time) but should always
+  be advancing if there's a ready lane.
 
 ## Resumability contract
 
