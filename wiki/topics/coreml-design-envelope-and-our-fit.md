@@ -14,6 +14,26 @@ We're documenting this for the same reason as the throughput-regimes page: open-
 - **The lever the L09 cell mechanically validated** ("workers vacate MPS, trainer-side step time drops 56%") **is real** and we exploited it through a different door at L11b' (`sgd_per_position` capping). ANE-as-concurrent-compute-stream is still a viable framing; ANE-as-faster-eval-than-MPS is not, at this model scale.
 - **Where ANE could still pay for us** is documented at the end of this page, queued as concrete research lanes — most promisingly: medium-model on Core ML (where the bandwidth-bound regime might kick in), routing-units sweeps, and the deployment story (shipping the trained model in a phone app, where Core ML on ANE is exactly the right tool).
 
+## 2026-05-23 OSS Frontier Update
+
+Later 2026-05-23 measurements narrowed the simple public-Core-ML envelope:
+ANE won one live-training corner (tiny/V=64), but small/V=64, tiny/V=512,
+and medium/V=512 all lost holistically against torch/MPS or torch+fp16
+baselines. That falsifies the easy "bigger model or bigger batch will
+automatically amortize Core ML overhead" hypothesis for the current export.
+
+The web pass does **not** make ANE less interesting. It makes the next
+question more specific. Mainstream LLM runners use Metal/MLX/GPU because
+generic decode is dynamic and memory-bandwidth-bound; ANE-specific OSS
+projects win by shaping static dense graph islands, prefill-sized matmuls,
+Core ML packages, IOSurface buffers, profiler-guided fallback removal,
+and in some cases private APIs.
+
+For the lab route map, see
+[ane-moonshots-and-oss-frontier.md](ane-moonshots-and-oss-frontier.md).
+For the web source record, see
+[../sources/ane-oss-frontier-2026-05-23.md](../sources/ane-oss-frontier-2026-05-23.md).
+
 ## What Core ML / ANE is designed for
 
 Inferred from Apple's public materials (Core ML developer docs, WWDC sessions, Core ML Tools, MLX framework, the Vision framework's API surface) — none of this is privileged Apple-insider information; it's the design center any developer can read off the framework's shape, examples, and where Apple's own apps use it.

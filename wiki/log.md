@@ -3,6 +3,12 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-23] topics | ANE OSS frontier moonshots captured
+
+- Added [sources/ane-oss-frontier-2026-05-23.md](sources/ane-oss-frontier-2026-05-23.md) as the source record for a fresh web pass on OSS Apple Neural Engine work: llama.cpp/Ollama/MLX stay GPU-first for generic LLM decode, while ANEMLL, apple/ml-ane-transformers, ggml-ane, maderix/ANE, Orion, and NPUMoE point toward static dense graph islands, prefill-sized matmuls, Core ML package shaping, IOSurface discipline, profiler-guided fallback removal, and private-API research constraints.
+- Added [topics/ane-moonshots-and-oss-frontier.md](topics/ane-moonshots-and-oss-frontier.md) as the lab-facing route map: the goal is to max out the M5 Max by making ANE a useful Gomoku sidecar, not merely to request `CPU_AND_NE`. Routes include rail/profiler control loop, ANE-shaped evaluator, long-lived package ring, INT8/LUT calibration, MCTS prefill/decode split, private-API constraint scouting, and classic-ANE-vs-M5-GPU-Neural-Accelerators separation.
+- Cross-linked the new page from [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md), [topics/coreml-design-envelope-and-our-fit.md](topics/coreml-design-envelope-and-our-fit.md), and the wiki index. Added `scripts/ane_vision_furnace.swift` as a local Vision positive-control helper for rail-meter sanity checks; it is explicitly not Gomoku evidence.
+
 ## [2026-05-23] topics | Core ML design-envelope page published + L09c-L09h research lanes queued
 
 - Added [topics/coreml-design-envelope-and-our-fit.md](topics/coreml-design-envelope-and-our-fit.md) — characterizes Core ML / ANE's design center (the iOS/macOS app ML stack: Vision, Siri, AR, FaceID), maps our research-compute gomoku workload against that envelope (20-100× above design call rate, 3-30× below design model size — worst corner), and proposes six concrete research lanes (L09c tiny on ANE, L09d medium on ANE, L09e routing-units sweep, L09f larger-V amortization, L09g model-size sweep at V=512, L09h .mlpackage re-export cost). Frame: "M5 Max as mainframe is learning where it breaks; even if we don't directly leverage it in the end, we'll know."

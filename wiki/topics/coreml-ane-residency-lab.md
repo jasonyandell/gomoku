@@ -7,6 +7,7 @@ script output paths; durable interpretation can be appended here.
 
 **Companion pages:**
 - [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md) — the design-context page: what Core ML is built for (the iOS/macOS app ML stack: Vision, Siri, AR, FaceID), where our research-compute workload sits relative to that envelope, where ANE could still pay (deployment; concurrent compute stream; medium-and-larger models), and concrete L09c-L09h research lanes for mapping the envelope's edges. Read this first if you're new to the ANE story in this project.
+- [ane-moonshots-and-oss-frontier.md](ane-moonshots-and-oss-frontier.md) — the OSS-frontier route map: what llama.cpp/Ollama/MLX/ANEMLL/private-API projects imply for this lab, and the next moonshot lanes for making ANE useful to Gomoku rather than merely requested by `CPU_AND_NE`.
 - [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — chip-level findings; Finding 2 (bandwidth-bound vs dispatch-bound regimes) is the MPS analog of what L09g would measure for Core ML.
 
 ## Goal
@@ -26,6 +27,13 @@ The practical target is still the three-engine training loop:
 This lab is not trying to prove that Core ML is faster in a naked
 microbench. It is trying to find the production-shaped point where
 engine isolation beats same-engine contention.
+
+2026-05-23 moonshot correction: the lab's larger goal is not merely to
+ask Core ML for `CPU_AND_NE`. It is to max out this M5 Max as a
+whole-machine Gomoku proving ground. The OSS frontier says the ANE is
+most plausible as a static dense sidecar/prefill-like engine, with CPU
+and GPU handling dynamic control flow and training. See
+[ane-moonshots-and-oss-frontier.md](ane-moonshots-and-oss-frontier.md).
 
 ## Definition Of Cap
 
@@ -96,6 +104,12 @@ is a request to Core ML, not proof that the model landed on the ANE.
 - `wiki/topics/m5-max-as-mainframe.md` is the philosophy page: this lab
   is part of learning the exact M5 Max contour, with rail evidence above
   generic assumptions.
+- A fresh 2026-05-23 web pass found the same pattern across OSS: mainline
+  LLM runners use Metal/MLX/GPU for general decode, while ANE-specific
+  projects succeed by shaping static dense graph islands, prefill-sized
+  matmuls, Core ML packages, IOSurface buffers, and/or private APIs.
+  Durable source record:
+  [../sources/ane-oss-frontier-2026-05-23.md](../sources/ane-oss-frontier-2026-05-23.md).
 
 ## Sweep Matrix
 
@@ -186,18 +200,46 @@ or passwordless sudo for `powermetrics` and runs the conv/resnet/gomoku
 scout plus a fresh Vision positive control in adjacent windows. No
 Gomoku/Core ML path should be called ANE-backed from this lane.
 
+### 2026-05-23 OSS frontier moonshot pass
+
+Fresh web research changed the lab posture from "try the current Core ML
+worker harder" to "shape the workload like the successful ANE projects."
+Mainstream runners still live on Metal/MLX/GPU because generic LLM decode
+needs dynamic kernels and memory-bandwidth-heavy KV-cache traffic. ANE
+successes cluster around static dense graph islands, prefill-sized
+matmuls, app-deployment Core ML models, profiler-guided fallback removal,
+IOSurface buffer discipline, long-lived compiled packages, and private
+API research runtimes.
+
+Durable artifacts:
+
+| Artifact | Role |
+|---|---|
+| [../sources/ane-oss-frontier-2026-05-23.md](../sources/ane-oss-frontier-2026-05-23.md) | Source record for the web pass. |
+| [ane-moonshots-and-oss-frontier.md](ane-moonshots-and-oss-frontier.md) | Lab route map and lane cards. |
+| `scripts/ane_vision_furnace.swift` | Local Vision positive-control helper for rail-meter sanity checks; not Gomoku evidence. |
+
+Decision: keep the evidence cap discipline, but widen the research target.
+The next useful lane is not another blind `CPU_AND_NE` run. It is a
+profiler-backed, rail-backed attempt to make Gomoku leaf eval look like a
+static dense ANE sidecar while CPU/native MCTS and MPS/MLX training keep
+the dynamic parts.
+
 ## Next Actions
 
 1. Re-run with cached/passwordless sudo available (`sudo -n true` must
    pass). Start with a fresh Vision positive control and a fresh
    `conv,resnet,gomoku` scout in adjacent windows.
-2. Use `--powermetrics required` for any claim cell; do not promote any
+2. Read [ane-moonshots-and-oss-frontier.md](ane-moonshots-and-oss-frontier.md)
+   before designing the next ANE lane. Prefer profiler-guided shape changes
+   over repeating the current exported graph.
+3. Use `--powermetrics required` for any claim cell; do not promote any
    claim above `coreml-scheduled` if sudo/powermetrics is unavailable.
-3. Summarize each cell by cap, ANE mean/max mW, positions/sec, ready
+4. Summarize each cell by cap, ANE mean/max mW, positions/sec, ready
    workers, and errors. Append only the interpretation here; leave raw
    receipts where they are.
-4. If any toy conv/resnet shape reaches `ane-metered`, narrow around its
+5. If any toy conv/resnet shape reaches `ane-metered`, narrow around its
    shape before trying to make Gomoku match it.
-5. If Gomoku reaches `ane-metered`, run a production-shaped overlap probe
+6. If Gomoku reaches `ane-metered`, run a production-shaped overlap probe
    before wiring self-play. The win condition is lower trainer slowdown
    plus acceptable self-play throughput, not raw Core ML latency.

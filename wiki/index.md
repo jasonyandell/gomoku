@@ -18,6 +18,7 @@ reading it front-to-back unless the work actually needs that.
 | Interpret training dynamics | [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) and [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | The run's evidence section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
 | Plan a WL-series follow-up | [topics/training-run-lineage.md](topics/training-run-lineage.md) | [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md), [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md), [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md). |
 | Work on performance or hardware strategy | [topics/perf-lab-charter.md](topics/perf-lab-charter.md) | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md), [topics/perf-lab-session-runbook.md](topics/perf-lab-session-runbook.md), [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md), [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md), [topics/ane-int8-inference.md](topics/ane-int8-inference.md), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md). |
+| Push ANE / whole-machine moonshots | [topics/ane-moonshots-and-oss-frontier.md](topics/ane-moonshots-and-oss-frontier.md) | [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md), [sources/ane-oss-frontier-2026-05-23.md](sources/ane-oss-frontier-2026-05-23.md), then [ops/perf-queue.md](ops/perf-queue.md). |
 | Operate the autonomous perf lab | [topics/perf-lab-charter.md](topics/perf-lab-charter.md) | [topics/conventions.md](topics/conventions.md), [topics/perf-lab-reviewer-role.md](topics/perf-lab-reviewer-role.md), [ops/perf-queue.md](ops/perf-queue.md), [ops/best-cells.md](ops/best-cells.md), [ops/perf-log.md](ops/perf-log.md). |
 | Understand cross-cutting conventions (autonomy, merge-commits, memories-to-wiki) | [topics/conventions.md](topics/conventions.md) | [topics/perf-lab-charter.md](topics/perf-lab-charter.md) for lab-specific rules. |
 | Run a perf cell or sweep (procedure) | [topics/perf-lab-session-runbook.md](topics/perf-lab-session-runbook.md) | [ops/perf-log.md](ops/perf-log.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), [ops/baselines.md](ops/baselines.md). |
@@ -69,6 +70,7 @@ read is:
 | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
 | [topics/training-run-lineage.md](topics/training-run-lineage.md) | Compact route map for the Z and WL-series run sequence. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
+| [sources/ane-oss-frontier-2026-05-23.md](sources/ane-oss-frontier-2026-05-23.md) | Source record for the ANE OSS/frontier web pass behind the moonshot route map. |
 
 ### Training Dynamics
 
@@ -94,6 +96,7 @@ read is:
 | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | Guiding philosophy and sequence for the post-WL5 perf era on Jason's M5 Max. |
 | [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Engine-isolation plan and first scout for Core ML / ANE / CPU lanes around MPS training. |
 | [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) | Rail-proof lab for Core ML / ANE residency claims; caps `CPU_AND_NE` label checks below ANE-backed unless powermetrics shows nonzero ANE rail. |
+| [topics/ane-moonshots-and-oss-frontier.md](topics/ane-moonshots-and-oss-frontier.md) | OSS-frontier synthesis and lab route map for making ANE useful to Gomoku as a static dense sidecar, not just a requested compute-unit label. |
 | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 replay-buffer compression plan: bit-packed planes plus FP16 policy, with cheap-test gate. |
 | [topics/conventions.md](topics/conventions.md) | Cross-cutting project conventions: deny-list autonomy (Class A/B/C), merge-commits-never-rebase, memories-also-go-to-wiki, Opus-minutes-not-human-days. Source of truth mirrored in memory. |
 | [topics/perf-lab-charter.md](topics/perf-lab-charter.md) | Charter for the autonomous perf lab: mission, success metric (R-S* + R-TRAIN-*), two-queue scheduler, smoke-first doctrine, operating loop, priority function, tier system, reviewer gate, autonomy boundaries, worktree discipline, stop conditions. |
