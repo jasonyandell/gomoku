@@ -647,10 +647,25 @@ def active_ideas(board: dict, state: dict) -> list[str]:
 
 
 def pick_priority(board: dict, state: dict, candidates: list[str]) -> str:
-    """Pick the idea with highest last_delo. Tie-break: fewest epochs_done, then name."""
+    """Pick the idea with the highest CURRENT elo (feed the leader). Tie-break:
+    fewest epochs_done, then name.
+
+    This implements the user's intent — "feed training time to things that are
+    doing better; elo go up? train more; leaders first, everyone reaches cap
+    eventually." It REPLACES the original last-chunk-Δelo rule, which was
+    pathological: a floor-stuck idea sitting at Δ0 outranks strong climbers whose
+    most recent chunk happened to be a downward oscillation (negative Δ), so the
+    queue ended up feeding the WORST idea (sims-100, stuck at 389) toward the cap
+    while the champion (sims-400, 965) and strong climbers (peak 751) were ranked
+    last. Ranking on current elo level fixes the inversion and still guarantees
+    everyone reaches the cap (floor ideas get fed once all stronger ideas cap)."""
+    def current_elo(name: str) -> float:
+        hist = state["ideas"][name].get("elo_history") or []
+        return hist[-1][1] if hist else float("-inf")
+
     def key(name: str):
         st = state["ideas"][name]
-        return (-st["last_delo"], st["epochs_done"], name)
+        return (-current_elo(name), st["epochs_done"], name)
     return sorted(candidates, key=key)[0]
 
 

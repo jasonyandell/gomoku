@@ -15,9 +15,12 @@ each idea gets a production-style title card, but the question it answers is
   model by epoch 140**.
 - **10-epoch chunks.** Each scheduling step advances one idea by a 10-epoch
   increment (`gomoku.train --resume <idea>/latest.pt --epochs 10`).
-- **Δelo-rate priority queue.** The not-yet-capped idea whose *most-recent chunk*
-  gained the most anchored elo gets the next chunk. **Everyone reaches 140
-  eventually; leaders get there first.**
+- **Current-elo priority queue.** The not-yet-capped idea with the highest
+  *current* anchored elo gets the next chunk — "feed the leader." **Everyone
+  reaches 140 eventually; leaders get there first.** (Revised 2026-05-24 mid-run
+  from a last-chunk-Δelo rule, which pathologically fed the *worst* idea: a
+  floor-stuck idea at Δ0 outranked strong climbers whose latest chunk was a
+  downward oscillation. Ranking on elo *level* feeds the genuinely-strongest.)
 - **Fresh self-play, shared init.** All ideas start from an identical fresh init
   (`--size small --seed 0`). No warm-start, no shared parent.
 - **One lever each.** Every idea changes exactly ONE flag vs **C0-baseline** —
@@ -208,18 +211,18 @@ gain.
 
 ## Standings
 
-_Last updated: 2026-05-24T06:04:20Z — 0 chunks run._
+_Last updated: 2026-05-24T10:29:17Z — 54 chunks run._
 
-**Champion so far:** _(no rated ideas yet)_
+**Champion so far:** `sims-400` at 965 elo (70/140 epochs).
 
 | Rank | Idea | Epochs | Elo | Δelo (last) | Δelo/epoch | Beat heuristic? | Status |
 |-----:|------|:------:|----:|------------:|-----------:|:---------------:|--------|
-| 1 | C0-baseline | 0/140 | — | — | — |  | queued |
-| 2 | sims-400 | 0/140 | — | — | — |  | queued |
-| 3 | sims-100 | 0/140 | — | — | — |  | queued |
-| 4 | sgd-800 | 0/140 | — | — | — |  | queued |
-| 5 | buf-30k | 0/140 | — | — | — |  | queued |
-| 6 | open-div4 | 0/140 | — | — | — |  | queued |
-| 7 | ema-099 | 0/140 | — | — | — |  | queued |
-| 8 | temp-16 | 0/140 | — | — | — |  | queued |
+| 1 | sims-400 | 70/140 | 965 | -168 | -16.8 | ✓ | queued |
+| 2 | sgd-800 | 60/140 | 614 | -137 | -13.7 |  | queued |
+| 3 | open-div4 | 70/140 | 513 | -238 | -23.8 |  | queued |
+| 4 | buf-30k | 60/140 | 453 | -60 | -6.0 |  | queued |
+| 5 | temp-16 | 70/140 | 437 | -16 | -1.6 |  | queued |
+| 6 | C0-baseline | 50/140 | 389 | -16 | -1.6 |  | queued |
+| 7 | sims-100 | 110/140 | 389 | +0 | +0.0 |  | queued |
+| 8 | ema-099 | 50/140 | 389 | -16 | -1.6 |  | queued |
 
