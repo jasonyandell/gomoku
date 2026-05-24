@@ -20,6 +20,22 @@ python scripts/perf_microbench.py --device mps --size small --stem-padding 1 --g
 
 Purpose: bounded self-play/MCTS throughput comparison. Score by seconds, games/sec, and positions/sec.
 
+### Lookahead-eval microbench (R-EVAL-LA, CPU)
+
+```bash
+python scripts/bench_lookahead.py --n-positions 60 --depths 2,4
+python scripts/bench_lookahead.py --n-positions 60 --profile --profile-depth 4  # hot-spot breakdown
+```
+
+Purpose: per-move wall-clock of the alpha-beta `lookahead_player` baseline (the Elo anchor used by `eval_worker` and the training-loop eval). CPU/numpy, torch-free, single process. Score by ms/move and moves/s at depth=2 and depth=4. Deterministic positions (seed=0).
+
+| ref | quality pin | code | depth=2 ms/move | depth=4 ms/move | dated | from receipt |
+|---|---|---|---|---|---|---|
+| R-EVAL-LA (pre) | lookahead anchor, native state_ops | pre-5d0985a (loop helpers) | 15.35 (65.1/s) | 145.61 (6.9/s) | 2026-05-23 | LA1 baseline arm |
+| **R-EVAL-LA** | lookahead anchor, native state_ops | **5d0985a (vectorized helpers)** | **2.36 (424.4/s)** | **22.94 (43.6/s)** | 2026-05-23 | LA1-lookahead-eval-vectorize |
+
+Behavior-identical: vectorized helpers return byte-identical move selection to the old loop logic (360-position equivalence + tests). ~6.3× faster on the lookahead side of every eval pass.
+
 ### Canonical 5-axis sweep
 
 ```bash

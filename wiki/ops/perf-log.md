@@ -16,6 +16,20 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] LA1 | Lookahead-eval ~6.3× faster, byte-identical — the eval anchor was paying a pure-Python tax at every node
+
+Jason redirected the lab: "perf pass on lookahead eval." Target = `lookahead_player`, the alpha-beta baseline that anchors model Elo in `eval_worker` and the training-loop eval. It's the known-slow eval path — `train.py:341` dropped `lookahead:depth=2` as a default precisely because it cost "45s+ for noisy signal," and depth=4 (the dominant anchor) is worse. This isn't a gen (R-S*) or train (R-TRAIN-*) lane; it's a new eval-path family, R-EVAL-*.
+
+**Smoke-first measurement (`scripts/bench_lookahead.py`, 60 deterministic midgame positions):** depth=2 = 15.35 ms/move, depth=4 = 145.6 ms/move (6.9 moves/s). A 20-game pass plays ~240 lookahead moves → ~35s at depth=4 on the lookahead side alone. Matches the "45s+" lore.
+
+**The surprise was where the time went.** Native state_ops (`_state_ops_native.so`) is built and active — so `apply`/`is_terminal`/`legal_mask` are already C-fast (~0.1s total in the profile). The bottleneck was three *pure-numpy* helpers in `baselines.py` running at every search node, each doing a Python loop wrapped around tiny numpy ops: `_find_immediate_wins` (52% — a per-legal-cell loop scanning every empty square at every leaf), `_candidate_moves` (29% — a 24-offset neighbor-dilation loop with fancy-index bounds masking per offset), and the full-81-cell `_score_all_moves` used only for candidate ordering. cProfile made it unambiguous: 27,789 leaf calls and 37,338 internal-node calls dominating a 10.6s run.
+
+**Fix = three vectorizations, all behavior-preserving:** `_find_immediate_wins` → one dense per-cell max-after-placement over `_DENSE_WIN_BY_CELL` (mask the padded slots before the max); `_candidate_moves` → one gather over a precomputed (81,81) `_NEIGHBOR_MASK`; new `_score_cells` restricts the dense gather to candidate rows for the ordering hot path. Result: **depth=2 6.5×, depth=4 6.3×** (22.94 ms/move, 43.6 moves/s). cProfile after: the two loop helpers dropped from 6.26s to 0.22s combined tottime.
+
+**The discipline that mattered: prove byte-identical, don't argue it.** The lookahead is an Elo *anchor* — if its move selection shifts, every model's measured Elo shifts with it, silently. So I reimplemented the old loop logic alongside and asserted equality across 360 positions (candidate sets, immediate-win sets, per-cell scores, and the final depth-4 move) — all byte-identical. That makes the Training-Quality gate trivially satisfied: there's no strength/game-shape risk to measure because the outputs are provably unchanged; only the cost moved. test_baselines/test_lookahead_quiescence/test_rating/test_eval_parallel all green.
+
+**Why it matters for the north-star:** cheaper lookahead → frequent Elo anchoring (esp. depth=4) becomes affordable inside the eval loop, which feeds Δelo/Δt directly. Remaining levers are diminishing-returns: history-free `apply` for the lookahead path (negamax never reads the 8 history snapshots `apply_move_arrays` copies per node, ~8-10% — but it's shared with the MCTS path, so it needs a lookahead-specific lighter apply), or a numba/cython negamax (Class C, out of autonomous scope). Not queued unless eval cost resurfaces. **decision: promote** (Reviewer pending).
+
 ## [2026-05-23] Lpwr2b | RESOLVED: the cross-engine throttle is FLOP-rate-independent — it's occupancy/working-set, not compute-power
 
 The discriminator. Same matrix (4096), back-to-back fp32-hog then fp16-hog, bracketed by no-hog. fp16@4096 has half the byte-footprint and can push far more FLOPs; the *sign* of its throttle-vs-fp32 was meant to separate the hypotheses.
