@@ -1,0 +1,22 @@
+{
+  "_doc": "Delo Derby v3 board — UNIFIED race: the v2 carryover recipes (open-div4 / temp-16 / sgd-800, the v1 top-3) PLUS the prior-art levers mined from other implementations (KataGo / Gumbel / Leela), all raced wall-matched against a single C0 control on the PRODUCTION multiprocess recipe (run_sweep wave-mode, 1 trainer + 8 selfplay_workers, GPU-saturated => HONEST wall-clock). Engine 'run_sweep_wall_slice': each chunk advances an idea by ONE wall-time slice (slice_secs) via `python scripts/run_sweep.py --cell <CELL> --resume <idea>/checkpoints/latest.pt --max-wall-secs <slice_secs> --final-eval`; --final-eval writes a fresh eval/model_elo line INSIDE the bundle. Budget wall-native: an idea caps when wall_secs_total >= cap_wall_secs. Priority = highest CURRENT elo (feed the leader); everyone caps, leaders first; we CALL it early once decisive (v1 was called at 5/8). All cells share ONE base recipe (small / sims=400 / buf 1.5M / EMA 0.99 / sgd_per_position 0.0025 / temp 30 / wave 8x8) and change exactly ONE lever. The 'cell' key == the run_sweep.CELLS dict KEY; 'cell_name' == that Cell's .name (the sweep_runs/<cell_name>/checkpoints path the derby reads). All cells are already in run_sweep.CELLS. NOTE: derby-gumbel and derby-sims100 run at n_simulations=100 (gumbel's value-prop is good targets at CHEAP sims; sims100 is the plain-MCTS control to isolate whether gumbel rescues cheap sims). aux-head (opponent-reply) is a model-arch lever on its OWN axis/board, NOT in this search/recipe race.",
+  "global": {
+    "engine": "run_sweep_wall_slice",
+    "slice_secs": 600,
+    "cap_wall_secs": 7200,
+    "base_out_dir": "sweep_runs/derby_v3",
+    "board_md_path": "sweep_runs/derby_v3/standings.md",
+    "beat_heuristic_elo": 800
+  },
+  "ideas": [
+    {"name": "c0",         "cell": "derby-c0",         "cell_name": "derby-c0",         "lever": "CONTROL - no lever (small/sims400/EMA0.99/sgd0.0025/temp30); every other cell is read as a delta vs this"},
+    {"name": "open-div4",  "cell": "derby-open-div4",  "cell_name": "derby-open-div4",  "lever": "random_opening_moves=4 (WL3) - opening diversity; v1 ceiling winner (peak 1385)"},
+    {"name": "temp-16",    "cell": "derby-temp-16",    "cell_name": "derby-temp-16",    "lever": "temperature_moves=16 (vs 30) - shorter sampling window; v1 #2 (peak 1340)"},
+    {"name": "sgd-800",    "cell": "derby-sgd-800",    "cell_name": "derby-sgd-800",    "lever": "sgd_per_position 0.005 (2x) - more fit per epoch; v1 #3 (peak 1284)"},
+    {"name": "playoutcap", "cell": "derby-playoutcap", "cell_name": "derby-playoutcap", "lever": "KataGo Playout-Cap Randomization: 25% full-search+recorded, rest cheap+unrecorded - more games/wall at constant target quality"},
+    {"name": "forced",     "cell": "derby-forced",     "cell_name": "derby-forced",     "lever": "KataGo Forced Playouts + policy-target pruning (k=2.0) - cheap root exploration without the sim tax"},
+    {"name": "swa",        "cell": "derby-swa",         "cell_name": "derby-swa",        "lever": "SWA tail-avg generator weights (window=5, replaces EMA publish) - smoothing without the lag that floored v1's ema-099"},
+    {"name": "gumbel",     "cell": "derby-gumbel",     "cell_name": "derby-gumbel",     "lever": "native Gumbel root + Sequential Halving at sims=100 - provably good targets at CHEAP sims (wall-fair native port; the generation-bound attack)"},
+    {"name": "sims100",    "cell": "derby-sims100",    "cell_name": "derby-sims100",    "lever": "CONTROL for gumbel - plain MCTS at sims=100, no gumbel (v1: floored at 389, never grokked); isolates whether gumbel rescues cheap sims"}
+  ]
+}
