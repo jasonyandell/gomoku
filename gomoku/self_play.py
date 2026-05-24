@@ -143,6 +143,194 @@ def _can_use_native_mcts(evaluator: Evaluator) -> bool:
     )
 
 
+def _can_use_native_gumbel(evaluator: Evaluator) -> bool:
+    """True iff the native engine is available AND it implements the Gumbel
+    batch path (the built .so exposes gumbel_search_batch). On a source-only or
+    pre-port .so this is False and the pure-Python fallback is used.
+    """
+    return bool(_can_use_native_mcts(evaluator) and native_mcts.has_native_gumbel())
+
+
+def _generate_games_native_gumbel(
+    n_games: int,
+    evaluator: Evaluator,
+    *,
+    n_simulations: int = 100,
+    c_puct: float = 1.25,
+    c_puct_base: float = 19652.0,
+    max_plies: int | None = None,
+    rng: np.random.Generator | None = None,
+    augment_symmetries: bool = True,
+    wave_size: int = 16,
+    random_opening_moves: int = 0,
+    archive: dict | None = None,
+    archive_start_frac: float = 0.0,
+    profile: ProfileStats | None = None,
+    gumbel_m: int = 16,
+    gumbel_c_visit: float = 50.0,
+    gumbel_c_scale: float = 1.0,
+) -> list[GameRecord]:
+    """Self-play using the NATIVE Gumbel root + Sequential Halving path.
+
+    Mirrors `_generate_games_native` (wave-batched native C engine, subtree
+    reuse via advance_root) but:
+      - constructs games with `gumbel_root=1` so the native engine forces the
+        root edge to the Sequential-Halving-chosen candidate;
+      - drives search with `native_mcts.gumbel_search_batch` (one batched leaf
+        eval per slot, shared across games — the wall-fairness win);
+      - the move played is `g.gumbel_selected_action()` (the SH argmax), NOT a
+        temperature-sampled visit-count draw;
+      - the training target is `g.gumbel_policy()` (the COMPLETED-POLICY), NOT
+        visit counts.
+
+    Identical training-signal math to `_generate_games_gumbel` (the Python
+    fallback), just running in the fast native engine.
+    """
+    rng = rng or np.random.default_rng()
+    if max_plies is None:
+        max_plies = N_ACTIONS
+
+    planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
+
+    def _timed_planes_evaluator(planes_batch):
+        t0 = time.perf_counter()
+        try:
+            return planes_evaluator(planes_batch)
+        finally:
+            dt = time.perf_counter() - t0
+            _profile_add(profile, "evaluator_s", dt)
+            try:
+                batch_n = int(getattr(planes_batch, "shape", [len(planes_batch)])[0])
+            except Exception:
+                batch_n = 0
+            _profile_add(profile, "evaluator_calls", 1.0)
+            _profile_add(profile, "evaluator_positions", float(batch_n))
+
+    search_evaluator = _timed_planes_evaluator if profile is not None else planes_evaluator
+
+    games = []
+    initial_plies: list[int] = []
+    archive_start_flags: list[bool] = []
+    n_archive = 0 if archive is None else int(archive["planes"].shape[0])
+    with _profile_timer(profile, "game_setup_s"):
+        for _ in range(n_games):
+            from_archive = (
+                archive is not None
+                and n_archive > 0
+                and float(rng.random()) < archive_start_frac
+            )
+            if from_archive:
+                idx = int(rng.integers(0, n_archive))
+                start_state = _gamestate_from_archive(archive, idx)
+                opening_plies = start_state.move_count
+            elif random_opening_moves > 0:
+                start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+            else:
+                start_state, opening_plies = GameState.initial(), 0
+            games.append(
+                native_mcts.NativeMCTSGame(
+                    start_state,
+                    c_puct=c_puct,
+                    c_puct_base=c_puct_base,
+                    seed=int(rng.integers(1, 2**63 - 1)),
+                    gumbel_root=1,
+                    gumbel_m=gumbel_m,
+                    gumbel_c_visit=gumbel_c_visit,
+                    gumbel_c_scale=gumbel_c_scale,
+                )
+            )
+            initial_plies.append(opening_plies)
+            archive_start_flags.append(from_archive)
+
+    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    active: list[int] = list(range(n_games))
+    completed: list[tuple[int, float, int]] = []
+
+    ply = 0
+    while active and ply < max_plies:
+        with _profile_timer(profile, "active_list_s"):
+            active_games = [games[i] for i in active]
+        with _profile_timer(profile, "native_search_batch_s"):
+            native_mcts.gumbel_search_batch(
+                active_games,
+                search_evaluator,
+                n_simulations=n_simulations,
+                wave_size=wave_size,
+            )
+        _profile_add(profile, "search_calls", 1.0)
+
+        next_active: list[int] = []
+        with _profile_timer(profile, "post_search_loop_s"):
+            for slot_idx, g_idx in enumerate(active):
+                g = active_games[slot_idx]
+                with _profile_timer(profile, "policy_export_s"):
+                    pi = g.gumbel_policy()
+                n_initial = initial_plies[g_idx]
+                side = (n_initial + ply) % 2
+                with _profile_timer(profile, "policy_sanitize_s"):
+                    if not np.all(np.isfinite(pi)):
+                        pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
+                        s = pi.sum()
+                        pi = pi / s if s > 0 else np.full_like(pi, 1.0 / len(pi))
+                with _profile_timer(profile, "root_planes_s"):
+                    planes = g.root_planes()
+                with _profile_timer(profile, "trajectory_append_s"):
+                    trajectories[g_idx].append((planes, pi.copy(), side))
+
+                # The move is the Sequential-Halving argmax (NO temperature
+                # sampling — the Gumbel noise IS the exploration).
+                action = int(g.gumbel_selected_action())
+                if action < 0:
+                    # Degenerate (terminal/no legal); fall back to argmax of pi.
+                    action = int(np.argmax(pi))
+                with _profile_timer(profile, "advance_root_s"):
+                    g.advance_root(action)
+                with _profile_timer(profile, "terminal_check_s"):
+                    done, term_val = g.is_terminal()
+                if done:
+                    if term_val == -1.0:
+                        winner_side = side
+                        outcome_for_black = 1.0 if winner_side == 0 else -1.0
+                    else:
+                        outcome_for_black = 0.0
+                    completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+                else:
+                    next_active.append(g_idx)
+
+        active = next_active
+        ply += 1
+
+    for g_idx in active:
+        completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
+
+    records: list[GameRecord] = []
+    with _profile_timer(profile, "record_build_s"):
+        for g_idx, outcome_for_black, plies in sorted(completed):
+            examples: list[SelfPlayExample] = []
+            n_initial = initial_plies[g_idx]
+            for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+                z = outcome_for_black if side == 0 else -outcome_for_black
+                ply_at_capture = n_initial + ply_idx
+                if augment_symmetries:
+                    for aug_planes, aug_pi in augment(planes, pi):
+                        examples.append(SelfPlayExample(
+                            aug_planes, aug_pi.astype(np.float32), z,
+                            side=int(side), ply=int(ply_at_capture),
+                        ))
+                else:
+                    examples.append(SelfPlayExample(
+                        planes, pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                    ))
+            records.append(GameRecord(
+                examples=examples,
+                plies=plies,
+                outcome=outcome_for_black,
+                archive_start=archive_start_flags[g_idx],
+            ))
+    return records
+
+
 def _generate_games_gumbel(
     n_games: int,
     evaluator: Evaluator,
@@ -585,9 +773,31 @@ def generate_games(
     """
     rng = rng or np.random.default_rng()
     if gumbel_root:
-        # Gumbel runs on the pure-Python tree path; the native C engine does
-        # not (yet) implement Gumbel root selection. This is intentional and
-        # explicit — see the C-port spec at the bottom of gomoku/gumbel.py.
+        # Gumbel root selection + Sequential Halving. When the native C engine
+        # is available AND implements the Gumbel batch path, use it — it
+        # inherits the wave-batching that keeps Gumbel wall-comparable to native
+        # PUCT (the whole point of the C port). Otherwise fall back to the pure-
+        # Python tree path (identical target math, ~5x slower). See the C-port
+        # spec at the bottom of gomoku/gumbel.py.
+        if _can_use_native_gumbel(evaluator):
+            return _generate_games_native_gumbel(
+                n_games,
+                evaluator,
+                n_simulations=n_simulations,
+                c_puct=c_puct,
+                c_puct_base=c_puct_base,
+                max_plies=max_plies,
+                rng=rng,
+                augment_symmetries=augment_symmetries,
+                wave_size=wave_size,
+                random_opening_moves=random_opening_moves,
+                archive=archive,
+                archive_start_frac=archive_start_frac,
+                profile=profile,
+                gumbel_m=gumbel_m,
+                gumbel_c_visit=gumbel_c_visit,
+                gumbel_c_scale=gumbel_c_scale,
+            )
         return _generate_games_gumbel(
             n_games,
             evaluator,
