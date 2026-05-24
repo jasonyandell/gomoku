@@ -41,7 +41,7 @@ TWO CHUNK ENGINES (selected by board `global.engine`):
     the bundle — no separate eval_worker step). Budget is WALL-NATIVE: a chunk = a wall
     slice; the per-idea cap is wall-seconds (cap_wall_secs), NOT epochs.
 
-Both engines share: current-elo "feed the leader" priority, atomic state writes, one
+Both engines share: never-run-first then Δelo/hour "hill-climb" priority, atomic state writes, one
 failed chunk never kills the race, crash-resume via --resume, peak-checkpoint
 snapshotting (best-elo latest.pt copied to a peak path so keep-last-n pruning can't
 discard the champion).
@@ -973,26 +973,63 @@ def idea_started(board: dict, st: dict) -> bool:
     return st["epochs_done"] > 0
 
 
+FLOOR_ELO = 389.0  # "beats random, nothing above" — the no-skill floor (matches render_standings)
+
+
+def delo_per_hr(state: dict, name: str) -> float | None:
+    """Δelo/HOUR — the recent elo-climb RATE (last-chunk slope) for an idea.
+
+    Returns None when the rate is NOT YET MEASURABLE (fewer than 2 elo points):
+    you cannot compute a climb rate from a single measurement, and at round-0
+    every fresh idea sits at the same no-skill floor (~389), indistinguishable.
+    Such ideas are "entry fee" — they need another chunk to establish a slope
+    before the hill-climb can rank them (handled in pick_priority).
+
+    With >=2 points: (elo[-1] - elo[-2]) / last_chunk_wall_hours — the most recent
+    gradient, so compute follows where strength is currently rising fastest.
+    """
+    hist = state["ideas"][name].get("elo_history") or []
+    if len(hist) < 2:
+        return None  # never-run OR measured-once: rate not yet defined
+    last_wall = hist[-1][2] if len(hist[-1]) >= 3 else 0.0
+    wall_hr = last_wall / 3600.0
+    if wall_hr <= 0:
+        return 0.0
+    return (hist[-1][1] - hist[-2][1]) / wall_hr
+
+
 def pick_priority(board: dict, state: dict, candidates: list[str]) -> str:
-    """Pick the idea with the highest CURRENT elo (feed the leader). Tie-break:
-    fewest epochs_done, then name.
+    """Hill-climb by Δelo/HOUR (Jason's directive 2026-05-24: "priority by never-run,
+    then by delta elo/hour — hill climb elo"). Priority order:
 
-    This implements the user's intent — "feed training time to things that are
-    doing better; elo go up? train more; leaders first, everyone reaches cap
-    eventually." It REPLACES the original last-chunk-Δelo rule, which was
-    pathological: a floor-stuck idea sitting at Δ0 outranks strong climbers whose
-    most recent chunk happened to be a downward oscillation (negative Δ), so the
-    queue ended up feeding the WORST idea (sims-100, stuck at 389) toward the cap
-    while the champion (sims-400, 965) and strong climbers (peak 751) were ranked
-    last. Ranking on current elo level fixes the inversion and still guarantees
-    everyone reaches the cap (floor ideas get fed once all stronger ideas cap)."""
-    def current_elo(name: str) -> float:
-        hist = state["ideas"][name].get("elo_history") or []
-        return hist[-1][1] if hist else float("-inf")
+      1. NEVER-RUN ideas first — the entry fee. (Round-0 normally drains these before
+         the priority loop even starts; this also guards an idea whose round-0 errored
+         and left it with no elo.)
+      2. Then by Δelo/HOUR over the most recent chunk, DESCENDING — feed the steepest
+         elo gradient. Compute goes where strength is rising fastest, NOT to the
+         highest absolute elo (that was the v2 "feed-the-leader" rule this replaces:
+         it over-fed an already-peaked champion and starved a faster-climbing
+         challenger). Tie-break: higher current elo, fewer chunks, then name.
 
+    On the oscillation tradeoff (why v1 once moved OFF a Δ-rule): ranking by the
+    RATE is not the v1 pathology. v1 ranked by last-chunk *raw Δelo* and fed the
+    WORST idea (a floored idea at Δ0 outranked a strong idea whose chunk dipped). Here
+    a floored idea sits at Δ0/hr and ANY genuine climber (Δ>0/hr) outranks it; a strong
+    idea that dips for one chunk is correctly paused (it stopped climbing) and the
+    cap-guarantee (everyone caps eventually) prevents permanent starvation."""
     def key(name: str):
         st = state["ideas"][name]
-        return (-current_elo(name), st["epochs_done"], name)
+        hist = st.get("elo_history") or []
+        npts = len(hist)
+        rate = delo_per_hr(state, name)            # None until 2 elo points exist
+        chunks = st.get("chunks_done", st.get("epochs_done", 0))
+        if rate is None:
+            # ENTRY-FEE group: needs (another) chunk to establish a Δelo/hr slope.
+            # Fewest elo points first → never-run (0) before measured-once (1);
+            # then fewest chunks, then name. This drains round-0 then round-1.
+            return (0, npts, chunks, name)
+        # HILL-CLIMB group: steepest recent Δelo/hr first, then higher current elo.
+        return (1, -rate, -hist[-1][1], chunks, name)
     return sorted(candidates, key=key)[0]
 
 
@@ -1041,8 +1078,8 @@ def do_dry_run_v2(board: dict) -> None:
     derby_print("")
     derby_print("Plan:")
     derby_print("  1. Round 0: every idea runs its first wall-slice FRESH (no --resume).")
-    derby_print("  2. Priority loop: pick highest CURRENT elo among active ideas (feed the")
-    derby_print("     leader); tie-break fewest wall-secs spent, then name. Everyone caps.")
+    derby_print("  2. Priority loop: NEVER-RUN first, then highest Δelo/HOUR among active")
+    derby_print("     ideas (hill-climb the elo gradient); tie-break elo, chunks, name. Everyone caps.")
     derby_print("  3. Each chunk = ONE `run_sweep --max-wall-secs --final-eval` command:")
     derby_print("     multiprocess bundle (1 trainer + N selfplay_workers, wave-mode,")
     derby_print("     GPU-saturated) self-caps + final eval writes a fresh model_elo line.")
