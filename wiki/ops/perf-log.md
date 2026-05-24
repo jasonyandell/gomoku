@@ -10,7 +10,7 @@ so future sessions can scan with grep.
 
 Cross-refs:
 - Philosophy: [../topics/m5-max-as-mainframe.md](../topics/m5-max-as-mainframe.md)
-- Procedure: [../topics/perf-lab-session-runbook.md](../topics/perf-lab-session-runbook.md)
+- Procedure: [../topics/research-lab-session-runbook.md](../topics/research-lab-session-runbook.md)
 - Receipts: [experiment-ledger.md](experiment-ledger.md)
 - Board: [frontier.md](frontier.md)
 
@@ -728,7 +728,7 @@ buffer-curation research arc, not just a 1.5M-vs-750k throughput
 ablation. After BAB1 there may be a paired BAB2 (750k).
 
 What was done in this session before the pause:
-- Added [topics/perf-lab-session-runbook.md](../topics/perf-lab-session-runbook.md).
+- Added [topics/research-lab-session-runbook.md](../topics/research-lab-session-runbook.md) (formerly perf-lab-session-runbook.md).
 - Wrote `scripts/canonical_sweep.py` (23-cell 5-axis design).
 - Wrote `scripts/plot_canonical_sweep.py` (axes + model + contour plots).
 - Smoked the driver; first iteration crashed because spawned workers
@@ -768,7 +768,7 @@ Next session pickup:
 Per Jason: "make resumability first class since this will require many
 hours of processing and I'll be using it from time to time." Refactored
 `scripts/canonical_sweep.py` against an 8-point contract now documented
-under [Resumability contract](../topics/perf-lab-session-runbook.md):
+under [Resumability contract](../topics/research-lab-session-runbook.md):
 
 1. **Stable cell IDs** — derived purely from params (e.g.
    `small_W08_G08_S400_V064`); no list-position prefix that would
@@ -1001,7 +1001,7 @@ the model-size dependency).
 
 **Promotion: small / W=8 / G=8 / sims=400 / V=128 → V=512** at R-S400.
 Pending Reviewer signoff per
-[perf-lab-reviewer-role](../topics/perf-lab-reviewer-role.md).
+[research-lab-reviewer-role](../topics/research-lab-reviewer-role.md).
 +17.7% over yesterday's V=128 promote. +49.5% cumulative since the
 WL5 production V=64. No behavior change; eval batch shape only.
 
@@ -1061,7 +1061,7 @@ At V=64 the canonical sweep had W=16 as the peak (3,411 vs W=8 3,188 = +7%). At 
 
 **Implication**: knob wins don't just fail to compound — they actively interact in non-monotone ways at the chip's high end. The tier system's "no leapfrogging" rule is more than aesthetic; it's about not assuming linear combinatorics. Future cells should always re-measure the W axis when V changes substantially, not extrapolate.
 
-Auto-queue updates (in `wiki/ops/perf-queue.md`):
+Auto-queue updates (in `wiki/ops/gpu-queue.md`):
 - L04 G-x-wave bumped from priority 1.4 → 9.0 (G might also be non-monotone at V=512; was flat at V=64).
 - L07 tiny-contour bumped from priority 12 → 36.4 (added V=512 + V=1024 cells; tiny model may extend the wave plateau further because forward pass is cheaper).
 
@@ -1198,7 +1198,7 @@ directives that reshape the lab:
    (epochs/sec under live trainer). This is the holistic metric
    that matters for elo gain, not just isolated self-play.
 2. **Reviewer role** — codified in
-   [perf-lab-reviewer-role](../topics/perf-lab-reviewer-role.md).
+   [research-lab-reviewer-role](../topics/research-lab-reviewer-role.md).
    Spawned per lane + every ~5 lanes for discipline audit. APPROVE
    / REVISE / BLOCK. No promote without signoff.
 3. **/loop 10m check-in** — periodic auto-tick: read queue, file

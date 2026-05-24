@@ -48,7 +48,7 @@ pre-emptive HALT can be a missed +97% headline (the 2026-05-23 perf
 session would have halted at 3 consecutive rejects, immediately before
 the L06-followup fp16-eval lane that nearly doubled R-S400).
 
-See [perf-lab-charter.md § Stop gates and escalation protocol](perf-lab-charter.md#stop-gates-and-escalation-protocol)
+See [research-lab-charter.md § Stop gates and escalation protocol](research-lab-charter.md#stop-gates-and-escalation-protocol)
 for the canonical 12-row triage matrix. Other autonomous-loop scopes
 should write their own matrices in the same shape.
 
@@ -121,9 +121,9 @@ alongside the broader scheduler philosophy).
 
 ## Cross-refs
 
-- [perf-lab-charter](perf-lab-charter.md) — the lab-specific charter
+- [research-lab-charter](research-lab-charter.md) — the lab-specific charter
   that builds on these conventions.
-- [perf-lab-session-runbook](perf-lab-session-runbook.md) — per-session
+- [research-lab-session-runbook](research-lab-session-runbook.md) — per-session
   mechanics.
-- [perf-lab-reviewer-role](perf-lab-reviewer-role.md) — review process
+- [research-lab-reviewer-role](research-lab-reviewer-role.md) — review process
   for lane completions.

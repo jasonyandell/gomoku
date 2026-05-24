@@ -195,7 +195,7 @@ The session narrative is in [`wiki/ops/perf-log.md`](../ops/perf-log.md) under t
 
 ## Cross-refs
 
-- [perf-lab-charter.md](perf-lab-charter.md) — the lab's mission, autonomy boundaries, and stop-gates triage.
+- [research-lab-charter.md](research-lab-charter.md) — the lab's mission, autonomy boundaries, and stop-gates triage.
 - [m5-max-as-mainframe.md](m5-max-as-mainframe.md) — parent philosophy: treat the chip as a knowable mainframe and tune it specifically.
 - [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — what was already optimized in our MCTS before this cycle (saves reviewers from re-suggesting known-done work).
 - [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md) — the parallel investigation of Core ML / ANE as the worker eval backend. Short version: at small/V=64 the ANE path frees up MPS for the trainer (trainer_step_s_p50 -55.7%) but Core ML eval at this model scale is ~2× slower than torch/MPS on the worker side, so the holistic R-TRAIN-ANE cell came in below R-TRAIN-WL5. The lever is real but the model-size operating point matters.

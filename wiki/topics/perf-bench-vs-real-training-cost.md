@@ -26,7 +26,7 @@ The relevant pieces of the pipeline:
 - **`sgd_per_position`.** The trainer's SGD schedule: it does roughly `sgd_per_position × (positions ingested this epoch)` optimizer steps per epoch. WL5 uses 0.0025; the LEAN-fp16 recipe uses 0.001. Note that it scales SGD work with *inflow*, not with a fixed budget.
 - **replay buffer.** 1.5M positions, inherited from the WL5 lineage. Once full it evicts oldest-first; the relevant thing here is *when it fills*, because the runaway dynamics change at that point.
 - **aug-positions/sec (aug/s), epochs/sec.** The perf lab's throughput proxies. Each position is augmented to 8 D4 symmetries before training. These measure how fast positions are *produced and consumed in a short window* — they are generation/ingest-rate proxies, not training-speed metrics.
-- **R-TRAIN-\*.** The perf lab's "live training" reference points: trainer + N workers all sharing MPS, scored in aug/s and epochs/s. R-TRAIN-WL5 is the production baseline (3,297.6 aug/s); R-TRAIN-LEAN-fp16 is the candidate this page is about. Defined in [perf-lab-charter.md § Success metric](perf-lab-charter.md).
+- **R-TRAIN-\*.** The research lab's "live training" reference points: trainer + N workers all sharing MPS, scored in aug/s and epochs/s. R-TRAIN-WL5 is the production baseline (3,297.6 aug/s); R-TRAIN-LEAN-fp16 is the candidate this page is about. Defined in [research-lab-charter.md § Success metric](research-lab-charter.md).
 
 The two relevant drivers:
 - [`scripts/lab_train_cell.py`](../../scripts/lab_train_cell.py) — the perf-bench harness. Short (≤3 min total) windows, throughput-scored.
@@ -80,7 +80,7 @@ The runaway is a positive feedback loop with no fixed point. Step by step:
 
 6. **WL5 (wave_size=64) does not run away.** At V=64, generation rate ≈ trainer consumption rate, so the tile reaches a small steady state (~70–86 games) and stays there. The loop's gain is below 1; it has a fixed point. **V=512 broke that balance.** wave_size is the knob that moves the loop across the stability boundary.
 
-This is the **L11 perf-lab finding at unbounded scale.** L11 already observed that V=512 fills the buffer ~2.4× faster, producing ~3× more SGD steps/epoch and causing the trainer to monopolize MPS — and it *rejected* V=512-at-default-sgd for exactly this reason (see [perf-log.md](../ops/perf-log.md) L11, and [perf-lab-charter.md § R-TRAIN](perf-lab-charter.md)). What L11 saw as a bounded ~3× penalty in a short window is, in a real run past buffer-fill, an *unbounded* runaway. The lowered `sgd_per_position` in LEAN-fp16 was meant to *cure* the L11 MPS-monopolization at the bench scale (and it did, in the window) — but it doesn't remove the feedback loop, it just delays the point at which the loop's growth becomes visible.
+This is the **L11 research-lab finding at unbounded scale.** L11 already observed that V=512 fills the buffer ~2.4× faster, producing ~3× more SGD steps/epoch and causing the trainer to monopolize MPS — and it *rejected* V=512-at-default-sgd for exactly this reason (see [perf-log.md](../ops/perf-log.md) L11, and [research-lab-charter.md § R-TRAIN](research-lab-charter.md)). What L11 saw as a bounded ~3× penalty in a short window is, in a real run past buffer-fill, an *unbounded* runaway. The lowered `sgd_per_position` in LEAN-fp16 was meant to *cure* the L11 MPS-monopolization at the bench scale (and it did, in the window) — but it doesn't remove the feedback loop, it just delays the point at which the loop's growth becomes visible.
 
 ## Why the perf bench completely missed it
 
@@ -127,7 +127,7 @@ Concrete directions, in rough priority order:
 ## Cross-refs and primary sources
 
 - [experiment-ledger.md](../ops/experiment-ledger.md) — the **LF1 receipt** (2026-05-23, "LEAN-fp16 as a REAL run") with the full runaway trajectory and quality notes, and the **L11b' R-TRAIN-LEAN-fp16 receipt** (the +152.9% bench finding it was promoted from).
-- [perf-lab-charter.md § Success metric](perf-lab-charter.md) — the R-TRAIN-\* metric definitions. **Note for the next charter pass:** the R-TRAIN-\* metric definition needs the warm-buffer fix from lane 1 — as defined, a cold-window R-TRAIN cell is non-predictive of real training cost, which is exactly the gap this page documents.
+- [research-lab-charter.md § Success metric](research-lab-charter.md) — the R-TRAIN-\* metric definitions. **Note for the next charter pass:** the R-TRAIN-\* metric definition needs the warm-buffer fix from lane 1 — as defined, a cold-window R-TRAIN cell is non-predictive of real training cost, which is exactly the gap this page documents.
 - [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — the sibling public page; its Finding 3 is the multiplicative-composition result that *produced* the +152% number, measured honestly as a generation-throughput compound. This page is its cautionary epilogue: the throughput compound was real, the training-speed extrapolation was not.
 - [perf-log.md](../ops/perf-log.md) — the L11 finding (V=512 fills the buffer faster → more SGD/epoch → trainer monopolizes MPS). The LF1 runaway is L11's mechanism at unbounded, post-buffer-fill scale.
 - [wave-of-lockstep-design.md](wave-of-lockstep-design.md) — the wave-mode / tile design that the runaway exploits.

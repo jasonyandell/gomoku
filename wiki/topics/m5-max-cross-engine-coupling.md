@@ -201,6 +201,6 @@ The GPU has headroom during a light-trainer Core ML-CPU-worker cell, but filling
 - [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md) — cap ladder; L09e' pins L09c at `coreml-isolated` (CPU/BNNS), not `ane-metered`.
 - [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — single-engine MPS findings.
 - [m5-max-as-mainframe.md](m5-max-as-mainframe.md) — the philosophy; this page is a concrete "where it breaks" finding.
-- [perf-lab-charter.md](perf-lab-charter.md) — lab operating rules.
+- [research-lab-charter.md](research-lab-charter.md) — lab operating rules.
 - Memory: [[project-light-all-engines]] — the multi-engine utilization goal this finding constrains.
 - External: [hollance/neural-engine](https://github.com/hollance/neural-engine) — the ANE community resource that unblocked the residency check.
