@@ -1,4 +1,8 @@
-# ANE INT8 Inference (Post-WL5 Task)
+# ANE INT8 Inference (Post-WL5 Task) — HISTORICAL SCOPING DOC
+
+> **Status note (2026-05-23):** This is the original (WL5-era) scoping doc for the ANE work. Parts have shipped, parts have been superseded, parts are still relevant. **For the current state of ANE research in this project, read [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md) — that page is now the canonical entry point** with the measured envelope, the live research lanes, and the inbound-research landing zone. This page is preserved as the historical record of how the ANE strand started.
+>
+> What's shipped from this doc's plan: `gomoku/coreml_evaluator.py`, `scripts/aggressive_engine_scout.py`, `selfplay_worker --evaluator coreml --coreml-compute-units …` flags, `scripts/coreml_ane_residency_scout.py` (companion). What's superseded: the "When to do this — not during WL5" gating (we are past WL5). What hasn't shipped: INT8 quantization specifically (FP16 path is what landed and what we measured against in L09c/L09d/L09e/etc.).
 
 Scoping doc for moving eval-only inference off the MPS training path,
 starting with self-play on Apple Neural Engine (ANE) at INT8 precision
@@ -261,13 +265,39 @@ input distribution. If we see > 30 point elo delta in validation:
 - **Total: ~3 days** if things go cleanly; 4-5 days with calibration
   or checkpoint-refresh iteration.
 
-## When to do this
+## When to do this (HISTORICAL — see status note at top)
 
-Not during WL5. Mid-run backend changes invalidate comparisons.
+Original framing (2026-05-21): Not during WL5. Mid-run backend changes
+invalidate comparisons. The natural window was after WL5 reports out
+and we're in design mode for WL6 — quantize the WL5 final checkpoint,
+validate, and use INT8 for WL6's self-play if it passes the elo gate.
 
-The natural window: after WL5 reports out and we're in design mode for
-WL6. Quantize the WL5 final checkpoint, validate, and use INT8 for
-WL6's self-play if it passes the elo gate.
+**Update 2026-05-23:** WL5 is closed. The Core ML evaluator and ANE
+scout did ship between WL5 close and 2026-05-23 (see "What shipped"
+section below). INT8 specifically did not ship — we measured against
+the FP16 Core ML path (which is Core ML's default `compute_precision`)
+and the L09 family of receipts at FP16 is what currently maps the
+envelope. INT8 remains a future-research lane if the L09e' residency
+proof confirms ANE residency and the FP16-vs-INT8 throughput delta is
+worth the quantization-calibration cost.
+
+## What shipped from this doc's plan (2026-05-23 reality check)
+
+The original implementation plan below has been partly executed. Status
+of each plan item:
+
+| Plan item | Status | Where it lives |
+|---|---|---|
+| Boundary scouting microbench | **SHIPPED** | `scripts/aggressive_engine_scout.py`; receipt at `sweep_logs/aggressive-engine-scout-2026-05-22.json` |
+| `scripts/export_coreml_int8.py` (INT8 conversion script) | **NOT SHIPPED** | FP16 path landed via `gomoku/coreml_evaluator.py` instead; INT8 specifically not pursued |
+| `gomoku/coreml_evaluator.py` (Core ML evaluator) | **SHIPPED** | `gomoku/coreml_evaluator.py:285+` (FP16 path; INT8 not implemented) |
+| `selfplay_worker` `--evaluator-backend` flag | **SHIPPED** (named `--evaluator coreml`) | `gomoku/selfplay_worker.py`; flag landed 2026-05-23 alongside L09 dispatch |
+| `scripts/validate_int8_elo.py` (calibration + elo validation) | **NOT SHIPPED** | INT8-specific; depends on the un-shipped INT8 conversion path |
+| Wiki update with elo delta + throughput numbers | **SHIPPED (different shape)** | Receipts in [experiment-ledger.md](../ops/experiment-ledger.md) L09 / L09c / L09c-V512 / L09d / L09e; FP16 numbers not INT8 |
+| Three-engine smoke | **PARTIALLY SHIPPED** | Engine-isolation measured by perf-lab L09 family; residency proof (the third leg) still blocked on sudo for powermetrics — see [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md) |
+| ANE residency rail scout (`coreml_ane_residency_scout.py`) | **SHIPPED** (separate from this plan) | `scripts/coreml_ane_residency_scout.py`; companion page [coreml-ane-residency-lab.md](coreml-ane-residency-lab.md); 2026-05-22 lane 03 blocked on sudo, no rail evidence yet |
+
+The INT8 path remains a future-research lane: it would only become load-bearing if (a) L09e' confirms L09c's win is actually ANE-resident, (b) the inbound new ANE research suggests INT8 would shift the envelope materially, or (c) deployment-time inference cost becomes a constraint.
 
 ## Open questions
 
