@@ -519,6 +519,30 @@ def parse_args() -> argparse.Namespace:
                         "structurally cannot run away even if the tile grows. "
                         "Applied AFTER the schedule computes steps_this_cycle, in "
                         "every mode (wave or in-process).")
+    p.add_argument("--sgd-steps-per-epoch", type=int, default=0,
+                   help="TRAINER MODE (fixed-step / fast-cadence learner). 0 "
+                        "(default) = OFF = today's behavior (the "
+                        "--sgd-per-position / --sgd-per-game / --training-steps "
+                        "schedule, then the --max-sgd-steps-per-epoch cap). When "
+                        "> 0, the trainer does EXACTLY this many SGD steps per "
+                        "epoch, FIXED, independent of how many games arrived — it "
+                        "does NOT scale with inflow and is structurally incapable "
+                        "of the inflow-driven per-epoch runaway documented in "
+                        "wiki/topics/perf-bench-vs-real-training-cost.md (the LF1 "
+                        "20s->7min/epoch blow-up). Differs from "
+                        "--max-sgd-steps-per-epoch (a min(computed, cap) clamp that "
+                        "still scales below the cap): this PINS the count. In the "
+                        "NON-wave worker-ingest path (--worker-input-dir set, "
+                        "--wave-mode OFF) it ALSO switches ingest to NON-BLOCKING: "
+                        "the epoch drains whatever new games are present this "
+                        "instant (no --worker-min-games / --worker-min-positions "
+                        "barrier) and trains immediately on the buffer, so the "
+                        "trainer never idles waiting for generation. Net effect = "
+                        "the async continuous-learner pattern (parallel actors + "
+                        "fixed-rate learner) on a fast cadence. Tune N so an epoch "
+                        "lands ~5s of SGD. Wave-mode is unaffected (the fixed-step "
+                        "count still applies, but the wave barrier ingest is left "
+                        "intact); intended for the non-wave async path.")
     p.add_argument("--worker-poll-sec", type=float, default=0.5,
                    help="Sleep this long between dir scans when waiting for workers.")
     p.add_argument("--device", type=str, default=None, help="torch device override (e.g. cpu, mps)")
@@ -812,6 +836,51 @@ def main() -> None:
                     return out_records
                 if target_positions <= 0 and target_games > 0 and n_games >= target_games:
                     return out_records
+
+    def _drain_worker_batches_nonblocking() -> tuple[list, int, int]:
+        """TRAINER MODE ingest: drain whatever flat worker payloads are present
+        in worker_input_dir RIGHT NOW and return immediately — do NOT wait for
+        any --worker-min-games / --worker-min-positions barrier. The trainer
+        trains on the buffer every cycle regardless of inflow, so it never idles
+        waiting for generation. Returns (records, n_games, n_positions).
+
+        Mirrors _ingest_worker_batches' per-file load/delete, but without the
+        blocking poll loop. Honors the stop flag before doing any work so a
+        SIGTERM observed here unwinds cleanly (same as the blocking path).
+        Non-wave only: it scans the top-level *.pt (the layout selfplay_worker
+        writes when --wave-mode is off), never the v{version}/ tree."""
+        if _stop["requested"]:
+            raise _ShutdownRequested(_stop["reason"])
+        out_records: list = []
+        n_games = 0
+        n_positions = 0
+        files = sorted(
+            (p for p in worker_input_dir.glob("*.pt")),
+            key=lambda p: p.stat().st_mtime,
+        )
+        for f in files:
+            consumed = False
+            try:
+                data = torch.load(f, map_location="cpu", weights_only=False)
+                if not (isinstance(data, dict) and "records" in data):
+                    # Not a self-play record payload (e.g. a worker_weights.pt
+                    # someone parked in the input dir). Leave it in place and
+                    # skip — never delete a file we did not ingest.
+                    continue
+                recs = data["records"]
+                out_records.extend(recs)
+                n_games += int(data.get("n_games", len(recs)))
+                n_positions += int(
+                    data.get("n_examples", sum(len(r.examples) for r in recs))
+                )
+                consumed = True
+            finally:
+                if consumed:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        return out_records, n_games, n_positions
 
     def _normalize_wave_worker_id(raw: object) -> str:
         """Normalize path/payload worker ids to the run_sweep style: w0, w1, ..."""
@@ -1176,6 +1245,18 @@ def main() -> None:
             pass
         _publish_worker_weights(epoch=epoch_num)
 
+    # TRAINER MODE running totals (only meaningful when --sgd-steps-per-epoch>0).
+    # cumulative_sgd_steps: SGD microbatch steps across all epochs this slice —
+    # the x-axis for the "loss/val-CE vs CUMULATIVE steps" productive-vs-redundant
+    # test (perf-bench-vs-real-training-cost.md follow-up #5).
+    # cumulative_sgd_positions: steps * batch_size = positions CONSUMED by SGD.
+    # cumulative_new_positions: positions INGESTED from workers.
+    # reuse ratio = consumed / ingested (>1 re-using buffer; <1 fresh gen aging
+    # out unused). These are extra log keys; they do not affect training.
+    cumulative_sgd_steps = 0
+    cumulative_sgd_positions = 0
+    cumulative_new_positions = 0
+
     for epoch in range(start_epoch, start_epoch + args.epochs):
         epoch_start = time.time()
 
@@ -1207,6 +1288,16 @@ def main() -> None:
                             records, record_groups, args.max_tile_games
                         )
                         wave_metrics = {**wave_metrics, **cap_metrics}
+                elif args.sgd_steps_per_epoch > 0:
+                    # TRAINER MODE (non-wave): NON-BLOCKING ingest. Drain
+                    # whatever new games are present right now and proceed to
+                    # SGD immediately — no --worker-min-games / -positions
+                    # barrier, so the trainer never idles waiting for inflow.
+                    # It cycles fast and publishes fresh weights each epoch
+                    # while the workers keep generating in the background.
+                    records, _tm_drained_games, _tm_drained_positions = (
+                        _drain_worker_batches_nonblocking()
+                    )
                 elif args.worker_min_positions > 0:
                     records = _ingest_worker_batches(target_positions=args.worker_min_positions)
                 else:
@@ -1282,12 +1373,21 @@ def main() -> None:
 
         # --- training ---
         # Decide how many SGD steps this cycle. Priority (highest first):
+        #   0. --sgd-steps-per-epoch N (TRAINER MODE): FIXED N, independent of
+        #      inflow — structurally incapable of the inflow-driven runaway.
         #   1. --sgd-per-position * positions_ingested  (constant-age recipe)
         #   2. --sgd-per-game * games_ingested          (legacy K-based)
         #   3. --training-steps                          (static fallback)
         n_games_this_cycle = len(records)
         n_positions_this_cycle = sum(len(r.examples) for r in records)
-        if args.sgd_per_position is not None and n_positions_this_cycle > 0:
+        if args.sgd_steps_per_epoch > 0:
+            # TRAINER MODE: pin the per-epoch step count. Does NOT read the
+            # inflow (tile size / positions), so the train phase cannot grow
+            # with generation rate. Bypasses the schedule AND the
+            # --max-sgd-steps-per-epoch cap (a min(N, cap) clamp would be a
+            # no-op anyway against a fixed N).
+            steps_this_cycle = args.sgd_steps_per_epoch
+        elif args.sgd_per_position is not None and n_positions_this_cycle > 0:
             steps_this_cycle = max(
                 args.min_training_steps,
                 round(args.sgd_per_position * n_positions_this_cycle),
@@ -1307,10 +1407,15 @@ def main() -> None:
         # cap below min_training_steps were ever set, the cap wins (it is the
         # explicit upper bound the operator asked for).
         steps_before_cap = steps_this_cycle
-        if args.max_sgd_steps_per_epoch > 0:
+        # TRAINER MODE pins the count, so the cap is bypassed (a fixed N is
+        # already inflow-independent; a min(N, cap) clamp would just be a
+        # confusing second knob). Cap applies only in the schedule path.
+        if args.sgd_steps_per_epoch <= 0 and args.max_sgd_steps_per_epoch > 0:
             steps_this_cycle = min(steps_this_cycle, args.max_sgd_steps_per_epoch)
         sgd_step_cap_active = (
-            args.max_sgd_steps_per_epoch > 0 and steps_before_cap > steps_this_cycle
+            args.sgd_steps_per_epoch <= 0
+            and args.max_sgd_steps_per_epoch > 0
+            and steps_before_cap > steps_this_cycle
         )
 
         train_metrics_acc: dict[str, list[float]] = {}
@@ -1324,8 +1429,10 @@ def main() -> None:
         # the backward work we already paid for).
         accum_n = max(1, int(args.grad_accum_steps))
         optimizer_steps_this_cycle = 0
+        microbatch_steps_this_cycle = 0  # actual forward+backward passes run
         if buffer.size >= args.batch_size:
             for i in range(steps_this_cycle):
+                microbatch_steps_this_cycle += 1
                 planes, pi, z, side, ply = buffer.sample(args.batch_size)
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
@@ -1352,6 +1459,17 @@ def main() -> None:
                         ema_update(ema_model, model, args.ema_tau)
         train_time = time.time() - train_start
         train_metrics = {k: float(np.mean(v)) for k, v in train_metrics_acc.items()}
+
+        # TRAINER MODE idle-guard: if this epoch did NO SGD (buffer not yet
+        # warm, or no games have arrived from the still-spinning-up workers),
+        # the non-blocking epoch would otherwise busy-spin and peg a CPU. A
+        # short poll-sleep keeps the cadence from free-running before the
+        # buffer fills, WITHOUT ever sleeping when there is real SGD work to do
+        # (so it never wastes the GPU). Re-checks the stop flag so SIGTERM
+        # stays prompt during warm-up.
+        if (args.sgd_steps_per_epoch > 0 and microbatch_steps_this_cycle == 0
+                and not _stop["requested"]):
+            time.sleep(args.worker_poll_sec)
 
         total_games += n_games_this_cycle if worker_input_dir is not None else args.games_per_epoch
 
@@ -1393,6 +1511,33 @@ def main() -> None:
             # Computed every cycle so wandb shows shape evolution over time.
             **buffer.shape_stats(),
         }
+        # TRAINER MODE metrics (only when --sgd-steps-per-epoch>0; otherwise
+        # NO new keys are emitted, so wave-mode / schedule cells log exactly as
+        # before). These measure the whole point of the mode:
+        #   - cumulative_sgd_steps: x-axis for "loss vs CUMULATIVE steps" — the
+        #     productive-vs-redundant-SGD test (perf page follow-up #5).
+        #   - sample_reuse_ratio: positions CONSUMED by SGD (steps*batch) /
+        #     positions INGESTED. >1 = re-using buffer positions; <1 = fresh
+        #     generation aging out unused.
+        if args.sgd_steps_per_epoch > 0:
+            cumulative_sgd_steps += microbatch_steps_this_cycle
+            cumulative_sgd_positions += microbatch_steps_this_cycle * args.batch_size
+            cumulative_new_positions += n_positions_this_cycle
+            log["train/cumulative_sgd_steps"] = cumulative_sgd_steps
+            log["train/cumulative_sgd_positions"] = cumulative_sgd_positions
+            log["train/cumulative_new_positions"] = cumulative_new_positions
+            log["train/sgd_positions_this_cycle"] = (
+                microbatch_steps_this_cycle * args.batch_size
+            )
+            log["train/sample_reuse_ratio"] = (
+                cumulative_sgd_positions / cumulative_new_positions
+                if cumulative_new_positions > 0 else 0.0
+            )
+            log["train/sample_reuse_ratio_epoch"] = (
+                (microbatch_steps_this_cycle * args.batch_size) / n_positions_this_cycle
+                if n_positions_this_cycle > 0 else 0.0
+            )
+
         # WL2 lever #1: diagnose runaway divergence between learn-brain and
         # play-brain. Logged only when EMA is enabled.
         if ema_model is not None:
@@ -1460,6 +1605,11 @@ def main() -> None:
                 f"workers={wave_metrics.get('wave/games_per_worker_min', 0)}-"
                 f"{wave_metrics.get('wave/games_per_worker_max', 0)} "
                 f"extras={wave_metrics.get('wave/greedy_extras_count', 0)}]"
+            )
+        if args.sgd_steps_per_epoch > 0:
+            msg += (
+                f" trainer[cumsteps={log.get('train/cumulative_sgd_steps', 0)} "
+                f"reuse={log.get('train/sample_reuse_ratio', 0.0):.2f}]"
             )
         wr_bits = [
             f"{key[3:]}={log[f'eval/{key}_winrate']:.0%}"
