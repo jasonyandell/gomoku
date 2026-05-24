@@ -15,12 +15,20 @@ each idea gets a production-style title card, but the question it answers is
   model by epoch 140**.
 - **10-epoch chunks.** Each scheduling step advances one idea by a 10-epoch
   increment (`gomoku.train --resume <idea>/latest.pt --epochs 10`).
-- **Current-elo priority queue.** The not-yet-capped idea with the highest
-  *current* anchored elo gets the next chunk — "feed the leader." **Everyone
-  reaches 140 eventually; leaders get there first.** (Revised 2026-05-24 mid-run
-  from a last-chunk-Δelo rule, which pathologically fed the *worst* idea: a
-  floor-stuck idea at Δ0 outranked strong climbers whose latest chunk was a
-  downward oscillation. Ranking on elo *level* feeds the genuinely-strongest.)
+- **Δelo/hour hill-climb priority** (Jason 2026-05-24: "never-run, then delta
+  elo/hour — hill climb elo"). Order: **(1) never-run / entry-fee first** — an
+  idea needs **2 elo points** to have a Δelo/hr slope, so round-0 then round-1 run
+  for every idea (fewest points first); **(2) then highest Δelo/HOUR** over the
+  most recent chunk — compute follows the *steepest recent climb*, not the highest
+  absolute elo. Everyone caps; the steepest climbers get there first.
+  - *History:* v1 ranked by last-chunk *raw Δelo* and pathologically fed the
+    *worst* idea (a floored idea at Δ0 outranked a strong idea whose chunk dipped).
+    v2 patched that with current-elo *level* (but that over-feeds an already-peaked
+    champion and starves a faster challenger). The Δelo/**rate** rule is neither
+    pathology: a floored idea sits at 0/hr and any genuine climber outranks it, and
+    ranking the *rate* (not the level) is the literal hill-climb. The round-0/1
+    entry fee avoids the floor-noise artifact (at the floor all ideas are ~equal, so
+    a 1-point "rate" is meaningless).
 - **Fresh self-play, shared init.** All ideas start from an identical fresh init
   (`--size small --seed 0`). No warm-start, no shared parent.
 - **One lever each.** Every idea changes exactly ONE flag vs **C0-baseline** —
