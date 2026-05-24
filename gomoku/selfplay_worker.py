@@ -106,6 +106,22 @@ def parse_args() -> argparse.Namespace:
                    help="Reduced sim budget for non-recorded (fast) PCR moves. "
                         "0 (default) = same as --n-simulations, which makes the "
                         "lever inert. Only used when --playout-cap-frac < 1.0.")
+    # Gumbel AlphaZero root selection + Sequential Halving (Danihelka et al. 2022).
+    # Derby v3 lever. Default OFF = byte-identical current PUCT+Dirichlet behavior.
+    # When ON: root uses Gumbel-top-k candidate sampling + Sequential Halving over
+    # the sim budget; the policy training target is the completed-policy (softmax of
+    # logits + sigma(q_hat)), NOT visit counts. Internal nodes keep PUCT. Runs on
+    # the pure-Python MCTS tree (native C engine does not implement Gumbel).
+    p.add_argument("--gumbel-root", action="store_true", default=False,
+                   help="Enable Gumbel AlphaZero root selection + Sequential "
+                        "Halving. Default OFF = unchanged PUCT+Dirichlet self-play.")
+    p.add_argument("--gumbel-m", type=int, default=16,
+                   help="Number of root actions sampled via Gumbel-top-k "
+                        "(clamped to #legal moves). Only used with --gumbel-root.")
+    p.add_argument("--gumbel-c-visit", type=float, default=50.0,
+                   help="Gumbel sigma(q) c_visit constant (paper default 50.0).")
+    p.add_argument("--gumbel-c-scale", type=float, default=1.0,
+                   help="Gumbel sigma(q) c_scale constant (paper default 1.0).")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -557,6 +573,10 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             playout_cap_frac=args.playout_cap_frac,
             playout_cap_fast_sims=args.playout_cap_fast_sims,
             profile=profile,
+            gumbel_root=args.gumbel_root,
+            gumbel_m=args.gumbel_m,
+            gumbel_c_visit=args.gumbel_c_visit,
+            gumbel_c_scale=args.gumbel_c_scale,
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
