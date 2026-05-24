@@ -41,16 +41,61 @@ When you catch yourself about to write "good place to pause" / "clean stopping p
 
 ```bash
 cd ~/code/gomoku
-pgrep -fl 'gomoku.train|selfplay_worker|run_sweep|eval_worker|lab_train_cell' || echo "BOX IDLE"
+pgrep -fl 'gomoku.train|selfplay_worker|run_sweep|eval_worker|lab_train_cell|delo_derby' || echo "BOX IDLE"
 # read the current RESUME STATE
 grep -A 4 "RESUME STATE" wiki/ops/gpu-queue.md
 ```
 
-Then pull the top lane from the queue and dispatch via either:
+(Full status + how to add/remove work is the next section.) Then pull the top lane from the queue and dispatch via either:
 - `scripts/canonical_sweep.py` — pure self-play (R-S* family). Multi-cell sweeps.
 - `scripts/lab_train_cell.py` — live training + workers (R-TRAIN-* family). One cell per invocation; 30s warmup + 60–120s measure default.
 
 Both surface the flags Jason added 2026-05-23: `--compile`, `--fp16-eval`, `--evaluator coreml`, `--coreml-compute-units`, and (canonical_sweep only) the `env` column in cells.csv.
+
+## Lab status & managing work
+
+Live state lives in three places: the **GPU-required lane** (what's running now), **`wiki/ops/gpu-queue.md`** (what's next + RESUME STATE), and per-campaign state files under `sweep_runs/<campaign>/`. These recipes read and edit them.
+
+### List what's active
+
+```bash
+cd ~/code/gomoku
+# 1. GPU-required lane — the serial tenant running NOW (train / gen / eval / derby):
+pgrep -fl 'gomoku.train|selfplay_worker|run_sweep|eval_worker|lab_train_cell|delo_derby' || echo "GPU LANE IDLE"
+# 2. The queue + what's next (also read the lane table at the top of the file):
+grep -A 6 "RESUME STATE" wiki/ops/gpu-queue.md
+# 3. Live progress — latest model_elo per cell that has eval results:
+for f in sweep_runs/*/checkpoints/eval_results.jsonl; do
+  printf '%-32s %s\n' "$(basename "$(dirname "$(dirname "$f")")")" "$(tail -1 "$f" | grep -oE '"eval/model_elo": [0-9.]+')"
+done 2>/dev/null
+# 4. everything-else lane — background agent worktrees doing parallel CPU work:
+git worktree list
+# 5. A running Derby — race state + standings:
+python -m json.tool sweep_runs/derby_v2/derby_state.json 2>/dev/null | head -30
+cat sweep_runs/derby_v2/standings.md 2>/dev/null          # board_md_path from the board json
+```
+For a single run's per-epoch health: `tail -3 sweep_logs/<CELL>/trainer.log` — watch the `gen=`/`train=` split (gen = worker MPS, train = SGD MPS; a ballooning `train=` is the runaway/contention tell, per the friction log + [[project-concurrent-runs]]).
+
+### Add work
+
+| Want | Concrete steps |
+|---|---|
+| A **GPU-queue lane** (perf cell or training-slice experiment) | Append a lane to `wiki/ops/gpu-queue.md`: id, tier (1 architectural / 2 compound / 3 speculative), the dispatch command, an `E[Δ]·P / wall_cost` priority note. Bump RESUME STATE. It runs when it reaches the top of the serial lane; then file receipts (next section). |
+| A **Derby recipe** (race a new training lever) | (1) `scripts/run_sweep.py` → add `Cell("derby-<idea>", …)`, cloning a sibling `derby-*` cell, change **exactly one** lever. (2) `scripts/derby_v2_board.json` → add `{"name","cell","cell_name","lever"}` (set `cell`=`cell_name`=`derby-<idea>`). (3) *optional* title card (hypothesis + expected Δelo signature) in `wiki/ops/research-board.md`. Verify with `python scripts/delo_derby.py --board scripts/derby_v2_board.json --dry-run`. |
+| A **new campaign / board** | New `scripts/<name>_board.json` (set `global.engine`, `base_out_dir`, `board_md_path`) + a `research-board.md` section + its cells. Same shape as the derby. |
+
+### Remove / stop work
+
+```bash
+# Stop the running GPU tenant CLEANLY — SIGTERM makes the trainer self-save a
+# resumable latest.pt (buffer embedded) and run_sweep tear down workers+eval.
+# NEVER kill -9 (skips the clean save; wandb won't flush).
+pkill -TERM -f 'sweep_runs/<CELL>/'    # one run_sweep training slice
+pkill -TERM -f 'delo_derby'            # a Derby race (current chunk finishes its teardown)
+```
+- **Drop a queue lane:** move it to the Completed section of `wiki/ops/gpu-queue.md` with a one-line reason; recompute RESUME STATE + `consecutive_rejects`. Ledgers are **append-only** — mark it dropped, don't delete history.
+- **Remove a Derby recipe:** delete its entry from `scripts/derby_v2_board.json` (and optionally its `Cell`). If a race is mid-flight, also drop its idea from `sweep_runs/derby_v2/derby_state.json`, or `--resume` re-queues it.
+- **Resume after a stop/crash:** `python scripts/delo_derby.py --board <board> --resume` (re-queues `running` ideas), or `run_sweep.py --cell <CELL> --resume sweep_runs/<CELL>/checkpoints/latest.pt --max-wall-secs <N> --final-eval`. The clean-stop save means no cold buffer refill ([[project-training-slices]]).
 
 ## How to dispatch a cell
 
