@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 from gomoku.model import build_model
-from gomoku.train import ema_l2_distance, ema_update, train_step
+from gomoku.train import average_state_dicts, ema_l2_distance, ema_update, train_step
 
 
 # --------------------------- EMA update math --------------------------------
@@ -17,6 +17,80 @@ from gomoku.train import ema_l2_distance, ema_update, train_step
 
 def _flat_params(m: nn.Module) -> torch.Tensor:
     return torch.cat([p.detach().flatten() for p in m.parameters()])
+
+
+# --------------------- V3 SWA tail-averaging math ---------------------------
+
+
+def _models_with_distinct_bn_counts(nfwds):
+    """Build tiny models with distinct weights AND distinct BN batch-counters
+    (num_batches_tracked) so 'latest-wins' on int buffers is observable."""
+    models = []
+    for seed, nfwd in nfwds:
+        torch.manual_seed(seed)
+        m = build_model("tiny")
+        m.train()
+        for _ in range(nfwd):
+            m(torch.randn(2, m.cfg.n_input_planes, 9, 9))
+        models.append(m)
+    return models
+
+
+def test_swa_average_equals_elementwise_float_mean():
+    """Every FLOAT tensor in the SWA output is the elementwise mean of inputs."""
+    models = _models_with_distinct_bn_counts([(0, 1), (1, 3), (2, 7)])
+    sds = [m.state_dict() for m in models]
+    avg = average_state_dicts(sds)
+    n_float = 0
+    for k, ref in sds[-1].items():
+        if torch.is_tensor(ref) and ref.is_floating_point():
+            expected = sum(sd[k].double() for sd in sds) / len(sds)
+            assert torch.allclose(avg[k].double(), expected, atol=1e-6), k
+            n_float += 1
+    assert n_float > 0
+
+
+def test_swa_int_buffers_take_latest_not_average():
+    """num_batches_tracked (int64) takes the LATEST value, never an average."""
+    models = _models_with_distinct_bn_counts([(0, 1), (1, 3), (2, 7)])
+    sds = [m.state_dict() for m in models]
+    avg = average_state_dicts(sds)
+    n_int = 0
+    for k, ref in sds[-1].items():
+        if torch.is_tensor(ref) and not ref.is_floating_point():
+            assert torch.equal(avg[k], sds[-1][k]), k
+            n_int += 1
+        if "num_batches_tracked" in k:
+            assert int(avg[k]) == 7  # latest model had 7 forward passes
+    assert n_int > 0
+
+
+def test_swa_single_window_is_identity():
+    """A window of one checkpoint publishes that checkpoint unchanged."""
+    m = build_model("tiny")
+    sd = m.state_dict()
+    avg = average_state_dicts([sd])
+    for k, v in sd.items():
+        if torch.is_tensor(v):
+            assert torch.equal(avg[k], v), k
+
+
+def test_swa_does_not_mutate_inputs():
+    """Averaging must not alias/mutate the source state_dicts (ring buffer safety)."""
+    models = _models_with_distinct_bn_counts([(0, 1), (1, 5)])
+    sds = [m.state_dict() for m in models]
+    before = {k: v.clone() for k, v in sds[0].items() if torch.is_tensor(v)}
+    _ = average_state_dicts(sds)
+    for k, v in before.items():
+        assert torch.equal(sds[0][k], v), k
+
+
+def test_swa_output_loads_into_fresh_model():
+    """The averaged state_dict has full key/shape parity (loadable for publish)."""
+    models = _models_with_distinct_bn_counts([(0, 2), (1, 4), (2, 6)])
+    avg = average_state_dicts([m.state_dict() for m in models])
+    fresh = build_model("tiny")
+    fresh.load_state_dict(avg)  # raises on any missing/extra/shape mismatch
 
 
 def test_ema_tau_zero_copies_model_into_ema():
