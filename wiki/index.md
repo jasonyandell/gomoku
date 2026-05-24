@@ -97,6 +97,7 @@ read is:
 | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 replay-buffer compression plan: bit-packed planes plus FP16 policy, with cheap-test gate. |
 | [topics/conventions.md](topics/conventions.md) | Cross-cutting project conventions: deny-list autonomy (Class A/B/C), merge-commits-never-rebase, memories-also-go-to-wiki, Opus-minutes-not-human-days. Source of truth mirrored in memory. |
 | [topics/perf-lab-charter.md](topics/perf-lab-charter.md) | Charter for the autonomous perf lab: mission, success metric (R-S* + R-TRAIN-*), two-queue scheduler, smoke-first doctrine, operating loop, priority function, tier system, reviewer gate, autonomy boundaries, worktree discipline, stop conditions. |
+| [topics/wall-clock-to-elo-metric.md](topics/wall-clock-to-elo-metric.md) | LF1-followup #4 design: wall-clock-to-elo as a first-class metric family (MTTE primary, EPWH/Δelo·Δt⁻¹ secondary) the throughput proxies must be checked against; protocol, val/policy_ce gate, gap analysis vs `delta_e_harness.py`, proposed charter diff. |
 | [topics/perf-lab-reviewer-role.md](topics/perf-lab-reviewer-role.md) | Codified Reviewer role: when it fires (post-lane + mid-loop), the audit prompts, the three verdicts (APPROVE/REVISE/BLOCK), and what it does NOT do. |
 | [topics/perf-lab-session-runbook.md](topics/perf-lab-session-runbook.md) | End-to-end procedure for running a perf cell or sweep: pre-flight, naming, command surfaces, receipt, surfaces to update. |
 
