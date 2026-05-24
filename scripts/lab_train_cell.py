@@ -215,7 +215,45 @@ def _is_nan_token(tok: str) -> bool:
     return tok.strip().lower() in ("nan", "-nan", "inf", "-inf")
 
 
-def parse_trainer_trajectory(log_path: Path) -> dict:
+def postfill_window(rows: list[dict], *, fill_frac: float, capacity: int,
+                    prefill_epochs: int) -> tuple[int, str]:
+    """Pick the index of the FIRST epoch that counts as "post buffer-fill" for
+    warm-buffer measurement, and the reason we picked it.
+
+    The post-fill boundary is the EARLIER-satisfied of two conditions, so a cell
+    is honest whether or not it has a known capacity:
+      - buffer-fill: first epoch whose `buf` >= fill_frac * capacity (only when
+        capacity > 0 and fill_frac > 0). This is the real "steady state" signal
+        from perf-bench-vs-real-training-cost.md — the regime that emerges once
+        the 1.5M replay buffer fills.
+      - prefill-epochs: a fixed epoch count to skip as cold warmup (fallback /
+        belt-and-suspenders when capacity is unknown or the buffer never fills).
+
+    Returns (start_idx, reason). start_idx is clamped to len(rows). reason is
+    one of "fillfrac", "prefill_epochs", "none".
+    """
+    n = len(rows)
+    fill_idx = None
+    if capacity > 0 and fill_frac > 0:
+        target = fill_frac * capacity
+        for i, r in enumerate(rows):
+            if r.get("buf", 0) >= target:
+                fill_idx = i
+                break
+    pre_idx = prefill_epochs if prefill_epochs > 0 else None
+    candidates = [(i, why) for i, why in
+                  ((fill_idx, "fillfrac"), (pre_idx, "prefill_epochs"))
+                  if i is not None]
+    if not candidates:
+        return 0, "none"
+    # Earliest-satisfied wins: whichever boundary we cross first is when we're
+    # warm enough to start measuring.
+    start_idx, reason = min(candidates, key=lambda t: t[0])
+    return min(start_idx, n), reason
+
+
+def parse_trainer_trajectory(log_path: Path, *, fill_frac: float = 0.0,
+                             capacity: int = 0, prefill_epochs: int = 0) -> dict:
     """Read trainer.log and harvest the FULL per-epoch trajectory (epoch-capped
     mode). Unlike parse_trainer_log (which windows by warmup/measurement secs),
     this keeps every ^epoch line so a fixed-epoch sweep can see the per-epoch
@@ -226,6 +264,14 @@ def parse_trainer_trajectory(log_path: Path) -> dict:
         epoch, steps, wall_s, gen_s, train_s, plies, tile, new, buf, elo
         (elo is None when absent).
       summary fields over the full run (see keys assigned below).
+
+    Warm-buffer mode (fill_frac>0 or prefill_epochs>0): also computes a SECOND
+    set of slope/trend fields over only the post-buffer-fill epochs (the steady
+    state regime), plus a tile_verdict ("BOUNDED"/"DIVERGING"/"INCONCLUSIVE").
+    These are the load-bearing outputs of perf-bench-vs-real-training-cost.md
+    lane 1: the cold-window slope is non-predictive; the post-fill slope is the
+    real training cost. When neither knob is set the post-fill fields equal the
+    full-run fields (start_idx 0), preserving current behavior.
     """
     rows: list[dict] = []
     nan_count = 0
@@ -270,6 +316,39 @@ def parse_trainer_trajectory(log_path: Path) -> dict:
     last_steps = steps_seq[-1] if steps_seq else 0
     first_wall = wall_seq[0] if wall_seq else 0.0
     last_wall = wall_seq[-1] if wall_seq else 0.0
+
+    # --- warm-buffer (post-fill) window --------------------------------------
+    # The cold-buffer slope is non-predictive (perf-bench-vs-real-training-cost
+    # lane 1). Measure the SLOPE of tile / steps / wall over only the post-fill
+    # epochs and emit a bounded-vs-diverging verdict from the tile slope.
+    pf_start, pf_reason = postfill_window(
+        rows, fill_frac=fill_frac, capacity=capacity,
+        prefill_epochs=prefill_epochs,
+    )
+    pf_rows = rows[pf_start:]
+    pf_n = len(pf_rows)
+    pf_tile = [float(r["tile"]) for r in pf_rows]
+    pf_steps = [float(r["steps"]) for r in pf_rows]
+    pf_wall = [r["wall_s"] for r in pf_rows]
+    tile_slope = _slope(pf_tile)
+    steps_slope_pf = _slope(pf_steps)
+    wall_slope_pf = _slope(pf_wall)
+    # Verdict: the runaway has no fixed point — tile grows without bound. We call
+    # it DIVERGING when the tile slope is meaningfully positive relative to the
+    # window's own scale (a per-epoch growth >= ~2% of the mean tile sustained
+    # over the window). BOUNDED when the slope is flat/negative. INCONCLUSIVE
+    # when we don't have enough post-fill epochs to trust the slope (the whole
+    # POINT of this lane is that a too-short window can't adjudicate).
+    mean_tile = (sum(pf_tile) / pf_n) if pf_n else 0.0
+    rel_tile_slope = (tile_slope / mean_tile) if mean_tile > 0 else 0.0
+    MIN_TREND_EPOCHS = 20  # lane 1 asks for >= 20 post-fill epochs
+    if pf_n < max(2, MIN_TREND_EPOCHS):
+        tile_verdict = "INCONCLUSIVE"
+    elif rel_tile_slope >= 0.02:
+        tile_verdict = "DIVERGING"
+    else:
+        tile_verdict = "BOUNDED"
+
     return dict(
         rows=rows,
         epochs_completed=n,
@@ -287,6 +366,21 @@ def parse_trainer_trajectory(log_path: Path) -> dict:
         final_plies=rows[-1]["plies"] if rows else 0.0,
         final_elo=(elos[-1] if elos else None),
         nan_count=nan_count,
+        # warm-buffer (post-fill) trend fields. Equal to full-run when no
+        # prefill knob is set (pf_start == 0).
+        postfill_start_epoch=(pf_rows[0]["epoch"] if pf_rows else 0),
+        postfill_reason=pf_reason,
+        postfill_epochs=pf_n,
+        postfill_mean_steps_per_epoch=(sum(pf_steps) / pf_n) if pf_n else 0.0,
+        postfill_mean_train_s=(
+            sum(r["train_s"] for r in pf_rows) / pf_n) if pf_n else 0.0,
+        postfill_mean_wall_per_epoch=(sum(pf_wall) / pf_n) if pf_n else 0.0,
+        postfill_mean_tile=mean_tile,
+        postfill_tile_slope=tile_slope,
+        postfill_tile_slope_rel=rel_tile_slope,
+        postfill_steps_slope=steps_slope_pf,
+        postfill_wall_slope=wall_slope_pf,
+        tile_verdict=tile_verdict,
     )
 
 
@@ -530,6 +624,21 @@ def build_trainer_cmd(cell: dict, dirs: dict, max_epochs: int = 0) -> list[str]:
         "--no-wandb",
         "--min-training-steps", "16",
     ]
+    # Warm-buffer mode: shrink the replay buffer so it FILLS within a perf-cell
+    # time budget (the production 1.5M buffer takes ~27 epochs to fill, far past
+    # a smoke cell). The runaway is a property of the loop gain, not the absolute
+    # capacity, so a smaller buffer reaches the same post-fill steady state
+    # sooner while preserving the dynamics we want to measure. See
+    # perf-bench-vs-real-training-cost.md lane 1. 0 = leave trainer default.
+    if cell.get("replay_buffer_size", 0) > 0:
+        cmd += ["--replay-buffer-size", str(cell["replay_buffer_size"])]
+    # Optional Path (a): start from a saved buffer artifact (latest.pt with an
+    # embedded replay_buffer). Fastest warm start when the artifact exists and
+    # matches this cell's model. NOTE: --resume sets start_epoch from the
+    # artifact and the wave barrier waits on v{start_epoch}, so this only works
+    # cleanly with a matching artifact — prefer the prefill phase otherwise.
+    if cell.get("prefill_buffer_from"):
+        cmd += ["--resume", str(cell["prefill_buffer_from"])]
     if cell["sgd_per_position"] > 0:
         cmd += ["--sgd-per-position", str(cell["sgd_per_position"])]
     if cell["wave_mode"]:
@@ -791,15 +900,47 @@ def _harvest_epoch_capped(cell: dict, dirs: dict, wall_secs: float,
       - 'failed' if it emitted no epoch lines at all.
     """
     cell_id = cell["cell_id"]
-    traj = parse_trainer_trajectory(dirs["logs"] / "trainer.log")
+    traj = parse_trainer_trajectory(
+        dirs["logs"] / "trainer.log",
+        fill_frac=cell.get("prefill_to_fill_frac", 0.0),
+        capacity=cell.get("replay_buffer_size", 0),
+        prefill_epochs=cell.get("prefill_epochs", 0),
+    )
     rows = traj["rows"]
     n = traj["epochs_completed"]
+    warm = (cell.get("prefill_to_fill_frac", 0.0) > 0
+            or cell.get("prefill_epochs", 0) > 0)
 
     if rows:
         traj_path = dirs["cell"] / "trajectory.tsv"
         write_trajectory_tsv(traj_path, rows)
         print(f"[traj] {cell_id} {n} epochs -> {traj_path}")
         print(format_trajectory_table(rows))
+        if warm:
+            # The load-bearing warm-buffer verdict (lane 1). The single
+            # throughput number is explicitly NOT the deliverable; the SLOPE is.
+            print(
+                f"[warmbuf] {cell_id} post-fill window: "
+                f"start_epoch={traj['postfill_start_epoch']} "
+                f"({traj['postfill_reason']}) "
+                f"n={traj['postfill_epochs']} epochs | "
+                f"steps/epoch mean={traj['postfill_mean_steps_per_epoch']:.0f} "
+                f"slope={traj['postfill_steps_slope']:.2f}/ep | "
+                f"train_s/epoch mean={traj['postfill_mean_train_s']:.1f}s | "
+                f"wall/epoch mean={traj['postfill_mean_wall_per_epoch']:.1f}s "
+                f"slope={traj['postfill_wall_slope']:.2f}s/ep | "
+                f"tile mean={traj['postfill_mean_tile']:.0f} "
+                f"slope={traj['postfill_tile_slope']:.2f}/ep "
+                f"(rel {traj['postfill_tile_slope_rel']*100:.1f}%/ep) "
+                f"=> tile {traj['tile_verdict']}"
+            )
+            if traj["tile_verdict"] == "INCONCLUSIVE":
+                print(
+                    f"[warmbuf] {cell_id} WARNING: only "
+                    f"{traj['postfill_epochs']} post-fill epochs; need >= 20 "
+                    f"to adjudicate bounded-vs-diverging. This cell is "
+                    f"non-predictive of steady-state cost — extend --max-epochs."
+                )
     else:
         print(f"[traj] {cell_id} no epoch lines parsed from trainer.log")
 
@@ -861,6 +1002,24 @@ def _harvest_epoch_capped(cell: dict, dirs: dict, wall_secs: float,
         final_elo=("" if final_elo is None else round(final_elo, 1)),
         final_buf=final_buf,
         nan_count=traj["nan_count"],
+        # warm-buffer (post-fill) extras (blank/equal-to-full when not warm):
+        replay_buffer_size=cell.get("replay_buffer_size", 0),
+        prefill_to_fill_frac=cell.get("prefill_to_fill_frac", 0.0),
+        prefill_epochs=cell.get("prefill_epochs", 0),
+        postfill_start_epoch=traj["postfill_start_epoch"],
+        postfill_reason=traj["postfill_reason"],
+        postfill_epochs=traj["postfill_epochs"],
+        postfill_mean_steps_per_epoch=round(
+            traj["postfill_mean_steps_per_epoch"], 1),
+        postfill_mean_train_s=round(traj["postfill_mean_train_s"], 2),
+        postfill_mean_wall_per_epoch=round(
+            traj["postfill_mean_wall_per_epoch"], 2),
+        postfill_mean_tile=round(traj["postfill_mean_tile"], 1),
+        postfill_tile_slope=round(traj["postfill_tile_slope"], 3),
+        postfill_tile_slope_rel=round(traj["postfill_tile_slope_rel"], 4),
+        postfill_steps_slope=round(traj["postfill_steps_slope"], 3),
+        postfill_wall_slope=round(traj["postfill_wall_slope"], 3),
+        tile_verdict=traj["tile_verdict"],
     )
 
 
@@ -882,6 +1041,13 @@ SUMMARY_COLS = [
     "mean_wall_per_epoch", "last_wall_per_epoch",
     "wall_growth_ratio", "wall_slope",
     "final_plies", "final_elo", "final_buf", "nan_count",
+    # warm-buffer (post-fill) extras (blank in cold / time-windowed rows):
+    "replay_buffer_size", "prefill_to_fill_frac", "prefill_epochs",
+    "postfill_start_epoch", "postfill_reason", "postfill_epochs",
+    "postfill_mean_steps_per_epoch", "postfill_mean_train_s",
+    "postfill_mean_wall_per_epoch", "postfill_mean_tile",
+    "postfill_tile_slope", "postfill_tile_slope_rel",
+    "postfill_steps_slope", "postfill_wall_slope", "tile_verdict",
 ]
 
 
@@ -993,6 +1159,11 @@ def make_cell_from_args(args: argparse.Namespace) -> dict:
         evaluator=args.evaluator,
         coreml_compute_units=args.coreml_compute_units,
         fp16_eval=args.fp16_eval,
+        # warm-buffer mode (opt-in; 0/empty = unchanged cold behavior)
+        replay_buffer_size=args.replay_buffer_size,
+        prefill_to_fill_frac=args.prefill_to_fill_frac,
+        prefill_epochs=args.prefill_epochs,
+        prefill_buffer_from=args.prefill_buffer_from,
     )
     if args.cell_id:
         cell["cell_id"] = args.cell_id
@@ -1058,6 +1229,38 @@ def main() -> None:
                    help="If >0, run a fixed-epoch cell: trainer stops after N "
                         "epochs and the full per-epoch trajectory is harvested "
                         "to trajectory.tsv. 0 = time-windowed (default).")
+    # Warm-buffer mode (lane 1 of perf-bench-vs-real-training-cost.md). ALL
+    # opt-in and additive: with none of these set the tool behaves exactly as
+    # before. A cold-window R-TRAIN number is non-predictive of steady-state
+    # training cost; this mode measures the per-epoch SLOPE at/after buffer-fill
+    # and emits a tile BOUNDED-vs-DIVERGING verdict. Use WITH --max-epochs N so
+    # there are >= 20 post-fill epochs to adjudicate the slope.
+    p.add_argument("--replay-buffer-size", type=int, default=0,
+                   help="Warm-buffer: pass --replay-buffer-size to the trainer "
+                        "(0 = leave trainer default 1.5M). Shrink it (e.g. "
+                        "20000) so the buffer FILLS within the cell's epoch "
+                        "budget — the runaway is a loop-gain property, not a "
+                        "capacity one, so a small buffer reaches the same "
+                        "post-fill steady state much sooner. Also used as the "
+                        "denominator for --prefill-to-fill-frac.")
+    p.add_argument("--prefill-to-fill-frac", type=float, default=0.0,
+                   help="Warm-buffer: treat epochs where buf >= F*capacity as "
+                        "post-fill (the measured steady-state window). 0 = off. "
+                        "Requires --replay-buffer-size > 0 for the capacity. "
+                        "e.g. 0.95 starts the slope/verdict once the buffer is "
+                        "95%% full.")
+    p.add_argument("--prefill-epochs", type=int, default=0,
+                   help="Warm-buffer: skip the first N epochs as cold warmup "
+                        "before measuring the post-fill slope. Used as a "
+                        "fallback when capacity is unknown, or combined with "
+                        "--prefill-to-fill-frac (earliest boundary wins). 0=off.")
+    p.add_argument("--prefill-buffer-from", type=str, default=None,
+                   help="Warm-buffer Path (a): --resume the trainer from a "
+                        "saved checkpoint (latest.pt) whose embedded "
+                        "replay_buffer pre-fills the buffer at startup. Fastest "
+                        "warm start, but only works cleanly when the artifact's "
+                        "model + epoch tag match this cell (wave barrier waits "
+                        "on v{start_epoch}); prefer the prefill phase otherwise.")
     p.add_argument("--device", type=str, default="mps")
     # Resumability / utility
     p.add_argument("--retry-failed", action="store_true",
@@ -1070,6 +1273,27 @@ def main() -> None:
                    help="Skip the pgrep idle check. Use only when you know "
                         "you're the only tenant.")
     args = p.parse_args()
+
+    # Warm-buffer mode is an extension of epoch-capped mode: the post-fill slope
+    # needs the full per-epoch trajectory, which only the --max-epochs path
+    # harvests. Fail loudly rather than silently producing a cold-window number
+    # (the exact non-predictive trap this lane fixes).
+    warm = (args.prefill_to_fill_frac > 0 or args.prefill_epochs > 0
+            or args.prefill_buffer_from)
+    if warm and args.max_epochs <= 0:
+        raise SystemExit(
+            "warm-buffer mode (--prefill-*) requires --max-epochs N (epoch-"
+            "capped mode) so the post-fill slope can be measured over >= 20 "
+            "post-fill epochs. A time-windowed cold cell is non-predictive of "
+            "steady-state training cost (perf-bench-vs-real-training-cost.md "
+            "lane 1)."
+        )
+    if args.prefill_to_fill_frac > 0 and args.replay_buffer_size <= 0:
+        raise SystemExit(
+            "--prefill-to-fill-frac needs --replay-buffer-size > 0 for the "
+            "capacity denominator (shrink it so the buffer actually fills "
+            "inside --max-epochs)."
+        )
 
     out_dir: Path = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
