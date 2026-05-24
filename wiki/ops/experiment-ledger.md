@@ -37,6 +37,34 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — LF1-followups (fan-out, 5 sub-lanes) — runaway knee in (384,512]; tile-cap tames it; extra steps redundant; metric instrument fixed
+
+```yaml
+lane: LF1-followups (the 6-lane block re-pointing the lab at wall-clock-to-elo after the LF1 runaway; ran 5 as a two-queue fan-out — 4 worktree-isolated CPU agents + 1 GPU sweep). Jason: "proceed, fan out background subagents."
+hypothesis: (per wiki/topics/perf-bench-vs-real-training-cost.md) V=512 + sgd_per_position causes an unbounded per-epoch runaway; the cold-window R-TRAIN metric missed it. Map the boundary, build the structural fix, check if the extra steps are productive, fix the instrument.
+code_ref:
+  - lane1 warm-buffer: feat/perf-LF1-warmbuf @ 38fc90f → merged (lab_train_cell --replay-buffer-size/--prefill-*; post-fill slope + BOUNDED/DIVERGING verdict; <20 post-fill epochs = INCONCLUSIVE, refuses a cold number).
+  - lane6 tile-cap: feat/perf-LF1-tilecap @ 7802672 → merged (gomoku/train.py --max-tile-games [drop, earliest-prefix, post-barrier pre-buffer-add], --max-sgd-steps-per-epoch, --sgd-per-game; threaded through lab_train_cell. All opt-in; WL5 default byte-identical — build_trainer_cmd char-identical to main when unset).
+  - lane4 metric design: feat/perf-LF1-metric-design @ 3279d69 → merged (wiki/topics/wall-clock-to-elo-metric.md: MTTE primary, EPWH secondary, charter diff proposed [Class-B, un-applied], delta_e_harness.py gap analysis).
+hardware: M5 Max, mps, small/W8/G8/S400, EMA τ=0.99, grad_accum=4, sgd_per_position=0.001, fp16-eval, --max-epochs 18. wandb disabled (lab cells); lane-5 read wandb h9al2e0k + geft5xmy.
+baseline_command: python scripts/lab_train_cell.py --wave-size {256,384,512} ... --max-epochs 18 (uncapped)
+candidate_command: python scripts/lab_train_cell.py --wave-size 512 ... --max-tile-games 120 --max-epochs 18
+baseline_metric (lane2 runaway boundary, steps/epoch e1→e18, wall/epoch e1→e18):
+  V=256 uncapped: 20→56 steps, 9.6→7.3s  — BOUNDED
+  V=384 uncapped: 19→62 steps, 5.9→8.8s  — BOUNDED
+  V=512 uncapped: 22→154 steps, 6.8→19.9s, new-pos 77→630 — DIVERGENT (monotonic; the runaway reproduced in lab_train_cell)
+candidate_metric (lane6 cap validation):
+  V=512 + --max-tile-games 120: 23→53 steps, 6.6→7.7s, new-pos 84→207 — BOUNDED (cap converts the divergent recipe to bounded; same recipe, cap is the only diff)
+finding (lane2): the runaway stability KNEE is in (384, 512] — sharp. CRITICAL METHOD NOTE: divergence does NOT appear in per-version tile (barrier-bounded ~85 by worker-min-games=64, invariant to V); it appears in steps/wall/new-positions/age (trainer falls behind → drains more stale versions/epoch). Watching tile-only gives a false "no runaway" read.
+finding (lane5, REDUNDANT, high confidence): val/policy_ce (vs wl5_validation_v1.pt) best=3.9905 at cum-step ~3.4k/epoch20 then flattens+reverses while cumulative steps go 4.4× higher to 14.7k; train-loss falls monotonically (overfitting signature). The runaway's extra SGD re-grinds stale buffer (~28% current). ⇒ bounding the tile costs ~0 elo and improves elo-per-wall. Lane5 + lane6 compose: the cap removes exactly the non-productive steps.
+quality_gate: behavior knobs are OPT-IN and OFF by default; WL5 production recipe byte-identical (verified: default --dry-run emits none of the 7 new flags; combined --dry-run threads them; tests green). No production default changed (that would be ESCALATE). The cap's elo-neutrality is supported by lane-5's val/policy_ce analysis but a live TQ canary (val-CE vs wl5_validation_v1.pt at full buffer) is the gate before any production adoption.
+confidence: HIGH for the boundary + cap mechanism (stark 4-run contrast, same recipe). CAVEAT: all GPU runs pre-buffer-fill (~64% at e18); divergence is unambiguous pre-fill (matches LF1's pre-fill climb) but post-fill steady-state confirmation pending (warm-buffer re-run via lane-1's shrunk-buffer mode).
+artifacts: sweep_logs/lab-LF1-runaway-V{256,384,512-uncapped}-*, lab-LF1-tilecap-V512cap120-* (trajectory.tsv each).
+decision: promote (lanes 1/4/6 code+design landed, merged --no-ff); lane2 knee mapped (research finding); lane5 analysis finding. 
+reviewer: PENDING
+next_action: (1) warm-buffer post-fill confirmation run (V=512 ± cap, --replay-buffer-size ~20000 to fill within budget, ≥20 post-fill epochs) — closes the pre-fill caveat AND exercises lane-1's mode on a real runaway; (2) narrow the knee with V=448 if a sharp-vs-gradual threshold matters; (3) Class-B: charter Success-metric edit (lane-4 R-ELO-* diff) is the user's call. Runaway reproduction in lab_train_cell means the harness CAN now study this (previously thought run_sweep-only).
+```
+
 ### 2026-05-23 — LF1 (LEAN-fp16 as a REAL run) — the +152% is COLD-BUFFER generation throughput, NOT training speed (steady-state ~3min/epoch)
 
 ```yaml

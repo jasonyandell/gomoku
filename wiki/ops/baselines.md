@@ -36,6 +36,22 @@ Purpose: per-move wall-clock of the alpha-beta `lookahead_player` baseline (the 
 
 Behavior-identical: vectorized helpers return byte-identical move selection to the old loop logic (360-position equivalence + tests). ~6.3× faster on the lookahead side of every eval pass.
 
+### Runaway stability boundary + tile-cap (LF1-followups L2/L6)
+
+```bash
+# Runaway boundary probe: sweep wave_size; watch steps/epoch + wall/epoch trajectory (NOT per-version tile — that's barrier-bounded ~85, V-invariant).
+python scripts/lab_train_cell.py --out-dir sweep_logs/lab-runaway-V<N>-$(date -u +%Y%m%dT%H%M%SZ) \
+  --model small --workers 8 --games-per-batch 8 --n-simulations 400 \
+  --wave-size <N> --ema-tau 0.99 --grad-accum-steps 4 --sgd-per-position 0.001 --fp16-eval \
+  --max-epochs 18 --device mps
+# Read: <cell>/trajectory.tsv columns steps, wall_s, new — monotonic climb = DIVERGENT.
+
+# Tile-cap validation: same recipe at the divergent V plus the structural cap.
+python scripts/lab_train_cell.py ... --wave-size 512 --max-tile-games 120 --max-epochs 18
+```
+
+Purpose: locate the wave_size runaway knee and validate the anti-runaway caps. Score by the steps/epoch + wall/epoch *slope* across the trajectory (bounded vs diverging), NOT a single throughput number. Result (2026-05-23): knee in **(384, 512]** — V=64/256/384 bounded, V=512 uncapped divergent (steps 22→154, wall 6.8→19.9s over 18 ep); `--max-tile-games 120` converts V=512 to bounded (steps 53, wall 7.7s). All runs pre-buffer-fill; warm-buffer post-fill confirmation via `--replay-buffer-size`/`--prefill-*` is the queued follow-up.
+
 ### Canonical 5-axis sweep
 
 ```bash

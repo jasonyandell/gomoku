@@ -16,6 +16,31 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] LF1-followups | Fan-out (4 CPU agents + GPU): runaway knee mapped to (384,512], tile-cap validated end-to-end, metric instrument fixed
+
+Jason: "proceed, fan out background subagents." Ran the LF1-followups block as a **two-queue fan-out** — 4 worktree-isolated CPU agents in parallel + the GPU runaway-boundary sweep driven serially by the orchestrator. (The orchestration pattern is now codified in the gomoku-perf-lab skill, "Fan-out orchestration mode.") All five sub-lanes landed coherently into one story.
+
+**The headline science — runaway stability boundary (lane 2), four lab_train_cell runs, `--max-epochs 18`, LEAN recipe (V, sgd_per_position=0.001, fp16):**
+
+| run | steps e1→e18 | wall/epoch e1→e18 | new-pos/epoch | verdict |
+|---|---|---|---|---|
+| V=256 uncapped | 20→56 | 9.6→7.3s | 75→208 | **bounded** |
+| V=384 uncapped | 19→62 | 5.9→8.8s | 73→231 | **bounded** |
+| V=512 uncapped | 22→**154** | 6.8→**19.9s** | 77→**630** | **DIVERGENT** (monotonic) |
+| V=512 + `--max-tile-games 120` | 23→53 | 6.6→7.7s | 84→207 | **bounded — cap tamed it** |
+
+**The runaway knee is in (384, 512]** — a sharp threshold. V≤384 keeps up; V=512 falls behind and diverges.
+
+**Method lesson that nearly bit me (filed to the skill friction log):** the divergence does NOT show in the per-version `tile` — that's barrier-bounded at ~85 by lab_train_cell's `worker-min-games`=64 (8×8) and is *invariant to V*. I first concluded "lab_train_cell can't reproduce the runaway" from the flat tile column. Wrong. The runaway lives in **steps/epoch, wall/epoch, new-positions/epoch, and `age`** — at V=512 the trainer falls behind and drains *more stale versions per epoch* (age 2→3), so per-epoch SGD work climbs without bound while the per-version tile stays flat. I also realized I'd imported LF1's *run_sweep* divergence as the V=512 point without ever running uncapped V=512 in lab_train_cell — ran that missing control, and it diverged exactly as predicted (steps 22→154). Same friction-log discipline (attribute before concluding) applied to my own GPU data.
+
+**Lane 6 (architectural fix) — VALIDATED end-to-end, not just unit-tested.** `--max-tile-games 120` converts the divergent V=512 (steps 154, wall 19.9s) into a bounded run (steps 53, wall 7.7s) — same recipe, the cap is the only difference. The structural lever closes the open loop. (Also shipped: `--max-sgd-steps-per-epoch`, `--sgd-per-game`; all opt-in, WL5 defaults byte-identical.)
+
+**Lane 5 (productivity analysis) — the extra steps are REDUNDANT.** From LF1 wandb (`h9al2e0k`): `val/policy_ce` hits its best (3.9905) at cum-step ~3.4k / epoch 20 — *before* the runaway — then flattens and reverses while cumulative steps go 4.4× higher. Train-loss keeps falling, val-loss doesn't → the giant late tiles re-grind stale buffer (~28% current). **So bounding the tile costs ~0 elo and improves elo-per-wall** — lane 5 and lane 6 compose: the cap removes exactly the steps that weren't buying quality.
+
+**Lane 1 (metric fix) + Lane 4 (metric design) — the instrument.** Lane 1 shipped an opt-in warm-buffer / shrunk-buffer measurement mode in lab_train_cell (`--replay-buffer-size`, `--prefill-*`) that reports the post-fill steps/wall/tile *slope* + a BOUNDED/DIVERGING verdict (and refuses to emit a number with <20 post-fill epochs — the cold-window cell that produced the misleading +152% is structurally disallowed). Lane 4 designed the higher-order objective: `wall-clock-to-elo-metric.md` (MTTE primary, EPWH/Δelo·hr⁻¹ secondary), reconciled with the existing `delta_e_harness.py` (5 gaps identified, chiefly: fix the window in wall-clock not epochs, or a runaway re-imports the bug) + a proposed (un-applied, Class-B) charter diff adding an R-ELO-* family.
+
+**Integration:** 3 code/design branches merged `--no-ff` to main, integrated tree verified (WL5 default byte-identical, 7 new flags coexist, tests green). Both code agents hit a stale-base worktree + editable-install path-leak (filed to skill; fix = "merge local main at startup" now in the fan-out guardrails). decision: lanes 1/4/6 promote (code/design landed); lane 2 = knee mapped (research finding); lane 5 = analysis finding. Reviewer pending. Caveat: all GPU runs are pre-buffer-fill (~64% at e18); the divergence is already unambiguous pre-fill (matches LF1's pre-fill climb), but a warm-buffer re-run via lane-1's shrunk-buffer mode would confirm post-fill steady state — queued as the natural follow-up.
+
 ## [2026-05-23] LA1 | Lookahead-eval ~6.3× faster, byte-identical — the eval anchor was paying a pure-Python tax at every node
 
 Jason redirected the lab: "perf pass on lookahead eval." Target = `lookahead_player`, the alpha-beta baseline that anchors model Elo in `eval_worker` and the training-loop eval. It's the known-slow eval path — `train.py:341` dropped `lookahead:depth=2` as a default precisely because it cost "45s+ for noisy signal," and depth=4 (the dominant anchor) is worse. This isn't a gen (R-S*) or train (R-TRAIN-*) lane; it's a new eval-path family, R-EVAL-*.
