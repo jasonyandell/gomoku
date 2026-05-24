@@ -143,6 +143,157 @@ def _can_use_native_mcts(evaluator: Evaluator) -> bool:
     )
 
 
+def _generate_games_gumbel(
+    n_games: int,
+    evaluator: Evaluator,
+    *,
+    n_simulations: int = 100,
+    c_puct: float = 1.25,
+    c_puct_base: float = 19652.0,
+    temperature_moves: int = 8,  # unused: Gumbel selects greedily by its own score
+    temperature_final: float = 0.1,  # unused
+    dirichlet_alpha: float = 0.3,  # unused: Gumbel uses Gumbel noise, not Dirichlet
+    dirichlet_eps: float = 0.25,  # unused
+    max_plies: int | None = None,
+    rng: np.random.Generator | None = None,
+    augment_symmetries: bool = True,
+    random_opening_moves: int = 0,
+    archive: dict | None = None,
+    archive_start_frac: float = 0.0,
+    profile: ProfileStats | None = None,
+    gumbel_m: int = 16,
+    gumbel_c_visit: float = 50.0,
+    gumbel_c_scale: float = 1.0,
+) -> list[GameRecord]:
+    """Self-play generation using Gumbel AlphaZero root selection + Sequential
+    Halving (the pure-Python `gomoku.mcts.Node` tree path).
+
+    Differences from the standard path:
+      - Root action is chosen by `gumbel_search_root` (Gumbel-top-k candidate
+        sampling, Sequential Halving over the sim budget, argmax of the SH score).
+        There is NO temperature sampling and NO Dirichlet noise — the Gumbel
+        noise IS the exploration, and the SH argmax IS the move.
+      - The training policy target is the COMPLETED-POLICY (softmax of
+        logits + sigma(q_hat) with v-mix completion for unvisited actions),
+        NOT the visit-count distribution.
+
+    Each game keeps its own `MCTSGame` so subtrees are reused across plies.
+    """
+    from gomoku.mcts import MCTSGame
+    from gomoku.gumbel import gumbel_search_root
+
+    rng = rng or np.random.default_rng()
+    if max_plies is None:
+        max_plies = N_ACTIONS
+    _ = (temperature_moves, temperature_final, dirichlet_alpha, dirichlet_eps)
+
+    games: list[MCTSGame] = []
+    initial_plies: list[int] = []
+    archive_start_flags: list[bool] = []
+    n_archive = 0 if archive is None else int(archive["planes"].shape[0])
+    for _ in range(n_games):
+        from_archive = (
+            archive is not None and n_archive > 0
+            and float(rng.random()) < archive_start_frac
+        )
+        if from_archive:
+            idx = int(rng.integers(0, n_archive))
+            start_state = _gamestate_from_archive(archive, idx)
+            opening_plies = start_state.move_count
+        elif random_opening_moves > 0:
+            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+        else:
+            start_state, opening_plies = GameState.initial(), 0
+        games.append(
+            MCTSGame(
+                start_state,
+                c_puct=c_puct,
+                c_puct_base=c_puct_base,
+                rng=np.random.default_rng(rng.integers(0, 2**31)),
+            )
+        )
+        initial_plies.append(opening_plies)
+        archive_start_flags.append(from_archive)
+
+    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    active: list[int] = list(range(n_games))
+    completed: list[tuple[int, float, int]] = []
+
+    ply = 0
+    while active and ply < max_plies:
+        with _profile_timer(profile, "gumbel_search_s"):
+            for g_idx in active:
+                g = games[g_idx]
+                # Per-move Gumbel noise: draw from the game's own rng.
+                result = gumbel_search_root(
+                    g.root,
+                    evaluator,
+                    n_simulations=n_simulations,
+                    m=gumbel_m,
+                    c_visit=gumbel_c_visit,
+                    c_scale=gumbel_c_scale,
+                    c_puct_init=c_puct,
+                    c_puct_base=c_puct_base,
+                    rng=g.rng,
+                )
+                n_initial = initial_plies[g_idx]
+                side = (n_initial + ply) % 2
+                pi = result.pi
+                # Sanitize the target (mirrors the native path's NaN guard).
+                if not np.all(np.isfinite(pi)):
+                    pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
+                    s = pi.sum()
+                    pi = pi / s if s > 0 else np.full_like(pi, 1.0 / len(pi))
+                trajectories[g_idx].append((g.root.state.to_planes(), pi.copy(), side))
+                g.advance_root(result.action)
+
+        next_active: list[int] = []
+        for g_idx in active:
+            g = games[g_idx]
+            n_initial = initial_plies[g_idx]
+            done, term_val = g.root.state.is_terminal()
+            if done:
+                if term_val == -1.0:
+                    winner_side = (n_initial + ply) % 2
+                    outcome_for_black = 1.0 if winner_side == 0 else -1.0
+                else:
+                    outcome_for_black = 0.0
+                completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+            else:
+                next_active.append(g_idx)
+        active = next_active
+        ply += 1
+
+    for g_idx in active:
+        completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
+
+    records: list[GameRecord] = []
+    for g_idx, outcome_for_black, plies in sorted(completed):
+        examples: list[SelfPlayExample] = []
+        n_initial = initial_plies[g_idx]
+        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+            z = outcome_for_black if side == 0 else -outcome_for_black
+            ply_at_capture = n_initial + ply_idx
+            if augment_symmetries:
+                for aug_planes, aug_pi in augment(planes, pi):
+                    examples.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                    ))
+            else:
+                examples.append(SelfPlayExample(
+                    planes, pi.astype(np.float32), z,
+                    side=int(side), ply=int(ply_at_capture),
+                ))
+        records.append(GameRecord(
+            examples=examples,
+            plies=plies,
+            outcome=outcome_for_black,
+            archive_start=archive_start_flags[g_idx],
+        ))
+    return records
+
+
 def _generate_games_native(
     n_games: int,
     evaluator: Evaluator,
@@ -339,11 +490,24 @@ def generate_games(
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     profile: ProfileStats | None = None,
+    gumbel_root: bool = False,
+    gumbel_m: int = 16,
+    gumbel_c_visit: float = 50.0,
+    gumbel_c_scale: float = 1.0,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
     All games advance in lockstep: at each ply we batch-MCTS across active games,
     sample an action per game, apply it, and remove any games that ended.
+
+    `gumbel_root=True` switches the ROOT to Gumbel AlphaZero selection + Sequential
+    Halving (Danihelka et al. 2022): the root samples `gumbel_m` candidate actions
+    via the Gumbel-top-k trick, allocates the sim budget with Sequential Halving,
+    and the training policy target is the COMPLETED-POLICY (not visit counts).
+    Internal nodes keep PUCT. Default `gumbel_root=False` is byte-identical to the
+    standard path. The Gumbel path runs on the pure-Python `gomoku.mcts` tree
+    (the native C engine does not implement Gumbel — see the C-port spec in
+    `gomoku/gumbel.py`).
 
     `wave_size` > 1 enables zeb-style wave-batched MCTS with virtual loss:
     each round collects `wave_size` leaves per game in one batched evaluator
@@ -356,6 +520,31 @@ def generate_games(
     the model to learn from a diverse set of starting positions.
     """
     rng = rng or np.random.default_rng()
+    if gumbel_root:
+        # Gumbel runs on the pure-Python tree path; the native C engine does
+        # not (yet) implement Gumbel root selection. This is intentional and
+        # explicit — see the C-port spec at the bottom of gomoku/gumbel.py.
+        return _generate_games_gumbel(
+            n_games,
+            evaluator,
+            n_simulations=n_simulations,
+            c_puct=c_puct,
+            c_puct_base=c_puct_base,
+            temperature_moves=temperature_moves,
+            temperature_final=temperature_final,
+            dirichlet_alpha=dirichlet_alpha,
+            dirichlet_eps=dirichlet_eps,
+            max_plies=max_plies,
+            rng=rng,
+            augment_symmetries=augment_symmetries,
+            random_opening_moves=random_opening_moves,
+            archive=archive,
+            archive_start_frac=archive_start_frac,
+            profile=profile,
+            gumbel_m=gumbel_m,
+            gumbel_c_visit=gumbel_c_visit,
+            gumbel_c_scale=gumbel_c_scale,
+        )
     if _can_use_native_mcts(evaluator):
         return _generate_games_native(
             n_games,
