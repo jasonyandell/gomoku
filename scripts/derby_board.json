@@ -1,0 +1,40 @@
+{
+  "_doc": "Delo Derby board spec. The race: 8 fresh-start self-play training recipes, each raced in chunk_epochs-sized chunks to cap_epochs, scored by anchored model_elo. Allocation = Delo-rate priority queue (the not-yet-capped idea with the best most-recent elo gain gets the next chunk). Everyone reaches cap_epochs eventually; leaders get there first. Each idea changes ONE lever vs C0-baseline (clean attribution). All share --size small --seed 0 => identical fresh init. Engine: single-process gomoku.train (chunk = --resume <idea>/latest.pt --epochs <chunk_epochs>; --epochs is an INCREMENT). Score = last eval/model_elo in <idea_dir>/checkpoints/eval_results.jsonl. Curator/curriculum ideas are a FUTURE board (they need the train_replay flywheel engine, not fresh self-play).",
+  "global": {
+    "chunk_epochs": 10,
+    "cap_epochs": 140,
+    "size": "small",
+    "seed": 0,
+    "base_out_dir": "sweep_runs/derby",
+    "device": "mps",
+    "wandb": true,
+    "wandb_project": "gomoku",
+    "eval_baselines": "random,heuristic,lookahead:depth=2",
+    "eval_baselines_slow": "lookahead:depth=4",
+    "eval_baseline_games": 30,
+    "eval_slow_games": 14,
+    "eval_slow_every": 1,
+    "eval_sims": 100,
+    "eval_every": 10,
+    "beat_heuristic_elo": 800,
+    "common_args": [
+      "--games-per-epoch", "64",
+      "--training-steps", "400",
+      "--batch-size", "256",
+      "--replay-buffer-size", "100000",
+      "--lr", "1e-3",
+      "--temperature-moves", "8",
+      "--c-puct", "1.25"
+    ]
+  },
+  "ideas": [
+    {"name": "C0-baseline", "lever": "control (sims 200, 64 games, 400 steps, buf 100k, temp 8, lr 1e-3)", "args": ["--n-simulations", "200"]},
+    {"name": "sims-400",    "lever": "n_simulations 400 (vs 200) - stronger policy targets, slower gen", "args": ["--n-simulations", "400"]},
+    {"name": "sims-100",    "lever": "n_simulations 100 (vs 200) - weaker targets, ~2x faster gen / more games per wall", "args": ["--n-simulations", "100"]},
+    {"name": "sgd-800",     "lever": "training_steps 800 (vs 400) - more fit per epoch", "args": ["--n-simulations", "200", "--training-steps", "800"]},
+    {"name": "buf-30k",     "lever": "replay_buffer_size 30k (vs 100k) - faster turnover, fits recent self-play harder", "args": ["--n-simulations", "200", "--replay-buffer-size", "30000"]},
+    {"name": "open-div4",   "lever": "random_opening_moves 4 (WL3 lever) - opening diversity, better-balanced climb", "args": ["--n-simulations", "200", "--random-opening-moves", "4"]},
+    {"name": "ema-099",     "lever": "ema_tau 0.99 (WL2 lever) - EMA self-play weights, smoother targets", "args": ["--n-simulations", "200", "--ema-tau", "0.99"]},
+    {"name": "temp-16",     "lever": "temperature_moves 16 (vs 8) - more opening exploration", "args": ["--n-simulations", "200", "--temperature-moves", "16"]}
+  ]
+}

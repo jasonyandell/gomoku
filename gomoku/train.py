@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import time
 from pathlib import Path
 
@@ -288,7 +289,13 @@ def parse_args() -> argparse.Namespace:
                         "the AZ recipe (1 SGD step per game played). NOTE: when "
                         "game length varies (model swings between attack and defense), "
                         "this knob also varies the per-cycle SGD count and the buffer "
-                        "turnover rate. Prefer --sgd-per-position for stable runs.")
+                        "turnover rate. Prefer --sgd-per-position for stable runs. "
+                        "LF1 NOTE: as an anti-runaway schedule this has LOWER gain "
+                        "than --sgd-per-position, because the tile's game COUNT grows "
+                        "slower than its POSITION count (games lengthen as defense is "
+                        "learned). It does not fully close the runaway loop on its "
+                        "own — pair with --max-tile-games / --max-sgd-steps-per-epoch "
+                        "for a structural bound.")
     p.add_argument("--sgd-per-position", type=float, default=None,
                    help="Position-based version of --sgd-per-game. Each cycle "
                         "computes training_steps = max(--min-training-steps, "
@@ -368,6 +375,14 @@ def parse_args() -> argparse.Namespace:
                         "checkpoint dir AND any leftover *.pt.tmp / orphaned *.pt in the "
                         "worker-input-dir that are older than this many seconds. Keeps "
                         "interrupted writes from accumulating across runs.")
+    p.add_argument("--max-wall-secs", type=float, default=0.0,
+                   help="Time-cap the run: after this many wall-seconds (checked at "
+                        "each epoch boundary), finish the current epoch, force-save a "
+                        "fully-resumable latest.pt (WITH the replay buffer, ignoring "
+                        "--save-buffer-every), and exit 0. 0 = no cap (run to --epochs). "
+                        "This is what makes a training task a clean research SLICE: "
+                        "resume from latest.pt never cold-refills the buffer. A SIGTERM "
+                        "or SIGINT triggers the same clean-save path mid-run.")
     p.add_argument("--no-eval", dest="eval_in_trainer", action="store_false",
                    help="Skip the in-trainer eval block entirely. Pair with "
                         "`python -m gomoku.eval_worker` running separately — it polls "
@@ -415,6 +430,32 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wave-games-per-worker", type=int, default=0,
                    help="Per-worker barrier size for --wave-mode. Defaults to "
                         "--worker-min-games / --wave-workers when possible.")
+    # --- LF1 anti-runaway structural levers (all OPT-IN; 0 = disabled = today) ---
+    # See wiki/topics/perf-bench-vs-real-training-cost.md for the runaway loop:
+    # large wave_size -> gen outpaces trainer -> per-version tile grows ->
+    # sgd_per_position scales steps with inflow -> train phase lengthens ->
+    # even more games pile up. These three flags close that open loop. When all
+    # are unset (default 0/None), the trainer is byte-identical to today (WL5).
+    p.add_argument("--max-tile-games", type=int, default=0,
+                   help="LF1 anti-runaway: cap how many self-play games the trainer "
+                        "ingests per model version (the 'tile'). 0 (default) = "
+                        "uncapped = today's behavior. When > 0, excess games beyond "
+                        "this many per version are DROPPED (deterministically, "
+                        "keeping the earliest games in stable sorted order). This "
+                        "structurally bounds the tile regardless of generation rate, "
+                        "converting the open generation->ingest loop into a closed "
+                        "one. Acts in the wave-mode epoch loop right AFTER the "
+                        "barrier ingest, before the buffer add and before the SGD "
+                        "step schedule reads the tile size. Wave-mode only.")
+    p.add_argument("--max-sgd-steps-per-epoch", type=int, default=0,
+                   help="LF1 anti-runaway: hard upper bound on SGD steps per epoch "
+                        "(per cycle). 0 (default) = no cap = today's behavior. When "
+                        "> 0, the per-cycle step count (from --sgd-per-position, "
+                        "--sgd-per-game, or --training-steps) is clamped to at most "
+                        "this many steps. Decouples SGD work from inflow entirely: "
+                        "structurally cannot run away even if the tile grows. "
+                        "Applied AFTER the schedule computes steps_this_cycle, in "
+                        "every mode (wave or in-process).")
     p.add_argument("--worker-poll-sec", type=float, default=0.5,
                    help="Sleep this long between dir scans when waiting for workers.")
     p.add_argument("--device", type=str, default=None, help="torch device override (e.g. cpu, mps)")
@@ -760,6 +801,61 @@ def main() -> None:
         }
         return out_records, out_groups, metrics
 
+    def _cap_tile_games(records: list,
+                        record_groups: list[tuple[int, list]],
+                        cap: int) -> tuple[list, list[tuple[int, list]], dict]:
+        """LF1 per-version tile cap (DROP semantics).
+
+        Given the flat `records` and version-tagged `record_groups` produced by
+        the wave ingest, keep at most `cap` games for EACH model version and
+        DROP the rest. Returns rebuilt (records, record_groups, metrics) that are
+        mutually consistent so the downstream buffer add and SGD-step schedule
+        both see the capped tile.
+
+        Why DROP, not DEFER: the wave drain (`_drain_wave_version`) has already
+        deleted the on-disk payloads by the time we get here, so the excess games
+        only exist in memory. Deferring them would mean re-attributing games
+        generated under version v to a LATER version's tile, which violates the
+        wave-mode invariant "every game in tile v was generated by version v"
+        (wave-of-lockstep-design.md, invariant #1). Dropping the in-memory excess
+        is the only choice that both bounds the tile AND preserves per-version
+        purity. The cost is wasted generation — which is exactly the runaway work
+        the cap exists to stop producing.
+
+        Determinism: groups arrive in stable sorted order (sorted by file path in
+        `_drain_wave_version`, sorted by version in `_drain_stale_wave_versions`).
+        We keep the earliest games per version in that order, so the kept tile is
+        a deterministic prefix.
+        """
+        if cap <= 0:
+            return records, record_groups, {}
+        kept_per_version: dict[int, int] = {}
+        new_groups: list[tuple[int, list]] = []
+        new_records: list = []
+        dropped_games = 0
+        dropped_positions = 0
+        for version, recs in record_groups:
+            already = kept_per_version.get(version, 0)
+            room = max(0, cap - already)
+            if room >= len(recs):
+                keep = recs
+            else:
+                keep = recs[:room]
+            drop = recs[len(keep):]
+            if keep:
+                new_groups.append((version, keep))
+                new_records.extend(keep)
+            kept_per_version[version] = already + len(keep)
+            if drop:
+                dropped_games += len(drop)
+                dropped_positions += sum(len(r.examples) for r in drop)
+        metrics = {
+            "wave/tile_cap_dropped_games": dropped_games,
+            "wave/tile_cap_dropped_positions": dropped_positions,
+            "wave/tile_cap_active": 1 if dropped_games > 0 else 0,
+        }
+        return new_records, new_groups, metrics
+
     def _ingest_worker_wave(version: int) -> tuple[list, list[tuple[int, list]], dict]:
         """Block until the current version has enough games from every worker."""
         if args.wave_workers <= 0 or args.wave_games_per_worker <= 0:
@@ -903,6 +999,51 @@ def main() -> None:
     _publish_worker_weights(epoch=start_epoch)
     _sweep_orphans()
 
+    # --- clean-shutdown support (time-capped research slices) ---
+    # A SIGTERM/SIGINT, or crossing --max-wall-secs, sets the stop flag. We
+    # finish the current epoch, then force a fully-resumable save and exit 0 so
+    # `--resume latest.pt` continues without a cold buffer refill (the LF1 trap).
+    # The signal handler only flips a flag — no I/O in the async context.
+    _stop = {"requested": False, "reason": ""}
+
+    def _request_stop(signum, _frame):
+        _stop["requested"] = True
+        _stop["reason"] = f"signal {signal.Signals(signum).name}"
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    signal.signal(signal.SIGINT, _request_stop)
+    _wall_start = time.monotonic()
+
+    def _save_resumable(epoch_num: int) -> None:
+        """Force-write a fully-resumable latest.pt RIGHT NOW (ignores
+        --save-buffer-every) plus a labeled snapshot, and republish worker
+        weights. Called at clean shutdown so a capped slice always leaves a
+        latest.pt that embeds the replay buffer."""
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        ckpt_extra: dict = {"replay_buffer": buffer.state_dict()}
+        if ema_model is not None:
+            ckpt_extra["ema_model_state_dict"] = ema_model.state_dict()
+        # Labeled snapshot (weights+optimizer; small) for lineage.
+        snap = os.path.join(args.checkpoint_dir, f"epoch{epoch_num:04d}.pt")
+        snap_extra = ({"ema_model_state_dict": ema_model.state_dict()}
+                      if ema_model is not None else None)
+        save_checkpoint(snap, model, optimizer, epoch=epoch_num,
+                        total_games=total_games, wandb_run_id=wandb_run_id,
+                        extra=snap_extra)
+        # Resumable latest.pt with the buffer embedded.
+        latest = os.path.join(args.checkpoint_dir, "latest.pt")
+        latest_tmp = latest + ".tmp"
+        save_checkpoint(latest_tmp, model, optimizer, epoch=epoch_num,
+                        total_games=total_games, wandb_run_id=wandb_run_id,
+                        extra=ckpt_extra)
+        try:
+            if os.path.islink(latest) or os.path.exists(latest):
+                os.remove(latest)
+            os.replace(latest_tmp, latest)
+        except OSError:
+            pass
+        _publish_worker_weights(epoch=epoch_num)
+
     for epoch in range(start_epoch, start_epoch + args.epochs):
         epoch_start = time.time()
 
@@ -917,6 +1058,14 @@ def main() -> None:
                 records = stale_records + wave_records
                 record_groups = stale_groups + wave_groups
                 wave_metrics = {**stale_metrics, **wave_metrics}
+                # LF1 per-version tile cap (opt-in; 0 = uncapped = today's path).
+                # Acts AFTER the barrier ingest and BEFORE buffer add / SGD
+                # schedule, so the capped tile flows consistently to both.
+                if args.max_tile_games > 0:
+                    records, record_groups, cap_metrics = _cap_tile_games(
+                        records, record_groups, args.max_tile_games
+                    )
+                    wave_metrics = {**wave_metrics, **cap_metrics}
             elif args.worker_min_positions > 0:
                 records = _ingest_worker_batches(target_positions=args.worker_min_positions)
             else:
@@ -1004,6 +1153,19 @@ def main() -> None:
         else:
             steps_this_cycle = args.training_steps
 
+        # LF1 hard per-epoch SGD step cap (opt-in; 0 = no cap = today's path).
+        # Decouples SGD work from inflow entirely: clamps the computed step count
+        # from ANY schedule above, so the train phase cannot run away even if the
+        # tile grows. Note this clamps ABOVE the --min-training-steps floor; if a
+        # cap below min_training_steps were ever set, the cap wins (it is the
+        # explicit upper bound the operator asked for).
+        steps_before_cap = steps_this_cycle
+        if args.max_sgd_steps_per_epoch > 0:
+            steps_this_cycle = min(steps_this_cycle, args.max_sgd_steps_per_epoch)
+        sgd_step_cap_active = (
+            args.max_sgd_steps_per_epoch > 0 and steps_before_cap > steps_this_cycle
+        )
+
         train_metrics_acc: dict[str, list[float]] = {}
         train_start = time.time()
         # WL2 lever #4: grad accumulation. steps_this_cycle is the number of
@@ -1068,6 +1230,8 @@ def main() -> None:
             "time/gen_s": gen_time,
             "time/train_s": train_time,
             "train/steps_this_cycle": steps_this_cycle,
+            "train/steps_before_cap": steps_before_cap,
+            "train/sgd_step_cap_active": 1 if sgd_step_cap_active else 0,
             "train/optimizer_steps_this_cycle": optimizer_steps_this_cycle,
             "train/actual_sgd_per_game": (
                 steps_this_cycle / n_games_this_cycle if n_games_this_cycle else 0.0
@@ -1232,6 +1396,22 @@ def main() -> None:
                         pass
             # Sweep .tmp leftovers and unknown files past the age threshold.
             _sweep_orphans()
+
+        # --- clean stop: SIGTERM/SIGINT received, or wall-time cap reached ---
+        # Checked at the epoch boundary so a partial epoch is never interrupted.
+        # Either path force-saves a resumable latest.pt (buffer embedded) so the
+        # next slice resumes without a cold refill, then exits 0 (wandb flushes
+        # on normal exit).
+        if not _stop["requested"] and args.max_wall_secs > 0:
+            if (time.monotonic() - _wall_start) >= args.max_wall_secs:
+                _stop["requested"] = True
+                _stop["reason"] = f"--max-wall-secs {args.max_wall_secs:g}"
+        if _stop["requested"]:
+            print(f"[stop] {_stop['reason']} after epoch {epoch + 1}; "
+                  f"saving resumable checkpoint (buffer embedded), exiting",
+                  flush=True)
+            _save_resumable(epoch + 1)
+            break
 
 
 if __name__ == "__main__":
