@@ -127,7 +127,12 @@ def main() -> None:
         model, payload = load_checkpoint(args.resume, device=device)
         start_epoch = int(payload.get("epoch", 0))
         total_games = int(payload.get("total_games", 0))
-        wandb_run_id = payload.get("wandb_run_id")
+        # A replay fork given an explicit --run-name is a NEW experiment off C,
+        # not a continuation of C's training run. Do NOT inherit the checkpoint's
+        # wandb_run_id in that case — otherwise wandb resumes (and pollutes) the
+        # parent's run (e.g. forking WL5 e10200 was appending to WL5's run o6cbjfnr).
+        # Only inherit when no run-name is given (a genuine same-run continuation).
+        wandb_run_id = None if args.run_name else payload.get("wandb_run_id")
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         if "optimizer_state_dict" in payload:
             optimizer.load_state_dict(payload["optimizer_state_dict"])
