@@ -89,6 +89,15 @@ def parse_args() -> argparse.Namespace:
                         "training target a real soft distribution.")
     p.add_argument("--dirichlet-alpha", type=float, default=0.13)
     p.add_argument("--dirichlet-eps", type=float, default=0.25)
+    p.add_argument("--forced-playout-k", type=float, default=0.0,
+                   help="KataGo forced-playouts + policy-target-pruning constant k "
+                        "(Wu 2019). 0.0 (default) = OFF = byte-identical legacy "
+                        "behavior. When >0, root self-play search forces each "
+                        "already-visited root child up to "
+                        "n_forced(a)=ceil(sqrt(k*P(a)*N_root)) visits, and the "
+                        "policy training target subtracts those forced visits back "
+                        "out (down to where the child's PUCT value would equal the "
+                        "best child's) before renormalizing. Recommended 2.0.")
     p.add_argument("--random-opening-moves", type=int, default=0)
 
     # Playout-Cap Randomization (KataGo, Wu 2019). Opt-in; defaults are inert and
@@ -572,6 +581,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             archive_start_frac=args.archive_start_frac,
             playout_cap_frac=args.playout_cap_frac,
             playout_cap_fast_sims=args.playout_cap_fast_sims,
+            forced_playout_k=args.forced_playout_k,
             profile=profile,
             gumbel_root=args.gumbel_root,
             gumbel_m=args.gumbel_m,
@@ -592,6 +602,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
         wave_size=args.wave_size,
         model_first_frac=args.model_first_frac,
         random_opening_moves=args.random_opening_moves,
+        forced_playout_k=args.forced_playout_k,
     )
 
 

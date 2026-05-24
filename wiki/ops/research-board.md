@@ -75,25 +75,29 @@ Re-run the **top 3** (`open-div4`, `temp-16`, `sgd-800`) **HEAD-TO-HEAD**, using
 
 ---
 
-## v3 — prior-art levers (queued, code building 2026-05-24)
+## v3 — UNIFIED prior-art race (LAUNCHED 2026-05-24, `scripts/derby_v3_board.json`)
 
-A **third board**: race training levers imported from the engines/papers that came
-before us, each picked to attack a **specific v1 finding**. v1 told us we are
-**generation-bound** (train ~10.5s/epoch floor; MCTS gen 2–5×) and that
-**exploration/diversity beats raw compute for the ceiling** — so the v3 roster is
-biased toward levers that get *better targets per unit of generation* rather than
-just spending more compute. Same rules as v1/v2: fresh `--size small --seed 0`,
-**one lever vs C0-baseline**, scored by anchored elo (then head-to-head once the
-ladder saturates). Code lands as opt-in flags (production byte-identical when
-unset) before any cell runs; the board json + run_sweep cells get wired once each
-lever's branch is merged. Source provenance for each card below.
+A **unified board**: Jason called it — rather than run v2 (the top-3 head-to-head) to
+cap and *then* a separate v3, we **ported the v2 carryover recipes into v3** and race
+everything at once. v2 was stopped at round-0 (all at the 389 floor → zero data lost),
+which freed the box for the native `.so` rebuild. The roster (9 ideas, one lever each
+vs the `c0` control, fresh `--size small --seed 0`, scored by anchored elo then
+head-to-head at the top): the **v1/v2 carryovers** (open-div4, temp-16, sgd-800) +
+the **4 prior-art levers** (playoutcap, forced, swa, gumbel) + a **sims100 control**
+for gumbel. Each picked to attack a **specific v1 finding** — v1 told us we're
+**generation-bound** and **exploration/diversity beats raw compute for the ceiling**,
+so the new levers are biased toward *better targets per unit of generation*. All ran
+through the lab's two-queue fan-out (5 worktree code lanes, opt-in flags, production
+byte-identical when off, merged `--no-ff` serially with one native rebuild).
 
-> Implementation note: **Gumbel** and **forced-playouts** modify root selection in
-> the native C MCTS (`_mcts_native.c`) — they're only fair wall-clock derby levers
-> if they run in that fast path. If a lane comes back python-`mcts.py`-only, it's
-> still a valid *target-quality* experiment but its wall-clock isn't comparable;
-> such a lever moves to a sims-matched (not wall-matched) sub-race until the C port
-> lands.
+> Wall-fairness resolved: **gumbel + forced-playouts both run in the native C engine**
+> (`_mcts_native.c`, rebuilt). Gumbel's first cut came back python-only (~5× slow =
+> DOA per Jason); the **native C port** (per-game Sequential Halving inside the wave)
+> made it **0.86–1.26× native PUCT** — wall-fair, raced wall-matched like the rest.
+> (Gumbel + sims100 run at sims=100: gumbel's value-prop is good targets at *cheap*
+> sims; sims100 is the plain-MCTS control that isolates whether gumbel rescues them.)
+> **aux-head** (opponent-reply, Class-C model-arch) is built + verified but parked on
+> its **own axis/board** — not in this search/recipe race.
 
 ### v3-gumbel  (HIGHEST leverage)
 **Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
