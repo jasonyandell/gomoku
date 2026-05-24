@@ -90,6 +90,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dirichlet-alpha", type=float, default=0.13)
     p.add_argument("--dirichlet-eps", type=float, default=0.25)
     p.add_argument("--random-opening-moves", type=int, default=0)
+
+    # Playout-Cap Randomization (KataGo, Wu 2019). Opt-in; defaults are inert and
+    # preserve the byte-identical production self-play path. When frac < 1.0,
+    # each move is full-search+recorded with probability `frac`, else fast (at
+    # `--playout-cap-fast-sims`) and NOT recorded as a training target.
+    p.add_argument("--playout-cap-frac", type=float, default=1.0,
+                   help="Playout-Cap Randomization full-search fraction. 1.0 "
+                        "(default) = every move is full-search and recorded "
+                        "(current behavior). When <1.0, the probability a given "
+                        "move runs the full --n-simulations budget AND is "
+                        "recorded as a training target; the rest run "
+                        "--playout-cap-fast-sims and are not recorded.")
+    p.add_argument("--playout-cap-fast-sims", type=int, default=0,
+                   help="Reduced sim budget for non-recorded (fast) PCR moves. "
+                        "0 (default) = same as --n-simulations, which makes the "
+                        "lever inert. Only used when --playout-cap-frac < 1.0.")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -538,6 +554,8 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             random_opening_moves=args.random_opening_moves,
             archive=archive,
             archive_start_frac=args.archive_start_frac,
+            playout_cap_frac=args.playout_cap_frac,
+            playout_cap_fast_sims=args.playout_cap_fast_sims,
             profile=profile,
         )
     return generate_games_vs_baseline(
