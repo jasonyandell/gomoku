@@ -1028,8 +1028,11 @@ def pick_priority(board: dict, state: dict, candidates: list[str]) -> str:
             # Fewest elo points first → never-run (0) before measured-once (1);
             # then fewest chunks, then name. This drains round-0 then round-1.
             return (0, npts, chunks, name)
-        # HILL-CLIMB group: steepest recent Δelo/hr first, then higher current elo.
-        return (1, -rate, -hist[-1][1], chunks, name)
+        # HILL-CLIMB group: steepest recent Δelo/hr first; TIES broken by PEAK elo
+        # (demonstrated potential — Jason 2026-05-24: two equal Δelo/hr → the one
+        # that reached higher wins), then current elo, fewer chunks, name.
+        peak = max((h[1] for h in hist), default=float("-inf"))
+        return (1, -rate, -peak, -hist[-1][1], chunks, name)
     return sorted(candidates, key=key)[0]
 
 
