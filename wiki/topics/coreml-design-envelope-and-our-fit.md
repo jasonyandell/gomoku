@@ -173,7 +173,7 @@ The third-from-top row (weight lifecycle) is also relevant: every time the train
 
 ## Where the chip breaks — and where ANE could still pay
 
-Per Jason 2026-05-23: "part of M5 as mainframe is learning just where it breaks. even if we dont directly leverage it in the end, we'll know." This page is the framing; the perf-queue lanes below are the measurement.
+Per Jason 2026-05-23: "part of M5 as mainframe is learning just where it breaks. even if we dont directly leverage it in the end, we'll know." This page is the framing; the gpu-queue lanes below are the measurement.
 
 ### Where ANE might cross into "pays off" territory
 
@@ -362,7 +362,7 @@ When this becomes load-bearing: when the project's primary training shape moves 
 Jason flagged inbound ANE research on 2026-05-23 (origin TBD when it lands — Apple WWDC, internal scout, external paper, etc.). When it drops:
 
 1. **Drop new findings into a new dated subsection of "Current state"** above (e.g., `### After [inbound research] (YYYY-MM-DD)`). Preserve the prior-state subsections as historical.
-2. **For any L09* lane the new research suggests reactivating**, move its "Research lanes" status from `REACTIVATABLE` or `QUEUED` to a new dispatch-queue entry in [perf-queue.md](../ops/perf-queue.md) with priority updated per the new prior.
+2. **For any L09* lane the new research suggests reactivating**, move its "Research lanes" status from `REACTIVATABLE` or `QUEUED` to a new dispatch-queue entry in [gpu-queue.md](../ops/gpu-queue.md) with priority updated per the new prior.
 3. **For new lane ideas** (e.g., a new compute-units mode, a new ANE feature), open a new `L09[i,j,k...]` card. Use the existing L09a/L09b/L09c naming convention.
 4. **Update the cap-status table** in Current state with any newly-elevated receipts (e.g., if the new research provides `powermetrics ane_power` for an L09* cell, elevate it from `coreml-isolated` to `ane-metered`).
 
@@ -382,7 +382,7 @@ The framework is set up to absorb new findings without requiring a structural ov
 - [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) — the chip-level findings page (fp16 reversal, bandwidth/dispatch regimes, multiplicative composition). Finding 2 is the analog of L09g for the torch/MPS path.
 - [ane-int8-inference.md](ane-int8-inference.md) — earlier lane-of-thought on ANE with int8 quantization (different precision path, may interact with the design-envelope analysis here).
 - [activity-monitor-perf-runbook.md](activity-monitor-perf-runbook.md) — practical guide to interpreting MPS / ANE / GPU residency from Activity Monitor and `powermetrics`.
-- [perf-lab-charter.md](perf-lab-charter.md) — autonomous-lab operating rules; the L09[c-h] lanes above will be dispatched per the standard receipt-and-Reviewer protocol.
+- [research-lab-charter.md](research-lab-charter.md) — autonomous-lab operating rules; the L09[c-h] lanes above will be dispatched per the standard receipt-and-Reviewer protocol.
 - Memory: [[project-coreml-reality]] — the personalized index pointer for this page.
 - Memory: [[feedback-know-the-machine]] — why mapping the envelope matters even when we won't directly leverage the lever.
 - External: [Apple Core ML developer documentation](https://developer.apple.com/documentation/coreml), [coremltools on PyPI](https://pypi.org/project/coremltools/), [MLX framework (Apple's open-source research framework)](https://github.com/ml-explore/mlx).

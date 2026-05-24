@@ -1,7 +1,7 @@
-# Perf Lab Session Runbook
+# Research Lab Session Runbook
 
-How to run a perf cell or sweep end-to-end without rediscovering the
-convention. Sister page to
+How to run a GPU-required lab item (perf cell, training slice, or sweep)
+end-to-end without rediscovering the convention. Sister page to
 [launch-sequence-runbook.md](launch-sequence-runbook.md) (for training
 runs). Aligned with
 [m5-max-as-mainframe.md](m5-max-as-mainframe.md) (the philosophy).
@@ -11,8 +11,10 @@ runs). Aligned with
 A "perf cell" is one paired measurement at a fixed code commit on the
 M5 Max: a single parameter combination, run long enough to be stable,
 captured as a receipt. A "sweep" is N cells run together to map a
-contour. Use this page when you intend to file evidence — not for
-ad-hoc tinkering.
+contour. A "training slice" is a time-capped, resumable training run
+dispatched via `run_sweep --max-wall-secs --final-eval`. All three are
+GPU-required lab items and use this procedure. Use this page when you
+intend to file evidence — not for ad-hoc tinkering.
 
 ## Pre-flight
 
@@ -183,13 +185,14 @@ python scripts/canonical_sweep.py \
 If a cell's delta vs the reference is clear (>5% in either direction),
 that's the answer. File the receipt.
 
-## Fan-out pattern (CPU queue)
+## Fan-out pattern (everything-else queue)
 
 When a lane is **code-only** (Class A under
 [conventions.md](conventions.md)) — new script, evaluator backend,
-driver, wiki edit, plot generation — it goes on the CPU queue, not the
-GPU queue. The orchestrator spawns an Agent in a worktree to do the
-code work in parallel with whatever GPU cell is currently running.
+driver, wiki edit, plot generation — it goes on the everything-else
+queue, not the GPU-required queue. The orchestrator spawns an Agent
+in a worktree to do the code work in parallel with whatever GPU item
+is currently running.
 
 Pattern for the orchestrator (live session):
 
@@ -315,5 +318,7 @@ sure nothing is actually running.
   been optimized; don't re-port these.
 - [launch-sequence-runbook.md](launch-sequence-runbook.md) — sister
   runbook for training runs.
+- [research-lab-charter.md](research-lab-charter.md) — the charter
+  that governs the research lab operating loop.
 - Memory: [[feedback-know-the-machine]], [[project-perf-bench-lesson]],
   [[user-hardware]].

@@ -62,7 +62,7 @@ python scripts/canonical_sweep.py --out-dir sweep_logs/canonical-sweep-$(date -u
 python scripts/plot_canonical_sweep.py --sweep-dir sweep_logs/canonical-sweep-latest
 ```
 
-Purpose: produce a per-cell aug-positions/sec contour over workers × games-per-worker × n-simulations × wave-size × model-size, with each cell measured as a bounded multi-worker production-shape self-play batch. The canonical sweep replaces single-process intuition with a calibrated map for the specific M5 Max SKU. See [perf-lab-session-runbook](../topics/perf-lab-session-runbook.md) for the contract; [m5-max-as-mainframe](../topics/m5-max-as-mainframe.md) for the philosophy.
+Purpose: produce a per-cell aug-positions/sec contour over workers × games-per-worker × n-simulations × wave-size × model-size, with each cell measured as a bounded multi-worker production-shape self-play batch. The canonical sweep replaces single-process intuition with a calibrated map for the specific M5 Max SKU. See [research-lab-session-runbook](../topics/research-lab-session-runbook.md) for the contract; [m5-max-as-mainframe](../topics/m5-max-as-mainframe.md) for the philosophy.
 
 ### Outer-loop worker profile
 

@@ -1,10 +1,18 @@
-# Perf Lab Queue
+# GPU-required queue — the serial lane for anything needing MPS
 
 Two-queue scheduler per
-[perf-lab-charter](../topics/perf-lab-charter.md#two-queue-scheduler):
-**GPU queue** runs serial cells; **CPU queue** runs code/wiki/scaffold
-work in parallel via Agent fan-out. Reviewer gates every promote
-([perf-lab-reviewer-role](../topics/perf-lab-reviewer-role.md)).
+[research-lab-charter](../topics/research-lab-charter.md#two-queue-scheduler):
+**GPU-required queue** runs one item at a time on MPS — perf cells,
+training slices, eval probes, gen sweeps; **everything-else queue**
+runs code/wiki/scaffold work in parallel via Agent fan-out. Reviewer
+gates every promote
+([research-lab-reviewer-role](../topics/research-lab-reviewer-role.md)).
+
+This queue now holds **training slices** alongside perf cells. A
+training slice is a time-capped resumable run via
+`run_sweep --max-wall-secs --final-eval`; the lab reads
+`eval/model_elo` from `<cell>/checkpoints/eval_results.jsonl` and
+receipts the slice like any perf cell. Eval stays inside the bundle.
 
 Within each queue, sort by **tier** (1 architectural > 2 compound > 3
 speculative > bg calibration), then by priority within tier:
@@ -28,7 +36,7 @@ Reference points (current bests):
 | ~~R-TRAIN-ANE~~ | WL5 with workers on Core ML | **1,930.3 aug/s** / 0.0583 ep/s / 8.00 g/s (L09, REJECT holistic at SMALL; the same engine wins at TINY — see R-TRAIN-TINY-ANE) | — |
 | ~~R-TRAIN-MEDIUM-ANE~~ | medium V=512 with workers on Core ML | **591.7 aug/s** / 0.0208 ep/s / 2.33 g/s (L09d, REJECT — trainer side -81% trainer_step_s_p50, but worker gen 6× slower on ANE at medium V=512 = holistic -59.6%; envelope sharply mapped: ANE pays at TINY only) | — |
 
-## CPU queue (parallel — Agent fan-out, no GPU contention)
+## Everything-else queue (parallel — Agent fan-out, no GPU contention)
 
 These run as Agent subagents in worktrees; integrate as merge commits.
 Multiple can be in flight at once. Listed top-down by priority.
@@ -55,7 +63,7 @@ L08-driver) landed 2026-05-23; the L09i-fix coreml capability +
 canonical_sweep coreml + --coreml-static-batch + fp16-hog + Ltrain-amp bf16
 all landed this session on their worktrees — see Completed table.)*
 
-## GPU queue (serial — one cell at a time on MPS)
+## GPU-required queue (serial — one item at a time on MPS)
 
 Lanes listed top-down by **tier**, then by priority within tier.
 

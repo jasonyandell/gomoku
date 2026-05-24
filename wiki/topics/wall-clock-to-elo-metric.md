@@ -128,7 +128,7 @@ multiple checkpoints** so a *crossing time* (MTTE) and a *true wall-clock slope*
 
 ### This BREAKS the smoke-first 60–90 s doctrine — by design
 
-The charter's [smoke-first doctrine](perf-lab-charter.md#smoke-first-doctrine)
+The charter's [smoke-first doctrine](research-lab-charter.md#smoke-first-doctrine)
 (60–90 s default cell, 5 min hard cap) is **explicitly inapplicable to this
 metric family**, and the source writeup says so directly: *"even though it
 forces cells to run much longer than the current smoke-first 60–90 s doctrine.
@@ -280,7 +280,7 @@ boundaries"). It is **the user's call.** Presented as a proposed diff for the
 next charter pass, NOT applied in this worktree.
 
 The edit adds a third metric family to
-[perf-lab-charter.md § Success metric](perf-lab-charter.md#success-metric),
+[research-lab-charter.md § Success metric](research-lab-charter.md#success-metric),
 after the R-TRAIN-\* subsection, and updates the existing metric-validity flag
 to point at its supersession.
 
@@ -420,7 +420,7 @@ regressing val/policy_ce.**
   the LF1 finding this lane closes (Research lanes, item 4). The "subtlety that
   keeps the verdict honest" paragraph is the direct motivation for MTTE over a
   naive epoch count.
-- [perf-lab-charter.md § Success metric](perf-lab-charter.md#success-metric) —
+- [research-lab-charter.md § Success metric](research-lab-charter.md#success-metric) —
   the R-S\*/R-TRAIN-\* families and the existing metric-validity flag the §5
   diff edits.
 - [`scripts/delta_e_harness.py`](../../scripts/delta_e_harness.py) — the

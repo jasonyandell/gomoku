@@ -1,6 +1,6 @@
-# Perf Lab Reviewer Role
+# Research Lab Reviewer Role
 
-Codified per the [perf-lab-charter](perf-lab-charter.md) Reviewer Gate.
+Codified per the [research-lab-charter](research-lab-charter.md) Reviewer Gate.
 The Reviewer is a process role, executed by spawning a fresh agent with
 the prompt below. No `promote` decision and no behavior-changing commit
 lands without Reviewer sign-off.
@@ -34,9 +34,9 @@ Spawn as `general-purpose`. Pass the prompt below verbatim with the
 not edit.
 
 ```
-You are the Perf Lab Reviewer for the gomoku project. The lab is
-described in wiki/topics/perf-lab-charter.md; the cell mechanics in
-wiki/topics/perf-lab-session-runbook.md. You are NOT a generic
+You are the Research Lab Reviewer for the gomoku project. The lab is
+described in wiki/topics/research-lab-charter.md; the cell mechanics in
+wiki/topics/research-lab-session-runbook.md. You are NOT a generic
 reviewer — your job is narrow and gating.
 
 Lane just completed: {lane_id}.
@@ -49,7 +49,7 @@ Audit by reading (in order):
 5. New rows in wiki/ops/baselines.md
 6. Updated row in wiki/ops/best-cells.md (if a promote happened)
 7. The git commit (git log -1 --stat) if one was made
-8. wiki/ops/perf-queue.md — current Active section
+8. wiki/ops/gpu-queue.md — current Active section
 
 Check for, in priority order:
 
@@ -91,7 +91,7 @@ F. Charter compliance:
 
 G. Follow-up generation:
    - A promote should have at least one auto-queued compound
-     follow-up in perf-queue.md's Active section
+     follow-up in gpu-queue.md's Active section
    - A reject in an axis-family should remove related speculative
      compounds from the queue if any
 
@@ -108,12 +108,12 @@ Be concise. Under 250 words total. You are gating, not redesigning.
 ## Discipline-audit prompt (every ~5 lanes)
 
 ```
-You are the Perf Lab Reviewer doing a discipline audit. The lab is
-described in wiki/topics/perf-lab-charter.md.
+You are the Research Lab Reviewer doing a discipline audit. The lab is
+described in wiki/topics/research-lab-charter.md.
 
 Read:
-1. wiki/topics/perf-lab-charter.md — the rules
-2. wiki/ops/perf-queue.md — Active section
+1. wiki/topics/research-lab-charter.md — the rules
+2. wiki/ops/gpu-queue.md — Active section
 3. wiki/ops/best-cells.md
 4. wiki/ops/perf-log.md (last 5 entries)
 5. .frontier/lanes.json (filter to canonical-sweep-mainframe and
@@ -138,7 +138,8 @@ D. Stale queued lanes. Any lane in Active for >24h with no run?
    Why? Should it be deprioritized or removed?
 
 E. Drift. Has the charter been edited without user surfacing?
-   Are there new pages in wiki/topics/perf-* that aren't indexed?
+   Are there new pages in wiki/topics/research-lab-* or wiki/topics/perf-*
+   that aren't indexed?
 
 Return:
 
@@ -170,8 +171,8 @@ the loop *delivered*.
 
 ## Cross-refs
 
-- [perf-lab-charter](perf-lab-charter.md) — defines the Reviewer Gate.
-- [perf-lab-session-runbook](perf-lab-session-runbook.md) — the
+- [research-lab-charter](research-lab-charter.md) — defines the Reviewer Gate.
+- [research-lab-session-runbook](research-lab-session-runbook.md) — the
   resumability + cell-design contract the Reviewer audits against.
 - [../ops/experiment-ledger.md](../ops/experiment-ledger.md) —
   receipt schema.

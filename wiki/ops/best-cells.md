@@ -2,7 +2,7 @@
 
 Single source of truth for the current best cell at each quality
 reference point. Updated on every Reviewer-approved promote per the
-[perf-lab-charter](../topics/perf-lab-charter.md). Promotion requires
+[research-lab-charter](../topics/research-lab-charter.md). Promotion requires
 a no-behavior-change knob movement (sims and model size pin the
 quality point).
 

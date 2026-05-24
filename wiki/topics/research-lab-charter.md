@@ -1,22 +1,33 @@
-# Perf Lab Charter — "Fastest Generator in the West"
+# Research Lab Charter — "Make the Mac Sing"
 
-Captured 2026-05-23 at the launch of the autonomous perf era. Sets the
-goal, the success metric, the operating loop, and the autonomy
-boundaries for the post-canonical-sweep work. Any future session
-operating the lab should read this page first.
+Captured 2026-05-23 at the launch of the autonomous research era and
+updated 2026-05-24 to reflect the lab's expanded scope. Sets the goal,
+the success metric, the operating loop, and the autonomy boundaries for
+post-canonical-sweep work. Any future session operating the lab should
+read this page first.
 
 ## Mission
 
-Push **measured aug-positions-per-second at fixed quality** as high as
-the M5 Max will allow under realistic gomoku self-play conditions.
-Treat the chip as the [[feedback-know-the-machine]] mainframe it is:
-sweep it, calibrate it, find its corners, write the receipts. Stop
-when the ceiling is structural (not when the loop is bored).
+Advance **measured understanding of the M5 Max as a training platform**
+for gomoku AlphaZero — pushing Δelo-per-wall-hour as high as the chip
+will allow. Treat the chip as the [[feedback-know-the-machine]]
+mainframe it is: sweep it, calibrate it, find its corners, write the
+receipts. Stop when the ceiling is structural (not when the loop is
+bored).
 
-This is **perf work, not training work**. The lab does not run epochs;
-it runs ≤ 5-minute production-shape self-play cells against
-fresh-random fused checkpoints, measures throughput, and chains
-follow-ups from the results.
+The lab does **research**, not production operations. It has two
+active research areas:
+
+1. **Perf research** (the original scope): push self-play generation
+   throughput (aug/s) and holistic trainer+generator throughput
+   (aug/s R-TRAIN-*) against the current production recipe. Perf cells
+   run ≤ 5-minute production-shape self-play sweeps against fresh-random
+   fused checkpoints and chain follow-ups from results.
+
+2. **Training-recipe research** (new): run time-capped, resumable
+   training slices to compare recipe variants by Δelo-per-wall-hour.
+   A training run is a first-class GPU-required item in the lab
+   (see [Training runs as GPU-required items](#training-runs-as-gpu-required-items)).
 
 ## Vocabulary
 
@@ -140,23 +151,50 @@ aggregates.
 ## Two-queue scheduler
 
 The lab is **not** a single-queue "dispatch one cell, wait, dispatch
-next" loop. It's a two-queue scheduler:
+next" loop. It's a two-queue scheduler. The split is by **hardware
+requirement**, not by work type:
 
 | Queue | Concurrency | What goes here | Default cell wall |
 |---|---|---|---|
-| **GPU queue (serial)** | one at a time on MPS | live cells: self-play sweeps, R-TRAIN-* training cells, eval probes | 60-90s (smoke-first; see below) |
-| **CPU queue (parallel)** | many at once via Agent fan-out | code (new scripts, evaluator backends, drivers); wiki edits; charter updates; plot generation; reviewer audits; worktree code work | n/a (subagent time) |
+| **GPU-required (serial)** | one at a time on MPS | anything needing the MPS device: self-play sweeps, training slices, eval probes, gen cells | 60-90s for perf cells; up to `--max-wall-secs` for training slices |
+| **Everything-else (parallel)** | many at once via Agent fan-out | coding (new scripts, evaluator backends, drivers); wiki edits; charter updates; plot generation; reviewer audits; worktree code work; analysis | n/a (subagent time) |
 
-**Orchestrator's job**: keep both queues turning. Block only on GPU;
-never block on code. When a code task surfaces, spawn an Agent in a
-worktree (CPU queue) rather than serializing behind the next GPU cell.
-When the GPU is busy with cell N, the orchestrator is using that wall
-time to fan out code/wiki/review work in parallel.
+**Orchestrator's job**: keep both queues turning. Block only on
+GPU-required work; never block on code or wiki. When a code task
+surfaces, spawn an Agent in a worktree (everything-else queue) rather
+than serializing behind the next GPU item. When the GPU is busy, the
+orchestrator uses that wall time to fan out code/wiki/review work in
+parallel.
 
 Mid-conversation, the orchestrator is the live session (multiple `Agent`
 calls in one message). For unattended drift, a cron tick is the MVP —
 but it's a degenerate scheduler that only advances the GPU queue. Prefer
 live-session orchestration when possible.
+
+### Training runs as GPU-required items
+
+A **training slice** is a time-capped, resumable training run. It is
+a first-class GPU-required lab item — scheduled and receipted exactly
+like a perf cell:
+
+```bash
+python scripts/run_sweep.py \
+  --cell <cell-name> \
+  --resume <dir>/latest.pt \
+  --max-wall-secs <secs> \
+  --final-eval
+```
+
+The `--final-eval` flag causes the trainer to write a fresh eval result
+to `<cell>/checkpoints/eval_results.jsonl` before exiting. The lab reads
+`eval/model_elo` from that file to measure Δelo for the slice. **The lab
+never runs eval itself** — eval lives inside the training bundle and is
+triggered by `--final-eval`.
+
+Receipt a training slice like any perf cell: file an experiment-ledger
+yaml with `eval/model_elo` as the primary metric, Δelo-per-wall-hour as
+the derived north-star, and a link to the wandb run for the epoch trace.
+Promotion rules and the Reviewer gate apply normally.
 
 ## Smoke-first doctrine
 
@@ -266,27 +304,30 @@ to do the code in parallel.
 
 **No promote without Reviewer sign-off.** After every lane (and on a
 periodic discipline check), spawn a Reviewer per
-[perf-lab-reviewer-role](perf-lab-reviewer-role.md). Verdict APPROVE /
+[research-lab-reviewer-role](research-lab-reviewer-role.md). Verdict APPROVE /
 REVISE / BLOCK; BLOCK surfaces to the user. The loop does not commit a
 `promote` decision until the Reviewer approves. Reviewer audits a
 *reject* receipt too (catches confounded knobs, missed surfaces).
 
 ## File and directory contract
 
-- `wiki/topics/perf-lab-charter.md` — this page (the why).
-- `wiki/topics/perf-lab-session-runbook.md` — the per-session procedure
-  (the how).
-- `wiki/ops/perf-queue.md` — the live queue. Source of truth for what
-  to run next.
+- `wiki/topics/research-lab-charter.md` — this page (the why).
+- `wiki/topics/research-lab-session-runbook.md` — the per-session
+  procedure (the how).
+- `wiki/ops/gpu-queue.md` — the live GPU-required queue. Source of
+  truth for what to run next.
 - `wiki/ops/best-cells.md` — current best cell at each reference
   point; updated on promotion.
-- `wiki/ops/perf-log.md` — narrative timeline of what we tried.
+- `wiki/ops/perf-log.md` — narrative timeline of what we tried (perf
+  research area).
 - `wiki/ops/experiment-ledger.md` — formal receipts.
 - `wiki/ops/baselines.md` — citeable baseline rows.
 - `.frontier/lanes.json` — coarse lane registry for board projection.
 - `scripts/canonical_sweep.py` — workhorse driver, takes `--cells-from
   <csv> --lane <label>` for ad-hoc cell lists; resumable per
-  [perf-lab-session-runbook](perf-lab-session-runbook.md).
+  [research-lab-session-runbook](research-lab-session-runbook.md).
+- `scripts/run_sweep.py` — full trainer + workers + eval. Use for
+  training-slice GPU-required items (`--max-wall-secs`, `--final-eval`).
 - `scripts/plot_canonical_sweep.py` — chart producer.
 - `sweep_logs/lab-<lane-id>-<TS>/` — per-lane artifact dir.
 - Worktrees: `~/code/gomoku-perf-<lane-id>/` on branch
@@ -388,13 +429,13 @@ the user's calendar) → ESCALATE.
 When ESCALATING, send a one-line PushNotification:
 
 ```
-gomoku perf lab: <one-line situation>. <one-line action requested>.
+gomoku research lab: <one-line situation>. <one-line action requested>.
 ```
 
 Examples:
-- `gomoku perf lab: box busy with gomoku.train PID 12345; pausing.`
-- `gomoku perf lab: Reviewer BLOCK on L99: <reason>. Awaiting your call.`
-- `gomoku perf lab: L20 found +50% perf at Class C model arch change; needs your design call before continuing.`
+- `gomoku research lab: box busy with gomoku.train PID 12345; pausing.`
+- `gomoku research lab: Reviewer BLOCK on L99: <reason>. Awaiting your call.`
+- `gomoku research lab: L20 found +50% perf at Class C model arch change; needs your design call before continuing.`
 
 Then **pause the loop** (no ScheduleWakeup). Resume on next user prompt.
 
@@ -478,7 +519,7 @@ commit-message texture.
   the 2026-05-23 cycle: fp16 reversal, bandwidth/dispatch regimes,
   multiplicative lever composition. Use as the "what did the lab find?"
   reference for external readers.
-- [perf-lab-session-runbook](perf-lab-session-runbook.md) — the
+- [research-lab-session-runbook](research-lab-session-runbook.md) — the
   per-session mechanics (lock, --status, --retry-failed, etc.).
 - [mcts-perf-ceiling](mcts-perf-ceiling.md) — what's already been
   optimized; don't re-port these from other codebases.
