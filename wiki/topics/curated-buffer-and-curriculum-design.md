@@ -1,10 +1,22 @@
 # Curated buffer + lazy generation + curriculum seeding — design
 
-*Captured 2026-05-24 from the post-LF1 conversation. The plan for the next
-training architecture. Status: DESIGN (not built). Companion to
+*Captured 2026-05-24 from the post-LF1 conversation. Companion to
 [[project-buffer-curation]] (the research framing) and
 [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md)
 (the runaway that motivates the decouple).*
+
+> **STATUS (2026-05-24): Layer 1 + the delta-e harness are BUILT and MERGED to
+> main (`6afd2fe`, Reviewer APPROVE — purely additive, existing training path
+> untouched).** Shipped: `gomoku/curated_buffer.py` (retain-all archive +
+> curated slice + lru/recency curators), `gomoku/train_replay.py` (fixed-SGD
+> replay, no runaway by construction, ~3s/fork in smoke), `scripts/build_archive.py`,
+> `scripts/delta_e_harness.py` (fork-off-C → anchored eval → rank by Δelo with
+> an INSIDE-NOISE verdict). End-to-end flywheel smoke green on a toy C.
+> **STILL PENDING:** (a) the first *meaningful* delta-e run — a strong common C
+> (e.g. WL5 elo-1738) + a real 1M archive + 100+ eval games + a stable anchor;
+> (b) Layer 2 external curricula (Gomocup parser etc.); (c) lazy/pull-based live
+> generation (only frozen-archive replay is built). The toy smoke proves the
+> machinery, NOT that curation improves elo/wall — that's (a).
 
 ## Why now — the thing it fixes
 

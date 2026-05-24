@@ -209,6 +209,7 @@ def main() -> None:
 
     accum_n = max(1, int(args.grad_accum_steps))
 
+    epoch = start_epoch - 1  # guard: with --epochs 0 the loop never binds `epoch`; the post-loop latest.pt write then saves the resumed model.
     for epoch in range(start_epoch, start_epoch + args.epochs):
         epoch_start = time.time()
 
