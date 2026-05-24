@@ -37,6 +37,29 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-23 — delta-e run-1 (first Δelo flywheel run) — harness validated end-to-end; ANCHOR-CEILING method-limit discovered
+
+```yaml
+lane: delta-e-run1 (first real run of scripts/delta_e_harness.py — the Δelo/Δt north-star scoring engine for the curated-buffer flywheel). 3 recipes forked off a common WL5 parent C, fixed 40-epoch window, anchored-eval each fork + C at 40 games/baseline.
+hypothesis: curator (lru vs recency_weighted) and sgd_steps_per_epoch (100 vs 300) produce measurable Δelo separation off a common parent, resolvable above the eval-noise floor.
+code_ref: scripts/delta_e_harness.py (anchored-eval mode) + gomoku/train_replay.py (replay-fork trainer) + gomoku/curated_buffer.py (curators). All on main.
+dataset_ref: parent C = sweep_runs/WL5-diagnostics-archive-start/checkpoints/epoch10200.pt; archive A = /tmp/wl5_replay_archive (WL5's 1.5M-position buffer, retain-all). validation = archives/wl5_validation_v1.pt.
+hardware: M5 Max, eval on cpu (6 workers), forks on mps. small. eval sims=100, c_puct=1.5, 40 games/baseline.
+seed: 0
+baseline_metric: parent C elo = +1536.7 [+1356.8, +1690.8] (±167.0, 40 games/baseline). C win-rates: heuristic=75%, lookahead:depth=2=89%, lookahead:depth=4=78%.
+candidate_metric: |
+  rank  recipe                       Δelo     ±CI    window  verdict        fork win-rates (h / d2 / d4)
+  1     lru,sgd=100                  -55.8    218.1   40 ep   INSIDE-NOISE   64% / 100% / 65%
+  2     recency_weighted,sgd=100    -127.4    228.3   40 ep   INSIDE-NOISE   75% /  85% / 51%
+  3     lru,sgd=300                 -195.0    233.2   40 ep   INSIDE-NOISE   74% /  66% / 54%
+delta: all 3 INSIDE-NOISE (|Δelo| <= CI half-width). No recipe distinguishable from C or from each other.
+confidence: HIGH on the NEGATIVE/method finding. Root cause is NOT that the recipes are equal — it is an ANCHOR-CEILING limit: the strongest anchor is lookahead:depth=4 @ 1500, and C already beats it (78%). Both C and every fork pin near the ~1700-elo ceiling; differencing two near-ceiling implied-elos buries the real difference under sampling noise (signal lives almost entirely in the d4 win-rate, the only non-saturated anchor, which has a huge CI at 40 games). keep-last-n=3 pruning destroyed all early/weak checkpoints, so no "headroom parent" exists among surviving checkpoints either (WL3.1 e1504 also sits at model_elo ~1465-1567). The faint trend (sub-noise, do NOT over-read): sgd=300 most negative → directionally consistent with over-grinding a tiny curated slice off a converged net.
+artifacts: /tmp/delo_run1/results.json, /tmp/delo_run1.log; wandb runs (fresh, NOT WL5's): delta-e-lru_sgd100=ms1pplps, recency_weighted_sgd100=91awvfib, lru_sgd300=jc228edo (project jasonyandell-forge42/gomoku).
+commands_run: python scripts/delta_e_harness.py --parent <C> --archive-path /tmp/wl5_replay_archive --window-epochs 40 --recipe 'lru:sgd_steps_per_epoch=100' --recipe 'recency_weighted:sgd_steps_per_epoch=100' --recipe 'lru:sgd_steps_per_epoch=300' --eval-games 40 --eval-sims 100 --wandb --out-dir /tmp/delo_run1
+decision: needs_repeat
+next_action: re-run head-to-head (fork-vs-C direct match) — the ceiling-free fix. Two similar-strength models score near 50% against each other (the max-sensitivity region of the logistic), so relative Δelo gets a tight CI with no anchor ceiling. Added --head-to-head to delta_e_harness.py this session (model-vs-model via play_match_pickers + mcts_picker; relative Δelo = 400*log10(p/(1-p)), Wilson CI mapped through the logistic). run-2 = same 3 recipes off the same WL5 C, head-to-head. Also: a true headroom parent would need re-generating an early-epoch checkpoint (none survived pruning) — head-to-head sidesteps that entirely.
+```
+
 ### 2026-05-23 — LF1-followups (fan-out, 5 sub-lanes) — runaway knee in (384,512]; tile-cap tames it; extra steps redundant; metric instrument fixed
 
 ```yaml

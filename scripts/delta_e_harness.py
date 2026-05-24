@@ -249,10 +249,109 @@ class DeltaEResult:
         return abs(self.delta_elo) <= self.delta_ci_half
 
 
+# ---------------------------------------------------------------------------
+# Head-to-head Δelo (the anchor-ceiling fix).
+#
+# When every checkpoint beats the top anchor, the anchored ladder is saturated:
+# fork and C both pin near the elo ceiling and differencing two near-ceiling
+# implied-elos buries the real gap under sampling noise. Fix: play fork DIRECTLY
+# vs the common parent C (model-vs-model, alternating colors). Two similar
+# models score near 50% — the maximally sensitive region of the logistic — so
+# the RELATIVE Δelo has a tight CI with no anchor ceiling.
+# ---------------------------------------------------------------------------
+
+H2H_EPS = 1e-6  # clamp on p before log10 so a 100%/0% sweep stays finite.
+
+
+def elo_from_score_rate(p: float) -> float:
+    """Relative Δelo implied by an expected score `p` (fork's perspective) in a
+    head-to-head match: 400*log10(p/(1-p)). p=0.5 -> 0; p=0.6 -> +70.4;
+    p=0.4 -> -70.4. p is clamped to [eps, 1-eps] so a clean sweep stays finite."""
+    pc = max(H2H_EPS, min(1.0 - H2H_EPS, p))
+    return LOGISTIC_SLOPE * math.log10(pc / (1.0 - pc))
+
+
+@dataclass
+class HeadToHeadResult:
+    """One fork-vs-C direct match. `wins/draws/losses` are from the FORK's
+    perspective (fork is picker_a). Relative Δelo is mapped from the expected
+    score via the elo logistic; the CI comes from the Wilson interval on the
+    score-rate mapped through the same logistic — no anchor ceiling."""
+
+    recipe_label: str
+    window_epochs: int
+    wall_secs: float | None
+    n_games: int
+    wins: int
+    draws: int
+    losses: int
+
+    @property
+    def score(self) -> float:
+        """Score sum, draws=0.5 (fork's perspective)."""
+        return self.wins + 0.5 * self.draws
+
+    @property
+    def win_rate(self) -> float:
+        return self.score / max(self.n_games, 1)
+
+    @property
+    def delta_elo(self) -> float:
+        return elo_from_score_rate(self.win_rate)
+
+    @property
+    def delta_ci_half(self) -> float:
+        """Half-width of the Δelo CI: take the Wilson CI on the score-rate
+        (reusing binomial_ci) and map each endpoint through the elo logistic."""
+        lo, hi = binomial_ci(self.score, self.n_games)
+        d_lo, d_hi = elo_from_score_rate(lo), elo_from_score_rate(hi)
+        return 0.5 * (d_hi - d_lo)
+
+    @property
+    def delta_elo_per_hr(self) -> float | None:
+        if not self.wall_secs or self.wall_secs <= 0:
+            return None
+        return self.delta_elo / (self.wall_secs / 3600.0)
+
+    @property
+    def inside_noise(self) -> bool:
+        """True if |Δelo| <= its CI half-width — same rule as the anchored path."""
+        return abs(self.delta_elo) <= self.delta_ci_half
+
+
 def rank_results(results: list[DeltaEResult]) -> list[DeltaEResult]:
     """Rank by Δelo descending (the achievable increment). Caller can re-sort by
     Δelo/hr for the rate view; we expose both columns in the table."""
     return sorted(results, key=lambda r: r.delta_elo, reverse=True)
+
+
+def rank_h2h(results: list[HeadToHeadResult]) -> list[HeadToHeadResult]:
+    """Rank head-to-head results by Δelo descending (mirrors rank_results)."""
+    return sorted(results, key=lambda r: r.delta_elo, reverse=True)
+
+
+def format_h2h_table(results: list[HeadToHeadResult]) -> str:
+    ranked = rank_h2h(results)
+    lines: list[str] = []
+    hdr = (f"{'rank':>4}  {'recipe':<34}  {'Δelo(vsC)':>9}  {'±CI':>6}  "
+           f"{'T(ep)':>6}  {'Δelo/hr':>9}  {'verdict':<13}  head-to-head")
+    lines.append(hdr)
+    lines.append("-" * len(hdr))
+    for i, r in enumerate(ranked, 1):
+        rate = f"{r.delta_elo_per_hr:+.1f}" if r.delta_elo_per_hr is not None else "  n/a"
+        verdict = "INSIDE-NOISE" if r.inside_noise else "signal"
+        h2h = f"fork {r.score:g}/{r.n_games} vs C = {r.win_rate:.0%}"
+        lines.append(
+            f"{i:>4}  {r.recipe_label:<34}  {r.delta_elo:>+9.1f}  "
+            f"{r.delta_ci_half:>6.1f}  {r.window_epochs:>6}  {rate:>9}  "
+            f"{verdict:<13}  {h2h}"
+        )
+    lines.append("")
+    lines.append("Δelo is RELATIVE to common parent C (model-vs-model, no anchor "
+                 "ceiling); p=0.5 -> 0 elo.")
+    lines.append("verdict=INSIDE-NOISE means |Δelo| <= its CI half-width: the "
+                 "recipe's gain over C is NOT distinguishable from sampling noise.")
+    return "\n".join(lines)
 
 
 def format_table(results: list[DeltaEResult]) -> str:
@@ -478,6 +577,129 @@ def anchored_eval(
 
 
 # ---------------------------------------------------------------------------
+# Head-to-head eval (reuses gomoku.eval — the anchor-ceiling fix).
+# ---------------------------------------------------------------------------
+
+
+def _build_ckpt_picker(checkpoint: str, *, sims: int, c_puct: float, device: str):
+    """Load a checkpoint and wrap it in an mcts_picker (same load/fuse/evaluator
+    idiom as anchored_eval's sequential model_picker)."""
+    from gomoku.eval import mcts_picker
+    from gomoku.mcts import make_torch_evaluator
+    from gomoku.model import fuse_model_for_inference, load_checkpoint
+    from gomoku.util import pick_device
+
+    dev = pick_device(device)
+    model, _ = load_checkpoint(checkpoint, device=dev)
+    model = fuse_model_for_inference(model)
+    evaluator = make_torch_evaluator(model, dev)
+    return mcts_picker(evaluator, n_simulations=sims, c_puct=c_puct)
+
+
+def _play_h2h_paired(
+    fork_picker,
+    parent_picker,
+    *,
+    n_games: int,
+    opening_plies: int,
+    sims: int,
+    c_puct: float,
+    seed: int,
+) -> tuple[int, int, int, int]:
+    """Fork-vs-C with PAIRED RANDOM OPENINGS. Returns (wins, draws, losses, n_played)
+    from the fork's perspective.
+
+    Why this exists instead of gomoku.eval.play_match_pickers: the match pickers
+    are temperature=0 argmax with no root noise (deterministic). Two such players
+    from the empty board replay exactly ONE line per color assignment — so a
+    "100-game" match is really 2 distinct games, and its binomial CI is false
+    precision. Here each opening is generated by `random_opening_state` and played
+    TWICE (fork as black, then fork as white) so the games are INDEPENDENT and
+    color bias cancels within each pair. This is standard paired-opening match
+    practice; it's what makes the relative-Δelo CI honest.
+    """
+    import numpy as np
+
+    from gomoku.game import GameState
+    from gomoku.self_play import _random_opening_state
+
+    wins = losses = draws = 0
+    n_pairs = max(1, n_games // 2)
+    for pair_idx in range(n_pairs):
+        opening_rng = np.random.default_rng(seed + pair_idx)
+        if opening_plies > 0:
+            opening_state, opening_ply_count = _random_opening_state(opening_rng, opening_plies)
+        else:
+            opening_state, opening_ply_count = GameState.initial(), 0
+        for fork_is_black in (True, False):
+            game_rng = np.random.default_rng(
+                seed + 1_000_000 + pair_idx * 2 + (0 if fork_is_black else 1))
+            state = opening_state
+            ply = opening_ply_count
+            # Side to move at `ply`: 0 = black. Fork moves iff that matches its color.
+            fork_to_move = (ply % 2 == 0) == fork_is_black
+            winner_side: int | None = None
+            while True:
+                picker = fork_picker if fork_to_move else parent_picker
+                action = picker(state, game_rng)
+                side_just_moved = ply % 2
+                state = state.apply(action)
+                done, v = state.is_terminal()
+                if done:
+                    if v == -1.0:
+                        winner_side = side_just_moved
+                    break
+                fork_to_move = not fork_to_move
+                ply += 1
+            if winner_side is None:
+                draws += 1
+            else:
+                fork_side = 0 if fork_is_black else 1
+                if winner_side == fork_side:
+                    wins += 1
+                else:
+                    losses += 1
+    return wins, draws, losses, 2 * n_pairs
+
+
+def head_to_head_eval(
+    fork_picker,
+    parent_picker,
+    *,
+    recipe_label: str,
+    window_epochs: int,
+    wall_secs: float | None,
+    n_games: int,
+    sims: int,
+    c_puct: float,
+    seed: int,
+    opening_plies: int = 4,
+) -> HeadToHeadResult:
+    """Play one fork-vs-C direct match (model-vs-model, paired random openings)
+    and return a HeadToHeadResult. fork is picker_a, so wins are the fork's.
+
+    This is the anchor-ceiling fix: when every checkpoint beats the top anchor,
+    two similar models still score near 50% against EACH OTHER — the maximally
+    sensitive region of the logistic — so the relative Δelo has a tight CI.
+    Paired random openings (see `_play_h2h_paired`) give INDEPENDENT games despite
+    the deterministic pickers; without them the CI is false precision.
+    """
+    wins, draws, losses, n_played = _play_h2h_paired(
+        fork_picker, parent_picker, n_games=n_games, opening_plies=opening_plies,
+        sims=sims, c_puct=c_puct, seed=seed)
+    out = HeadToHeadResult(
+        recipe_label=recipe_label, window_epochs=window_epochs, wall_secs=wall_secs,
+        n_games=n_played, wins=wins, draws=draws, losses=losses,
+    )
+    decisive = wins + losses
+    print(f"[delta-e] H2H {recipe_label}: fork {wins}W-{losses}L-{draws}D "
+          f"vs C ({out.win_rate:.0%}, {decisive}/{n_played} decisive, "
+          f"openings={opening_plies}p) -> Δelo={out.delta_elo:+.1f} "
+          f"(±{out.delta_ci_half:.1f})", flush=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # External-anchor hook — SCAFFOLD ONLY (do NOT build Rapfi integration here).
 # ---------------------------------------------------------------------------
 
@@ -587,8 +809,51 @@ def self_test() -> int:
     print(f"[rate] best Δelo/hr recipe: {rate_ranked[0].recipe_label} "
           f"({rate_ranked[0].delta_elo_per_hr:+.1f} elo/hr) "
           f"vs best Δelo recipe: {ranked[0].recipe_label}")
-    print("\nself-test PASSED: CI tightens with n; elo/Δelo/CI computed; ranked by "
-          "Δelo; inside-noise judgment correct; Δelo/hr rate available.")
+
+    # 2) Head-to-head math (the anchor-ceiling fix). No GPU/I/O — synthetic
+    #    fork-vs-C scores fed straight through the elo logistic + Wilson CI.
+    print("\n=== head-to-head: relative Δelo (fork vs common parent C) ===")
+    # p=0.5 -> ~0 elo; the symmetry/sign anchors.
+    assert abs(elo_from_score_rate(0.5)) < 1e-9, "p=0.5 must give 0 elo"
+    assert elo_from_score_rate(0.6) > 0 and elo_from_score_rate(0.4) < 0, "sign must track p"
+    assert abs(elo_from_score_rate(0.6) - 70.4) < 0.2, "p=0.6 -> +70.4 elo"
+    assert math.isfinite(elo_from_score_rate(1.0)) and math.isfinite(elo_from_score_rate(0.0)), \
+        "clamp must keep a 100%/0% sweep finite (no log(0)/div-by-zero)"
+
+    def _h2h(p: float, n: int) -> HeadToHeadResult:
+        wins = round(p * n)
+        return HeadToHeadResult(recipe_label="r", window_epochs=40, wall_secs=3600.0,
+                                n_games=n, wins=wins, draws=0, losses=n - wins)
+
+    # Same effect size (p=0.64), two sample sizes: the CI tightens with n so the
+    # SAME edge that is buried at n=20 becomes a clear signal at n=120.
+    small = _h2h(0.64, 20)
+    big = _h2h(0.64, 120)
+    print(f"[h2h] p=0.64  n=20:  Δelo={small.delta_elo:+.1f} ±{small.delta_ci_half:.1f}  "
+          f"-> {'INSIDE-NOISE' if small.inside_noise else 'signal'}")
+    print(f"[h2h] p=0.64  n=120: Δelo={big.delta_elo:+.1f} ±{big.delta_ci_half:.1f}  "
+          f"-> {'INSIDE-NOISE' if big.inside_noise else 'signal'}")
+    assert big.delta_elo > 0, "p=0.64 fork is stronger than C (positive Δelo)"
+    assert big.delta_ci_half < small.delta_ci_half, "more games must tighten the Δelo CI"
+    assert not big.inside_noise, "p=0.64 at n=120 must read as signal"
+    assert small.inside_noise, "p=0.64 at n=20 must be buried INSIDE-NOISE (CI too wide)"
+
+    # Near-tie reads INSIDE-NOISE regardless; a 50% match is exactly 0 elo.
+    tie = _h2h(0.5, 120)
+    assert abs(tie.delta_elo) < 1e-9 and tie.inside_noise, "50% match -> 0 elo, inside-noise"
+
+    h2h_results = [_h2h(0.64, 120), _h2h(0.52, 120), _h2h(0.40, 120)]
+    h2h_results[0].recipe_label = "recency_weighted,sgd=100"
+    h2h_results[1].recipe_label = "diversity,sgd=150"
+    h2h_results[2].recipe_label = "trouble_pinned,sgd=80"
+    print()
+    print(format_h2h_table(h2h_results))
+    assert rank_h2h(h2h_results)[0].recipe_label.startswith("recency_weighted"), \
+        "highest-scoring fork ranks #1 in head-to-head"
+
+    print("\nself-test PASSED: CI tightens with n; anchored elo/Δelo/CI computed; "
+          "ranked by Δelo; inside-noise judgment correct; Δelo/hr rate available; "
+          "head-to-head relative Δelo + CI tightening + sensitivity verified.")
     return 0
 
 
@@ -630,11 +895,90 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--eval-device", type=str, default="cpu")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--wandb", action="store_true", help="Let forks log to wandb.")
+    p.add_argument("--head-to-head", action="store_true",
+                   help="Anchor-ceiling fix: skip anchored-eval of C and instead "
+                        "play each fork DIRECTLY vs the common parent C "
+                        "(model-vs-model, alternating colors). Relative Δelo has a "
+                        "tight CI with no anchor ceiling. Uses --eval-games games, "
+                        "--eval-sims, --eval-c-puct, --eval-device, --seed.")
+    p.add_argument("--h2h-opening-plies", type=int, default=4,
+                   help="Head-to-head only: random opening plies per game pair. "
+                        ">0 is REQUIRED for an honest CI — temperature=0 pickers "
+                        "replay one line per color from the empty board (2 distinct "
+                        "games). Each opening is played twice (colors swapped).")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the exact per-recipe train commands and exit (no GPU).")
     p.add_argument("--self-test", action="store_true",
                    help="Run the synthetic elo/CI/ranking self-test and exit.")
     return p.parse_args(argv)
+
+
+def _run_head_to_head(
+    args: argparse.Namespace,
+    plans: list[tuple[Recipe, list[str], Path]],
+    out_dir: Path,
+    baselines: list[str],
+) -> int:
+    """Real head-to-head run: fork sequentially, then play each fork DIRECTLY vs
+    the common parent C. C's picker is loaded ONCE and reused across all forks."""
+    print("[delta-e] head-to-head mode: forks will be matched directly vs C "
+          "(no anchored-eval of C).", flush=True)
+    print(f"[delta-e] loading common parent C picker once: {args.parent}", flush=True)
+    parent_picker = _build_ckpt_picker(
+        args.parent, sims=args.eval_sims, c_puct=args.eval_c_puct,
+        device=args.eval_device)
+
+    results: list[HeadToHeadResult] = []
+    for i, (r, cmd, ckpt_dir) in enumerate(plans, 1):
+        print(f"[delta-e] === fork {i}/{len(plans)}: {r.label} ===", flush=True)
+        log_path = out_dir / f"fork_{r.slug}" / "trainer.log"
+        wall = run_fork(cmd, log_path=log_path)
+        final_ckpt = final_checkpoint_for(str(ckpt_dir))
+        if not final_ckpt.exists():
+            raise SystemExit(f"fork {r.label} produced no checkpoint at {final_ckpt}")
+        print(f"[delta-e] fork done in {wall:.0f}s; head-to-head {final_ckpt} vs C...",
+              flush=True)
+        fork_picker = _build_ckpt_picker(
+            str(final_ckpt), sims=args.eval_sims, c_puct=args.eval_c_puct,
+            device=args.eval_device)
+        results.append(head_to_head_eval(
+            fork_picker, parent_picker, recipe_label=r.label,
+            window_epochs=args.window_epochs, wall_secs=wall,
+            n_games=args.eval_games, sims=args.eval_sims, c_puct=args.eval_c_puct,
+            seed=args.seed, opening_plies=args.h2h_opening_plies))
+
+    print("\n" + format_h2h_table(results))
+
+    record = {
+        "ts": time.time(),
+        "mode": "head-to-head",
+        "parent": args.parent,
+        "archive_path": args.archive_path,
+        "window_epochs": args.window_epochs,
+        "eval": {"mode": "head-to-head", "games": args.eval_games,
+                 "sims": args.eval_sims, "c_puct": args.eval_c_puct,
+                 "device": args.eval_device,
+                 "opening_plies": args.h2h_opening_plies},
+        "results": [
+            {
+                "recipe": r.recipe_label,
+                "delta_elo": r.delta_elo,
+                "delta_ci_half": r.delta_ci_half,
+                "window_epochs": r.window_epochs,
+                "wall_secs": r.wall_secs,
+                "delta_elo_per_hr": r.delta_elo_per_hr,
+                "inside_noise": r.inside_noise,
+                "n_games": r.n_games,
+                "wins": r.wins, "draws": r.draws, "losses": r.losses,
+                "score": r.score, "win_rate": r.win_rate,
+            }
+            for r in rank_h2h(results)
+        ],
+    }
+    rec_path = out_dir / "results.json"
+    rec_path.write_text(json.dumps(record, indent=2))
+    print(f"\n[delta-e] wrote {rec_path}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -674,15 +1018,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"--- recipe {i}/{len(plans)}: {r.label}")
             print("  " + " ".join(shlex.quote(c) for c in cmd))
             print(f"  -> final checkpoint: {final_checkpoint_for(str(ckpt_dir))}\n")
-        print("=== then anchored-eval each fork's final checkpoint + C ===")
-        print(f"  baselines: {baselines}")
-        print(f"  games/baseline: {args.eval_games} (sims={args.eval_sims}, "
-              f"workers={args.eval_workers})")
-        print("  -> Δelo = elo(fork_final) - elo(C); rank by Δelo and Δelo/hr.")
+        if args.head_to_head:
+            print("=== then HEAD-TO-HEAD eval: each fork's final checkpoint vs C ===")
+            print("  (anchor-ceiling fix: skips anchored-eval of C; plays "
+                  "fork-vs-C directly)")
+            print(f"  games/match: {args.eval_games} (sims={args.eval_sims}, "
+                  f"c_puct={args.eval_c_puct}, device={args.eval_device}, "
+                  f"paired openings={args.h2h_opening_plies}p)")
+            print("  -> Δelo(vs C) = 400*log10(p/(1-p)), p=fork score-rate; "
+                  "rank by Δelo and Δelo/hr.")
+        else:
+            print("=== then anchored-eval each fork's final checkpoint + C ===")
+            print(f"  baselines: {baselines}")
+            print(f"  games/baseline: {args.eval_games} (sims={args.eval_sims}, "
+                  f"workers={args.eval_workers})")
+            print("  -> Δelo = elo(fork_final) - elo(C); rank by Δelo and Δelo/hr.")
         return 0
 
-    # --- Real run: fork sequentially, then anchored-eval, then rank. ---
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.head_to_head:
+        return _run_head_to_head(args, plans, out_dir, baselines)
+
+    # --- Real run: fork sequentially, then anchored-eval, then rank. ---
     print("[delta-e] anchored-eval of common parent C (the Δelo baseline)...", flush=True)
     parent_est = anchored_eval(
         args.parent, baselines=baselines, n_games=args.eval_games,

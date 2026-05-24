@@ -16,6 +16,28 @@ Cross-refs:
 
 ---
 
+## [2026-05-23] delta-e run-1 | First Δelo flywheel run: harness works end-to-end, but the anchor ladder is too short to measure strong models
+
+Jason: "yeah light it up, fan it out" / "wandb please." Ran the first real run of the Δelo north-star scoring engine (`scripts/delta_e_harness.py`): fork 3 recipes off a common WL5 parent C, train each a fixed 40-epoch window on the replay trainer, then anchored-eval each fork + C at 40 games/baseline and rank by Δelo.
+
+**It ran clean, top to bottom** — fork → replay-train → `latest.pt` → anchored-eval → Wilson-CI → implied-elo → Δelo → INSIDE-NOISE verdict → ranked table → `results.json`, 3 forks in one shot, each logging to its own fresh wandb run. The flywheel is real. (Also fixed a wandb bug first: `train_replay --resume` was inheriting the checkpoint's `wandb_run_id`, so forks were *resuming* WL5's run instead of starting fresh — now an explicitly `--run-name`'d replay fork starts a new run.)
+
+**The result: all 3 INSIDE-NOISE.**
+
+| rank | recipe | Δelo | ±CI | verdict |
+|---|---|---|---|---|
+| 1 | lru, sgd=100 | −55.8 | ±218 | INSIDE-NOISE |
+| 2 | recency_weighted, sgd=100 | −127.4 | ±228 | INSIDE-NOISE |
+| 3 | lru, sgd=300 | −195.0 | ±233 | INSIDE-NOISE |
+
+Parent C elo = **+1536.7** [+1357, +1691]. Fresh wandb: ms1pplps, 91awvfib, jc228edo.
+
+**The finding is a method-limit, not "the recipes are equal."** The strongest anchor we have is `lookahead:depth=4 @ 1500`, and C already beats it (78%). So both C and every fork pin near the **~1700-elo ceiling** of the ladder — the signal lives almost entirely in the d4 win-rate (the only non-saturated anchor), and at 40 games that win-rate has a huge CI. Differencing two near-ceiling implied-elos buries any real recipe difference under sampling noise. And there's no escape via a "headroom parent": `keep-last-n=3` pruning destroyed every early/weak checkpoint (WL3.1 at e1504 also sits at model_elo ~1465–1567 — the ladder saturates around there regardless). The faint sub-noise trend (do NOT over-read): sgd=300 is the *most* negative, directionally consistent with over-grinding a tiny curated slice off an already-converged net.
+
+**The fix — head-to-head.** Don't measure both models against a too-weak fixed anchor; play the **fork directly against C**. Two similar-strength models score near 50% against each other, which is the *maximally sensitive* region of the logistic, so the relative Δelo gets a tight CI with no ceiling (this is exactly how AZ-style gating works). Added `--head-to-head` to `delta_e_harness.py` this session (model-vs-model via the existing `play_match_pickers` + `mcts_picker`; relative Δelo = 400·log₁₀(p/(1−p)), Wilson CI mapped through the logistic; self-test + micro-smoke green — self-play scores 50% → Δelo +0). run-2 re-runs the same 3 recipes off the same WL5 C, head-to-head. decision: needs_repeat (recipes un-resolved by the anchored method, not rejected).
+
+---
+
 ## [2026-05-23] LF1-followups | Fan-out (4 CPU agents + GPU): runaway knee mapped to (384,512], tile-cap validated end-to-end, metric instrument fixed
 
 Jason: "proceed, fan out background subagents." Ran the LF1-followups block as a **two-queue fan-out** — 4 worktree-isolated CPU agents in parallel + the GPU runaway-boundary sweep driven serially by the orchestrator. (The orchestration pattern is now codified in the gomoku-perf-lab skill, "Fan-out orchestration mode.") All five sub-lanes landed coherently into one story.
