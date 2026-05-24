@@ -547,6 +547,28 @@ CELLS: dict[str, Cell] = {
                 weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
                 epochs=1_000_000,
                 random_opening_moves=0),   # control for gumbel: 100 sims, no gumbel (v1: floored)
+    # A/B vs derby-gumbel: SAME generator (Gumbel@100, 8 workers) but the FIXED-STEP /
+    # fast-cadence trainer instead of wave + sgd_per_position. wave_mode=False routes to
+    # the non-wave async path; --sgd-steps-per-epoch N pins SGD to N steps/epoch
+    # (decoupled from the gen flood → structurally can't run away) with non-blocking
+    # ingest (~5s/epoch, many fast epochs). Tests whether "many faster epochs" climbs
+    # faster than wave-scaled SGD when generation floods. N=64 is a ~5s starting point —
+    # confirm/tune from the first chunk's trainer.log epoch wall + watch train/sample_reuse_ratio.
+    "derby-gumbel-fast5s": Cell("derby-gumbel-fast5s", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,  # ← non-wave async path
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,  # (overridden by --sgd-steps-per-epoch)
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16"],      # same gen as derby-gumbel
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),            # ← the fixed-step lever
 }
 
 

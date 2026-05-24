@@ -13,6 +13,7 @@
     {"name": "open-div4",  "cell": "derby-open-div4",  "cell_name": "derby-open-div4",  "lever": "random_opening_moves=4 (WL3) - opening diversity; v1 ceiling winner (peak 1385)"},
     {"name": "forced",     "cell": "derby-forced",     "cell_name": "derby-forced",     "lever": "KataGo Forced Playouts + policy-target pruning (k=2.0) - cheap root exploration without the sim tax"},
     {"name": "gumbel",     "cell": "derby-gumbel",     "cell_name": "derby-gumbel",     "lever": "native Gumbel root + Sequential Halving at sims=100 - provably good targets at CHEAP sims (wall-fair native port; the generation-bound attack)"},
-    {"name": "sims100",    "cell": "derby-sims100",    "cell_name": "derby-sims100",    "lever": "CONTROL for gumbel - plain MCTS at sims=100, no gumbel (v1: floored at 389, never grokked); isolates whether gumbel rescues cheap sims"}
+    {"name": "sims100",    "cell": "derby-sims100",    "cell_name": "derby-sims100",    "lever": "CONTROL for gumbel - plain MCTS at sims=100, no gumbel (v1: floored at 389, never grokked); isolates whether gumbel rescues cheap sims"},
+    {"name": "gumbel-fast5s", "cell": "derby-gumbel-fast5s", "cell_name": "derby-gumbel-fast5s", "lever": "A/B vs gumbel: SAME Gumbel@100 generator, but FIXED-STEP non-wave trainer (--sgd-steps-per-epoch 64, ~5s epochs, decoupled from inflow, can't run away) instead of wave+sgd_per_position - tests whether 'many faster epochs' climbs faster when gen floods"}
   ]
 }
