@@ -1,0 +1,16 @@
+{
+  "_doc": "Delo Derby v2 board — WALL-NATIVE race on the PRODUCTION multiprocess recipe. Engine 'run_sweep_wall_slice': each chunk advances an idea by ONE wall-time slice (slice_secs) via `python scripts/run_sweep.py --cell <CELL> --resume <idea>/checkpoints/latest.pt --max-wall-secs <slice_secs> --final-eval`. That single command runs the full bundle (1 trainer + 8 selfplay_workers, wave-mode, GPU-saturated), self-caps with a clean resumable latest.pt, AND writes a fresh eval/model_elo line via --final-eval INSIDE the bundle (no separate eval step). Budget is wall-native: an idea caps when wall_secs_total >= cap_wall_secs. Priority = highest current elo (feed the leader); everyone reaches cap. ROSTER = the v1 top-3 (open-div4, temp-16, sgd-800), now as run_sweep CELL NAMES. The 'cell' key = the run_sweep.CELLS dict KEY; 'cell_name' = that Cell's .name (fixes the sweep_runs/<cell_name>/checkpoints path the derby reads from). These cells must be ADDED to run_sweep.CELLS before a REAL run (orchestrator owns run_sweep.py); the dry-run prints the planned command without them.",
+  "global": {
+    "engine": "run_sweep_wall_slice",
+    "slice_secs": 600,
+    "cap_wall_secs": 7200,
+    "base_out_dir": "sweep_runs/derby_v2",
+    "board_md_path": "sweep_runs/derby_v2/standings.md",
+    "beat_heuristic_elo": 800
+  },
+  "ideas": [
+    {"name": "open-div4", "cell": "derby-open-div4", "cell_name": "derby-open-div4", "lever": "random_opening_moves=4 (WL3 lever) - opening diversity; v1 ceiling winner (peak 1385)"},
+    {"name": "temp-16",   "cell": "derby-temp-16",   "cell_name": "derby-temp-16",   "lever": "temperature_moves=16 (vs 8) - more opening exploration; v1 #2 (peak 1340)"},
+    {"name": "sgd-800",   "cell": "derby-sgd-800",   "cell_name": "derby-sgd-800",   "lever": "training intensity 2x the WL4 baseline rate (sgd_per_position 0.005 vs 0.0025); v1 #3 (peak 1284)"}
+  ]
+}

@@ -61,6 +61,8 @@ from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import generate_games, generate_games_vs_baseline
 from gomoku.util import pick_device
 
+import tempfile
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
@@ -88,6 +90,38 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dirichlet-alpha", type=float, default=0.13)
     p.add_argument("--dirichlet-eps", type=float, default=0.25)
     p.add_argument("--random-opening-moves", type=int, default=0)
+
+    # Playout-Cap Randomization (KataGo, Wu 2019). Opt-in; defaults are inert and
+    # preserve the byte-identical production self-play path. When frac < 1.0,
+    # each move is full-search+recorded with probability `frac`, else fast (at
+    # `--playout-cap-fast-sims`) and NOT recorded as a training target.
+    p.add_argument("--playout-cap-frac", type=float, default=1.0,
+                   help="Playout-Cap Randomization full-search fraction. 1.0 "
+                        "(default) = every move is full-search and recorded "
+                        "(current behavior). When <1.0, the probability a given "
+                        "move runs the full --n-simulations budget AND is "
+                        "recorded as a training target; the rest run "
+                        "--playout-cap-fast-sims and are not recorded.")
+    p.add_argument("--playout-cap-fast-sims", type=int, default=0,
+                   help="Reduced sim budget for non-recorded (fast) PCR moves. "
+                        "0 (default) = same as --n-simulations, which makes the "
+                        "lever inert. Only used when --playout-cap-frac < 1.0.")
+    # Gumbel AlphaZero root selection + Sequential Halving (Danihelka et al. 2022).
+    # Derby v3 lever. Default OFF = byte-identical current PUCT+Dirichlet behavior.
+    # When ON: root uses Gumbel-top-k candidate sampling + Sequential Halving over
+    # the sim budget; the policy training target is the completed-policy (softmax of
+    # logits + sigma(q_hat)), NOT visit counts. Internal nodes keep PUCT. Runs on
+    # the pure-Python MCTS tree (native C engine does not implement Gumbel).
+    p.add_argument("--gumbel-root", action="store_true", default=False,
+                   help="Enable Gumbel AlphaZero root selection + Sequential "
+                        "Halving. Default OFF = unchanged PUCT+Dirichlet self-play.")
+    p.add_argument("--gumbel-m", type=int, default=16,
+                   help="Number of root actions sampled via Gumbel-top-k "
+                        "(clamped to #legal moves). Only used with --gumbel-root.")
+    p.add_argument("--gumbel-c-visit", type=float, default=50.0,
+                   help="Gumbel sigma(q) c_visit constant (paper default 50.0).")
+    p.add_argument("--gumbel-c-scale", type=float, default=1.0,
+                   help="Gumbel sigma(q) c_scale constant (paper default 1.0).")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -170,7 +204,94 @@ def parse_args() -> argparse.Namespace:
                         "each (re)load; fallback to uncompiled if compile raises. "
                         "Do NOT set this on the trainer's model — would interfere "
                         "with backward + optimizer.step.")
-    return p.parse_args()
+    p.add_argument("--fp16-eval", action="store_true",
+                   help="Cast the worker's eval model to torch.float16 and feed "
+                        "fp16 inputs to make_torch_evaluator. Forward outputs are "
+                        "cast back to float32 inside the evaluator before host "
+                        "transfer, so MCTS and game-record payloads are unchanged. "
+                        "L06 perf-lab lane (see wiki/ops/perf-queue.md). Eval-only "
+                        "— DO NOT set on the trainer's model.")
+    p.add_argument("--evaluator", type=str, default="torch",
+                   choices=["torch", "coreml"],
+                   help="Inference backend. 'torch' = PyTorch on --device (default). "
+                        "'coreml' = export the loaded model to a fresh .mlpackage "
+                        "and use Core ML for leaf evaluation. Re-export on every "
+                        "weight reload. Used by the L09 ANE-offload lane to free "
+                        "the GPU from inference (R-TRAIN-ANE in perf-lab-charter).")
+    p.add_argument("--coreml-compute-units", type=str, default="CPU_AND_NE",
+                   help="Core ML compute-units selection when --evaluator coreml: "
+                        "CPU_ONLY / CPU_AND_NE / CPU_AND_GPU / ALL. Default "
+                        "CPU_AND_NE asks Core ML to schedule on the ANE when it "
+                        "can. Use CPU_ONLY to isolate the Core ML path from any "
+                        "GPU contention.")
+    args = p.parse_args()
+    # --fp16-eval is structurally incompatible AND semantically redundant
+    # with --evaluator coreml: Core ML already exports at
+    # compute_precision=FLOAT16, and torch.jit.trace inside export_model_to_coreml
+    # passes a fp32 dummy input — casting model.half() first causes
+    # "Input type (float) and bias type (Half) should be the same" at the
+    # first conv. L09b discovered this at runtime. Force fp16_eval off for
+    # the Core ML path; print a one-line note so the choice is auditable.
+    if args.evaluator == "coreml" and args.fp16_eval:
+        print(
+            f"[{args.worker_id}] --fp16-eval ignored on --evaluator coreml "
+            f"(Core ML is already FLOAT16 internally)",
+            flush=True,
+        )
+        args.fp16_eval = False
+    return args
+
+
+def _build_evaluator(args: argparse.Namespace, model: torch.nn.Module, device: torch.device):
+    """Construct an evaluator from a loaded model per --evaluator.
+
+    'torch' returns the PyTorch evaluator on --device (the existing path).
+    'coreml' exports the model to a fresh .mlpackage in a per-worker
+    tempdir and wraps it as a CoreMLEvaluator. Re-export runs on every
+    weight reload because export_model_to_coreml requires a concrete
+    PyTorch module. Per the L09 charter, this is the ANE-offload path.
+
+    --fp16-eval applies to the 'torch' path only (Core ML already exports
+    at compute_precision=FLOAT16 above)."""
+    if args.evaluator == "torch":
+        return make_torch_evaluator(model, device, fp16=bool(args.fp16_eval))
+    if args.evaluator == "coreml":
+        from gomoku.coreml_evaluator import (
+            export_model_to_coreml,
+            make_coreml_evaluator,
+        )
+        tmp_root = Path(tempfile.gettempdir()) / f"gomoku_worker_{args.worker_id}_coreml"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        ml_path = tmp_root / "eval.mlpackage"
+        # Cap Core ML's export-side max_batch at wave_size * games_per_batch
+        # * 2 so the model can accept the largest leaf-batch the wave engine
+        # might hand it. Keep it modest because Core ML compile-time scales
+        # with the upper bound.
+        max_batch = max(1, int(args.wave_size) * int(args.games_per_batch) * 2)
+        # On CPU, the original PyTorch model must NOT be the same instance
+        # we hand to JIT trace (jit moves it to CPU); pass the already-cpu
+        # model so trainer-MPS gradients aren't disturbed.
+        export_model_to_coreml(
+            model.cpu(),
+            ml_path,
+            max_batch_size=max_batch,
+            compute_precision="FLOAT16",
+        )
+        # Move back to original device if the caller still wants a torch
+        # reference (we don't here, but be a good citizen).
+        if device.type != "cpu":
+            model.to(device)
+        print(
+            f"[{args.worker_id}] exported Core ML model -> {ml_path} "
+            f"(compute_units={args.coreml_compute_units}, max_batch={max_batch})",
+            flush=True,
+        )
+        return make_coreml_evaluator(
+            ml_path,
+            compute_units=args.coreml_compute_units,
+            max_batch_size=max_batch,
+        )
+    raise ValueError(f"unknown --evaluator {args.evaluator!r}")
 
 
 def _maybe_compile(model: torch.nn.Module, enabled: bool, worker_id: str) -> torch.nn.Module:
@@ -187,6 +308,28 @@ def _maybe_compile(model: torch.nn.Module, enabled: bool, worker_id: str) -> tor
         return compiled
     except Exception as e:
         print(f"[{worker_id}] torch.compile failed ({e}); using uncompiled model", flush=True)
+        return model
+
+
+def _maybe_half(model: torch.nn.Module, enabled: bool, worker_id: str) -> torch.nn.Module:
+    """Optionally cast the eval model to torch.float16 in-place.
+
+    The L06 perf-lab lane: fp16 forward on MPS / CPU at eval time. Inputs
+    are cast to .half() inside make_torch_evaluator and outputs cast back
+    to float32 there before host transfer, so MCTS and game-record
+    payloads stay fp32. Eval-only — DO NOT call on the trainer's model.
+    """
+    if not enabled:
+        return model
+    try:
+        model = model.half()
+        # Belt-and-suspenders: every parameter and buffer is now fp16.
+        # A mismatched buffer (e.g. running_mean fused into the conv) would
+        # raise at forward time on MPS; surface it now if it ever happens.
+        print(f"[{worker_id}] fp16-eval enabled (model cast to torch.float16)", flush=True)
+        return model
+    except Exception as e:
+        print(f"[{worker_id}] fp16-eval cast failed ({e}); using fp32 model", flush=True)
         return model
 
 
@@ -367,8 +510,11 @@ def _roll_wave_mix(
     try:
         past_model, _payload = load_checkpoint(str(ckpt_path), device=device)
         past_model = fuse_model_for_inference(past_model)
+        past_model = _maybe_half(past_model, args.fp16_eval, worker_id)
         past_model = _maybe_compile(past_model, args.compile, worker_id)
-        past_evaluator = make_torch_evaluator(past_model, device)
+        past_evaluator = make_torch_evaluator(
+            past_model, device, fp16=bool(args.fp16_eval)
+        )
     except Exception as e:
         print(
             f"[{worker_id}] wave v{model_version} past-ckpt load failed "
@@ -424,7 +570,13 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             random_opening_moves=args.random_opening_moves,
             archive=archive,
             archive_start_frac=args.archive_start_frac,
+            playout_cap_frac=args.playout_cap_frac,
+            playout_cap_fast_sims=args.playout_cap_fast_sims,
             profile=profile,
+            gumbel_root=args.gumbel_root,
+            gumbel_m=args.gumbel_m,
+            gumbel_c_visit=args.gumbel_c_visit,
+            gumbel_c_scale=args.gumbel_c_scale,
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
@@ -545,8 +697,9 @@ def main() -> None:
         )
 
     model, weights_mtime, model_version = _load_model(args.weights_path, device)
+    model = _maybe_half(model, args.fp16_eval, args.worker_id)
     model = _maybe_compile(model, args.compile, args.worker_id)
-    evaluator = make_torch_evaluator(model, device)
+    evaluator = _build_evaluator(args, model, device)
     print(
         f"[{args.worker_id}] initial weights version={model_version} "
         f"mtime={weights_mtime:.0f}",
@@ -630,8 +783,9 @@ def main() -> None:
                 try:
                     model, payload = load_checkpoint(args.weights_path, device=device)
                     model = fuse_model_for_inference(model)
+                    model = _maybe_half(model, args.fp16_eval, args.worker_id)
                     model = _maybe_compile(model, args.compile, args.worker_id)
-                    evaluator = make_torch_evaluator(model, device)
+                    evaluator = _build_evaluator(args, model, device)
                     weights_mtime = cur_mtime
                     model_version = int(payload.get("epoch", model_version + 1))
                     games_on_version = 0
@@ -747,8 +901,9 @@ def main() -> None:
             try:
                 model, payload = load_checkpoint(args.weights_path, device=device)
                 model = fuse_model_for_inference(model)
+                model = _maybe_half(model, args.fp16_eval, args.worker_id)
                 model = _maybe_compile(model, args.compile, args.worker_id)
-                evaluator = make_torch_evaluator(model, device)
+                evaluator = _build_evaluator(args, model, device)
                 weights_mtime = cur_mtime
                 model_version = int(payload.get("epoch", model_version + 1))
                 print(
