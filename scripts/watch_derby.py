@@ -70,39 +70,47 @@ def load_state(base_out_dir: str) -> dict:
     return {}
 
 
-def elo_from_jsonl(cell_name: str) -> dict:
-    """Fallback elo when derby_state.json has no history yet."""
+def read_jsonl(cell_name: str) -> tuple[list, dict]:
+    """Return (model_elo series, latest full eval row) from the cell's
+    eval_results.jsonl — used as the elo fallback AND for the sub-grok anchor
+    winrates (which move before the quantized elo unsticks from the floor)."""
     f = REPO / "sweep_runs" / cell_name / "checkpoints" / "eval_results.jsonl"
     if not f.exists():
-        return {}
-    elos = []
+        return [], {}
+    elos, last = [], {}
     for line in f.read_text().splitlines():
         try:
-            e = json.loads(line).get("eval/model_elo")
+            d = json.loads(line)
         except Exception:
             continue
-        if e is not None:
-            elos.append(e)
-    return {"elo": elos[-1], "peak": max(elos), "pts": len(elos)} if elos else {}
+        last = d
+        if d.get("eval/model_elo") is not None:
+            elos.append(d["eval/model_elo"])
+    return elos, last
 
 
 def idea_metrics(state: dict, name: str, cell: str) -> dict:
-    """elo / peak / Δelo-per-hr / chunks / status / pts, from state (jsonl fallback)."""
-    st = (state.get("ideas") or {}).get(name)
-    if st and st.get("elo_history"):
-        hist = st["elo_history"]
-        elos = [h[1] for h in hist]
-        rate = _derby.delo_per_hr(state, name) if _derby else None
-        return {"elo": elos[-1], "peak": max(elos), "pts": len(elos),
-                "rate": rate, "chunks": st.get("chunks_done", len(hist)),
-                "status": st.get("status", "?"),
-                "wall_min": st.get("wall_secs_total", 0.0) / 60.0,
-                "ep": hist[-1][0]}
-    fb = elo_from_jsonl(cell)
-    return {"elo": fb.get("elo"), "peak": fb.get("peak"), "pts": fb.get("pts", 0),
-            "rate": None, "chunks": (st or {}).get("chunks_done", 0),
-            "status": (st or {}).get("status", "—"),
-            "wall_min": (st or {}).get("wall_secs_total", 0.0) / 60.0, "ep": None}
+    """Fuse the scheduler's view (state: slice-points → Δelo/hr, chunks, status) with
+    the FRESHEST strength (jsonl: a fine-grained eval every ~5 epochs, so it moves
+    mid-slice before the per-slice summary lands).
+
+      elo/peak  = freshest / best fine-grained eval (the 'is it moving' signal)
+      rate/pts  = from the scheduler's slice-points (pts<2 ⇒ no Δelo/hr slope yet)
+    """
+    jsonl_elos, _ = read_jsonl(cell)
+    st = (state.get("ideas") or {}).get(name) or {}
+    slice_pts = len(st.get("elo_history") or [])
+    rate = _derby.delo_per_hr(state, name) if (_derby and slice_pts >= 2) else None
+    if jsonl_elos:
+        elo, peak = jsonl_elos[-1], max(jsonl_elos)
+    elif st.get("elo_history"):
+        elos = [h[1] for h in st["elo_history"]]
+        elo, peak = elos[-1], max(elos)
+    else:
+        elo = peak = None
+    return {"elo": elo, "peak": peak, "pts": slice_pts, "rate": rate,
+            "chunks": st.get("chunks_done", 0), "status": st.get("status", "—"),
+            "wall_min": st.get("wall_secs_total", 0.0) / 60.0}
 
 
 def fetch_wandb(run_names: set[str]) -> tuple[dict, str | None]:
@@ -175,8 +183,9 @@ def render(board_path: str) -> None:
     for i, x in enumerate(rows, 1):
         beat = "✓" if (x["peak"] or 0) >= 800 else " "
         run_mark = "►" if x["status"] == "running" else " "
-        rate = ("entry" if x["rate"] is None and (x["pts"] or 0) < 2
-                else _fmt(x["rate"], "8.1f"))
+        pts = x.get("pts") or 0
+        # distinguish never-run (no slice pts) from ran-but-no-slope-yet (1 pt) from a real rate
+        rate = "—" if pts == 0 else ("1pt" if pts < 2 else _fmt(x["rate"], "8.1f"))
         print(f"  {i:>2} {run_mark}{x['idea']:<10} {_fmt(x['elo'], '5.0f')} {_fmt(x['peak'], '5.0f')}{beat}"
               f"{rate:>8} {_fmt(x['chunks'], '3.0f')} {x['status']:<9} "
               f"{_fmt(x['pl'], '6.3f')} {_fmt(x['vl'], '6.3f')} {_fmt(x['plies'], '6.1f')} "
@@ -190,8 +199,10 @@ def render(board_path: str) -> None:
         nr = _derby.delo_per_hr(state, next_pick) if _derby else None
         why = "entry-fee (needs a 2nd point for a slope)" if nr is None else f"steepest Δelo/hr = {nr:.1f}"
         print(f"  ► next pick (live priority): {next_pick}  — {why}")
-    print("  ►=running · Δelo/hr=last-chunk slope (the hill-climb signal) · "
-          "'entry'=<2 elo pts · peak ✓=≥800\n")
+    print("  ►=running · elo/peak=freshest fine-grained eval (moves mid-slice) · Δelo/hr is the")
+    print("  scheduler's hill-climb signal: '—'=never-run, '1pt'=ran but no slope yet (needs a 2nd")
+    print("  slice-point), else last-chunk slope · pre-grok models pin at the ~389 floor until they")
+    print("  start beating an anchor (heuristic OR lookahead), then elo unsticks.\n")
 
 
 def main() -> None:
