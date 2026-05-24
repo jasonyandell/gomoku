@@ -11,11 +11,7 @@
   "ideas": [
     {"name": "c0",         "cell": "derby-c0",         "cell_name": "derby-c0",         "lever": "CONTROL - no lever (small/sims400/EMA0.99/sgd0.0025/temp30); every other cell is read as a delta vs this"},
     {"name": "open-div4",  "cell": "derby-open-div4",  "cell_name": "derby-open-div4",  "lever": "random_opening_moves=4 (WL3) - opening diversity; v1 ceiling winner (peak 1385)"},
-    {"name": "temp-16",    "cell": "derby-temp-16",    "cell_name": "derby-temp-16",    "lever": "temperature_moves=16 (vs 30) - shorter sampling window; v1 #2 (peak 1340)"},
-    {"name": "sgd-800",    "cell": "derby-sgd-800",    "cell_name": "derby-sgd-800",    "lever": "sgd_per_position 0.005 (2x) - more fit per epoch; v1 #3 (peak 1284)"},
-    {"name": "playoutcap", "cell": "derby-playoutcap", "cell_name": "derby-playoutcap", "lever": "KataGo Playout-Cap Randomization: 25% full-search+recorded, rest cheap+unrecorded - more games/wall at constant target quality"},
     {"name": "forced",     "cell": "derby-forced",     "cell_name": "derby-forced",     "lever": "KataGo Forced Playouts + policy-target pruning (k=2.0) - cheap root exploration without the sim tax"},
-    {"name": "swa",        "cell": "derby-swa",         "cell_name": "derby-swa",        "lever": "SWA tail-avg generator weights (window=5, replaces EMA publish) - smoothing without the lag that floored v1's ema-099"},
     {"name": "gumbel",     "cell": "derby-gumbel",     "cell_name": "derby-gumbel",     "lever": "native Gumbel root + Sequential Halving at sims=100 - provably good targets at CHEAP sims (wall-fair native port; the generation-bound attack)"},
     {"name": "sims100",    "cell": "derby-sims100",    "cell_name": "derby-sims100",    "lever": "CONTROL for gumbel - plain MCTS at sims=100, no gumbel (v1: floored at 389, never grokked); isolates whether gumbel rescues cheap sims"}
   ]
