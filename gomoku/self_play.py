@@ -143,6 +143,157 @@ def _can_use_native_mcts(evaluator: Evaluator) -> bool:
     )
 
 
+def _generate_games_gumbel(
+    n_games: int,
+    evaluator: Evaluator,
+    *,
+    n_simulations: int = 100,
+    c_puct: float = 1.25,
+    c_puct_base: float = 19652.0,
+    temperature_moves: int = 8,  # unused: Gumbel selects greedily by its own score
+    temperature_final: float = 0.1,  # unused
+    dirichlet_alpha: float = 0.3,  # unused: Gumbel uses Gumbel noise, not Dirichlet
+    dirichlet_eps: float = 0.25,  # unused
+    max_plies: int | None = None,
+    rng: np.random.Generator | None = None,
+    augment_symmetries: bool = True,
+    random_opening_moves: int = 0,
+    archive: dict | None = None,
+    archive_start_frac: float = 0.0,
+    profile: ProfileStats | None = None,
+    gumbel_m: int = 16,
+    gumbel_c_visit: float = 50.0,
+    gumbel_c_scale: float = 1.0,
+) -> list[GameRecord]:
+    """Self-play generation using Gumbel AlphaZero root selection + Sequential
+    Halving (the pure-Python `gomoku.mcts.Node` tree path).
+
+    Differences from the standard path:
+      - Root action is chosen by `gumbel_search_root` (Gumbel-top-k candidate
+        sampling, Sequential Halving over the sim budget, argmax of the SH score).
+        There is NO temperature sampling and NO Dirichlet noise — the Gumbel
+        noise IS the exploration, and the SH argmax IS the move.
+      - The training policy target is the COMPLETED-POLICY (softmax of
+        logits + sigma(q_hat) with v-mix completion for unvisited actions),
+        NOT the visit-count distribution.
+
+    Each game keeps its own `MCTSGame` so subtrees are reused across plies.
+    """
+    from gomoku.mcts import MCTSGame
+    from gomoku.gumbel import gumbel_search_root
+
+    rng = rng or np.random.default_rng()
+    if max_plies is None:
+        max_plies = N_ACTIONS
+    _ = (temperature_moves, temperature_final, dirichlet_alpha, dirichlet_eps)
+
+    games: list[MCTSGame] = []
+    initial_plies: list[int] = []
+    archive_start_flags: list[bool] = []
+    n_archive = 0 if archive is None else int(archive["planes"].shape[0])
+    for _ in range(n_games):
+        from_archive = (
+            archive is not None and n_archive > 0
+            and float(rng.random()) < archive_start_frac
+        )
+        if from_archive:
+            idx = int(rng.integers(0, n_archive))
+            start_state = _gamestate_from_archive(archive, idx)
+            opening_plies = start_state.move_count
+        elif random_opening_moves > 0:
+            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+        else:
+            start_state, opening_plies = GameState.initial(), 0
+        games.append(
+            MCTSGame(
+                start_state,
+                c_puct=c_puct,
+                c_puct_base=c_puct_base,
+                rng=np.random.default_rng(rng.integers(0, 2**31)),
+            )
+        )
+        initial_plies.append(opening_plies)
+        archive_start_flags.append(from_archive)
+
+    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    active: list[int] = list(range(n_games))
+    completed: list[tuple[int, float, int]] = []
+
+    ply = 0
+    while active and ply < max_plies:
+        with _profile_timer(profile, "gumbel_search_s"):
+            for g_idx in active:
+                g = games[g_idx]
+                # Per-move Gumbel noise: draw from the game's own rng.
+                result = gumbel_search_root(
+                    g.root,
+                    evaluator,
+                    n_simulations=n_simulations,
+                    m=gumbel_m,
+                    c_visit=gumbel_c_visit,
+                    c_scale=gumbel_c_scale,
+                    c_puct_init=c_puct,
+                    c_puct_base=c_puct_base,
+                    rng=g.rng,
+                )
+                n_initial = initial_plies[g_idx]
+                side = (n_initial + ply) % 2
+                pi = result.pi
+                # Sanitize the target (mirrors the native path's NaN guard).
+                if not np.all(np.isfinite(pi)):
+                    pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
+                    s = pi.sum()
+                    pi = pi / s if s > 0 else np.full_like(pi, 1.0 / len(pi))
+                trajectories[g_idx].append((g.root.state.to_planes(), pi.copy(), side))
+                g.advance_root(result.action)
+
+        next_active: list[int] = []
+        for g_idx in active:
+            g = games[g_idx]
+            n_initial = initial_plies[g_idx]
+            done, term_val = g.root.state.is_terminal()
+            if done:
+                if term_val == -1.0:
+                    winner_side = (n_initial + ply) % 2
+                    outcome_for_black = 1.0 if winner_side == 0 else -1.0
+                else:
+                    outcome_for_black = 0.0
+                completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+            else:
+                next_active.append(g_idx)
+        active = next_active
+        ply += 1
+
+    for g_idx in active:
+        completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
+
+    records: list[GameRecord] = []
+    for g_idx, outcome_for_black, plies in sorted(completed):
+        examples: list[SelfPlayExample] = []
+        n_initial = initial_plies[g_idx]
+        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+            z = outcome_for_black if side == 0 else -outcome_for_black
+            ply_at_capture = n_initial + ply_idx
+            if augment_symmetries:
+                for aug_planes, aug_pi in augment(planes, pi):
+                    examples.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                    ))
+            else:
+                examples.append(SelfPlayExample(
+                    planes, pi.astype(np.float32), z,
+                    side=int(side), ply=int(ply_at_capture),
+                ))
+        records.append(GameRecord(
+            examples=examples,
+            plies=plies,
+            outcome=outcome_for_black,
+            archive_start=archive_start_flags[g_idx],
+        ))
+    return records
+
+
 def _generate_games_native(
     n_games: int,
     evaluator: Evaluator,
@@ -161,11 +312,25 @@ def _generate_games_native(
     random_opening_moves: int = 0,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
+    playout_cap_frac: float = 1.0,
+    playout_cap_fast_sims: int = 0,
     profile: ProfileStats | None = None,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
         max_plies = N_ACTIONS
+
+    # Playout-Cap Randomization (KataGo, Wu 2019). When `playout_cap_frac < 1.0`,
+    # each move is, with probability `playout_cap_frac`, a FULL-search move (run
+    # at `n_simulations` AND recorded as a training target); otherwise it is a
+    # FAST move (run at `fast_sims` and NOT recorded — used only to advance the
+    # game). Concentrates expensive search on the moves that actually train the
+    # net. `playout_cap_frac >= 1.0` (default) => every move is full + recorded =
+    # byte-identical to the pre-PCR production path. `fast_sims == 0` (default)
+    # means "same as n_simulations", so the lever is inert unless BOTH the frac
+    # is reduced and a smaller fast budget is set.
+    pcr_active = playout_cap_frac < 1.0
+    fast_sims = playout_cap_fast_sims if playout_cap_fast_sims > 0 else n_simulations
 
     planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
 
@@ -225,20 +390,59 @@ def _generate_games_native(
     while active and ply < max_plies:
         with _profile_timer(profile, "active_list_s"):
             active_games = [games[i] for i in active]
-        with _profile_timer(profile, "native_search_batch_s"):
-            native_mcts.search_batch(
-                active_games,
-                search_evaluator,
-                n_simulations=n_simulations,
-                wave_size=wave_size,
-                add_root_noise=True,
-            )
-        _profile_add(profile, "search_calls", 1.0)
+
+        # Playout-Cap Randomization: decide per-game-per-ply whether this is a
+        # full-search (recorded) move or a fast (non-recorded) move. The native
+        # search_batch requires a single sim count per call, so when PCR is
+        # active we split the active wave into two homogeneous sub-batches and
+        # call search_batch once per sub-batch with its own sim count. The
+        # `is_full` flag (indexed by slot) gates the training-target append
+        # below; game advancement happens identically for both kinds of move.
+        if pcr_active:
+            is_full = rng.random(len(active_games)) < playout_cap_frac
+            full_slots = [s for s in range(len(active_games)) if is_full[s]]
+            fast_slots = [s for s in range(len(active_games)) if not is_full[s]]
+            with _profile_timer(profile, "native_search_batch_s"):
+                if full_slots:
+                    native_mcts.search_batch(
+                        [active_games[s] for s in full_slots],
+                        search_evaluator,
+                        n_simulations=n_simulations,
+                        wave_size=wave_size,
+                        add_root_noise=True,
+                    )
+                    _profile_add(profile, "search_calls", 1.0)
+                if fast_slots:
+                    # Fast moves are not training targets, so they carry no
+                    # exploration obligation: skip Dirichlet root noise to keep
+                    # the cheap search greedier (KataGo intent — exploration
+                    # noise belongs on the recorded/full moves). Temperature
+                    # (the play-sampling knob) still applies to both kinds.
+                    native_mcts.search_batch(
+                        [active_games[s] for s in fast_slots],
+                        search_evaluator,
+                        n_simulations=fast_sims,
+                        wave_size=wave_size,
+                        add_root_noise=False,
+                    )
+                    _profile_add(profile, "search_calls", 1.0)
+        else:
+            is_full = None  # every move is full + recorded (production path)
+            with _profile_timer(profile, "native_search_batch_s"):
+                native_mcts.search_batch(
+                    active_games,
+                    search_evaluator,
+                    n_simulations=n_simulations,
+                    wave_size=wave_size,
+                    add_root_noise=True,
+                )
+            _profile_add(profile, "search_calls", 1.0)
 
         next_active: list[int] = []
         with _profile_timer(profile, "post_search_loop_s"):
             for slot_idx, g_idx in enumerate(active):
                 g = active_games[slot_idx]
+                record_target = is_full is None or bool(is_full[slot_idx])
                 tau = 1.0 if ply < temperature_moves else temperature_final
                 with _profile_timer(profile, "policy_export_s"):
                     pi = g.policy(temperature=tau)
@@ -252,18 +456,19 @@ def _generate_games_native(
                 # Replace NaN with 0 and re-normalize; if everything is NaN, fall
                 # back to a uniform distribution (lowest-information target —
                 # better than corrupting the buffer).
-                with _profile_timer(profile, "policy_sanitize_s"):
-                    if not np.all(np.isfinite(pi)):
-                        pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
-                        s = pi.sum()
-                        if s <= 0:
-                            pi = np.full_like(pi, 1.0 / len(pi))
-                        else:
-                            pi = pi / s
-                with _profile_timer(profile, "root_planes_s"):
-                    planes = g.root_planes()
-                with _profile_timer(profile, "trajectory_append_s"):
-                    trajectories[g_idx].append((planes, pi.copy(), side))
+                if record_target:
+                    with _profile_timer(profile, "policy_sanitize_s"):
+                        if not np.all(np.isfinite(pi)):
+                            pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
+                            s = pi.sum()
+                            if s <= 0:
+                                pi = np.full_like(pi, 1.0 / len(pi))
+                            else:
+                                pi = pi / s
+                    with _profile_timer(profile, "root_planes_s"):
+                        planes = g.root_planes()
+                    with _profile_timer(profile, "trajectory_append_s"):
+                        trajectories[g_idx].append((planes, pi.copy(), side))
 
                 with _profile_timer(profile, "sample_action_s"):
                     action = _sample_action(pi, rng)
@@ -338,12 +543,27 @@ def generate_games(
     random_opening_moves: int = 0,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
+    playout_cap_frac: float = 1.0,
+    playout_cap_fast_sims: int = 0,
     profile: ProfileStats | None = None,
+    gumbel_root: bool = False,
+    gumbel_m: int = 16,
+    gumbel_c_visit: float = 50.0,
+    gumbel_c_scale: float = 1.0,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
     All games advance in lockstep: at each ply we batch-MCTS across active games,
     sample an action per game, apply it, and remove any games that ended.
+
+    `gumbel_root=True` switches the ROOT to Gumbel AlphaZero selection + Sequential
+    Halving (Danihelka et al. 2022): the root samples `gumbel_m` candidate actions
+    via the Gumbel-top-k trick, allocates the sim budget with Sequential Halving,
+    and the training policy target is the COMPLETED-POLICY (not visit counts).
+    Internal nodes keep PUCT. Default `gumbel_root=False` is byte-identical to the
+    standard path. The Gumbel path runs on the pure-Python `gomoku.mcts` tree
+    (the native C engine does not implement Gumbel — see the C-port spec in
+    `gomoku/gumbel.py`).
 
     `wave_size` > 1 enables zeb-style wave-batched MCTS with virtual loss:
     each round collects `wave_size` leaves per game in one batched evaluator
@@ -354,8 +574,41 @@ def generate_games(
     No training examples are recorded for the random opening — only for moves
     chosen by MCTS. Breaks the "always-same-opening" collapse mode by forcing
     the model to learn from a diverse set of starting positions.
+
+    `playout_cap_frac` < 1.0 enables Playout-Cap Randomization (KataGo, Wu 2019):
+    each move is, with probability `playout_cap_frac`, a full-search move
+    (`n_simulations` sims, recorded as a training target); otherwise a fast move
+    (`playout_cap_fast_sims` sims, NOT recorded — used only to advance the
+    game). Defaults (frac=1.0, fast_sims=0) preserve the current behavior
+    exactly: every move is full-search and recorded. NOTE: PCR is only honored on
+    the native MCTS path; the pure-Python fallback below ignores it.
     """
     rng = rng or np.random.default_rng()
+    if gumbel_root:
+        # Gumbel runs on the pure-Python tree path; the native C engine does
+        # not (yet) implement Gumbel root selection. This is intentional and
+        # explicit — see the C-port spec at the bottom of gomoku/gumbel.py.
+        return _generate_games_gumbel(
+            n_games,
+            evaluator,
+            n_simulations=n_simulations,
+            c_puct=c_puct,
+            c_puct_base=c_puct_base,
+            temperature_moves=temperature_moves,
+            temperature_final=temperature_final,
+            dirichlet_alpha=dirichlet_alpha,
+            dirichlet_eps=dirichlet_eps,
+            max_plies=max_plies,
+            rng=rng,
+            augment_symmetries=augment_symmetries,
+            random_opening_moves=random_opening_moves,
+            archive=archive,
+            archive_start_frac=archive_start_frac,
+            profile=profile,
+            gumbel_m=gumbel_m,
+            gumbel_c_visit=gumbel_c_visit,
+            gumbel_c_scale=gumbel_c_scale,
+        )
     if _can_use_native_mcts(evaluator):
         return _generate_games_native(
             n_games,
@@ -374,6 +627,8 @@ def generate_games(
             random_opening_moves=random_opening_moves,
             archive=archive,
             archive_start_frac=archive_start_frac,
+            playout_cap_frac=playout_cap_frac,
+            playout_cap_fast_sims=playout_cap_fast_sims,
             profile=profile,
         )
     if max_plies is None:
