@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -129,6 +130,44 @@ def ema_l2_distance(ema_model, model) -> float:
         for ep, p in zip(ema_model.parameters(), model.parameters()):
             sq += float((p - ep).pow(2).sum())
         return sq ** 0.5
+
+
+def average_state_dicts(state_dicts: list[dict]) -> dict:
+    """V3 SWA lever: flat (uniform) average of a list of model state_dicts.
+
+    Returns a new state_dict where each FLOAT tensor (conv/linear weights,
+    BatchNorm running_mean / running_var, etc.) is the elementwise arithmetic
+    mean across the inputs, and each non-float tensor (e.g. BatchNorm
+    `num_batches_tracked`, an int64 counter) is taken from the LATEST
+    state_dict — averaging an integer batch-counter is meaningless, and the
+    latest value is the most representative for inference.
+
+    Averaging BatchNorm running stats across checkpoints is standard for SWA
+    inference: the running_mean / running_var are floats that move slowly, so a
+    flat tail-average yields valid inference-time normalization without needing
+    a BN-recompute pass. (Classic SWA recomputes BN stats with a forward pass;
+    here the published model is for GENERATION/inference only and the running
+    stats are already well-tracked from training, so averaging is sufficient.)
+
+    All inputs must share the same keys/shapes. Computes in float64 then casts
+    back to each tensor's original float dtype to avoid accumulation drift.
+    """
+    if not state_dicts:
+        raise ValueError("average_state_dicts requires at least one state_dict")
+    latest = state_dicts[-1]
+    out: dict = {}
+    n = len(state_dicts)
+    for key, ref in latest.items():
+        if torch.is_tensor(ref) and ref.is_floating_point():
+            acc = state_dicts[0][key].detach().to(torch.float64)
+            for sd in state_dicts[1:]:
+                acc = acc + sd[key].detach().to(torch.float64)
+            acc = acc / n
+            out[key] = acc.to(ref.dtype)
+        else:
+            # int/long buffers (num_batches_tracked) or non-tensors: take latest.
+            out[key] = ref.detach().clone() if torch.is_tensor(ref) else ref
+    return out
 
 
 def _baseline_log_key(spec) -> str:
@@ -323,6 +362,23 @@ def parse_args() -> argparse.Namespace:
                         "publish-to-workers lag. 0.0 (default) = disabled, "
                         "matches pre-WL2 behavior. Recommended live value 0.99 "
                         "(~70 SGD-step half-life). EMA update is per-SGD-step.")
+    p.add_argument("--swa-window", type=int, default=0,
+                   help="V3 lever: SWA tail-averaging of the self-play generator "
+                        "weights. When > 0, the weights published to workers "
+                        "(--worker-weights-path) are the FLAT (uniform) average of "
+                        "the last --swa-window saved-checkpoint state_dicts of the "
+                        "LIVE learner, rather than an exponential moving average. "
+                        "0 (default) = OFF = current behavior (EMA if --ema-tau>0, "
+                        "else the live weights). SWA REPLACES the EMA-publish when "
+                        "set: --swa-window and --ema-tau are alternative smoothing "
+                        "strategies for the publish path, not composed. The ring "
+                        "buffer is refreshed at each worker-weights publication "
+                        "(every --save-every epochs), so window K spans K saves. "
+                        "Float tensors (incl. BN running stats) are mean-averaged; "
+                        "int buffers (num_batches_tracked) take the latest. The "
+                        "averaged weights are GENERATION-only — the learner, "
+                        "latest.pt and epochNNNN.pt remain the unaveraged live "
+                        "weights. Recommended starting value 5.")
     p.add_argument("--grad-accum-steps", type=int, default=1,
                    help="WL2 lever #4: gradient accumulation. Accumulate "
                         "gradients across this many minibatches before "
@@ -516,6 +572,31 @@ def main() -> None:
             p.requires_grad_(False)
         ema_model.eval()
 
+    # V3 lever: SWA tail-averaging of the self-play generator weights. When
+    # --swa-window > 0 the workers see the flat average of the last K saved
+    # checkpoints' state_dicts (of the live learner) instead of EMA/live
+    # weights. SWA REPLACES the EMA-publish: they are alternative publish-path
+    # smoothers, never composed. `swa_model` holds the recomputed average for
+    # publication; `swa_window_dicts` is the ring buffer of recent CPU
+    # state_dicts. The learner (`model`) and saved latest.pt/epochNNNN.pt are
+    # untouched — only worker_weights.pt reflects the average.
+    swa_model = None
+    swa_window_dicts: deque | None = None
+    if args.swa_window > 0:
+        if args.ema_tau > 0.0:
+            print(f"warning: --swa-window={args.swa_window} REPLACES the EMA "
+                  f"publish path; --ema-tau={args.ema_tau} EMA copy is ignored "
+                  f"for worker publication (SWA and EMA are not composed).")
+        from gomoku.model import GomokuNet
+        swa_model = GomokuNet(model.cfg).to(device)
+        for p in swa_model.parameters():
+            p.requires_grad_(False)
+        swa_model.eval()
+        swa_window_dicts = deque(maxlen=args.swa_window)
+        print(f"SWA generator weights enabled (window={args.swa_window}): "
+              f"workers see the flat mean of the last {args.swa_window} saved "
+              f"checkpoints")
+
     validation_archive: dict | None = None
     if args.validation_archive_path:
         validation_archive = torch.load(
@@ -626,11 +707,31 @@ def main() -> None:
 
         WL2 lever #1: when --ema-tau > 0, workers see the EMA weights, not
         the raw training weights. The 'brain that plays' is decoupled from
-        the 'brain that learns'."""
+        the 'brain that learns'.
+
+        V3 SWA lever: when --swa-window > 0, this REPLACES the EMA/live publish.
+        The live learner's current state_dict is pushed into a ring buffer of
+        the last K checkpoints, the flat average is recomputed into `swa_model`,
+        and that average is what the workers see. The learner (`model`) and the
+        saved latest.pt/epochNNNN.pt are untouched — only worker_weights.pt
+        carries the averaged generator weights."""
         buffer.set_weight_version(epoch)
         if not worker_weights_path:
             return
-        publish_model = ema_model if ema_model is not None else model
+        if swa_model is not None:
+            # Snapshot the live learner onto CPU and push into the tail window,
+            # then recompute the flat average for publication. (CPU clones keep
+            # the ring cheap and detached from the live training tensors.)
+            snapshot = {k: v.detach().to("cpu").clone()
+                        for k, v in model.state_dict().items()}
+            swa_window_dicts.append(snapshot)
+            avg = average_state_dicts(list(swa_window_dicts))
+            swa_model.load_state_dict(avg)
+            publish_model = swa_model
+        elif ema_model is not None:
+            publish_model = ema_model
+        else:
+            publish_model = model
         tmp = worker_weights_path + ".tmp"
         save_checkpoint(tmp, publish_model, optimizer=None,
                         epoch=epoch, total_games=total_games,
