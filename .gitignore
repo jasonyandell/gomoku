@@ -21,6 +21,7 @@ archives/
 .DS_Store
 .claude/*
 !.claude/skills/
+!.claude/agents/
 
 # Frontier lab runtime artifacts (keep .frontier/config.json and lanes.json tracked)
 .frontier/runs/
