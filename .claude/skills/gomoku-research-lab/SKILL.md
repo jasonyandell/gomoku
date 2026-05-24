@@ -101,8 +101,7 @@ pkill -TERM -f 'delo_derby'            # a Derby race (current chunk finishes it
 
 **Before any run that lands weights — a fresh production run, a time-capped training slice, or a new Derby idea's first chunk — present a TITLE CARD.** It makes "what is *this specific* run doing?" unambiguous, both in the moment and in the scrollback. We've always done these; they're easy to skip when autonomous — don't.
 
-- **ACK required** for anything that starts a NEW run / campaign or touches the production-default lineage → present the card, wait for the user's go.
-- **Informational** (no ACK, just print it then proceed) for an autonomous slice inside an already-approved campaign — e.g. the next Derby chunk (whose card already lives in `wiki/ops/research-board.md` — cite it).
+**Always present the card, then proceed — no ACK gate.** This is an autonomous lab; the card is for clarity, not permission. Print it and launch. (Flipping the production-default WL-release lineage is a separate deliberate ESCALATE per the stop-gates — *that* still surfaces to the user, but the title card itself never blocks.) A Derby idea's card already lives in `wiki/ops/research-board.md` — cite it rather than re-authoring.
 
 Template — tight, fill every line, lead with the lever + a falsifiable expectation:
 
@@ -118,7 +117,7 @@ Track:   <wandb run | sweep_runs/<cell>/checkpoints/eval_results.jsonl>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Same shape as the Derby title cards in `wiki/ops/research-board.md`. The long-form production-launch flow (smoke → ACK → launch → monitor → close-out) lives in [[gomoku-train]]'s launch-sequence-runbook; this card is the gate at the top of it.
+Same shape as the Derby title cards in `wiki/ops/research-board.md`. The long-form production-launch flow (smoke → launch → monitor → close-out) lives in [[gomoku-train]]'s launch-sequence-runbook; this card sits at the top of it.
 
 ## How to dispatch a cell
 
@@ -225,7 +224,7 @@ After every lane completes, before moving on:
 
 **Handoffs to [[gomoku-train]] (the machine — cross-ref, don't duplicate its steps):**
 - A recipe WON and you want to ship it → gomoku-train's publish flow (HuggingFace push + Cloudflare deploy).
-- Starting a real long PRODUCTION run (a new WL-release lineage, not a slice) → gomoku-train's launch-sequence-runbook: mine the validation archive first, 30-epoch smoke, then launch with a title-card ACK. The research lab schedules *slices*; a new release lineage is a gomoku-train launch.
+- Starting a real long PRODUCTION run (a new WL-release lineage, not a slice) → gomoku-train's launch-sequence-runbook: mine the validation archive first, 30-epoch smoke, then launch with a title card (no ACK). The research lab schedules *slices*; a new release lineage is a gomoku-train launch.
 
 **Discipline one-liners:**
 - **Thermal:** heat-soaked IS the production regime. Absolute aug/s drifts ~5% across a session as the chip warms — for cross-time comparisons do a matched-thermal back-to-back A/B, never a compare-to-a-cold-session reference ([[feedback-heat-soaked-is-production]]).

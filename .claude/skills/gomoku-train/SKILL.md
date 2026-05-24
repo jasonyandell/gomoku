@@ -25,7 +25,7 @@ The real production path. Follow the playbook at
 [`wiki/topics/launch-sequence-runbook.md`](/Users/jason/code/gomoku/wiki/topics/launch-sequence-runbook.md) end-to-end whenever the user says "start a run", "launch WL3", "kick off the next training run", etc. The runbook covers:
 
 1. Pre-launch state check + the two known gotchas (MPS INT_MAX at 1.5M+ buffer, worker race fix verification)
-2. **Title card → user ACK** (never launch without it)
+2. **Title card** — present it (never launch without one; no ACK, autonomous lab)
 3. **Smoke** (30 epochs, validate every new lever's signature in logs, clean the dir)
 4. **Real launch** + spin-up verify via Monitor
 5. **Wiki updates** — append-only run log in `TRAINING_WIKI.md`, maintenance entry in `wiki/log.md`, refresh `scripts/wandb_workspace.py` with the new run id
@@ -86,7 +86,7 @@ W&B dashboard: project is `gomoku` under entity `jasonyandell-forge42`. The acti
 
 ## Starting / resuming training
 
-> **Title card FIRST — never launch a run without one.** Before running any command below, present a title card (What / Lever / Parent / Config+cap / Why / Expect / Track) so it's clear what *this specific* run is doing, then get the user's ACK. Template + the ACK-vs-informational rule live in the research-lab skill ([[gomoku-research-lab]] § Title card) and mirror the Derby cards in `wiki/ops/research-board.md`. This is step 2 of the launch-sequence-runbook — don't skip it just because you jumped straight to the command.
+> **Title card FIRST — never launch a run without one.** Before running any command below, present a title card (What / Lever / Parent / Config+cap / Why / Expect / Track) so it's clear what *this specific* run is doing, then proceed — **no ACK gate; this is an autonomous lab.** The card is for clarity, not permission. Template lives in the research-lab skill ([[gomoku-research-lab]] § Title card) and mirrors the Derby cards in `wiki/ops/research-board.md`. This is step 2 of the launch-sequence-runbook — don't skip it just because you jumped straight to the command.
 
 The defaults below are what we know works on Jason's M5 Max — ~28s/epoch in steady state, ~125 epochs/hour:
 
@@ -367,7 +367,7 @@ cold.
 
 - **Change a training hyperparameter** (lr, sims, batch, K, τ, EMA tau, etc.). These are *experimental* decisions, not infrastructure.
 - **Stop a run that's still making progress.** Don't kill on a hunch.
-- **Re-architect**: add new levers, change cell config, change buffer sampling. New cells need a title card → ACK.
+- **Re-architect**: add new levers, change cell config, change buffer sampling. New cells need a title card (present it; no ACK).
 - **Push to main of any other repo, deploy, or anything that affects external surfaces** (gomoku.jasonyandell.workers.dev, HuggingFace, etc.).
 - **Reach for a completely new run design** (e.g. "let me try WL4 with a different lever") — that's a planning conversation.
 
@@ -465,7 +465,7 @@ e92 where we had a chance to merge the C fix), then cold restart as
 
 | User says | Do |
 |---|---|
-| "start training" / "kick off a run" / "launch WLn" | **Follow the production launch runbook end-to-end** at `wiki/topics/launch-sequence-runbook.md`. Status check first. Title card → ACK before launching. Smoke if any new lever. Wiki + workspace updates after spin-up. |
+| "start training" / "kick off a run" / "launch WLn" | **Follow the production launch runbook end-to-end** at `wiki/topics/launch-sequence-runbook.md`. Status check first. Title card before launching (present it; no ACK). Smoke if any new lever. Wiki + workspace updates after spin-up. |
 | "resume from latest" | Single-process path: see RESUME command below. **Cell-based runs DO support resume** via `python scripts/run_sweep.py --cell <CELL> --epochs N --resume sweep_runs/<CELL>/checkpoints/latest.pt` — keeps wandb lineage, keeps the 1.5M-position buffer (at the cost of up to `save_buffer_every` epochs of weight drift). This is the WL5 phase-2 resume pattern. |
 | "how's it going" / "status" | Run the status check block. Tail recent epoch lines. Quote W&B URL. |
 | "stop training" | `pkill -f gomoku.train`. Confirm with status check. |
