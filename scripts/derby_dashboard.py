@@ -11,8 +11,10 @@ What this script does that the picker-by-hand approach doesn't:
   * finds the ONE clean run per idea (newest — the others are stale dupes from
     earlier launches) and gives each a distinct color, disabling the dupes so the
     overlay isn't cluttered;
-  * pins eval/peak_elo + eval/model_elo as table columns (the elo leaderboard —
-    populate it first with `python scripts/derby_sync_elo.py`);
+  * charts the eval history (model_elo + every anchor winrate, logged to wandb by
+    the trainer's jsonl-tail-forward at each eval cycle) + pins eval/peak_elo as a
+    table column (the leaderboard — run `derby_sync_elo.py` for the peak scalar,
+    which wandb summary doesn't track natively);
   * lays out every comparison stat the trainer logs, grouped by what question it
     answers (losses / game-shape / policy-sharpness / intensity / throughput).
 
@@ -65,14 +67,22 @@ def line(title: str, ys: list[str]) -> rpt.LinePlot:
 
 def build_sections() -> list[ws.Section]:
     return [
-        ws.Section(name="1 · Strength — model_elo (run `derby_sync_elo.py` to populate)",
+        # Eval IS in wandb history: the eval_worker writes eval_results.jsonl and the
+        # trainer tails+forwards every row to its own run (single-writer), so
+        # eval/model_elo + each eval/vs_<anchor>_winrate are logged at every eval
+        # cycle (~5 epochs). One LinePlot per eval type → x=Step (iteration), one
+        # line per run (experiment). peak_elo bar = the leaderboard (from the summary
+        # sync, derby_sync_elo.py). This is "each type of eval at each iteration for
+        # each experiment."
+        ws.Section(name="1 · Strength — model_elo + every anchor eval (each cycle, each experiment)",
                    panels=[
-                       rpt.BarPlot(title="peak model_elo (the leaderboard)",
-                                   metrics=["eval/peak_elo"]),
-                       rpt.BarPlot(title="latest model_elo", metrics=["eval/model_elo"]),
-                       line("vs anchors — heuristic / la2 / la4 winrate",
-                            ["eval/vs_heuristic_winrate", "eval/vs_lookahead2_winrate",
-                             "eval/vs_lookahead4_winrate"]),
+                       line("model_elo — the headline elo curve (every eval cycle)",
+                            ["eval/model_elo"]),
+                       rpt.BarPlot(title="peak model_elo (leaderboard)", metrics=["eval/peak_elo"]),
+                       line("vs random — winrate", ["eval/vs_random_winrate"]),
+                       line("vs heuristic — winrate", ["eval/vs_heuristic_winrate"]),
+                       line("vs lookahead:depth=2 — winrate", ["eval/vs_lookahead2_winrate"]),
+                       line("vs lookahead:depth=4 — winrate", ["eval/vs_lookahead4_winrate"]),
                    ], is_open=True),
         ws.Section(name="2 · Losses",
                    panels=[

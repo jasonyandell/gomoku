@@ -8,7 +8,8 @@ Three sources, each for what it's best at:
     scheduler reads, so the Δelo/hr column + the "next pick" line below MATCH the
     real priority decision exactly (computed via delo_derby.pick_priority).
   * ``sweep_runs/<cell>/checkpoints/eval_results.jsonl`` — elo fallback if state is
-    missing (model_elo is NOT in wandb: the trainer runs ``--no-eval``).
+    missing. (model_elo IS in wandb history too — the trainer forwards the eval
+    jsonl to its run — but reading the jsonl/state directly is simpler here.)
   * wandb run ``9x9-sweep-<cell_name>`` — live TRAINING dynamics (loss / plies / step).
 
 Priority recap (what the Δelo/hr column drives): never-run / entry-fee first (an idea

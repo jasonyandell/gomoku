@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Sync derby model_elo from eval_results.jsonl INTO each idea's wandb run summary.
 
-Why this exists: the derby trainer runs ``--no-eval``, so ``eval/model_elo`` is
+NOTE (corrected 2026-05-24): eval/model_elo + every eval/vs_<anchor>_winrate ARE
+already in wandb HISTORY — the trainer tails eval_results.jsonl and forwards each row
+to its run (single-writer), even under --no-eval. This script is NOT needed for that;
+it only adds the PEAK elo + beat-heuristic as SUMMARY scalars (wandb summary keeps the
+LAST value, not the peak), which the dashboard pins as a leaderboard column.
+
+(Original rationale, now partly obsolete:) the derby trainer runs ``--no-eval``, so ``eval/model_elo`` is
 NEVER logged to wandb — it's computed by the bundle's separate ``--final-eval``
 step and written to ``sweep_runs/<cell>/checkpoints/eval_results.jsonl``. This
 script reads that jsonl and writes the latest + peak elo (and the anchor winrates)
