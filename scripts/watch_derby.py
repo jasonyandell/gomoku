@@ -148,8 +148,9 @@ def live_delo_per_hr(pts: list) -> float | None:
 def idea_metrics(state: dict, name: str, cell: str) -> dict:
     """elo/peak = freshest/best fine-grained eval; rate = LIVE elo/hr slope from the
     fine-grained eval series (moves mid-slice); chunks/status/wall from the state."""
-    pts, _ = read_jsonl(cell)
+    pts, last = read_jsonl(cell)
     st = (state.get("ideas") or {}).get(name) or {}
+    ep = last.get("eval_worker/epoch_evaluated")
     if pts:
         elos = [e for _, e in pts]
         elo, peak, rate = elos[-1], max(elos), live_delo_per_hr(pts)
@@ -162,7 +163,7 @@ def idea_metrics(state: dict, name: str, cell: str) -> dict:
     wall = float(st.get("wall_secs_total", 0.0))
     if st.get("status") == "running":
         wall += running_slice_secs(cell)
-    return {"elo": elo, "peak": peak, "pts": len(pts), "rate": rate,
+    return {"elo": elo, "peak": peak, "pts": len(pts), "rate": rate, "ep": ep,
             "chunks": st.get("chunks_done", 0), "status": st.get("status", "—"),
             "wall_min": wall / 60.0}
 
@@ -230,33 +231,33 @@ def render(board_path: str) -> None:
     name_t = Path(board_path).stem.replace("_board", "")
     print(f"\n  Δelo Derby — {name_t}   (cap {cap_h:.1f}h/idea · priority: never-run → Δelo/hr hill-climb)")
     print(f"  {time.strftime('%Y-%m-%d %H:%M:%S')}   {proj_url or '(wandb unavailable)'}")
-    print("  " + "-" * 104)
-    print(f"  {'#':>2} {'idea':<11} {'elo':>5} {'peak':>5} {'Δelo/hr':>8} {'chk':>3} "
+    print("  " + "-" * 108)
+    print(f"  {'#':>2} {'idea':<11} {'elo':>5} {'peak':>5} {'e':>4} {'Δelo/hr':>8} {'chk':>3} "
           f"{'status':<9} {'pl':>6} {'vl':>6} {'plies':>6} {'wall_m':>6}")
-    print("  " + "-" * 104)
+    print("  " + "-" * 108)
     for i, x in enumerate(rows, 1):
         beat = "✓" if (x["peak"] or 0) >= 800 else " "
         run_mark = "►" if x["status"] == "running" else " "
         # live elo/hr slope from the fine-grained eval series ('—' = <2 eval points)
         rate = _fmt(x["rate"], "8.1f") if x["rate"] is not None else "—"
         print(f"  {i:>2} {run_mark}{x['idea']:<10} {_fmt(x['elo'], '5.0f')} {_fmt(x['peak'], '5.0f')}{beat}"
-              f"{rate:>8} {_fmt(x['chunks'], '3.0f')} {x['status']:<9} "
+              f"{_fmt(x['ep'], '4.0f')} {rate:>8} {_fmt(x['chunks'], '3.0f')} {x['status']:<9} "
               f"{_fmt(x['pl'], '6.3f')} {_fmt(x['vl'], '6.3f')} {_fmt(x['plies'], '6.1f')} "
               f"{_fmt(x['wall_min'], '6.1f')}")
-    print("  " + "-" * 104)
+    print("  " + "-" * 108)
+    # footer: one status line (leader · next pick) + one compact legend line
+    bits = []
     lead = next((x for x in rows if x["elo"] is not None), None)
     if lead:
-        print(f"  leader: {lead['idea']} @ {lead['elo']:.0f} elo"
-              f"{'  (beat-heuristic ✓)' if (lead['peak'] or 0) >= 800 else ''}")
+        bits.append(f"leader: {lead['idea']} @ {lead['elo']:.0f}"
+                    f"{' ✓' if (lead['peak'] or 0) >= 800 else ''}")
     if next_pick:
         nr = _derby.delo_per_hr(state, next_pick) if _derby else None
-        why = "entry-fee (needs a 2nd point for a slope)" if nr is None else f"steepest Δelo/hr = {nr:.1f}"
-        print(f"  ► next pick (live priority): {next_pick}  — {why}")
-    print(f"  ►=running · elo/peak=freshest fine-grained eval · Δelo/hr=LIVE least-squares slope over")
-    print(f"  the last {LIVE_RATE_WINDOW} eval points (moves mid-slice; '—'=<2 evals) · pre-grok models pin at")
-    print("  ~389 until they beat an anchor · wall_m=closed slices + the running idea's LIVE in-flight")
-    print("  slice · NOTE: the scheduler picks on SLICE-CLOSE rates, so '► next pick' can lag this live")
-    print("  column by up to one slice (e.g. a mid-slice rocket).\n")
+        bits.append(f"next: {next_pick} ({'entry-fee' if nr is None else f'Δelo/hr {nr:.0f}'})")
+    if bits:
+        print("  " + "    ·    ".join(bits))
+    print("  e=epoch · elo/Δelo·hr/wall_m are LIVE (mid-slice) · ✓=beat-heuristic · "
+          "scheduler ranks on slice-close (next may lag)\n")
 
 
 def main() -> None:
