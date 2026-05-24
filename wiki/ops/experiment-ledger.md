@@ -69,6 +69,7 @@ confidence: HIGH. Behavior-identical proven, not just argued: across 360 positio
 artifacts: scripts/bench_lookahead.py (committed); equivalence harness in job dir (ephemeral).
 commands_run: pytest (29 passed); bench_lookahead.py before/after; cProfile before/after; 360-position equivalence check.
 decision: promote
+reviewer: APPROVE — behavior-preserving (equivalence logic sound across edge cases: empty-legal early-return, padded-slot zeroing before the max, opening/fallback preserved), math exact (6.347×/6.504×), all 5 surfaces consistent, 28 tests green, bench in thermal-ballpark, merge --no-ff, concurrent 6d47bbb work intact-not-clobbered. Non-gating flag actioned: the 360-position proof was ephemeral → committed tests/test_baselines_vectorized_equiv.py (helpers vs independent brute-force refs) so a future helper edit can't silently shift the Elo anchor.
 next_action: merge feat/perf-lookahead-eval to main (--no-ff). Follow-up levers (diminishing returns, NOT queued unless eval cost resurfaces): (a) history-free apply for the lookahead path — apply_move_arrays copies 8 history snapshots/node that negamax never reads (~8-10% remaining), but it's shared with the MCTS/self-play path so needs a lookahead-specific lighter apply (riskier); (b) numba/cython negamax (Class C, out of autonomous scope). Real-world impact: eval_worker's lookahead side (esp. depth=4, the dominant anchor per train.py:348) gets ~6× cheaper, making frequent Elo anchoring affordable — directly serves the Δelo/Δt north-star.
 ```
 
