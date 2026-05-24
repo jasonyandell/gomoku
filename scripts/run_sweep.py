@@ -400,6 +400,57 @@ CELLS: dict[str, Cell] = {
                 weights_poll_max_sec=8.0,
                 random_opening_moves=0,
                 epochs=100),
+    # Δelo Derby v2 roster (raced by scripts/delo_derby.py via the
+    # run_sweep_wall_slice engine + scripts/derby_v2_board.json). The v1 top-3,
+    # now on the PRODUCTION multiprocess wave-mode recipe (WL4-style base, no
+    # WL5 archive/validation levers — clean fresh race). Each changes exactly
+    # ONE lever vs the shared base. epochs huge so only --max-wall-secs stops a
+    # slice. NOTE (sgd-800): in wave-mode, training intensity is governed by
+    # sgd_per_position; train.py overrides --training-steps when it's set, so
+    # the faithful "2× SGD" lever is sgd_per_position 0.0025 -> 0.005, not
+    # training_steps.
+    "derby-open-div4": Cell("derby-open-div4", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=4),   # ← the one lever (was 0)
+    "derby-temp-16": Cell("derby-temp-16", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=16, temperature_final=0.1,   # ← the one lever (was 30)
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=0),
+    "derby-sgd-800": Cell("derby-sgd-800", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.005, save_buffer_every=100,   # ← the one lever (2× baseline)
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=0),
 }
 
 
