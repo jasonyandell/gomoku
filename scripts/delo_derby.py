@@ -13,24 +13,44 @@ Designed to run UNATTENDED OVERNIGHT: robustness > features. One bad chunk never
 kills the race; state is written atomically after every chunk and the loop is fully
 crash-resumable via --resume.
 
-CHUNK ENGINE NOTE (verified against gomoku/train.py + gomoku/eval_worker.py):
-  `gomoku.train` ALONE does NOT write `eval/model_elo` to eval_results.jsonl. With
-  in-trainer eval it logs only per-baseline winrates; the maximum-likelihood
-  `model_elo` + the jsonl line are produced by a SEPARATE `gomoku.eval_worker`
-  process (see scripts/run_sweep.py, which runs the trainer `--no-eval` alongside an
-  eval_worker). So each derby chunk is TWO sequential subprocess steps:
-    1. `python -m gomoku.train --no-eval --epochs <chunk> [--resume latest.pt]
-       --save-buffer-every <chunk> ...`  → advances the model, writes latest.pt.
-    2. `python -m gomoku.eval_worker --checkpoint-path <dir>/latest.pt
-       --max-cycles 1 ...`  → appends ONE eval_results.jsonl line carrying model_elo.
-  `--save-buffer-every <chunk_epochs>` is REQUIRED: train.py only rewrites latest.pt
-  every save_buffer_every epochs (default 20), so a 10-epoch chunk would otherwise
-  leave NO fresh latest.pt to resume from.
+TWO CHUNK ENGINES (selected by board `global.engine`):
+
+  "single_process" (v1, DEFAULT — unchanged):
+    `gomoku.train` ALONE does NOT write `eval/model_elo` to eval_results.jsonl. With
+    in-trainer eval it logs only per-baseline winrates; the maximum-likelihood
+    `model_elo` + the jsonl line are produced by a SEPARATE `gomoku.eval_worker`
+    process. So each v1 chunk is TWO sequential subprocess steps:
+      1. `python -m gomoku.train --no-eval --epochs <chunk> [--resume latest.pt]
+         --save-buffer-every <chunk> ...`  → advances the model, writes latest.pt.
+      2. `python -m gomoku.eval_worker --checkpoint-path <dir>/latest.pt
+         --max-cycles 1 ...`  → appends ONE eval_results.jsonl line carrying model_elo.
+    `--save-buffer-every <chunk_epochs>` is REQUIRED: train.py only rewrites latest.pt
+    every save_buffer_every epochs (default 20), so a 10-epoch chunk would otherwise
+    leave NO fresh latest.pt to resume from. Budget is EPOCH-native (cap_epochs).
+
+  "run_sweep_wall_slice" (v2 — production multiprocess, WALL-NATIVE):
+    v1 ran single-process (one `gomoku.train`; GPU ~30%, machine mostly idle), so its
+    wall-clock / Δelo-per-hour were unrepresentative of production. v2 races on the
+    PRODUCTION recipe — `run_sweep.py` runs 1 trainer + N selfplay_workers in wave-mode
+    and SATURATES the GPU — so Δelo/hr is finally honest. Each v2 chunk is ONE command:
+      `python scripts/run_sweep.py --cell <CELL> --resume <idea>/checkpoints/latest.pt
+       --max-wall-secs <slice_secs> --final-eval`
+    That single command runs the bundle for the slice, self-caps with a clean resumable
+    save (latest.pt with buffer embedded), AND ends with a fresh `eval/model_elo` line
+    in `<cell>/checkpoints/eval_results.jsonl` (run_sweep --final-eval does eval INSIDE
+    the bundle — no separate eval_worker step). Budget is WALL-NATIVE: a chunk = a wall
+    slice; the per-idea cap is wall-seconds (cap_wall_secs), NOT epochs.
+
+Both engines share: current-elo "feed the leader" priority, atomic state writes, one
+failed chunk never kills the race, crash-resume via --resume, peak-checkpoint
+snapshotting (best-elo latest.pt copied to a peak path so keep-last-n pruning can't
+discard the champion).
 
 Usage:
-  python scripts/delo_derby.py --board scripts/derby_board.json
-  python scripts/delo_derby.py --resume
-  python scripts/delo_derby.py --dry-run
+  python scripts/delo_derby.py --board scripts/derby_board.json            # v1 (default)
+  python scripts/delo_derby.py --board scripts/derby_v2_board.json         # v2 wall-slice
+  python scripts/delo_derby.py --board scripts/derby_v2_board.json --resume
+  python scripts/delo_derby.py --board scripts/derby_v2_board.json --dry-run
   python scripts/delo_derby.py --max-chunks 4 --chunk-timeout 1800
 """
 
@@ -118,18 +138,44 @@ def resolve_path(p: str | Path) -> Path:
 # Board / state model
 # ---------------------------------------------------------------------------
 
+SINGLE_PROCESS = "single_process"
+RUN_SWEEP_WALL_SLICE = "run_sweep_wall_slice"
+
+
+def engine_of(board: dict) -> str:
+    """The board's chunk engine. Absent => v1 single_process (backward compat)."""
+    return board["global"].get("engine", SINGLE_PROCESS)
+
+
 def load_board(board_path: Path) -> dict:
     with open(board_path) as f:
         board = json.load(f)
     if "global" not in board or "ideas" not in board:
         raise ValueError(f"board {board_path} missing 'global' or 'ideas'")
     g = board["global"]
-    for req in ("chunk_epochs", "cap_epochs", "size", "seed", "base_out_dir", "device"):
+    engine = g.get("engine", SINGLE_PROCESS)
+    if engine == SINGLE_PROCESS:
+        req_keys = ("chunk_epochs", "cap_epochs", "size", "seed", "base_out_dir", "device")
+    elif engine == RUN_SWEEP_WALL_SLICE:
+        # WALL-native: slice_secs (per chunk) + cap_wall_secs (per idea). No epochs.
+        req_keys = ("slice_secs", "cap_wall_secs", "base_out_dir")
+    else:
+        raise ValueError(f"board global.engine={engine!r} unknown "
+                         f"(expected {SINGLE_PROCESS!r} or {RUN_SWEEP_WALL_SLICE!r})")
+    for req in req_keys:
         if req not in g:
-            raise ValueError(f"board global missing required key: {req!r}")
+            raise ValueError(f"board global (engine={engine}) missing required key: {req!r}")
     names = [idea["name"] for idea in board["ideas"]]
     if len(names) != len(set(names)):
         raise ValueError(f"duplicate idea names in board: {names}")
+    if engine == RUN_SWEEP_WALL_SLICE:
+        for idea in board["ideas"]:
+            for req in ("cell", "cell_name"):
+                if req not in idea:
+                    raise ValueError(
+                        f"run_sweep idea {idea.get('name')!r} missing required key "
+                        f"{req!r} ('cell' = run_sweep.CELLS key; 'cell_name' = that "
+                        f"Cell's .name, which fixes the sweep_runs/<cell_name>/ path)")
     return board
 
 
@@ -143,10 +189,13 @@ def fresh_state(board: dict) -> dict:
         "ideas": {
             idea["name"]: {
                 "name": idea["name"],
-                "epochs_done": 0,
-                "elo_history": [],          # list of [epoch, elo, chunk_wall_secs]
+                "epochs_done": 0,            # v1: epoch progress (v2: best-effort epoch tag)
+                "elo_history": [],          # list of [epoch_or_chunk, elo, chunk_wall_secs]
                 "last_delo": 0.0,
-                "wall_secs_total": 0.0,
+                "wall_secs_total": 0.0,      # v2 budget axis (also tracked by v1)
+                "chunks_done": 0,            # v2: # wall slices completed
+                "peak_elo": None,            # best elo ever seen (peak-checkpoint tracking)
+                "peak_path": None,           # snapshot path of the best-elo latest.pt
                 "status": "queued",          # queued | running | capped | errored
                 "wandb_run_id": None,
                 "retries": 0,
@@ -159,6 +208,17 @@ def fresh_state(board: dict) -> dict:
 def state_path_for(board: dict) -> Path:
     base = resolve_path(board["global"]["base_out_dir"])
     return base / "derby_state.json"
+
+
+def board_md_path_for(board: dict) -> Path:
+    """Where standings are written. Default (v1) = the shared research-board.md.
+    A board may override via global.board_md_path (relative to repo root) — the v2
+    board points at a DERBY-OWNED standings file in base_out_dir so it never clobbers
+    the wiki page another agent owns."""
+    override = board["global"].get("board_md_path")
+    if override:
+        return resolve_path(override)
+    return resolve_path(RESEARCH_BOARD_REL)
 
 
 def load_state(path: Path) -> Optional[dict]:
@@ -176,8 +236,25 @@ def load_state(path: Path) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def idea_checkpoint_dir(board: dict, idea_name: str) -> Path:
+    """Checkpoint dir for an idea.
+
+    v1 (single_process): <base_out_dir>/<idea_name>/checkpoints — derby owns the dir.
+    v2 (run_sweep_wall_slice): run_sweep OWNS the layout. It always writes to
+    REPO_ROOT/sweep_runs/<cell_name>/checkpoints (see run_sweep.cell_dirs); the derby
+    must read latest.pt / eval_results.jsonl FROM THERE, not from base_out_dir. We
+    locate it via the idea's `cell_name` (the run_sweep Cell.name).
+    """
+    if engine_of(board) == RUN_SWEEP_WALL_SLICE:
+        idea = next(i for i in board["ideas"] if i["name"] == idea_name)
+        return REPO_ROOT / "sweep_runs" / idea["cell_name"] / "checkpoints"
     base = resolve_path(board["global"]["base_out_dir"])
     return base / idea_name / "checkpoints"
+
+
+def idea_peak_dir(board: dict, idea_name: str) -> Path:
+    """Derby-owned dir for peak-checkpoint snapshots (survives keep-last-n pruning)."""
+    base = resolve_path(board["global"]["base_out_dir"])
+    return base / "_peaks" / idea_name
 
 
 def idea_chunk_log(board: dict, idea_name: str) -> Path:
@@ -250,6 +327,30 @@ def build_eval_cmd(board: dict, idea: dict) -> list[str]:
     cmd += ["--n-workers", "4"]
     cmd += ["--max-cycles", "1"]
     cmd += ["--seed", str(g["seed"])]
+    return cmd
+
+
+def build_sweep_slice_cmd(board: dict, idea: dict, resume: bool) -> list[str]:
+    """Compose the v2 (run_sweep_wall_slice) chunk command — ONE process.
+
+    `python scripts/run_sweep.py --cell <CELL> [--resume <idea>/checkpoints/latest.pt]
+     --max-wall-secs <slice_secs> --final-eval`
+
+    run_sweep launches the full production bundle (1 trainer + N selfplay_workers in
+    wave-mode), self-caps the trainer at slice_secs on an epoch boundary (clean
+    resumable latest.pt with buffer embedded), tears down workers, then --final-eval
+    runs one eval_worker cycle that appends a fresh eval/model_elo line. So a v2 chunk
+    needs NO separate eval step — eval is inside the bundle.
+    """
+    g = board["global"]
+    slice_secs = float(g["slice_secs"])
+    run_sweep = REPO_ROOT / "scripts" / "run_sweep.py"
+    cmd: list[str] = [PYTHON, "-u", str(run_sweep), "--cell", str(idea["cell"])]
+    if resume:
+        latest = idea_checkpoint_dir(board, idea["name"]) / "latest.pt"
+        cmd += ["--resume", str(latest)]
+    cmd += ["--max-wall-secs", str(slice_secs)]
+    cmd += ["--final-eval"]
     return cmd
 
 
@@ -359,6 +460,32 @@ def run_subprocess(cmd: list[str], log_path: Path, timeout: float) -> tuple[int,
 
 
 # ---------------------------------------------------------------------------
+# Peak-checkpoint snapshotting
+# ---------------------------------------------------------------------------
+
+def snapshot_peak(board: dict, idea_name: str, elo: float) -> Optional[str]:
+    """If `elo` is a new high for the idea, copy its current latest.pt to a derby-owned
+    peak path so keep-last-n pruning can't discard the champion. Returns the peak path
+    (str) on success, else None. Best-effort: never raises (a failed copy is logged but
+    must not kill the race)."""
+    src = idea_checkpoint_dir(board, idea_name) / "latest.pt"
+    if not src.exists():
+        return None
+    peak_dir = idea_peak_dir(board, idea_name)
+    dst = peak_dir / "peak.pt"
+    try:
+        import shutil
+        peak_dir.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_suffix(".pt.tmp")
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+        return str(dst)
+    except OSError as e:
+        log_line(milestones_log_path(board), f"WARN peak-snapshot {idea_name} failed: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Standings / research-board output
 # ---------------------------------------------------------------------------
 
@@ -366,8 +493,10 @@ def write_research_board(board: dict, state: dict, board_md_path: Path) -> None:
     """Rewrite the standings section below the sentinel; preserve prose above it."""
     g = board["global"]
     beat_elo = float(g.get("beat_heuristic_elo", 800))
-    cap = int(g["cap_epochs"])
-    chunk = int(g["chunk_epochs"])
+    is_v2 = engine_of(board) == RUN_SWEEP_WALL_SLICE
+    cap = int(g["cap_epochs"]) if not is_v2 else 0
+    cap_wall = float(g["cap_wall_secs"]) if is_v2 else 0.0
+    progress_col = "Wall (of cap)" if is_v2 else "Epochs"
     floor = 389.0  # "beats random, nothing above" — the no-skill elo floor
 
     # Build rows sorted by current elo desc.
@@ -386,8 +515,14 @@ def write_research_board(board: dict, state: dict, board_md_path: Path) -> None:
         # Δelo/hr = real-strength gain (above the no-skill floor) per wall-hour to peak.
         delo_per_hr = ((peak - floor) / (wall_to_peak / 3600.0)) if (peak is not None and wall_to_peak > 0) else None
         beat = "✓" if (peak is not None and peak >= beat_elo) else ""
+        if is_v2:
+            progress = (f"{wall_total/3600.0:.2f}/{cap_wall/3600.0:.2f}h"
+                        if cap_wall > 0 else f"{wall_total/3600.0:.2f}h")
+        else:
+            progress = f"{st.get('epochs_done', 0)}/{cap}"
         rows.append({
             "name": name,
+            "progress": progress,
             "epochs_done": st.get("epochs_done", 0),
             "elo": elo,
             "peak": peak,
@@ -415,16 +550,17 @@ def write_research_board(board: dict, state: dict, board_md_path: Path) -> None:
     rated = [r for r in rows if r["elo"] is not None]
     if rated:
         leader = rated[0]
+        prog_word = "wall" if is_v2 else "epochs"
         lines.append(
             f"**Champion so far:** `{leader['name']}` at "
-            f"{leader['elo']:.0f} elo ({leader['epochs_done']}/{cap} epochs)."
+            f"{leader['elo']:.0f} elo ({leader['progress']} {prog_word})."
         )
     else:
         lines.append("**Champion so far:** _(no rated ideas yet)_")
     lines.append("")
 
     # table — north-star is Δelo/hr (real-strength gain above the floor per wall-hour to peak)
-    lines.append("| Rank | Idea | Epochs | Elo | Peak | Wall (min) | Δelo/hr | Beat heuristic? | Status |")
+    lines.append(f"| Rank | Idea | {progress_col} | Elo | Peak | Wall (min) | Δelo/hr | Beat heuristic? | Status |")
     lines.append("|-----:|------|:------:|----:|-----:|-----------:|--------:|:---------------:|--------|")
     for i, r in enumerate(rows, start=1):
         elo_s = f"{r['elo']:.0f}" if r["elo"] is not None else "—"
@@ -432,7 +568,7 @@ def write_research_board(board: dict, state: dict, board_md_path: Path) -> None:
         wall_s = f"{r['wall_min']:.1f}" if r["wall_min"] else "—"
         dph_s = f"{r['delo_per_hr']:.0f}" if r["delo_per_hr"] is not None else "—"
         lines.append(
-            f"| {i} | {r['name']} | {r['epochs_done']}/{cap} | {elo_s} | {peak_s} | "
+            f"| {i} | {r['name']} | {r['progress']} | {elo_s} | {peak_s} | "
             f"{wall_s} | {dph_s} | {r['beat']} | {r['status']} |"
         )
     lines.append("")
@@ -489,7 +625,16 @@ def current_leader(state: dict) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace) -> None:
-    """Run ONE chunk for an idea: train (--no-eval) then a single eval pass.
+    """Dispatch one chunk to the board's engine. Never raises (see per-engine impls)."""
+    if engine_of(board) == RUN_SWEEP_WALL_SLICE:
+        run_sweep_chunk(board, state, idea_name, args)
+    else:
+        run_single_process_chunk(board, state, idea_name, args)
+
+
+def run_single_process_chunk(board: dict, state: dict, idea_name: str,
+                             args: argparse.Namespace) -> None:
+    """v1 engine: run ONE chunk for an idea: train (--no-eval) then a single eval pass.
 
     Updates state in-place and writes it atomically. Never raises; on any failure
     the idea is marked 'errored' (with one optional retry) and the race continues.
@@ -556,7 +701,7 @@ def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace
                f"{elo_prev:.0f}, epochs->{target}")
         derby_print(msg)
         log_line(milestones, f"WARN {idea_name} eval failed; carried elo {elo_prev:.0f} @epoch {target}")
-        write_research_board(board, state, resolve_path(RESEARCH_BOARD_REL))
+        write_research_board(board, state, board_md_path_for(board))
         return
 
     # --- parse new elo ---
@@ -578,7 +723,7 @@ def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace
         atomic_write_json(state_p, state)
         derby_print(f"[derby] {idea_name} WARNING: no new elo line; carried {elo_prev:.0f}")
         log_line(milestones, f"WARN {idea_name} no new elo line @epoch {target}; carried {elo_prev:.0f}")
-        write_research_board(board, state, resolve_path(RESEARCH_BOARD_REL))
+        write_research_board(board, state, board_md_path_for(board))
         return
 
     elo_now, _epoch_eval = parsed
@@ -590,6 +735,15 @@ def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace
     st["elo_history"].append([target, elo_now, round(dt, 1)])
     st["wall_secs_total"] = st.get("wall_secs_total", 0.0) + dt
     st["wandb_run_id"] = st.get("wandb_run_id") or extract_wandb_run_id(board, idea_name)
+    # Peak-checkpoint snapshot: if this is a new elo high, copy latest.pt to a
+    # derby-owned peak path so keep-last-n pruning can't lose the champion.
+    if st.get("peak_elo") is None or elo_now > st["peak_elo"]:
+        peak_path = snapshot_peak(board, idea_name, elo_now)
+        st["peak_elo"] = elo_now
+        if peak_path:
+            st["peak_path"] = peak_path
+            log_line(milestones, f"PEAK {idea_name} new high elo {elo_now:.0f} "
+                                 f"@epoch {target}; snapshot -> {peak_path}")
     if st["epochs_done"] >= cap:
         st["status"] = "capped"
     else:
@@ -615,7 +769,7 @@ def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace
     if st["status"] == "capped":
         log_line(milestones, f"CAP {idea_name} reached {cap} epochs @ elo {elo_now:.0f}")
 
-    write_research_board(board, state, resolve_path(RESEARCH_BOARD_REL))
+    write_research_board(board, state, board_md_path_for(board))
 
 
 def _handle_chunk_failure(board: dict, state: dict, idea_name: str,
@@ -641,7 +795,145 @@ def _handle_chunk_failure(board: dict, state: dict, idea_name: str,
                     f"(retries exhausted)")
         log_line(milestones, f"ERROR {idea_name} errored ({reason}) after "
                              f"{st['retries']} retries @epoch {st['epochs_done']}")
-    write_research_board(board, state, resolve_path(RESEARCH_BOARD_REL))
+    write_research_board(board, state, board_md_path_for(board))
+
+
+def run_sweep_chunk(board: dict, state: dict, idea_name: str,
+                    args: argparse.Namespace) -> None:
+    """v2 engine: advance an idea by ONE WALL-TIME SLICE via the production recipe.
+
+    ONE subprocess: `run_sweep.py --cell <CELL> [--resume latest.pt] --max-wall-secs
+    <slice_secs> --final-eval`. That command runs the multiprocess bundle for the
+    slice, self-caps with a clean resumable latest.pt, AND ends with a fresh
+    eval/model_elo line in eval_results.jsonl — so there is NO separate eval step.
+
+    Budget is WALL-NATIVE: an idea caps when wall_secs_total >= cap_wall_secs. We bill
+    actual measured wall-time per chunk (which includes the slice + teardown + final
+    eval) so Δelo/hr is honest against the saturated machine.
+
+    Updates state in-place, writes atomically, never raises. On launch/non-zero failure
+    the idea is retried/errored (mirrors v1). On a missing/unparseable elo line the
+    chunk is still billed (the model DID train + save) and previous elo is carried.
+    """
+    g = board["global"]
+    slice_secs = float(g["slice_secs"])
+    cap_wall = float(g["cap_wall_secs"])
+    beat_elo = float(g.get("beat_heuristic_elo", 800))
+    st = state["ideas"][idea_name]
+    idea_spec = next(i for i in board["ideas"] if i["name"] == idea_name)
+
+    resume = st["wall_secs_total"] > 0  # first chunk fresh; later chunks --resume latest.pt
+    elo_prev = st["elo_history"][-1][1] if st["elo_history"] else 0.0
+    chunk_log = idea_chunk_log(board, idea_name)
+    milestones = milestones_log_path(board)
+    state_p = state_path_for(board)
+
+    leader_before = current_leader(state)
+    beat_before = st.get("peak_elo") is not None and st["peak_elo"] >= beat_elo
+
+    st["status"] = "running"
+    state["updated"] = now_iso()
+    atomic_write_json(state_p, state)
+
+    t0 = time.time()
+    derby_print(f"[derby/v2] {idea_name} (cell={idea_spec['cell']}) wall-slice "
+                f"{slice_secs:g}s starting (resume={resume}, "
+                f"{st['wall_secs_total']:.0f}/{cap_wall:.0f}s spent)")
+
+    # --- the single multiprocess chunk: run_sweep slice WITH --final-eval ---
+    # Give run_sweep enough wall room to self-cap + teardown + final eval, then a
+    # safety margin on top so a clean cap is never preempted by our own timeout.
+    slice_timeout = slice_secs + 600.0
+    if args.chunk_timeout and args.chunk_timeout > slice_timeout:
+        slice_timeout = args.chunk_timeout
+    lines_before = count_jsonl_lines(board, idea_name)
+    cmd = build_sweep_slice_cmd(board, idea_spec, resume=resume)
+    rc, status = run_subprocess(cmd, chunk_log, slice_timeout)
+    dt = time.time() - t0
+    # A COMPLETED slice bills at least its requested wall slice toward the per-idea
+    # cap, even if the subprocess returned faster than slice_secs. This guarantees
+    # forward progress toward cap_wall_secs so the leader-priority loop can't pin
+    # forever on an idea whose slices happen to exit early. We record the TRUE dt in
+    # elo_history (so Δelo/hr stays honest), but bill billed_dt against the budget.
+    billed_dt = max(dt, slice_secs)
+
+    if status != "ok":
+        # Even a non-zero/timeout slice usually leaves a clean resumable latest.pt
+        # (the trainer's SIGTERM handler force-saves). But to mirror v1's failure
+        # discipline we DON'T bill it — we retry/error so a genuinely broken cell
+        # (e.g. cell not yet defined in run_sweep.CELLS) can't burn the whole budget.
+        _handle_chunk_failure(board, state, idea_name, args,
+                              f"run_sweep {status} (rc={rc})", milestones, state_p)
+        return
+
+    # --- bill the wall time (the chunk completed; the model trained + saved) ---
+    st["wall_secs_total"] = st.get("wall_secs_total", 0.0) + billed_dt
+    st["chunks_done"] = st.get("chunks_done", 0) + 1
+    st["wandb_run_id"] = st.get("wandb_run_id") or extract_wandb_run_id(board, idea_name)
+
+    # --- parse the fresh elo line written by --final-eval ---
+    lines_after = count_jsonl_lines(board, idea_name)
+    parsed = read_last_elo(board, idea_name)
+    if parsed is None or lines_after <= lines_before:
+        # Slice ran + billed, but --final-eval produced no new parseable elo line.
+        # Carry previous elo; the training progress is NOT lost (latest.pt is fresh).
+        st["last_delo"] = 0.0
+        epoch_tag = st["epochs_done"]
+        st["elo_history"].append([epoch_tag, elo_prev, round(dt, 1)])
+        st["status"] = "capped" if st["wall_secs_total"] >= cap_wall else "queued"
+        state["total_chunks_run"] += 1
+        state["updated"] = now_iso()
+        atomic_write_json(state_p, state)
+        derby_print(f"[derby/v2] {idea_name} WARNING: no new elo line; carried "
+                    f"{elo_prev:.0f} ({dt:.0f}s billed)")
+        log_line(milestones, f"WARN {idea_name} no new elo line after slice; "
+                             f"carried {elo_prev:.0f}")
+        write_research_board(board, state, board_md_path_for(board))
+        return
+
+    elo_now, epoch_eval = parsed
+    last_delo = elo_now - elo_prev
+    # Track real epoch progress from eval_worker's epoch tag, when available.
+    if epoch_eval is not None:
+        st["epochs_done"] = epoch_eval
+    st["last_delo"] = last_delo
+    st["elo_history"].append([epoch_eval if epoch_eval is not None else st["epochs_done"],
+                              elo_now, round(dt, 1)])
+
+    # --- peak-checkpoint snapshot (survives keep-last-n pruning) ---
+    if st.get("peak_elo") is None or elo_now > st["peak_elo"]:
+        peak_path = snapshot_peak(board, idea_name, elo_now)
+        st["peak_elo"] = elo_now
+        if peak_path:
+            st["peak_path"] = peak_path
+            log_line(milestones, f"PEAK {idea_name} new high elo {elo_now:.0f}; "
+                                 f"snapshot -> {peak_path}")
+
+    st["status"] = "capped" if st["wall_secs_total"] >= cap_wall else "queued"
+    state["total_chunks_run"] += 1
+    state["updated"] = now_iso()
+    atomic_write_json(state_p, state)
+
+    derby_print(
+        f"[derby/v2] {idea_name} wall-slice done ({dt:.0f}s, "
+        f"{st['wall_secs_total']:.0f}/{cap_wall:.0f}s): "
+        f"elo {elo_prev:.0f}->{elo_now:.0f} (Δ{last_delo:+.0f})"
+    )
+
+    # --- milestones ---
+    if (not beat_before) and elo_now >= beat_elo:
+        log_line(milestones, f"BEAT-HEURISTIC {idea_name} crossed {beat_elo:.0f} "
+                             f"(elo {elo_now:.0f}) @ {st['wall_secs_total']:.0f}s")
+    leader_after = current_leader(state)
+    if leader_after != leader_before and leader_after is not None:
+        led_elo = state["ideas"][leader_after]["elo_history"][-1][1]
+        log_line(milestones, f"LEAD-CHANGE new leader {leader_after} @ {led_elo:.0f} elo "
+                             f"(was {leader_before})")
+    if st["status"] == "capped":
+        log_line(milestones, f"CAP {idea_name} reached {cap_wall:.0f}s wall budget "
+                             f"@ elo {elo_now:.0f} (peak {st['peak_elo']:.0f})")
+
+    write_research_board(board, state, board_md_path_for(board))
 
 
 # ---------------------------------------------------------------------------
@@ -650,20 +942,35 @@ def _handle_chunk_failure(board: dict, state: dict, idea_name: str,
 
 def active_ideas(board: dict, state: dict) -> list[str]:
     """Ideas eligible for more chunks: not capped, not errored."""
-    cap = int(board["global"]["cap_epochs"])
     out = []
     for idea in board["ideas"]:
         name = idea["name"]
         st = state["ideas"][name]
         if st["status"] == "errored":
             continue
-        if st["epochs_done"] >= cap:
+        if idea_is_capped(board, st):
             # ensure marked capped
             if st["status"] != "capped":
                 st["status"] = "capped"
             continue
         out.append(name)
     return out
+
+
+def idea_is_capped(board: dict, st: dict) -> bool:
+    """Engine-aware cap test. v1: epochs_done >= cap_epochs. v2: wall_secs_total
+    >= cap_wall_secs."""
+    if engine_of(board) == RUN_SWEEP_WALL_SLICE:
+        return st.get("wall_secs_total", 0.0) >= float(board["global"]["cap_wall_secs"])
+    return st["epochs_done"] >= int(board["global"]["cap_epochs"])
+
+
+def idea_started(board: dict, st: dict) -> bool:
+    """Has the idea run its first (entry-fee) chunk? Engine-aware: v1 keys on
+    epochs_done, v2 keys on chunks_done (epochs_done is only a best-effort tag in v2)."""
+    if engine_of(board) == RUN_SWEEP_WALL_SLICE:
+        return st.get("chunks_done", 0) > 0
+    return st["epochs_done"] > 0
 
 
 def pick_priority(board: dict, state: dict, candidates: list[str]) -> str:
@@ -697,7 +1004,7 @@ def round0_remaining(board: dict, state: dict) -> list[str]:
         st = state["ideas"][name]
         if st["status"] == "errored":
             continue
-        if st["epochs_done"] == 0:
+        if not idea_started(board, st):
             out.append(name)
     return out
 
@@ -707,6 +1014,61 @@ def round0_remaining(board: dict, state: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def do_dry_run(board: dict) -> None:
+    if engine_of(board) == RUN_SWEEP_WALL_SLICE:
+        do_dry_run_v2(board)
+    else:
+        do_dry_run_v1(board)
+
+
+def do_dry_run_v2(board: dict) -> None:
+    g = board["global"]
+    base = resolve_path(g["base_out_dir"])
+    slice_secs = float(g["slice_secs"])
+    cap_wall = float(g["cap_wall_secs"])
+    chunks_per_idea = int(cap_wall // slice_secs) if slice_secs > 0 else 0
+    derby_print("=" * 78)
+    derby_print("Δelo DERBY v2 — DRY RUN (engine: run_sweep_wall_slice, WALL-NATIVE)")
+    derby_print("=" * 78)
+    derby_print(f"base_out_dir : {base}  (derby state + peak snapshots)")
+    derby_print(f"run_sweep checkpoints/eval live in: sweep_runs/<cell_name>/checkpoints/")
+    derby_print(f"slice_secs   : {slice_secs:g}s/chunk   cap_wall_secs: {cap_wall:g}s/idea "
+                f"=> ~{chunks_per_idea} chunks/idea ({cap_wall/3600.0:.2f} wall-hr/idea)")
+    derby_print(f"beat_heuristic_elo: {g.get('beat_heuristic_elo')}")
+    derby_print(f"ideas: {len(board['ideas'])}   (eval is INSIDE the bundle via --final-eval)")
+    derby_print("")
+    derby_print(f"Total chunks to run (all ideas to cap): ~{chunks_per_idea * len(board['ideas'])} "
+                f"({cap_wall * len(board['ideas']) / 3600.0:.2f} wall-hr total)")
+    derby_print("")
+    derby_print("Plan:")
+    derby_print("  1. Round 0: every idea runs its first wall-slice FRESH (no --resume).")
+    derby_print("  2. Priority loop: pick highest CURRENT elo among active ideas (feed the")
+    derby_print("     leader); tie-break fewest wall-secs spent, then name. Everyone caps.")
+    derby_print("  3. Each chunk = ONE `run_sweep --max-wall-secs --final-eval` command:")
+    derby_print("     multiprocess bundle (1 trainer + N selfplay_workers, wave-mode,")
+    derby_print("     GPU-saturated) self-caps + final eval writes a fresh model_elo line.")
+    derby_print("  4. Peak-checkpoint snapshot: new elo high copies latest.pt -> _peaks/<idea>/peak.pt.")
+    derby_print("")
+    for idea in board["ideas"]:
+        derby_print("-" * 78)
+        derby_print(f"IDEA: {idea['name']}   cell={idea['cell']}  "
+                    f"lever: {idea.get('lever', '')}")
+        ckpt = idea_checkpoint_dir(board, idea["name"])
+        round0 = build_sweep_slice_cmd(board, idea, resume=False)
+        later = build_sweep_slice_cmd(board, idea, resume=True)
+        derby_print("  round-0 chunk cmd (fresh):")
+        derby_print("    " + " ".join(round0))
+        derby_print("  later chunk cmd (resumed):")
+        derby_print("    " + " ".join(later))
+        derby_print(f"  reads model_elo from: {ckpt}/eval_results.jsonl")
+        derby_print(f"  resumes from:         {ckpt}/latest.pt")
+        derby_print(f"  peak snapshot to:     {idea_peak_dir(board, idea['name'])}/peak.pt")
+    derby_print("-" * 78)
+    derby_print("NOTE: cells must be added to run_sweep.CELLS before a REAL run "
+                "(orchestrator owns run_sweep.py).")
+    derby_print("Dry run complete; nothing executed.")
+
+
+def do_dry_run_v1(board: dict) -> None:
     g = board["global"]
     base = resolve_path(g["base_out_dir"])
     derby_print("=" * 78)
@@ -800,7 +1162,7 @@ def main() -> int:
         state = fresh_state(board)
     state["board_path"] = str(board_path)
     atomic_write_json(state_p, state)
-    write_research_board(board, state, resolve_path(RESEARCH_BOARD_REL))
+    write_research_board(board, state, board_md_path_for(board))
 
     chunks_this_run = 0
 
@@ -855,7 +1217,7 @@ def main() -> int:
         return 1
 
     # final standings refresh
-    write_research_board(board, state, resolve_path(RESEARCH_BOARD_REL))
+    write_research_board(board, state, board_md_path_for(board))
     derby_print(f"[derby] done. {state['total_chunks_run']} total chunks. "
                 f"leader={current_leader(state)}")
     return 0
