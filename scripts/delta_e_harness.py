@@ -358,7 +358,7 @@ def build_fork_command(
     subprocess use the identical command.
     """
     cmd = [
-        sys.executable, "-m", "gomoku.train",
+        sys.executable, "-m", "gomoku.train_replay",
         "--resume", parent,
         "--archive-path", archive_path,
         "--buffer-recipe", recipe.buffer_recipe,
@@ -609,8 +609,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--default-sgd-steps-per-epoch", type=int, default=100,
                    help="sgd_steps_per_epoch used when a recipe doesn't override it.")
     p.add_argument("--size", type=str, default="small")
+    # Absolute by default: archives/ is gitignored (lives only in the main repo),
+    # and forks may run with a worktree cwd, so a relative path fails. Override
+    # with --validation-archive-path for a different location.
     p.add_argument("--validation-archive-path", type=str,
-                   default="archives/wl5_validation_v1.pt")
+                   default="/Users/jason/code/gomoku/archives/wl5_validation_v1.pt")
     p.add_argument("--out-dir", type=str, default="sweep_logs/delta-e",
                    help="Per-recipe fork checkpoints/logs + results.json land here.")
     # Anchored-eval knobs (the noise fix).

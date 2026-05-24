@@ -331,6 +331,20 @@ def main() -> None:
                 wandb_run_id=wandb_run_id, extra=ckpt_extra,
             )
 
+    # Always write latest.pt with the final model, regardless of --save-every,
+    # so downstream consumers (the delta-e harness reads <checkpoint-dir>/latest.pt)
+    # always find the fork's result — even short windows that never hit save-every.
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    latest_extra = (
+        {"ema_model_state_dict": ema_model.state_dict()}
+        if ema_model is not None else None
+    )
+    save_checkpoint(
+        os.path.join(args.checkpoint_dir, "latest.pt"), model, optimizer,
+        epoch=epoch + 1, total_games=total_games,
+        wandb_run_id=wandb_run_id, extra=latest_extra,
+    )
+
     if run is not None:
         run.finish()
 
