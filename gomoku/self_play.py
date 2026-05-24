@@ -161,11 +161,25 @@ def _generate_games_native(
     random_opening_moves: int = 0,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
+    playout_cap_frac: float = 1.0,
+    playout_cap_fast_sims: int = 0,
     profile: ProfileStats | None = None,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
         max_plies = N_ACTIONS
+
+    # Playout-Cap Randomization (KataGo, Wu 2019). When `playout_cap_frac < 1.0`,
+    # each move is, with probability `playout_cap_frac`, a FULL-search move (run
+    # at `n_simulations` AND recorded as a training target); otherwise it is a
+    # FAST move (run at `fast_sims` and NOT recorded — used only to advance the
+    # game). Concentrates expensive search on the moves that actually train the
+    # net. `playout_cap_frac >= 1.0` (default) => every move is full + recorded =
+    # byte-identical to the pre-PCR production path. `fast_sims == 0` (default)
+    # means "same as n_simulations", so the lever is inert unless BOTH the frac
+    # is reduced and a smaller fast budget is set.
+    pcr_active = playout_cap_frac < 1.0
+    fast_sims = playout_cap_fast_sims if playout_cap_fast_sims > 0 else n_simulations
 
     planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
 
@@ -225,20 +239,59 @@ def _generate_games_native(
     while active and ply < max_plies:
         with _profile_timer(profile, "active_list_s"):
             active_games = [games[i] for i in active]
-        with _profile_timer(profile, "native_search_batch_s"):
-            native_mcts.search_batch(
-                active_games,
-                search_evaluator,
-                n_simulations=n_simulations,
-                wave_size=wave_size,
-                add_root_noise=True,
-            )
-        _profile_add(profile, "search_calls", 1.0)
+
+        # Playout-Cap Randomization: decide per-game-per-ply whether this is a
+        # full-search (recorded) move or a fast (non-recorded) move. The native
+        # search_batch requires a single sim count per call, so when PCR is
+        # active we split the active wave into two homogeneous sub-batches and
+        # call search_batch once per sub-batch with its own sim count. The
+        # `is_full` flag (indexed by slot) gates the training-target append
+        # below; game advancement happens identically for both kinds of move.
+        if pcr_active:
+            is_full = rng.random(len(active_games)) < playout_cap_frac
+            full_slots = [s for s in range(len(active_games)) if is_full[s]]
+            fast_slots = [s for s in range(len(active_games)) if not is_full[s]]
+            with _profile_timer(profile, "native_search_batch_s"):
+                if full_slots:
+                    native_mcts.search_batch(
+                        [active_games[s] for s in full_slots],
+                        search_evaluator,
+                        n_simulations=n_simulations,
+                        wave_size=wave_size,
+                        add_root_noise=True,
+                    )
+                    _profile_add(profile, "search_calls", 1.0)
+                if fast_slots:
+                    # Fast moves are not training targets, so they carry no
+                    # exploration obligation: skip Dirichlet root noise to keep
+                    # the cheap search greedier (KataGo intent — exploration
+                    # noise belongs on the recorded/full moves). Temperature
+                    # (the play-sampling knob) still applies to both kinds.
+                    native_mcts.search_batch(
+                        [active_games[s] for s in fast_slots],
+                        search_evaluator,
+                        n_simulations=fast_sims,
+                        wave_size=wave_size,
+                        add_root_noise=False,
+                    )
+                    _profile_add(profile, "search_calls", 1.0)
+        else:
+            is_full = None  # every move is full + recorded (production path)
+            with _profile_timer(profile, "native_search_batch_s"):
+                native_mcts.search_batch(
+                    active_games,
+                    search_evaluator,
+                    n_simulations=n_simulations,
+                    wave_size=wave_size,
+                    add_root_noise=True,
+                )
+            _profile_add(profile, "search_calls", 1.0)
 
         next_active: list[int] = []
         with _profile_timer(profile, "post_search_loop_s"):
             for slot_idx, g_idx in enumerate(active):
                 g = active_games[slot_idx]
+                record_target = is_full is None or bool(is_full[slot_idx])
                 tau = 1.0 if ply < temperature_moves else temperature_final
                 with _profile_timer(profile, "policy_export_s"):
                     pi = g.policy(temperature=tau)
@@ -252,18 +305,19 @@ def _generate_games_native(
                 # Replace NaN with 0 and re-normalize; if everything is NaN, fall
                 # back to a uniform distribution (lowest-information target —
                 # better than corrupting the buffer).
-                with _profile_timer(profile, "policy_sanitize_s"):
-                    if not np.all(np.isfinite(pi)):
-                        pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
-                        s = pi.sum()
-                        if s <= 0:
-                            pi = np.full_like(pi, 1.0 / len(pi))
-                        else:
-                            pi = pi / s
-                with _profile_timer(profile, "root_planes_s"):
-                    planes = g.root_planes()
-                with _profile_timer(profile, "trajectory_append_s"):
-                    trajectories[g_idx].append((planes, pi.copy(), side))
+                if record_target:
+                    with _profile_timer(profile, "policy_sanitize_s"):
+                        if not np.all(np.isfinite(pi)):
+                            pi = np.nan_to_num(pi, nan=0.0, posinf=0.0, neginf=0.0)
+                            s = pi.sum()
+                            if s <= 0:
+                                pi = np.full_like(pi, 1.0 / len(pi))
+                            else:
+                                pi = pi / s
+                    with _profile_timer(profile, "root_planes_s"):
+                        planes = g.root_planes()
+                    with _profile_timer(profile, "trajectory_append_s"):
+                        trajectories[g_idx].append((planes, pi.copy(), side))
 
                 with _profile_timer(profile, "sample_action_s"):
                     action = _sample_action(pi, rng)
@@ -338,6 +392,8 @@ def generate_games(
     random_opening_moves: int = 0,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
+    playout_cap_frac: float = 1.0,
+    playout_cap_fast_sims: int = 0,
     profile: ProfileStats | None = None,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
@@ -354,6 +410,14 @@ def generate_games(
     No training examples are recorded for the random opening — only for moves
     chosen by MCTS. Breaks the "always-same-opening" collapse mode by forcing
     the model to learn from a diverse set of starting positions.
+
+    `playout_cap_frac` < 1.0 enables Playout-Cap Randomization (KataGo, Wu 2019):
+    each move is, with probability `playout_cap_frac`, a full-search move
+    (`n_simulations` sims, recorded as a training target); otherwise a fast move
+    (`playout_cap_fast_sims` sims, NOT recorded — used only to advance the
+    game). Defaults (frac=1.0, fast_sims=0) preserve the current behavior
+    exactly: every move is full-search and recorded. NOTE: PCR is only honored on
+    the native MCTS path; the pure-Python fallback below ignores it.
     """
     rng = rng or np.random.default_rng()
     if _can_use_native_mcts(evaluator):
@@ -374,6 +438,8 @@ def generate_games(
             random_opening_moves=random_opening_moves,
             archive=archive,
             archive_start_frac=archive_start_frac,
+            playout_cap_frac=playout_cap_frac,
+            playout_cap_fast_sims=playout_cap_fast_sims,
             profile=profile,
         )
     if max_plies is None:
