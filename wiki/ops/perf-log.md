@@ -16,6 +16,26 @@ Cross-refs:
 
 ---
 
+## [2026-05-24] delta-e run-2 | Head-to-head: CI 3× tighter, and the first resolved flywheel finding — recency_weighted >> lru, extra SGD buys nothing
+
+Jason: "use the trainer skill and launch this properly, backfilling where necessary." Re-ran run-1's three recipes off the same WL5 parent C, but head-to-head (fork plays C directly) instead of both-vs-fixed-anchors — the anchor-ceiling fix. Launched with production hygiene: persistent `sweep_logs/` out-dir, the 8.2G replay archive moved to `archives/`, `python -u`, wandb. Backfilled run-1's `/tmp` artifacts to `sweep_logs/delta-e-run1/` and fixed the receipt paths.
+
+| rank | recipe | Δelo vs C | ±CI | vs-C | decisive | verdict |
+|---|---|---|---|---|---|---|
+| 1 | **recency_weighted, sgd=100** | **−30.5** | ±76 | 46% | 35/80 | INSIDE-NOISE |
+| 2 | lru, sgd=100 | −93.4 | ±78 | 37% | 31/80 | **signal** |
+| 3 | lru, sgd=300 | −93.4 | ±78 | 37% | 41/80 | **signal** |
+
+**The method delivered.** CI went ±218 (run-1) → **±76** (run-2) — ~3× tighter, exactly what putting two similar-strength models in direct opposition (near 50%, the logistic's steep region) is supposed to buy. Run-1 was all-INSIDE-NOISE mush; run-2 resolves 2 of 3 to **signal**. The earlier worry that deterministic (temperature=0) pickers would replay one line was real — paired random openings fixed it: 31–41 of 80 games were decisive.
+
+**First concrete curated-buffer finding: the curator matters.** `recency_weighted` (−30.5) clearly beats `lru` (−93.4) at the same SGD budget — a ~63-elo gap. recency **holds** strength (INSIDE-NOISE — can't distinguish it from C); lru **degrades** below C (signal). Which positions you keep in the curated in-RAM slice changes how much strength you retain — the whole premise of the flywheel, now measured rather than asserted.
+
+**More SGD buys nothing.** `lru,sgd=300` netted the *identical* chess-score to `lru,sgd=100` (both 29.5/80) — it just played *sharper* (41 decisive vs 31, fewer draws), winning and losing proportionally, no net strength. This sharpens run-1's faint "sgd=300 over-trains" hint into a clear read: extra grinding on a fixed curated slice is wasted wall-clock.
+
+**Honest caveat:** all three *degrade* a converged C — expected, since 40 epochs of replay on a *subset* of C's own buffer pulls it off its optimum. The question was never "beat C in 40 epochs" (nothing should); it's "which curator degrades least," and recency wins cleanly. The high-value next run is a **headroom parent** (a mid-climb checkpoint with real elo to gain) so curators compete on upside, not just forgetting-resistance. decision: reject the recipes as C-improvements; promote the head-to-head method + the recency>>lru finding.
+
+---
+
 ## [2026-05-23] delta-e run-1 | First Δelo flywheel run: harness works end-to-end, but the anchor ladder is too short to measure strong models
 
 Jason: "yeah light it up, fan it out" / "wandb please." Ran the first real run of the Δelo north-star scoring engine (`scripts/delta_e_harness.py`): fork 3 recipes off a common WL5 parent C, train each a fixed 40-epoch window on the replay trainer, then anchored-eval each fork + C at 40 games/baseline and rank by Δelo.

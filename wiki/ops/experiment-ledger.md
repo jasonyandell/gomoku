@@ -37,6 +37,32 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-24 — delta-e run-2 (head-to-head Δelo) — CI 3× tighter; FIRST resolved flywheel finding: recency_weighted >> lru; extra SGD buys nothing
+
+```yaml
+lane: delta-e-run2 (re-run of run-1's 3 recipes off the same WL5 parent C, but HEAD-TO-HEAD — fork plays C directly instead of both-vs-fixed-anchors. The anchor-ceiling fix from run-1.). Launched properly per gomoku-train hygiene (persistent sweep_logs/ + archives/, python -u, wandb).
+hypothesis: with the ceiling removed (fork-vs-C is near 50% = max-sensitivity of the logistic), the curator (lru vs recency_weighted) and SGD budget (100 vs 300) produce a RESOLVABLE Δelo separation that run-1's anchored method buried in noise.
+code_ref: scripts/delta_e_harness.py --head-to-head (commit 79a2226) + parallel match & progress (2b3323b); paired random openings via gomoku.self_play._random_opening_state. train_replay forks + curated_buffer curators. All on main.
+dataset_ref: parent C = sweep_runs/WL5-diagnostics-archive-start/checkpoints/epoch10200.pt; archive A = archives/wl5_replay_archive (WL5's 1.5M-position buffer, retain-all). validation = archives/wl5_validation_v1.pt.
+hardware: M5 Max. forks on mps (~2.5s/epoch, 40-ep window). head-to-head match on cpu, 6 parallel workers, 80 games (paired 4-ply openings), sims=100, c_puct=1.5.
+seed: 0
+baseline_metric: relative — fork-vs-C, p=0.5 → Δelo 0. (No absolute C elo needed; the ceiling-free point.)
+candidate_metric: |
+  rank  recipe                       Δelo(vsC)   ±CI    vs-C   decisive   verdict
+  1     recency_weighted,sgd=100       -30.5    75.8    46%    35/80      INSIDE-NOISE
+  2     lru,sgd=100                    -93.4    78.2    37%    31/80      signal
+  3     lru,sgd=300                    -93.4    78.2    37%    41/80      signal
+delta: |
+  (1) METHOD WIN: CI ±218 (run-1 anchored) → ±76 (run-2 head-to-head), ~3× tighter; 2/3 verdicts now resolve to "signal" (run-1 was all INSIDE-NOISE).
+  (2) CURATOR FINDING: recency_weighted (-30.5) clearly beats lru (-93.4) at the same SGD budget — a ~63-elo gap. recency HOLDS strength (INSIDE-NOISE, indistinguishable from C); lru DEGRADES below C (signal). First concrete curated-buffer result: which positions you keep in the curated slice changes how much strength you retain.
+  (3) SGD budget: lru,sgd=300 netted the IDENTICAL chess-score to lru,sgd=100 (both 29.5/80 = 37%, by different W/L/D paths: sgd=300 was sharper — 41 decisive vs 31, fewer draws — but won+lost proportionally). Extra SGD on the curated slice buys NO strength. Confirms run-1's faint "sgd=300 over-trains" hint, now sharp.
+confidence: HIGH on the method (CI behaves as the logistic predicts; self-test + 2 smokes; parallel = byte-identical to sequential) and on recency>lru ordering. CAVEAT: all 3 recipes degrade a CONVERGED C slightly — expected (40 epochs of replay on a SUBSET of C's own buffer pulls it off its optimum); the question was never "beat C" but "which curator degrades least", and recency wins. Marginal 95% CIs of recency vs lru overlap ([-106,+45] vs [-172,-15]); the qualitative split (recency≈C INSIDE-NOISE vs lru<C signal) is the robust read; a direct recency-vs-lru match (not both-vs-C) would tighten the head-to-head comparison itself.
+artifacts: sweep_logs/delta-e-run2-20260524T044710Z/{results.json, .driver.log, fork_*/trainer.log}; wandb (fresh): recency_weighted_sgd100=7g12xjyf, lru_sgd100=6g8gb5m9, lru_sgd300=w6n4n0g8 (verify slug↔id from per-fork trainer.log).
+commands_run: python -u scripts/delta_e_harness.py --head-to-head --parent <C> --archive-path archives/wl5_replay_archive --window-epochs 40 --recipe 'lru:sgd_steps_per_epoch=100' --recipe 'recency_weighted:sgd_steps_per_epoch=100' --recipe 'lru:sgd_steps_per_epoch=300' --eval-games 80 --eval-sims 100 --eval-workers 6 --h2h-opening-plies 4 --wandb --out-dir sweep_logs/delta-e-run2-...
+decision: reject (none of the 3 recipes improves on C — all ≤ C over a 40-ep window; expected for replay off a converged checkpoint) — BUT the head-to-head METHOD and the recency>>lru CURATOR FINDING are the wins; this run did its job (resolve what run-1 could not). No production default changed.
+next_action: (1) the high-value follow-up is a HEADROOM parent — fork off a mid-climb checkpoint (or a deliberately-weakened C) where 40 epochs has real elo to GAIN, so curators compete on upside not just degradation-resistance; none survive WL5's keep-last-n=3 pruning, so this means re-generating an early checkpoint or check other runs. (2) direct recency-vs-lru head-to-head (not both-vs-C) for a tighter curator comparison. (3) add more curators to the bake-off (diversity, trouble-pinned) now that the ruler resolves ~60-elo gaps at 80 games.
+```
+
 ### 2026-05-23 — delta-e run-1 (first Δelo flywheel run) — harness validated end-to-end; ANCHOR-CEILING method-limit discovered
 
 ```yaml
