@@ -28,7 +28,7 @@ integration is SCAFFOLDED ONLY (see ExternalAnchor).
 
 REPLAY-TRAINER CLI CONTRACT (assumed; we shell out, do not import internals):
 
-    python -m gomoku.train \\
+    python -m gomoku.train_replay \\
         --resume <C> \\
         --archive-path <A> \\
         --buffer-recipe <R> \\
@@ -351,7 +351,7 @@ def build_fork_command(
     seed: int,
     wandb: bool,
 ) -> list[str]:
-    """Construct the EXACT `python -m gomoku.train ...` argv for one fork.
+    """Construct the EXACT `python -m gomoku.train_replay ...` argv for one fork.
 
     Matches the replay-trainer CLI contract documented in the module docstring.
     Returned as an argv list (not a string) so the dry-run print and the real

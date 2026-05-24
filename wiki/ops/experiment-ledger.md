@@ -51,6 +51,27 @@ meta_finding: the lab optimized aug/s (generation), but the real objective is wa
 cross_ref: gomoku-train skill "Tuning knobs → LEAN-fp16"; [[feedback-self-play-eta]] (the ETA-extrapolation lesson, now with this buffer-fill facet); run wandb h9al2e0k.
 ```
 
+### 2026-05-23 — LA1 — vectorize the lookahead-eval hot path: ~6.3× faster, byte-identical move selection (PROMOTE)
+
+```yaml
+lane: LA1-lookahead-eval-vectorize (perf pass on the alpha-beta lookahead baseline — an Elo anchor used by eval_worker/train eval; not a gen/train lane). User-introduced 2026-05-23.
+hypothesis: the lookahead baseline is the known-slow eval path (train.py:341 dropped lookahead:depth=2 as default at "45s+ for noisy signal"). With native state_ops already C-accelerated, the per-node bottleneck must be the pure-numpy helpers in baselines.py that run at every search node. Vectorizing them should cut eval wall-clock with zero behavior change.
+code_ref: feat/perf-lookahead-eval @ 5d0985a (vectorize _find_immediate_wins, _candidate_moves via precomputed (81,81) _NEIGHBOR_MASK, + candidate-restricted _score_cells for the ordering hot path). Behavior-preserving by construction (per-cell scores independent; same move sets).
+dataset_ref: scripts/bench_lookahead.py — 60 deterministic heuristic-vs-heuristic midgame positions (seed=0), spanning plies 4..24.
+baseline_command: git stash / pre-5d0985a `python scripts/bench_lookahead.py --n-positions 60 --depths 2,4`
+candidate_command: `python scripts/bench_lookahead.py --n-positions 60 --depths 2,4` @ 5d0985a
+hardware: M5 Max, CPU/numpy single-process (lookahead is torch-free); GOMOKU native state_ops active (USING_NATIVE=True). wandb: disabled (offline CPU microbench).
+seed: positions seed=0; player tie-break rng seed=1 (deterministic, no tie-break divergence observed).
+baseline_metric: depth=2 = 15.35 ms/move (65.1 moves/s); depth=4 = 145.61 ms/move (6.9 moves/s).
+candidate_metric: depth=2 = 2.36 ms/move (424.4 moves/s); depth=4 = 22.94 ms/move (43.6 moves/s).
+delta: depth=2 6.5× faster; depth=4 6.3× faster. cProfile: _find_immediate_wins 3.23s→0.14s, _candidate_moves 3.03s→0.08s tottime over the 60-move depth-4 run.
+confidence: HIGH. Behavior-identical proven, not just argued: across 360 positions (incl. child positions) the new _candidate_moves, _find_immediate_wins, and _score_cells return byte-identical results to the old loop logic, and lookahead_player(depth=4) picks the identical move. Quality gate is satisfied by construction — the lookahead Elo anchor's outputs are unchanged, so there is no strength/game-shape risk to measure; the gate's concern (does search behavior change?) is provably no. tests: test_baselines + test_lookahead_quiescence + test_rating + test_eval_parallel all green.
+artifacts: scripts/bench_lookahead.py (committed); equivalence harness in job dir (ephemeral).
+commands_run: pytest (29 passed); bench_lookahead.py before/after; cProfile before/after; 360-position equivalence check.
+decision: promote
+next_action: merge feat/perf-lookahead-eval to main (--no-ff). Follow-up levers (diminishing returns, NOT queued unless eval cost resurfaces): (a) history-free apply for the lookahead path — apply_move_arrays copies 8 history snapshots/node that negamax never reads (~8-10% remaining), but it's shared with the MCTS/self-play path so needs a lookahead-specific lighter apply (riskier); (b) numba/cython negamax (Class C, out of autonomous scope). Real-world impact: eval_worker's lookahead side (esp. depth=4, the dominant anchor per train.py:348) gets ~6× cheaper, making frequent Elo anchoring affordable — directly serves the Δelo/Δt north-star.
+```
+
 ### 2026-05-23 — Ltrain-amp — trainer-side bf16 autocast: directionally SLOWER, but cell is heat-soak-confounded (needs_repeat)
 
 ```yaml
