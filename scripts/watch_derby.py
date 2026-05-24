@@ -71,6 +71,36 @@ def load_state(base_out_dir: str) -> dict:
     return {}
 
 
+def _etime_to_secs(et: str) -> float:
+    """Parse `ps -o etime` ([[DD-]HH:]MM:SS) into seconds."""
+    et = et.strip()
+    if not et:
+        return 0.0
+    days = 0
+    if "-" in et:
+        d, et = et.split("-", 1)
+        days = int(d)
+    parts = [int(p) for p in et.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    h, m, s = parts[-3], parts[-2], parts[-1]
+    return days * 86400 + h * 3600 + m * 60 + s
+
+
+def running_slice_secs(cell: str) -> float:
+    """Wall elapsed of the in-flight run_sweep slice for this cell (0 if none is
+    running) — lets wall_m count the CURRENT chunk live, not just closed slices."""
+    try:
+        pid = subprocess.check_output(
+            ["pgrep", "-f", f"run_sweep.py --cell {cell} "],
+            text=True, stderr=subprocess.DEVNULL).split()[0]
+        et = subprocess.check_output(
+            ["ps", "-o", "etime=", "-p", pid], text=True, stderr=subprocess.DEVNULL)
+        return _etime_to_secs(et)
+    except Exception:
+        return 0.0
+
+
 LIVE_RATE_WINDOW = 10  # trailing fine-grained eval points for the live elo/hr slope
 
 
@@ -128,9 +158,13 @@ def idea_metrics(state: dict, name: str, cell: str) -> dict:
         elo, peak, rate = elos[-1], max(elos), None
     else:
         elo = peak = rate = None
+    # wall = closed-slice total + the in-flight slice's live elapsed (running idea only)
+    wall = float(st.get("wall_secs_total", 0.0))
+    if st.get("status") == "running":
+        wall += running_slice_secs(cell)
     return {"elo": elo, "peak": peak, "pts": len(pts), "rate": rate,
             "chunks": st.get("chunks_done", 0), "status": st.get("status", "—"),
-            "wall_min": st.get("wall_secs_total", 0.0) / 60.0}
+            "wall_min": wall / 60.0}
 
 
 def fetch_wandb(run_names: set[str]) -> tuple[dict, str | None]:
@@ -220,8 +254,9 @@ def render(board_path: str) -> None:
         print(f"  ► next pick (live priority): {next_pick}  — {why}")
     print(f"  ►=running · elo/peak=freshest fine-grained eval · Δelo/hr=LIVE least-squares slope over")
     print(f"  the last {LIVE_RATE_WINDOW} eval points (moves mid-slice; '—'=<2 evals) · pre-grok models pin at")
-    print("  ~389 until they beat an anchor · NOTE: the scheduler picks on SLICE-CLOSE rates, so the")
-    print("  '► next pick' can lag this live column by up to one slice (e.g. a mid-slice rocket).\n")
+    print("  ~389 until they beat an anchor · wall_m=closed slices + the running idea's LIVE in-flight")
+    print("  slice · NOTE: the scheduler picks on SLICE-CLOSE rates, so '► next pick' can lag this live")
+    print("  column by up to one slice (e.g. a mid-slice rocket).\n")
 
 
 def main() -> None:
