@@ -181,6 +181,146 @@ GAMES_RE = re.compile(r"\bgames=(\d+)")
 BUF_RE = re.compile(r"\bbuf=(\d+)")
 PLIES_RE = re.compile(r"\bplies=([\d.]+)")
 EPOCH_WALL_RE = re.compile(r"\(([\d.]+)s:")
+# Full-trajectory extras (epoch-capped mode). The wall/gen/train split lives
+# in the tail "(Xs: gen=Ys train=Zs)"; gen= is only meaningful there, so we
+# anchor it inside the parens. "new=" is the per-cycle new-games counter and
+# "tile=" is the wave's ingested-game count (wave[v.. tile=N ..]); both are the
+# load-bearing runaway signals from perf-bench-vs-real-training-cost.md.
+GEN_TAIL_RE = re.compile(r":\s*gen=([\d.]+)s")
+NEW_RE = re.compile(r"\bnew=(\d+)")
+TILE_RE = re.compile(r"\btile=(\d+)")
+# elo= trails the line when eval_worker forwarded a model_elo this cycle.
+ELO_RE = re.compile(r"\belo=(-?[\d.]+)")
+# pl=/vl= are the policy/value losses; we sniff them only to count NaNs.
+PL_RE = re.compile(r"\bpl=(\S+)")
+VL_RE = re.compile(r"\bvl=(\S+)")
+
+
+def _slope(xs: list[float]) -> float:
+    """Least-squares slope of xs against index (0..n-1). Returns 0.0 for <2
+    points or a degenerate fit. Used for the steps/epoch and wall/epoch growth
+    trend that perf-bench-vs-real-training-cost.md lane 1 asks for (is the tile
+    bounded or diverging?)."""
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(xs) / n
+    num = sum((i - mean_x) * (y - mean_y) for i, y in enumerate(xs))
+    den = sum((i - mean_x) ** 2 for i in range(n))
+    return num / den if den else 0.0
+
+
+def _is_nan_token(tok: str) -> bool:
+    return tok.strip().lower() in ("nan", "-nan", "inf", "-inf")
+
+
+def parse_trainer_trajectory(log_path: Path) -> dict:
+    """Read trainer.log and harvest the FULL per-epoch trajectory (epoch-capped
+    mode). Unlike parse_trainer_log (which windows by warmup/measurement secs),
+    this keeps every ^epoch line so a fixed-epoch sweep can see the per-epoch
+    cost runaway documented in wiki/topics/perf-bench-vs-real-training-cost.md.
+
+    Returns dict with:
+      rows: list[dict] one per epoch with keys
+        epoch, steps, wall_s, gen_s, train_s, plies, tile, new, buf, elo
+        (elo is None when absent).
+      summary fields over the full run (see keys assigned below).
+    """
+    rows: list[dict] = []
+    nan_count = 0
+    if log_path.exists():
+        with log_path.open() as f:
+            for line in f:
+                m = EPOCH_RE.match(line)
+                if not m:
+                    continue
+                wm = EPOCH_WALL_RE.search(line)
+                gm = GEN_TAIL_RE.search(line)
+                tm = TRAIN_TAIL_RE.search(line)
+                sm = STEPS_RE.search(line)
+                pm = PLIES_RE.search(line)
+                bm = BUF_RE.search(line)
+                tile_m = TILE_RE.search(line)
+                new_m = NEW_RE.search(line)
+                elo_m = ELO_RE.search(line)
+                plm = PL_RE.search(line)
+                vlm = VL_RE.search(line)
+                if (plm and _is_nan_token(plm.group(1))) or (
+                    vlm and _is_nan_token(vlm.group(1))
+                ):
+                    nan_count += 1
+                rows.append(dict(
+                    epoch=int(m.group(1)),
+                    steps=int(sm.group(1)) if sm else 0,
+                    wall_s=float(wm.group(1)) if wm else 0.0,
+                    gen_s=float(gm.group(1)) if gm else 0.0,
+                    train_s=float(tm.group(1)) if tm else 0.0,
+                    plies=float(pm.group(1)) if pm else 0.0,
+                    tile=int(tile_m.group(1)) if tile_m else 0,
+                    new=int(new_m.group(1)) if new_m else 0,
+                    buf=int(bm.group(1)) if bm else 0,
+                    elo=float(elo_m.group(1)) if elo_m else None,
+                ))
+    n = len(rows)
+    steps_seq = [r["steps"] for r in rows]
+    wall_seq = [r["wall_s"] for r in rows]
+    elos = [r["elo"] for r in rows if r["elo"] is not None]
+    first_steps = steps_seq[0] if steps_seq else 0
+    last_steps = steps_seq[-1] if steps_seq else 0
+    first_wall = wall_seq[0] if wall_seq else 0.0
+    last_wall = wall_seq[-1] if wall_seq else 0.0
+    return dict(
+        rows=rows,
+        epochs_completed=n,
+        total_wall_s=sum(wall_seq),
+        mean_steps_per_epoch=(sum(steps_seq) / n) if n else 0.0,
+        last_steps_per_epoch=last_steps,
+        first_steps_per_epoch=first_steps,
+        # last/first ratio + LS slope: two views of the runaway. >1 / >0 = growing.
+        steps_growth_ratio=(last_steps / first_steps) if first_steps else 0.0,
+        steps_slope=_slope([float(s) for s in steps_seq]),
+        mean_wall_per_epoch=(sum(wall_seq) / n) if n else 0.0,
+        last_wall_per_epoch=last_wall,
+        wall_growth_ratio=(last_wall / first_wall) if first_wall else 0.0,
+        wall_slope=_slope(wall_seq),
+        final_plies=rows[-1]["plies"] if rows else 0.0,
+        final_elo=(elos[-1] if elos else None),
+        nan_count=nan_count,
+    )
+
+
+TRAJECTORY_COLS = [
+    "epoch", "steps", "wall_s", "gen_s", "train_s",
+    "plies", "tile", "new", "buf", "elo",
+]
+
+
+def write_trajectory_tsv(path: Path, rows: list[dict]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=TRAJECTORY_COLS, delimiter="\t")
+        w.writeheader()
+        for r in rows:
+            out = {k: r.get(k, "") for k in TRAJECTORY_COLS}
+            if out["elo"] is None:
+                out["elo"] = ""
+            w.writerow(out)
+    os.replace(tmp, path)
+
+
+def format_trajectory_table(rows: list[dict]) -> str:
+    """Compact fixed-width table for the driver log."""
+    hdr = f"{'ep':>4} {'steps':>6} {'wall_s':>7} {'gen_s':>6} {'train_s':>7} {'plies':>6} {'tile':>5} {'new':>6} {'buf':>8} {'elo':>6}"
+    lines = [hdr]
+    for r in rows:
+        elo = f"{r['elo']:.0f}" if r.get("elo") is not None else "-"
+        lines.append(
+            f"{r['epoch']:>4} {r['steps']:>6} {r['wall_s']:>7.1f} "
+            f"{r['gen_s']:>6.1f} {r['train_s']:>7.1f} {r['plies']:>6.1f} "
+            f"{r['tile']:>5} {r['new']:>6} {r['buf']:>8} {elo:>6}"
+        )
+    return "\n".join(lines)
 
 
 def parse_trainer_log(log_path: Path, warmup_secs: float, measurement_secs: float
@@ -357,12 +497,18 @@ def stage_checkpoint(model_size: str, out_path: Path, stem_padding: int = 1) -> 
     save_checkpoint(str(out_path), m, epoch=0)
 
 
-def build_trainer_cmd(cell: dict, dirs: dict) -> list[str]:
+def build_trainer_cmd(cell: dict, dirs: dict, max_epochs: int = 0) -> list[str]:
+    # max_epochs == 0 → time-windowed mode: effectively unbounded epochs and the
+    # driver SIGTERMs the group after warmup+measurement. max_epochs > 0 →
+    # epoch-capped mode: the trainer stops itself after N epochs and the driver
+    # waits for it to exit (see run_cell). Only the STOP condition changes here;
+    # the WL5 recipe below is identical in both modes.
+    epochs_arg = str(max_epochs) if max_epochs > 0 else "1000000"
     cmd = [
         sys.executable, "-u", "-m", "gomoku.train",
         "--size", cell["model"],
         "--stem-padding", "1",
-        "--epochs", "1000000",  # effectively unbounded; we SIGTERM
+        "--epochs", epochs_arg,  # 1000000 = effectively unbounded; we SIGTERM
         "--games-per-epoch", str(cell["workers"] * cell["games_per_batch"]),
         "--n-simulations", str(cell["n_simulations"]),
         "--wave-size", str(cell["wave_size"]),
@@ -423,7 +569,8 @@ def build_worker_cmd(cell: dict, dirs: dict, worker_id: str, seed: int) -> list[
 
 
 def run_cell(cell: dict, sweep_dir: Path, warmup_secs: int,
-             measurement_secs: int, device: str, dry_run: bool = False
+             measurement_secs: int, device: str, dry_run: bool = False,
+             max_epochs: int = 0
              ) -> dict:
     cell_id = cell["cell_id"]
     cell_dir = sweep_dir / f"cell_{cell_id}"
@@ -437,7 +584,7 @@ def run_cell(cell: dict, sweep_dir: Path, warmup_secs: int,
     for d in (dirs["records"], dirs["checkpoints"], dirs["logs"]):
         d.mkdir(parents=True, exist_ok=True)
 
-    trainer_cmd = build_trainer_cmd(cell, dirs)
+    trainer_cmd = build_trainer_cmd(cell, dirs, max_epochs=max_epochs)
     worker_cmds = [
         build_worker_cmd(cell, dirs, f"w{i}", seed=1000 + i)
         for i in range(cell["workers"])
@@ -480,6 +627,64 @@ def run_cell(cell: dict, sweep_dir: Path, warmup_secs: int,
 
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     t0 = time.perf_counter()
+    timed_out = False
+    if max_epochs > 0:
+        # Epoch-capped mode: the trainer stops itself after max_epochs. We wait
+        # for the TRAINER process to exit (the workers run open-loop and never
+        # exit on their own — they keep generating against worker_weights.pt —
+        # so we cannot wait on the group; we poll the trainer specifically and
+        # tear down the workers afterward). A generous safety timeout prevents a
+        # runaway cell (the unbounded per-epoch cost from
+        # perf-bench-vs-real-training-cost.md) from hanging forever.
+        safety_deadline = t0 + max(600, max_epochs * 120)
+        try:
+            while not _INTERRUPTED:
+                if trainer.poll() is not None:
+                    break  # trainer finished its N epochs (or crashed)
+                if time.perf_counter() > safety_deadline:
+                    timed_out = True
+                    break
+                time.sleep(1.0)
+        finally:
+            wall_secs = time.perf_counter() - t0
+            # SIGTERM each pgroup (trainer + all workers), then SIGKILL after
+            # grace — identical teardown to the time-windowed path.
+            for pgid in list(_ACTIVE_PGIDS):
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            grace_deadline = time.time() + 15
+            for proc in [trainer] + [p for _, p, _ in workers]:
+                remaining = max(0.1, grace_deadline - time.time())
+                try:
+                    proc.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+            trainer_log.close()
+            for _, _, wf in workers:
+                try:
+                    wf.close()
+                except OSError:
+                    pass
+            _ACTIVE_PGIDS.clear()
+
+        if _INTERRUPTED:
+            return dict(cell_id=cell_id, cell_status="interrupted")
+
+        return _harvest_epoch_capped(
+            cell, dirs, wall_secs, started_at, max_epochs,
+            timed_out=timed_out,
+            warmup_secs=warmup_secs, measurement_secs=measurement_secs,
+        )
+
     deadline = t0 + warmup_secs + measurement_secs
     try:
         while time.perf_counter() < deadline and not _INTERRUPTED:
@@ -575,6 +780,90 @@ def run_cell(cell: dict, sweep_dir: Path, warmup_secs: int,
     )
 
 
+def _harvest_epoch_capped(cell: dict, dirs: dict, wall_secs: float,
+                          started_at: str, max_epochs: int, *, timed_out: bool,
+                          warmup_secs: int, measurement_secs: int) -> dict:
+    """Harvest the FULL per-epoch trajectory for an epoch-capped cell, write
+    trajectory.tsv, print a compact table, and build the summary row. Status:
+      - 'timeout' if the safety deadline fired (possible runaway).
+      - 'ok' if the trainer completed >= max_epochs epoch lines.
+      - 'partial' if it exited early (crash) with >=1 epoch.
+      - 'failed' if it emitted no epoch lines at all.
+    """
+    cell_id = cell["cell_id"]
+    traj = parse_trainer_trajectory(dirs["logs"] / "trainer.log")
+    rows = traj["rows"]
+    n = traj["epochs_completed"]
+
+    if rows:
+        traj_path = dirs["cell"] / "trajectory.tsv"
+        write_trajectory_tsv(traj_path, rows)
+        print(f"[traj] {cell_id} {n} epochs -> {traj_path}")
+        print(format_trajectory_table(rows))
+    else:
+        print(f"[traj] {cell_id} no epoch lines parsed from trainer.log")
+
+    if timed_out:
+        cell_status = "timeout"
+    elif n >= max_epochs:
+        cell_status = "ok"
+    elif n >= 1:
+        cell_status = "partial"
+    else:
+        cell_status = "failed"
+
+    # Throughput proxies over the full run (cumulative buf delta / total wall).
+    # buf= is the replay-buffer size, monotone until eviction; new= is per-cycle
+    # inflow. Sum(new) is the truer "positions ingested" for an epoch-capped run.
+    total_new = sum(r["new"] for r in rows)
+    final_buf = rows[-1]["buf"] if rows else 0
+    total_wall = traj["total_wall_s"] or wall_secs
+    final_elo = traj["final_elo"]
+
+    return dict(
+        cell_id=cell_id,
+        model=cell["model"],
+        workers=cell["workers"],
+        games_per_batch=cell["games_per_batch"],
+        n_simulations=cell["n_simulations"],
+        wave_size=cell["wave_size"],
+        wall_secs=round(wall_secs, 3),
+        total_games=0,  # n/a in epoch-capped mode (no per-game record walk)
+        total_aug_examples=total_new,
+        total_raw_plies=0,
+        aug_pos_per_sec=round(total_new / total_wall, 1) if total_wall else 0.0,
+        games_per_sec=0.0,
+        plies_mean=round(traj["final_plies"], 2),
+        cell_status=cell_status,
+        started_at=started_at,
+        # train-specific extras (kept for SUMMARY_COLS compatibility):
+        epochs_per_sec=round(n / total_wall, 4) if total_wall else 0.0,
+        trainer_step_s_p50=0.0,
+        epochs_in_window=n,
+        ema_tau=cell["ema_tau"],
+        grad_accum_steps=cell["grad_accum_steps"],
+        wave_mode=int(cell["wave_mode"]),
+        warmup_secs=warmup_secs,
+        measurement_secs=measurement_secs,
+        # epoch-capped extras (after the time-windowed block):
+        max_epochs=max_epochs,
+        epochs_completed=n,
+        total_wall_s=round(total_wall, 1),
+        mean_steps_per_epoch=round(traj["mean_steps_per_epoch"], 1),
+        last_steps_per_epoch=traj["last_steps_per_epoch"],
+        steps_growth_ratio=round(traj["steps_growth_ratio"], 3),
+        steps_slope=round(traj["steps_slope"], 3),
+        mean_wall_per_epoch=round(traj["mean_wall_per_epoch"], 2),
+        last_wall_per_epoch=round(traj["last_wall_per_epoch"], 2),
+        wall_growth_ratio=round(traj["wall_growth_ratio"], 3),
+        wall_slope=round(traj["wall_slope"], 3),
+        final_plies=round(traj["final_plies"], 2),
+        final_elo=("" if final_elo is None else round(final_elo, 1)),
+        final_buf=final_buf,
+        nan_count=traj["nan_count"],
+    )
+
+
 # --- Summary I/O ---------------------------------------------------------------
 
 SUMMARY_COLS = [
@@ -586,6 +875,13 @@ SUMMARY_COLS = [
     "epochs_per_sec", "trainer_step_s_p50", "epochs_in_window",
     "ema_tau", "grad_accum_steps", "wave_mode",
     "warmup_secs", "measurement_secs",
+    # epoch-capped extras (blank in time-windowed rows):
+    "max_epochs", "epochs_completed", "total_wall_s",
+    "mean_steps_per_epoch", "last_steps_per_epoch",
+    "steps_growth_ratio", "steps_slope",
+    "mean_wall_per_epoch", "last_wall_per_epoch",
+    "wall_growth_ratio", "wall_slope",
+    "final_plies", "final_elo", "final_buf", "nan_count",
 ]
 
 
@@ -749,9 +1045,19 @@ def main() -> None:
                         "torch.float16; outputs cast back to fp32 at MCTS "
                         "boundary). Eval-only — DO NOT use on trainer "
                         "(trainer always runs fp32 SGD).")
-    # Window
+    # Window (time-windowed mode; ignored when --max-epochs > 0)
     p.add_argument("--warmup-secs", type=int, default=30)
     p.add_argument("--measurement-secs", type=int, default=60)
+    # Epoch-capped mode. 0 (default) = unchanged time-windowed behavior. >0 =
+    # pass --epochs N to the trainer, wait for it to exit on its own (with a
+    # max(600, N*120)s safety timeout), and harvest the FULL per-epoch
+    # trajectory to trajectory.tsv. This is research lane 1 of
+    # wiki/topics/perf-bench-vs-real-training-cost.md: run past buffer-fill and
+    # measure the per-epoch cost SLOPE, not a cold-window throughput number.
+    p.add_argument("--max-epochs", type=int, default=0,
+                   help="If >0, run a fixed-epoch cell: trainer stops after N "
+                        "epochs and the full per-epoch trajectory is harvested "
+                        "to trajectory.tsv. 0 = time-windowed (default).")
     p.add_argument("--device", type=str, default="mps")
     # Resumability / utility
     p.add_argument("--retry-failed", action="store_true",
@@ -789,7 +1095,8 @@ def main() -> None:
         row = run_cell(cell, out_dir,
                        warmup_secs=args.warmup_secs,
                        measurement_secs=args.measurement_secs,
-                       device=args.device, dry_run=True)
+                       device=args.device, dry_run=True,
+                       max_epochs=args.max_epochs)
         print(f"[dry-run] cell_id={row['cell_id']} status={row.get('cell_status')}")
         return
 
@@ -819,14 +1126,17 @@ def main() -> None:
     _install_signal_handlers()
     append_metadata(meta_path, args, cell)
     try:
+        stop_desc = (f"max_epochs={args.max_epochs}" if args.max_epochs > 0
+                     else f"warmup={args.warmup_secs}s measure={args.measurement_secs}s")
         print(f"[run ] {cell['cell_id']} model={cell['model']} W={cell['workers']} "
               f"G={cell['games_per_batch']} S={cell['n_simulations']} V={cell['wave_size']} "
               f"ema={cell['ema_tau']} ga={cell['grad_accum_steps']} wave={int(cell['wave_mode'])} "
-              f"warmup={args.warmup_secs}s measure={args.measurement_secs}s")
+              f"{stop_desc}")
         row = run_cell(cell, out_dir,
                        warmup_secs=args.warmup_secs,
                        measurement_secs=args.measurement_secs,
-                       device=args.device)
+                       device=args.device,
+                       max_epochs=args.max_epochs)
         if _INTERRUPTED or row.get("cell_status") == "interrupted":
             print("[drop] interrupted mid-cell; not recording row")
             return
