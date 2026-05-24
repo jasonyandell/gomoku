@@ -37,6 +37,33 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
+### 2026-05-24 — Δelo Derby v1 (8-recipe race to 140 epochs) — CALLED at 5/8; exploration levers win the ceiling; wall-clock BUSTED (single-process)
+
+```yaml
+lane: delo-derby-v1 (scripts/delo_derby.py — race 8 fresh-start self-play recipes, one lever vs C0-baseline, to a 140-epoch budget in 10-epoch chunks, current-elo priority queue). Jason's "race to 140" idea.
+hypothesis: which single training lever climbs to the strongest 9x9 model fastest from a fresh init.
+code_ref: scripts/delo_derby.py (commits 4d887be, 76c4d73 priority fix, 2b3323b parallel-match[unused here], 0b13688 wall-time recording); scripts/derby_board.json; chunk engine = gomoku.train --no-eval + one-cycle gomoku.eval_worker.
+hardware: M5 Max, mps, SINGLE-PROCESS gomoku.train (one stream, GPU ~30% — see method caveat).
+seed: 0 (shared fresh init across all ideas); size small.
+baseline_metric: anchored model_elo vs random(0)/heuristic(800)/lookahead:d2(1200)/d4(1500). Floor ≈ 389 (beats random, nothing above).
+candidate_metric (ranked by ELO — NOT wall-clock; peak / final / beat-heuristic@ep):
+  1 open-div4 (random_opening_moves 4)  peak 1385 / final 1385 / beat@ep90  — WINNER, ended at peak (no overtrain)
+  2 temp-16   (temperature_moves 16)     peak 1340 / final 1240 / beat@ep90
+  3 sgd-800   (training_steps 800)        peak 1284 / final 1081 / beat@ep70  (overtrained -200)
+  4 sims-400  (n_simulations 400)         peak 1265 / final 1094 / beat@ep50  (fastest cross, overtrained -171; SLOWEST wall 60s/ep)
+  5 buf-30k   (replay_buffer 30000)       peak 908  / final 751  / beat@ep110
+  - C0-baseline (control)                 567 @ep60 (climbing, called); ema-099 405 floor @ep50; sims-100 389 NEVER grokked @ep110
+delta: |
+  (1) EXPLORATION > COMPUTE for the ceiling: random openings (1385) + high temperature (1340) beat more-sims (1265) + more-SGD (1284). (2) Compute levers grok FASTER but peak LOWER (beat-heur @ep: sims50<sgd70<openings/temp90<buf110). (3) Overtraining lever-dependent: sims-400/sgd-800 peak ~ep90 then -180 by 140; open-div4 ended AT peak. (4) sims-100 (100 sims) never groks — weak targets cap the climb. (5) GENERATION-bound not trainer-bound: train = fixed ~10.5s/epoch floor, MCTS gen = 2-5× that (scales w/ sims). (6) priority-by-last-Δelo pathologically fed the WORST idea → fixed to current-elo (76c4d73).
+confidence: MEDIUM-HIGH on the elo ordering (n=1/recipe, oscillating, so peaks ±~100 noise — but the exploration>compute gap and the lever ordering are clear). The exploration-wins-ceiling finding is the headline.
+quality_gate: N/A — research framework, no production default changed. best-cells.md / R-TRAIN-WL5 untouched.
+artifacts: sweep_runs/derby/ (derby_state.json, derby.driver.log, per-idea checkpoints + chunk.log + eval_results.jsonl); wandb runs derby-<idea>. Final standings + v2 plan in wiki/ops/research-board.md.
+commands_run: nohup python -u scripts/delo_derby.py --board scripts/derby_board.json (+ --resume restarts).
+decision: research-finding (CALLED by Jason at 5/8 capped — decisive science in; remaining 3 are floor/weak). 
+WALL-CLOCK CAVEAT (load-bearing): the derby ran SINGLE-PROCESS (one gomoku.train, GPU ~30%, ~70% machine idle). ALL wall-times / Δelo/hr from this run are single-stream and UNREPRESENTATIVE of production (run_sweep wave-mode = 1 trainer + 8 workers, saturated). Do NOT rank by Δelo/hr from v1. This is the under-counting trap [[project-perf-bench-lesson]]. The production recipe IS multiprocess (verified run_sweep.py:517) — the drift was only in the v1 derby harness.
+next_action: v2 — re-run TOP 3 (open-div4, temp-16, sgd-800) HEAD-TO-HEAD with the PRODUCTION multiprocess recipe (run_sweep wave-mode, 8 workers → real saturated wall-clock); eval = round-robin direct matches (all >1280, saturate the anchor ladder → head-to-head is correct); wall-native budget (hours, chunk=wall-slice, allocate+stop by Δelo/hr); carry fixes (current-elo priority, peak-checkpoint snapshotting).
+```
+
 ### 2026-05-24 — delta-e run-2 (head-to-head Δelo) — CI 3× tighter; FIRST resolved flywheel finding: recency_weighted >> lru; extra SGD buys nothing
 
 ```yaml

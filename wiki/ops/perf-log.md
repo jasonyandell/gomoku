@@ -16,6 +16,29 @@ Cross-refs:
 
 ---
 
+## [2026-05-24] Δelo Derby v1 | Exploration beats compute for the ceiling — and we measured the whole thing at 1/3 throttle
+
+Jason's "race to 140" idea, built as `scripts/delo_derby.py`: 8 fresh-start self-play recipes, one lever each vs a C0-baseline control, raced to a 140-epoch budget in 10-epoch chunks, scored by anchored model_elo, allocated by a current-elo priority queue ("feed the leader, everyone reaches 140"). Called at 5/8 capped — the decisive science was in and the remaining 3 were the floor cluster.
+
+**Final ranking (by ELO — see the wall-clock caveat below):**
+
+| rank | idea | lever | peak | final | beat-heur |
+|---|---|---|---:|---:|:--:|
+| 1 | open-div4 | random openings (WL3) | **1385** | 1385 | ep90 |
+| 2 | temp-16 | temperature 16 | **1340** | 1240 | ep90 |
+| 3 | sgd-800 | 800 SGD steps | 1284 | 1081 | ep70 |
+| 4 | sims-400 | 400 sims | 1265 | 1094 | ep50 |
+| 5 | buf-30k | 30k buffer | 908 | 751 | ep110 |
+| — | C0 / ema-099 / sims-100 | control / ema / 100 sims | 567 / 405 / 389 | — | never |
+
+**The headline: exploration/diversity beats raw compute for the ceiling.** Random openings (1385) and high temperature (1340) — the two levers that *diversify self-play* — reached the highest peaks, above more-sims (1265) and more-SGD (1284). The compute levers grok *faster* (beat-heuristic timing ordered exactly by per-epoch compute: sims-400 ep50 < sgd-800 ep70 < openings/temp ep90 < buf-30k ep110) but peak lower. Overtraining was real and lever-dependent: the compute levers peaked ~ep90 then regressed ~180 elo by 140, while open-div4 *ended at its peak* — opening diversity sustains the climb. `sims-100` (100 sims) never grokked at all (floor 389 @ep110): weak MCTS targets cap the climb.
+
+**The expensive lesson (Jason caught it): we ran the entire derby single-process, GPU at ~30%.** The chunk engine was a lone `gomoku.train` stream — generation-bound (MCTS gen 2–5× the fixed ~10.5s SGD floor), one stream, ~70% of the Mac idle. So **every wall-time and Δelo/hr from v1 is single-stream and unrepresentative** — the classic under-counting trap ([[project-perf-bench-lesson]]), which is exactly why v1's verdict is ranked by **elo, not wall-clock**. The production recipe (`run_sweep` wave-mode, 1 trainer + 8 `selfplay_worker`s, verified multiprocess) was sitting right there; the single-stream drift was only in the derby harness. Two other in-flight fixes: the priority rule started by ranking on *last-chunk Δelo*, which pathologically fed the *worst* idea (a floor-stuck Δ0 outranks a strong climber whose last chunk dipped negative) → changed to current-elo mid-run; and `keep-last-n=3` silently pruned the peak checkpoints (we have the elo trajectories but lost the best weights).
+
+**v2 (queued):** re-run the top 3 (open-div4, temp-16, sgd-800) head-to-head, with the production multiprocess recipe (saturated → real wall-clock), eval'd by round-robin direct matches (they're all >1280, so they saturate the anchor ladder — head-to-head is the right tool), on a wall-native budget (hours not epochs; allocate+stop by Δelo/hr). Then the Δelo/hr numbers will finally mean something.
+
+---
+
 ## [2026-05-24] delta-e run-2 | Head-to-head: CI 3× tighter, and the first resolved flywheel finding — recency_weighted >> lru, extra SGD buys nothing
 
 Jason: "use the trainer skill and launch this properly, backfilling where necessary." Re-ran run-1's three recipes off the same WL5 parent C, but head-to-head (fork plays C directly) instead of both-vs-fixed-anchors — the anchor-ceiling fix. Launched with production hygiene: persistent `sweep_logs/` out-dir, the 8.2G replay archive moved to `archives/`, `python -u`, wandb. Backfilled run-1's `/tmp` artifacts to `sweep_logs/delta-e-run1/` and fixed the receipt paths.

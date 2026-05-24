@@ -43,6 +43,38 @@ a headroom parent exists.
 
 ---
 
+## v1 FINAL — verdict (called 2026-05-24 at 5/8 capped; ranked by ELO, NOT wall-clock)
+
+> **Wall-clock is busted for this run** and must NOT be used to rank: the derby ran
+> single-process (`gomoku.train`, one stream, GPU ~30%), so every wall-time / Δelo/hr
+> here is single-stream and unrepresentative of production (wave-mode, 8 workers,
+> saturated). The under-counting trap ([[project-perf-bench-lesson]]). Rank by elo.
+
+| rank | idea | lever | peak | final | beat-heur @ep |
+|---:|---|---|---:|---:|:--:|
+| 1 | **open-div4** | random_opening_moves 4 (WL3) | **1385** | 1385 | 90 |
+| 2 | **temp-16** | temperature_moves 16 | **1340** | 1240 | 90 |
+| 3 | sgd-800 | training_steps 800 | 1284 | 1081 | 70 |
+| 4 | sims-400 | n_simulations 400 | 1265 | 1094 | 50 |
+| 5 | buf-30k | replay_buffer 30k | 908 | 751 | 110 |
+| — | C0-baseline | control | 567 (climbing, called @ep60) | — | — |
+| — | ema-099 | ema_tau 0.99 | 405 (floor, ep50) | — | — |
+| — | sims-100 | n_simulations 100 | 389 (NEVER grokked, ep110) | — | — |
+
+**Findings:**
+1. **Exploration/diversity levers win the ceiling.** Random openings (1385) and high temperature (1340) are the top 2 — *above* the compute levers (more sims 1265, more SGD 1284). Diversifying self-play raises reachable strength.
+2. **Compute levers grok FASTER but peak LOWER.** Beat-heuristic timing tracks per-epoch compute: sims-400 @ep50 < sgd-800 @ep70 < open-div4/temp-16 @ep90 < buf-30k @ep110. More sims/SGD = earliest crossing; exploration = highest ceiling.
+3. **Overtraining is real and lever-dependent.** sims-400/sgd-800 peaked ~ep90 then regressed ~180 elo by ep140; `open-div4` ended *at* its peak (openings sustain the climb, no overtrain); temp-16 mild (1340→1240).
+4. **`sims-100` (100 sims) never groks** — floor 389 at ep110. Weak MCTS targets cap the climb (and it's the only *trainer-bound* recipe: gen<train).
+5. **Generation-bound, not trainer-bound.** Train is a fixed ~10.5s/epoch floor; MCTS generation is 2–5× that and scales with sims. The trainer is cheap; Δelo/hr leverage is all on generation speed.
+6. **Method fixes (mid-run):** priority must rank by *current elo*, not last-chunk-Δelo (the latter fed the *worst* idea); peak checkpoints were lost to `keep-last-n=3`.
+
+## v2 — what's next (queued)
+
+Re-run the **top 3** (`open-div4`, `temp-16`, `sgd-800`) **HEAD-TO-HEAD**, using the **production multiprocess recipe** (`run_sweep` wave-mode, 8 `selfplay_worker`s — saturates the GPU, so wall-clock is REAL). Eval = round-robin *direct matches* among the 3 (they're all >1280, so they'd saturate the anchor ladder — head-to-head via `delta_e_harness --head-to-head` is the correct eval for strong models). **Wall-native budget** (hours, not epochs; chunk = wall-slice; allocate+stop by Δelo/hr) measured on the saturated machine so Δelo/hr is finally honest. Carry the fixes: current-elo priority, peak-checkpoint snapshotting. (Verified 2026-05-24: the production recipe IS multiprocess; the single-stream drift was only in the v1 derby harness.)
+
+---
+
 ## Title cards
 
 ### C0-baseline
@@ -211,18 +243,18 @@ gain.
 
 ## Standings
 
-_Last updated: 2026-05-24T13:07:49Z — 70 chunks run._
+_Last updated: 2026-05-24T15:31:05Z — 92 chunks run._
 
-**Champion so far:** `sims-400` at 1094 elo (140/140 epochs).
+**Champion so far:** `open-div4` at 1385 elo (140/140 epochs).
 
 | Rank | Idea | Epochs | Elo | Peak | Wall (min) | Δelo/hr | Beat heuristic? | Status |
 |-----:|------|:------:|----:|-----:|-----------:|--------:|:---------------:|--------|
-| 1 | sims-400 | 140/140 | 1094 | 1265 | 140.1 | 614 | ✓ | capped |
-| 2 | sgd-800 | 140/140 | 1081 | 1284 | 105.0 | 874 | ✓ | capped |
-| 3 | open-div4 | 80/140 | 498 | 751 | 35.1 | 867 |  | queued |
-| 4 | buf-30k | 60/140 | 453 | 513 | 25.4 | 364 |  | queued |
-| 5 | temp-16 | 70/140 | 437 | 453 | 29.9 | 153 |  | queued |
-| 6 | C0-baseline | 50/140 | 389 | 405 | 21.6 | 57 |  | queued |
+| 1 | open-div4 | 140/140 | 1385 | 1385 | 73.5 | 813 | ✓ | capped |
+| 2 | temp-16 | 140/140 | 1240 | 1340 | 76.2 | 823 | ✓ | capped |
+| 3 | sims-400 | 140/140 | 1094 | 1265 | 140.1 | 614 | ✓ | capped |
+| 4 | sgd-800 | 140/140 | 1081 | 1284 | 105.0 | 874 | ✓ | capped |
+| 5 | buf-30k | 140/140 | 751 | 908 | 77.9 | 488 | ✓ | capped |
+| 6 | C0-baseline | 60/140 | 567 | 567 | 27.8 | 384 |  | queued |
 | 7 | sims-100 | 110/140 | 389 | 389 | 33.2 | -8 |  | queued |
 | 8 | ema-099 | 50/140 | 389 | 405 | 21.6 | 57 |  | queued |
 
