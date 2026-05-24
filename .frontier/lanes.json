@@ -115,6 +115,24 @@
     ]
   },
   {
+    "id": "canonical-sweep-mainframe",
+    "title": "Canonical 5-axis M5 Max contour sweep",
+    "stage": "completed",
+    "heat": "done",
+    "resource": "gpu",
+    "goal": "Execute step 4 of wiki/topics/m5-max-as-mainframe.md: 23-cell sweep over workers x games-per-worker x n-simulations x wave-size x model-size, producing contour.png plus per-axis pivot charts as the wall artifact for the post-WL5 perf era.",
+    "nextAction": "Completed 2026-05-23 in sweep_logs/canonical-sweep-20260523T015614Z. 23/23 cells ok. Headline: wave=128 is a free +27% over the WL5-era wave=64 default (3188 -> 4048 aug pos/s, no behavior change); wave=256 is +38% with diminishing returns. Workers axis near-flat past W=8. Receipt in wiki/ops/experiment-ledger.md 2026-05-23 entry. Follow-ups (separate lanes): (a) re-run the W x G cross at V128 to verify the wave win compounds at higher worker counts; (b) sims-vs-wave interaction at S=200; (c) re-sweep at the next stable trained checkpoint to confirm shape matches infrastructure shape.",
+    "doneShape": [
+      "scripts/canonical_sweep.py and scripts/plot_canonical_sweep.py committed",
+      "sweep_logs/canonical-sweep-<TS>/summary.tsv has cell_status=ok rows for all 23 cells (or documented skips)",
+      "contour.png, axes.png, model_compare.png saved next to summary.tsv",
+      "wiki/ops/experiment-ledger.md receipt filed under lane canonical-sweep-mainframe",
+      "wiki/ops/baselines.md row added per cell-class",
+      "wiki/ops/status.md updated with the winning cell as the new throughput default",
+      "wiki/ops/perf-log.md narrative entry appended"
+    ]
+  },
+  {
     "id": "packed-buffer-cheap-test",
     "title": "Replay-buffer width cheap test",
     "stage": "seeded",
