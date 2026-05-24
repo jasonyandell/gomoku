@@ -23,6 +23,13 @@ from gomoku.self_play import generate_games, generate_games_vs_baseline
 from gomoku.util import load_wandb_key_from_keychain, pick_device
 
 
+class _ShutdownRequested(Exception):
+    """Raised from inside a blocking worker-ingest wait when SIGTERM/SIGINT
+    has set the stop flag. Lets a wait that would otherwise never return
+    (e.g. no workers are alive to deliver the next wave) unwind to the
+    epoch-boundary clean-stop path instead of hanging until SIGKILL."""
+
+
 def policy_loss(logits: torch.Tensor, pi: torch.Tensor) -> torch.Tensor:
     """Cross-entropy with soft targets. pi may have zeros on illegal moves; those contribute 0."""
     logp = F.log_softmax(logits, dim=-1)
@@ -698,6 +705,27 @@ def main() -> None:
     if worker_weights_path:
         print(f"workers will read weights from {worker_weights_path}")
 
+    # --- clean-shutdown support (time-capped research slices) ---
+    # A SIGTERM/SIGINT, or crossing --max-wall-secs, sets the stop flag. We
+    # finish the current epoch, then force a fully-resumable save and exit 0 so
+    # `--resume latest.pt` continues without a cold buffer refill (the LF1 trap).
+    # The signal handler only flips a flag — no I/O in the async context.
+    #
+    # The handler is installed HERE (before the ingest closures and the epoch
+    # loop) so a SIGTERM that arrives while a blocking worker-ingest wait is
+    # spinning is observed: those waits re-check `_stop["requested"]` each poll
+    # and raise `_ShutdownRequested` to unwind to the epoch-boundary stop path.
+    # Without that, a wait for a wave that never arrives (workers dead/orphaned)
+    # would loop forever and the process would have to be SIGKILL'd.
+    _stop = {"requested": False, "reason": ""}
+
+    def _request_stop(signum, _frame):
+        _stop["requested"] = True
+        _stop["reason"] = f"signal {signal.Signals(signum).name}"
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    signal.signal(signal.SIGINT, _request_stop)
+
     def _publish_worker_weights(epoch: int = 0) -> None:
         """Atomic-rename the model + cfg to `worker_weights_path` so workers
         (selfplay or eval) can mtime-poll and reload. Embeds the trainer's
@@ -754,6 +782,12 @@ def main() -> None:
         n_games = 0
         n_positions = 0
         while True:
+            # Break out of an otherwise-unbounded wait if shutdown was
+            # requested (SIGTERM/SIGINT). Raised before any work so a stop that
+            # arrives while no games are flowing (e.g. workers dead/orphaned)
+            # unwinds to the epoch-boundary clean-stop path instead of hanging.
+            if _stop["requested"]:
+                raise _ShutdownRequested(_stop["reason"])
             files = sorted(
                 (p for p in worker_input_dir.glob("*.pt")),
                 key=lambda p: p.stat().st_mtime,
@@ -970,6 +1004,14 @@ def main() -> None:
         total_positions = 0
 
         while True:
+            # Honor a shutdown request mid-barrier. The wave barrier waits for
+            # `all(done)` — every worker delivering its quota for THIS version.
+            # If the workers are dead/orphaned (the derby-kill case), that is
+            # never satisfied, so without this check a SIGTERM/SIGINT would
+            # loop here forever and force a SIGKILL. Raising unwinds to the
+            # epoch-boundary clean-stop path (save resumable latest.pt, exit 0).
+            if _stop["requested"]:
+                raise _ShutdownRequested(_stop["reason"])
             for path in _wave_files_for_version(version):
                 if path in payloads:
                     continue
@@ -1100,19 +1142,8 @@ def main() -> None:
     _publish_worker_weights(epoch=start_epoch)
     _sweep_orphans()
 
-    # --- clean-shutdown support (time-capped research slices) ---
-    # A SIGTERM/SIGINT, or crossing --max-wall-secs, sets the stop flag. We
-    # finish the current epoch, then force a fully-resumable save and exit 0 so
-    # `--resume latest.pt` continues without a cold buffer refill (the LF1 trap).
-    # The signal handler only flips a flag — no I/O in the async context.
-    _stop = {"requested": False, "reason": ""}
-
-    def _request_stop(signum, _frame):
-        _stop["requested"] = True
-        _stop["reason"] = f"signal {signal.Signals(signum).name}"
-
-    signal.signal(signal.SIGTERM, _request_stop)
-    signal.signal(signal.SIGINT, _request_stop)
+    # Stop flag + SIGTERM/SIGINT handler are installed earlier (right after
+    # worker_weights_path is resolved) so the ingest waits can observe them.
     _wall_start = time.monotonic()
 
     def _save_resumable(epoch_num: int) -> None:
@@ -1153,26 +1184,41 @@ def main() -> None:
         record_groups: list[tuple[int, list]] = []
         wave_metrics: dict = {}
         if worker_input_dir is not None:
-            if args.wave_mode:
-                stale_records, stale_groups, stale_metrics = _drain_stale_wave_versions(epoch)
-                wave_records, wave_groups, wave_metrics = _ingest_worker_wave(epoch)
-                records = stale_records + wave_records
-                record_groups = stale_groups + wave_groups
-                wave_metrics = {**stale_metrics, **wave_metrics}
-                # LF1 per-version tile cap (opt-in; 0 = uncapped = today's path).
-                # Acts AFTER the barrier ingest and BEFORE buffer add / SGD
-                # schedule, so the capped tile flows consistently to both.
-                if args.max_tile_games > 0:
-                    records, record_groups, cap_metrics = _cap_tile_games(
-                        records, record_groups, args.max_tile_games
+            # The worker-ingest waits below can block indefinitely if no games
+            # arrive (workers dead/orphaned). They re-check the stop flag each
+            # poll and raise _ShutdownRequested on SIGTERM/SIGINT; catch it here
+            # and route to the same clean-stop save path used at the epoch
+            # boundary. This epoch did no training (no records ingested), so we
+            # save at `epoch` (not epoch + 1) and exit 0 with a resumable
+            # latest.pt. Identical to the max-wall-secs stop, just reached from
+            # inside the wait instead of after it.
+            try:
+                if args.wave_mode:
+                    stale_records, stale_groups, stale_metrics = _drain_stale_wave_versions(epoch)
+                    wave_records, wave_groups, wave_metrics = _ingest_worker_wave(epoch)
+                    records = stale_records + wave_records
+                    record_groups = stale_groups + wave_groups
+                    wave_metrics = {**stale_metrics, **wave_metrics}
+                    # LF1 per-version tile cap (opt-in; 0 = uncapped = today's path).
+                    # Acts AFTER the barrier ingest and BEFORE buffer add / SGD
+                    # schedule, so the capped tile flows consistently to both.
+                    if args.max_tile_games > 0:
+                        records, record_groups, cap_metrics = _cap_tile_games(
+                            records, record_groups, args.max_tile_games
+                        )
+                        wave_metrics = {**wave_metrics, **cap_metrics}
+                elif args.worker_min_positions > 0:
+                    records = _ingest_worker_batches(target_positions=args.worker_min_positions)
+                else:
+                    records = _ingest_worker_batches(
+                        target_games=args.worker_min_games or args.games_per_epoch,
                     )
-                    wave_metrics = {**wave_metrics, **cap_metrics}
-            elif args.worker_min_positions > 0:
-                records = _ingest_worker_batches(target_positions=args.worker_min_positions)
-            else:
-                records = _ingest_worker_batches(
-                    target_games=args.worker_min_games or args.games_per_epoch,
-                )
+            except _ShutdownRequested:
+                print(f"[stop] {_stop['reason']} during wave ingest at epoch "
+                      f"{epoch}; saving resumable checkpoint (buffer embedded), "
+                      f"exiting", flush=True)
+                _save_resumable(epoch)
+                break
         elif opponent_picker is None:
             evaluator = make_torch_evaluator(model, device)
             records = generate_games(
