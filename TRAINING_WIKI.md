@@ -3483,3 +3483,33 @@ phase 1 occupied.
 - [wiki/topics/m5-max-as-mainframe.md](wiki/topics/m5-max-as-mainframe.md)
   — post-WL5 work pivots to chip-characterization perf sweeps before
   the next training cell.
+
+## 2026-05-23 — LF1 launched (lean-fp16-canary: the perf lab's +152% recipe as a real run)
+
+After the 2026-05-23 perf-lab era (ANE asked-and-answered; cross-engine
+coupling pinned), we cashed in the headline perf finding as a real training
+run. **LF1 = WL5 recipe + the R-TRAIN-LEAN-fp16 deltas**: `wave_size 512`,
+`sgd_per_position 0.001`, workers `--fp16-eval` (wired via the Cell
+`extra_worker_args`). Fresh, **1000 epochs**, started **HOT** (chip
+heat-soaked from the perf session — Jason: training runs hot, don't wait;
+noted for cold/hot comparison). run_sweep cell `LF1`, wandb **`h9al2e0k`**
+(100-ep shakeout `geft5xmy` first). Trainer + 8 fp16 workers + eval worker.
+
+**Spin-up verified**: fp16 cast in worker logs, V=512 wave mode, sgd=0.001
+(epoch-1 steps=25 matches), validation archive (1400 pos) loaded, 0 NaN.
+
+**Key finding (caveats the "+152%")**: the perf lab's 0.0667 epochs/s
+(≈15s/epoch) was a **cold-buffer transient**. In the real run, V=512 fills
+the 1.5M buffer by ~e27, then `sgd_per_position × fast V=512 inflow` →
+**~1300+ (growing) SGD steps/epoch → ~3 min/epoch**. So 1000 epochs is a
+multi-day run, not ~4h. The +152% is GENERATION (aug/s) throughput, NOT
+training speed. **But it learns fast per epoch** — elo 437→776 across the
+buffer-full transition (~e28), pl 4.42→3.78, plies ~27, 0 NaN. The honest
+"faster recipe" verdict is wall-clock-to-elo + val/policy_ce, pending the
+full LF1 dynamics. See the gomoku-train skill "Tuning knobs → LEAN-fp16"
+and experiment-ledger "LF1".
+
+**Monitoring**: cron `d443ef9c` (every 30 min, session-scoped) — pushes only
+on NaN/crash/plies-collapse/completion; cleans up orphaned workers at e1000
+or on early exit. TQ verdict on adopting the recipe into the production
+lineage stays Jason's call.
