@@ -86,6 +86,8 @@ W&B dashboard: project is `gomoku` under entity `jasonyandell-forge42`. The acti
 
 ## Starting / resuming training
 
+> **Title card FIRST — never launch a run without one.** Before running any command below, present a title card (What / Lever / Parent / Config+cap / Why / Expect / Track) so it's clear what *this specific* run is doing, then get the user's ACK. Template + the ACK-vs-informational rule live in the research-lab skill ([[gomoku-research-lab]] § Title card) and mirror the Derby cards in `wiki/ops/research-board.md`. This is step 2 of the launch-sequence-runbook — don't skip it just because you jumped straight to the command.
+
 The defaults below are what we know works on Jason's M5 Max — ~28s/epoch in steady state, ~125 epochs/hour:
 
 ```bash

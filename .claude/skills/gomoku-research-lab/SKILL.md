@@ -97,6 +97,29 @@ pkill -TERM -f 'delo_derby'            # a Derby race (current chunk finishes it
 - **Remove a Derby recipe:** delete its entry from `scripts/derby_v2_board.json` (and optionally its `Cell`). If a race is mid-flight, also drop its idea from `sweep_runs/derby_v2/derby_state.json`, or `--resume` re-queues it.
 - **Resume after a stop/crash:** `python scripts/delo_derby.py --board <board> --resume` (re-queues `running` ideas), or `run_sweep.py --cell <CELL> --resume sweep_runs/<CELL>/checkpoints/latest.pt --max-wall-secs <N> --final-eval`. The clean-stop save means no cold buffer refill ([[project-training-slices]]).
 
+## Title card — every run starts with one
+
+**Before any run that lands weights — a fresh production run, a time-capped training slice, or a new Derby idea's first chunk — present a TITLE CARD.** It makes "what is *this specific* run doing?" unambiguous, both in the moment and in the scrollback. We've always done these; they're easy to skip when autonomous — don't.
+
+- **ACK required** for anything that starts a NEW run / campaign or touches the production-default lineage → present the card, wait for the user's go.
+- **Informational** (no ACK, just print it then proceed) for an autonomous slice inside an already-approved campaign — e.g. the next Derby chunk (whose card already lives in `wiki/ops/research-board.md` — cite it).
+
+Template — tight, fill every line, lead with the lever + a falsifiable expectation:
+
+```
+━━━━━━ <RUN / cell name> ━━━━━━
+What:    <one line: what this run is>
+Lever:   <the ONE change vs parent / baseline>
+Parent:  <fresh (--seed 0) | resume <ckpt> @ elo NNNN>
+Config:  <cell · sims · buffer · key recipe deltas> · cap <wall-slice or epochs>
+Why:     <hypothesis — what we expect to learn>
+Expect:  confirm = <signature> · refute = <signature>
+Track:   <wandb run | sweep_runs/<cell>/checkpoints/eval_results.jsonl>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Same shape as the Derby title cards in `wiki/ops/research-board.md`. The long-form production-launch flow (smoke → ACK → launch → monitor → close-out) lives in [[gomoku-train]]'s launch-sequence-runbook; this card is the gate at the top of it.
+
 ## How to dispatch a cell
 
 For R-S* (pure gen, canonical_sweep):
@@ -163,6 +186,16 @@ When a lane block has multiple independent sub-lanes (e.g. the LF1-followups: co
 
 **Receipts still apply.** Batch the sub-lane findings into one consolidated lane-block receipt across the 5 surfaces rather than thrashing the wiki while agents are mid-flight; each promote still needs a Reviewer.
 
+## Measuring & reading results
+
+**The north-star is Δelo/Δt — measure it, don't eyeball proxies.** `scripts/delta_e_harness.py` is the tool: the elo-gain RATE from a common checkpoint over a fixed window vs a stable anchor. aug/s and epochs/s are gameable *means*, not the goal ([[feedback-elo-per-wall]]).
+- **Anchored `eval/model_elo`** (written per cycle by the bundle's eval_worker into `eval_results.jsonl`) is the cheap signal — fine while a model is climbing through the anchor ladder.
+- **Head-to-head** is the tiebreaker once candidates beat the anchors (all the strong WL / Derby checkpoints saturate the ladder): `delta_e_harness.py --head-to-head` (or `gomoku.match`) between candidates. This is the correct eval for the Derby v2 top-3 — anchored elo can't separate models that all crush `lookahead:depth=4`.
+
+**Reading / comparing:**
+- `scripts/plot_canonical_sweep.py` — chart a sweep's cells.
+- `scripts/wandb_workspace.py` — build a saved W&B workspace overlaying a run set (6 pre-tuned sections). Re-run with the new run id prepended when a run joins the comparison; the URL changes each time (bookmark the latest it prints).
+
 ## Receipt-filing checklist
 
 After every lane completes, before moving on:
@@ -174,7 +207,7 @@ After every lane completes, before moving on:
 5. Append a narrative entry to **`wiki/ops/perf-log.md`** — what was tried, what surprised you, what comes next.
 6. Update **`wiki/ops/gpu-queue.md`** — move lane to Completed; update reference table at the top if a new best landed; recompute consecutive_rejects; update RESUME STATE for the next session.
 7. Commit with a clear `lab <lane_id>: <decision> — <one-line summary>` message.
-8. Spawn the Reviewer (background Agent, `general-purpose`, with the audit prompt from research-lab-reviewer-role.md). After Reviewer APPROVE, backfill the `Reviewer: APPROVE` field in the surfaces.
+8. Spawn the Reviewer — a background `general-purpose` Agent with the audit prompt from `wiki/topics/research-lab-reviewer-role.md`, pointed at the receipt + the 5 surfaces. It READS, never edits; verdict **APPROVE / REVISE / BLOCK**. No `promote` is final until APPROVE — then backfill the `Reviewer: APPROVE` field. (REVISE → apply the numbered fixes, re-spawn same lane/receipt. BLOCK → ESCALATE.) **Pair the receipt commit with the Reviewer spawn** — never chain to the next dispatch before the previous lane's Reviewer is at least spawned (its read can run in parallel with the next GPU cell).
 
 ## Stop gates — when to CONTINUE / ESCALATE / HALT
 
@@ -185,6 +218,19 @@ After every lane completes, before moving on:
 - **HALT** (clean session-end + perf-log entry): queue empty AND no follow-ups queueable AND no compound mechanism left to test.
 
 **Heuristic:** the lab can autonomously do anything that's reversible at the file/branch level and doesn't change the production training default. When in doubt, lean CONTINUE; the worst case of CONTINUE is a wasted cell wall-time; the worst case of pre-emptive HALT is leaving a +97% headline win on the table (which the 3-reject-halt would have done 2026-05-23).
+
+## Handoffs, hygiene & discipline
+
+**Worktree hygiene (multi-agent fan-out).** Every spawned code/doc agent's FIRST step is `git merge --no-ff main` (NEVER rebase) — `isolation: worktree` can branch from a STALE base commit (hit repeatedly; see the friction log). After merging an agent's branch back: `git worktree list`, `git worktree prune`, `git branch -d feat/<merged>`. Harness-locked worktrees (`pid …` lock) auto-clean — don't force-unlock them.
+
+**Handoffs to [[gomoku-train]] (the machine — cross-ref, don't duplicate its steps):**
+- A recipe WON and you want to ship it → gomoku-train's publish flow (HuggingFace push + Cloudflare deploy).
+- Starting a real long PRODUCTION run (a new WL-release lineage, not a slice) → gomoku-train's launch-sequence-runbook: mine the validation archive first, 30-epoch smoke, then launch with a title-card ACK. The research lab schedules *slices*; a new release lineage is a gomoku-train launch.
+
+**Discipline one-liners:**
+- **Thermal:** heat-soaked IS the production regime. Absolute aug/s drifts ~5% across a session as the chip warms — for cross-time comparisons do a matched-thermal back-to-back A/B, never a compare-to-a-cold-session reference ([[feedback-heat-soaked-is-production]]).
+- **Box-busy:** run the Quick-start idle check before every GPU dispatch — a non-lab tenant is an ESCALATE, not a barge-in.
+- **Forward (15×15 / Gomocup era):** rated external-engine baselines (`wiki/topics/external-engine-baselines.md`, the Piskvork wrapper) become the real strength bar; not load-bearing at 9×9 yet.
 
 ## Friction-smoothing log
 
