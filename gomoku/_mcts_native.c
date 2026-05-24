@@ -55,6 +55,12 @@ typedef struct {
     double c_puct_base;
     double dirichlet_alpha;
     double dirichlet_eps;
+    // KataGo forced-playouts (Wu 2019). 0.0 == OFF == byte-identical legacy
+    // behavior. When > 0, root-only selection forces each already-visited
+    // root child up to n_forced(a) = ceil(sqrt(k * P(a) * N_root)) visits,
+    // and policy() subtracts those forced visits back out (policy-target
+    // pruning) before forming the training target.
+    double forced_playout_k;
     uint64_t rng;
 } NativeMCTSGameObject;
 
@@ -568,6 +574,58 @@ static int select_action(CNode const *node, double c_puct_init, double c_puct_ba
     return best_action;
 }
 
+// KataGo forced-playout count for one root child (Wu 2019, "Accelerating
+// Self-Play Learning in Go"). n_forced(a) = ceil(sqrt(k * P(a) * N_root)).
+// N_root is the total visit count over the root's children.
+static inline int n_forced_visits(double k, double prior, int root_total) {
+    if (k <= 0.0 || prior <= 0.0 || root_total <= 0) {
+        return 0;
+    }
+    double q = sqrt(k * prior * (double)root_total);
+    double c = ceil(q);
+    if (c < 0.0) {
+        c = 0.0;
+    }
+    return (int)c;
+}
+
+// Root-only forced-playout override. Returns a legal action to force, or -1
+// if no child is under its forced quota (caller falls back to PUCT). We only
+// force children that have ALREADY been visited at least once (N[a] > 0) and
+// are below their forced quota — matching KataGo, which tops up explored
+// children rather than seeding every legal move. Among eligible children we
+// pick the one with the largest forced-vs-actual deficit, breaking ties by
+// prior, so the selection is deterministic and reproducible.
+static int select_forced_root_action(CNode const *node, double k) {
+    int total = node_total_visits(node);
+    if (total <= 0) {
+        return -1;
+    }
+    int best_action = -1;
+    int best_deficit = 0;
+    double best_prior = -1.0;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (!node->legal[a]) {
+            continue;
+        }
+        if (node->N[a] <= 0) {
+            continue;  // only force already-explored children
+        }
+        int nf = n_forced_visits(k, (double)node->P[a], total);
+        int deficit = nf - node->N[a];
+        if (deficit <= 0) {
+            continue;
+        }
+        if (deficit > best_deficit ||
+            (deficit == best_deficit && (double)node->P[a] > best_prior)) {
+            best_deficit = deficit;
+            best_prior = (double)node->P[a];
+            best_action = a;
+        }
+    }
+    return best_action;
+}
+
 static int select_one_vloss(NativeMCTSGameObject *game, Pending *out) {
     int node_idx = game->root;
     out->path_len = 0;
@@ -577,7 +635,15 @@ static int select_one_vloss(NativeMCTSGameObject *game, Pending *out) {
             out->leaf_index = node_idx;
             return 1;
         }
-        int action = select_action(node, game->c_puct, game->c_puct_base);
+        int action = -1;
+        // Forced playouts apply at the ROOT only (KataGo). Default k==0.0
+        // disables this entirely so behavior is byte-identical to legacy.
+        if (game->forced_playout_k > 0.0 && node_idx == game->root) {
+            action = select_forced_root_action(node, game->forced_playout_k);
+        }
+        if (action < 0) {
+            action = select_action(node, game->c_puct, game->c_puct_base);
+        }
         int child_idx = node->child[action];
         if (child_idx < 0) {
             CState child_state;
@@ -782,17 +848,20 @@ static int NativeMCTSGame_init(
     self->c_puct_base = 19652.0;
     self->dirichlet_alpha = 0.3;
     self->dirichlet_eps = 0.25;
+    self->forced_playout_k = 0.0;  // OFF by default (byte-identical legacy)
     static char *kwlist[] = {
-        "state", "c_puct", "c_puct_base", "dirichlet_alpha", "dirichlet_eps", "seed", NULL
+        "state", "c_puct", "c_puct_base", "dirichlet_alpha", "dirichlet_eps",
+        "seed", "forced_playout_k", NULL
     };
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "|OddddK", kwlist,
+            args, kwargs, "|OddddKd", kwlist,
             &state_obj,
             &self->c_puct,
             &self->c_puct_base,
             &self->dirichlet_alpha,
             &self->dirichlet_eps,
-            &seed)) {
+            &seed,
+            &self->forced_playout_k)) {
         return -1;
     }
 
@@ -816,10 +885,88 @@ static int NativeMCTSGame_init(
     return 0;
 }
 
+// KataGo policy-target pruning (Wu 2019). Fill `pruned` with the root child
+// visit counts AFTER subtracting forced playouts. The most-visited child keeps
+// all its visits; for each other child we subtract as many visits as possible
+// (up to its n_forced quota) WITHOUT letting its PUCT exploration-selection
+// value exceed the best child's — i.e. we remove only the artificially-forced
+// exploration, never visits PUCT would have spent on its own. With k <= 0 this
+// is a straight copy of root->N (byte-identical legacy target).
+static void compute_pruned_root_visits(
+    NativeMCTSGameObject const *game, CNode const *root, double k, int32_t *pruned
+) {
+    for (int a = 0; a < N_ACTIONS; a++) {
+        pruned[a] = root->N[a];
+    }
+    if (k <= 0.0) {
+        return;
+    }
+    int total = node_total_visits(root);
+    if (total <= 0) {
+        return;
+    }
+    // Most-visited (best) child keeps all its visits.
+    int best_action = -1;
+    int best_count = -1;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (!root->legal[a]) {
+            continue;
+        }
+        if (root->N[a] > best_count) {
+            best_count = root->N[a];
+            best_action = a;
+        }
+    }
+    if (best_action < 0) {
+        return;
+    }
+    // AGZ log-schedule PUCT coefficient (same as select_action). Visit-count
+    // pruning is a target-extraction step; we use the FINAL parent total here.
+    double pb_c = log((1.0 + (double)total + game->c_puct_base) / game->c_puct_base)
+                  + game->c_puct;
+    double sqrt_total = sqrt((double)total + 1e-8);
+
+    // Best child's PUCT exploration-selection value (Q + U) at its real visits.
+    double best_q = root->N[best_action] > 0
+        ? (double)root->W[best_action] / (double)root->N[best_action]
+        : 0.0;
+    double best_u = pb_c * (double)root->P[best_action] * sqrt_total
+                    / (1.0 + (double)root->N[best_action]);
+    double best_value = best_q + best_u;
+
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (a == best_action || !root->legal[a] || root->N[a] <= 0) {
+            continue;
+        }
+        int nf = n_forced_visits(k, (double)root->P[a], total);
+        if (nf <= 0) {
+            continue;
+        }
+        // Q is fixed by W/N at the real visit count (KataGo holds the child's
+        // value constant while shrinking its U via the (1 + n) denominator).
+        double q = (double)root->W[a] / (double)root->N[a];
+        int n = root->N[a];
+        int subtracted = 0;
+        // Remove forced visits one at a time, up to nf, but stop the moment
+        // the child's selection value at the reduced count would meet/exceed
+        // the best child's (i.e. PUCT would have picked it on its own).
+        while (subtracted < nf && n > 1) {
+            double u_at = pb_c * (double)root->P[a] * sqrt_total / (1.0 + (double)(n - 1));
+            if (q + u_at > best_value) {
+                break;  // removing this visit would make the child PUCT-preferred
+            }
+            n -= 1;
+            subtracted += 1;
+        }
+        pruned[a] = n;
+    }
+}
+
 static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *args, PyObject *kwargs) {
     double temperature = 1.0;
-    static char *kwlist[] = {"temperature", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|d", kwlist, &temperature)) {
+    double forced_playout_k = -1.0;  // <0 sentinel: fall back to game's stored k
+    static char *kwlist[] = {"temperature", "forced_playout_k", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|dd", kwlist, &temperature, &forced_playout_k)) {
         return NULL;
     }
     npy_intp dims[1] = {N_ACTIONS};
@@ -829,23 +976,26 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     }
     float *out = (float *)PyArray_DATA((PyArrayObject *)out_obj);
     CNode *root = &self->nodes[self->root];
+    double k = forced_playout_k >= 0.0 ? forced_playout_k : self->forced_playout_k;
+    int32_t pruned[N_ACTIONS];
+    compute_pruned_root_visits(self, root, k, pruned);
 
     if (temperature <= 0.0) {
-        int max_count = root->N[0];
+        int max_count = pruned[0];
         for (int a = 1; a < N_ACTIONS; a++) {
-            if (root->N[a] > max_count) {
-                max_count = root->N[a];
+            if (pruned[a] > max_count) {
+                max_count = pruned[a];
             }
         }
         int winners = 0;
         for (int a = 0; a < N_ACTIONS; a++) {
-            if (root->N[a] == max_count) {
+            if (pruned[a] == max_count) {
                 winners++;
             }
         }
         float p = winners > 0 ? 1.0f / (float)winners : 0.0f;
         for (int a = 0; a < N_ACTIONS; a++) {
-            out[a] = root->N[a] == max_count ? p : 0.0f;
+            out[a] = pruned[a] == max_count ? p : 0.0f;
         }
         return out_obj;
     }
@@ -853,11 +1003,11 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     double sum = 0.0;
     if (temperature == 1.0) {
         for (int a = 0; a < N_ACTIONS; a++) {
-            sum += (double)root->N[a];
+            sum += (double)pruned[a];
         }
         if (sum > 0.0) {
             for (int a = 0; a < N_ACTIONS; a++) {
-                out[a] = (float)((double)root->N[a] / sum);
+                out[a] = (float)((double)pruned[a] / sum);
             }
         } else {
             int legal_count = 0;
@@ -884,7 +1034,7 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     // probabilities to float32 keeps the output strictly finite.
     double scores[N_ACTIONS];
     for (int a = 0; a < N_ACTIONS; a++) {
-        double x = pow((double)root->N[a], inv_temp);
+        double x = pow((double)pruned[a], inv_temp);
         scores[a] = x;
         sum += x;
     }
@@ -904,21 +1054,21 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     } else {
         // sum overflowed double (only possible at absurd tau or N). Fall back
         // to argmax-tie distribution so the policy is still a valid pmf.
-        int32_t max_count = root->N[0];
+        int32_t max_count = pruned[0];
         for (int a = 1; a < N_ACTIONS; a++) {
-            if (root->N[a] > max_count) {
-                max_count = root->N[a];
+            if (pruned[a] > max_count) {
+                max_count = pruned[a];
             }
         }
         int winners = 0;
         for (int a = 0; a < N_ACTIONS; a++) {
-            if (root->N[a] == max_count) {
+            if (pruned[a] == max_count) {
                 winners++;
             }
         }
         float p = winners > 0 ? 1.0f / (float)winners : 0.0f;
         for (int a = 0; a < N_ACTIONS; a++) {
-            out[a] = root->N[a] == max_count ? p : 0.0f;
+            out[a] = pruned[a] == max_count ? p : 0.0f;
         }
     }
     return out_obj;

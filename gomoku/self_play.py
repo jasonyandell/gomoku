@@ -314,6 +314,7 @@ def _generate_games_native(
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
     playout_cap_fast_sims: int = 0,
+    forced_playout_k: float = 0.0,
     profile: ProfileStats | None = None,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
@@ -377,6 +378,7 @@ def _generate_games_native(
                     dirichlet_alpha=dirichlet_alpha,
                     dirichlet_eps=dirichlet_eps,
                     seed=int(rng.integers(1, 2**63 - 1)),
+                    forced_playout_k=forced_playout_k,
                 )
             )
             initial_plies.append(opening_plies)
@@ -545,6 +547,7 @@ def generate_games(
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
     playout_cap_fast_sims: int = 0,
+    forced_playout_k: float = 0.0,
     profile: ProfileStats | None = None,
     gumbel_root: bool = False,
     gumbel_m: int = 16,
@@ -582,6 +585,11 @@ def generate_games(
     game). Defaults (frac=1.0, fast_sims=0) preserve the current behavior
     exactly: every move is full-search and recorded. NOTE: PCR is only honored on
     the native MCTS path; the pure-Python fallback below ignores it.
+
+    `forced_playout_k` > 0 enables KataGo forced playouts + policy-target
+    pruning (Wu 2019). Root-only forcing during search, forced visits removed
+    from the training target. 0.0 (default) is OFF == byte-identical legacy.
+    Composes with PCR (forced-k shapes search + prunes the recorded target).
     """
     rng = rng or np.random.default_rng()
     if gumbel_root:
@@ -629,6 +637,7 @@ def generate_games(
             archive_start_frac=archive_start_frac,
             playout_cap_frac=playout_cap_frac,
             playout_cap_fast_sims=playout_cap_fast_sims,
+            forced_playout_k=forced_playout_k,
             profile=profile,
         )
     if max_plies is None:
@@ -643,6 +652,7 @@ def generate_games(
             start_state, opening_plies = GameState.initial(), 0
         games.append(MCTSGame(start_state, c_puct=c_puct, c_puct_base=c_puct_base,
                               dirichlet_alpha=dirichlet_alpha, dirichlet_eps=dirichlet_eps,
+                              forced_playout_k=forced_playout_k,
                               rng=np.random.default_rng(rng.integers(0, 2**31))))
         initial_plies.append(opening_plies)
 
@@ -675,7 +685,11 @@ def generate_games(
         for slot_idx, g_idx in enumerate(active):
             g = active_games[slot_idx]
             tau = 1.0 if ply < temperature_moves else temperature_final
-            pi = policy_from_visits(g.root, tau)
+            pi = policy_from_visits(
+                g.root, tau,
+                forced_playout_k=forced_playout_k,
+                c_puct_init=c_puct, c_puct_base=c_puct_base,
+            )
             # Total moves played so far in THIS game = initial_plies[g_idx] (random
             # opening) + ply (MCTS moves applied so far). The side ABOUT to move
             # at this point has parity = total_moves % 2.
@@ -750,6 +764,7 @@ def generate_games_vs_baseline(
     wave_size: int = 1,
     model_first_frac: float = 0.5,
     random_opening_moves: int = 0,
+    forced_playout_k: float = 0.0,
 ) -> list[GameRecord]:
     """Generate games where the model plays a fixed opponent picker.
 
@@ -779,6 +794,7 @@ def generate_games_vs_baseline(
             start_state, opening_plies = GameState.initial(), 0
         games.append(MCTSGame(start_state, c_puct=c_puct, c_puct_base=c_puct_base,
                               dirichlet_alpha=dirichlet_alpha, dirichlet_eps=dirichlet_eps,
+                              forced_playout_k=forced_playout_k,
                               rng=np.random.default_rng(rng.integers(0, 2**31))))
         initial_plies.append(opening_plies)
     # side the model plays in each game: 0 = first mover, 1 = second
@@ -814,7 +830,11 @@ def generate_games_vs_baseline(
             for slot_idx, g_idx in enumerate(model_turn):
                 g = mcts_games[slot_idx]
                 tau = 1.0 if ply < temperature_moves else temperature_final
-                pi = policy_from_visits(g.root, tau)
+                pi = policy_from_visits(
+                    g.root, tau,
+                    forced_playout_k=forced_playout_k,
+                    c_puct_init=c_puct, c_puct_base=c_puct_base,
+                )
                 trajectories[g_idx].append((g.root.state.to_planes(), pi.copy(), n_initial + ply))
                 action = _sample_action(pi, rng)
                 g.advance_root(action)
