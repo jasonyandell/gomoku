@@ -71,14 +71,18 @@ def load_state(base_out_dir: str) -> dict:
     return {}
 
 
+LIVE_RATE_WINDOW = 10  # trailing fine-grained eval points for the live elo/hr slope
+
+
 def read_jsonl(cell_name: str) -> tuple[list, dict]:
-    """Return (model_elo series, latest full eval row) from the cell's
-    eval_results.jsonl — used as the elo fallback AND for the sub-grok anchor
-    winrates (which move before the quantized elo unsticks from the floor)."""
+    """Return ([(ts, model_elo), ...], latest full eval row) from the cell's
+    eval_results.jsonl. The (ts, elo) series feeds both the freshest-strength
+    columns AND the LIVE elo/hr slope (so the rate moves mid-slice, not only when
+    the coarse per-slice scheduler state updates)."""
     f = REPO / "sweep_runs" / cell_name / "checkpoints" / "eval_results.jsonl"
     if not f.exists():
         return [], {}
-    elos, last = [], {}
+    pts, last = [], {}
     for line in f.read_text().splitlines():
         try:
             d = json.loads(line)
@@ -86,30 +90,45 @@ def read_jsonl(cell_name: str) -> tuple[list, dict]:
             continue
         last = d
         if d.get("eval/model_elo") is not None:
-            elos.append(d["eval/model_elo"])
-    return elos, last
+            pts.append((d.get("ts"), d["eval/model_elo"]))
+    return pts, last
+
+
+def live_delo_per_hr(pts: list) -> float | None:
+    """Live Δelo/HOUR = least-squares slope of model_elo vs wall-clock over the last
+    LIVE_RATE_WINDOW fine-grained eval points. Reflects the CURRENT climb even
+    mid-slice — unlike the scheduler's slice-close rate (one point per finished
+    slice), which lags a full slice behind (e.g. shows '1pt' while an idea is
+    actually rocketing up within its running chunk)."""
+    series = [(t, e) for t, e in pts if isinstance(t, (int, float))]
+    if len(series) < 2:
+        return None
+    w = series[-LIVE_RATE_WINDOW:]
+    t0 = w[0][0]
+    xs = [(t - t0) / 3600.0 for t, _ in w]
+    ys = [e for _, e in w]
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    denom = sum((x - mx) ** 2 for x in xs)
+    if denom <= 0:
+        return None
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / denom
 
 
 def idea_metrics(state: dict, name: str, cell: str) -> dict:
-    """Fuse the scheduler's view (state: slice-points → Δelo/hr, chunks, status) with
-    the FRESHEST strength (jsonl: a fine-grained eval every ~5 epochs, so it moves
-    mid-slice before the per-slice summary lands).
-
-      elo/peak  = freshest / best fine-grained eval (the 'is it moving' signal)
-      rate/pts  = from the scheduler's slice-points (pts<2 ⇒ no Δelo/hr slope yet)
-    """
-    jsonl_elos, _ = read_jsonl(cell)
+    """elo/peak = freshest/best fine-grained eval; rate = LIVE elo/hr slope from the
+    fine-grained eval series (moves mid-slice); chunks/status/wall from the state."""
+    pts, _ = read_jsonl(cell)
     st = (state.get("ideas") or {}).get(name) or {}
-    slice_pts = len(st.get("elo_history") or [])
-    rate = _derby.delo_per_hr(state, name) if (_derby and slice_pts >= 2) else None
-    if jsonl_elos:
-        elo, peak = jsonl_elos[-1], max(jsonl_elos)
+    if pts:
+        elos = [e for _, e in pts]
+        elo, peak, rate = elos[-1], max(elos), live_delo_per_hr(pts)
     elif st.get("elo_history"):
         elos = [h[1] for h in st["elo_history"]]
-        elo, peak = elos[-1], max(elos)
+        elo, peak, rate = elos[-1], max(elos), None
     else:
-        elo = peak = None
-    return {"elo": elo, "peak": peak, "pts": slice_pts, "rate": rate,
+        elo = peak = rate = None
+    return {"elo": elo, "peak": peak, "pts": len(pts), "rate": rate,
             "chunks": st.get("chunks_done", 0), "status": st.get("status", "—"),
             "wall_min": st.get("wall_secs_total", 0.0) / 60.0}
 
@@ -184,9 +203,8 @@ def render(board_path: str) -> None:
     for i, x in enumerate(rows, 1):
         beat = "✓" if (x["peak"] or 0) >= 800 else " "
         run_mark = "►" if x["status"] == "running" else " "
-        pts = x.get("pts") or 0
-        # distinguish never-run (no slice pts) from ran-but-no-slope-yet (1 pt) from a real rate
-        rate = "—" if pts == 0 else ("1pt" if pts < 2 else _fmt(x["rate"], "8.1f"))
+        # live elo/hr slope from the fine-grained eval series ('—' = <2 eval points)
+        rate = _fmt(x["rate"], "8.1f") if x["rate"] is not None else "—"
         print(f"  {i:>2} {run_mark}{x['idea']:<10} {_fmt(x['elo'], '5.0f')} {_fmt(x['peak'], '5.0f')}{beat}"
               f"{rate:>8} {_fmt(x['chunks'], '3.0f')} {x['status']:<9} "
               f"{_fmt(x['pl'], '6.3f')} {_fmt(x['vl'], '6.3f')} {_fmt(x['plies'], '6.1f')} "
@@ -200,10 +218,10 @@ def render(board_path: str) -> None:
         nr = _derby.delo_per_hr(state, next_pick) if _derby else None
         why = "entry-fee (needs a 2nd point for a slope)" if nr is None else f"steepest Δelo/hr = {nr:.1f}"
         print(f"  ► next pick (live priority): {next_pick}  — {why}")
-    print("  ►=running · elo/peak=freshest fine-grained eval (moves mid-slice) · Δelo/hr is the")
-    print("  scheduler's hill-climb signal: '—'=never-run, '1pt'=ran but no slope yet (needs a 2nd")
-    print("  slice-point), else last-chunk slope · pre-grok models pin at the ~389 floor until they")
-    print("  start beating an anchor (heuristic OR lookahead), then elo unsticks.\n")
+    print(f"  ►=running · elo/peak=freshest fine-grained eval · Δelo/hr=LIVE least-squares slope over")
+    print(f"  the last {LIVE_RATE_WINDOW} eval points (moves mid-slice; '—'=<2 evals) · pre-grok models pin at")
+    print("  ~389 until they beat an anchor · NOTE: the scheduler picks on SLICE-CLOSE rates, so the")
+    print("  '► next pick' can lag this live column by up to one slice (e.g. a mid-slice rocket).\n")
 
 
 def main() -> None:
