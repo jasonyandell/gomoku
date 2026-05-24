@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import time
 from pathlib import Path
 
@@ -374,6 +375,14 @@ def parse_args() -> argparse.Namespace:
                         "checkpoint dir AND any leftover *.pt.tmp / orphaned *.pt in the "
                         "worker-input-dir that are older than this many seconds. Keeps "
                         "interrupted writes from accumulating across runs.")
+    p.add_argument("--max-wall-secs", type=float, default=0.0,
+                   help="Time-cap the run: after this many wall-seconds (checked at "
+                        "each epoch boundary), finish the current epoch, force-save a "
+                        "fully-resumable latest.pt (WITH the replay buffer, ignoring "
+                        "--save-buffer-every), and exit 0. 0 = no cap (run to --epochs). "
+                        "This is what makes a training task a clean research SLICE: "
+                        "resume from latest.pt never cold-refills the buffer. A SIGTERM "
+                        "or SIGINT triggers the same clean-save path mid-run.")
     p.add_argument("--no-eval", dest="eval_in_trainer", action="store_false",
                    help="Skip the in-trainer eval block entirely. Pair with "
                         "`python -m gomoku.eval_worker` running separately — it polls "
@@ -990,6 +999,51 @@ def main() -> None:
     _publish_worker_weights(epoch=start_epoch)
     _sweep_orphans()
 
+    # --- clean-shutdown support (time-capped research slices) ---
+    # A SIGTERM/SIGINT, or crossing --max-wall-secs, sets the stop flag. We
+    # finish the current epoch, then force a fully-resumable save and exit 0 so
+    # `--resume latest.pt` continues without a cold buffer refill (the LF1 trap).
+    # The signal handler only flips a flag — no I/O in the async context.
+    _stop = {"requested": False, "reason": ""}
+
+    def _request_stop(signum, _frame):
+        _stop["requested"] = True
+        _stop["reason"] = f"signal {signal.Signals(signum).name}"
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    signal.signal(signal.SIGINT, _request_stop)
+    _wall_start = time.monotonic()
+
+    def _save_resumable(epoch_num: int) -> None:
+        """Force-write a fully-resumable latest.pt RIGHT NOW (ignores
+        --save-buffer-every) plus a labeled snapshot, and republish worker
+        weights. Called at clean shutdown so a capped slice always leaves a
+        latest.pt that embeds the replay buffer."""
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        ckpt_extra: dict = {"replay_buffer": buffer.state_dict()}
+        if ema_model is not None:
+            ckpt_extra["ema_model_state_dict"] = ema_model.state_dict()
+        # Labeled snapshot (weights+optimizer; small) for lineage.
+        snap = os.path.join(args.checkpoint_dir, f"epoch{epoch_num:04d}.pt")
+        snap_extra = ({"ema_model_state_dict": ema_model.state_dict()}
+                      if ema_model is not None else None)
+        save_checkpoint(snap, model, optimizer, epoch=epoch_num,
+                        total_games=total_games, wandb_run_id=wandb_run_id,
+                        extra=snap_extra)
+        # Resumable latest.pt with the buffer embedded.
+        latest = os.path.join(args.checkpoint_dir, "latest.pt")
+        latest_tmp = latest + ".tmp"
+        save_checkpoint(latest_tmp, model, optimizer, epoch=epoch_num,
+                        total_games=total_games, wandb_run_id=wandb_run_id,
+                        extra=ckpt_extra)
+        try:
+            if os.path.islink(latest) or os.path.exists(latest):
+                os.remove(latest)
+            os.replace(latest_tmp, latest)
+        except OSError:
+            pass
+        _publish_worker_weights(epoch=epoch_num)
+
     for epoch in range(start_epoch, start_epoch + args.epochs):
         epoch_start = time.time()
 
@@ -1342,6 +1396,22 @@ def main() -> None:
                         pass
             # Sweep .tmp leftovers and unknown files past the age threshold.
             _sweep_orphans()
+
+        # --- clean stop: SIGTERM/SIGINT received, or wall-time cap reached ---
+        # Checked at the epoch boundary so a partial epoch is never interrupted.
+        # Either path force-saves a resumable latest.pt (buffer embedded) so the
+        # next slice resumes without a cold refill, then exits 0 (wandb flushes
+        # on normal exit).
+        if not _stop["requested"] and args.max_wall_secs > 0:
+            if (time.monotonic() - _wall_start) >= args.max_wall_secs:
+                _stop["requested"] = True
+                _stop["reason"] = f"--max-wall-secs {args.max_wall_secs:g}"
+        if _stop["requested"]:
+            print(f"[stop] {_stop['reason']} after epoch {epoch + 1}; "
+                  f"saving resumable checkpoint (buffer embedded), exiting",
+                  flush=True)
+            _save_resumable(epoch + 1)
+            break
 
 
 if __name__ == "__main__":
