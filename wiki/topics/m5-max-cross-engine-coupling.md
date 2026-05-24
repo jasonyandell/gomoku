@@ -139,6 +139,34 @@ A system GPU monitor (Stats-style menu-bar reading, captured 2026-05-23 during t
 - **ANE utilization: 0%** — workers are NOT on the Apple Neural Engine. Two independent tools (process `sample` showing `BnnsCpuInferenceOperation`, and the system monitor showing ANE 0%) agree.
 - **GPU utilization: ~75%**, Render 1%, Tiler 0% — the GPU compute is busy (trainer + hog) with headroom, and it's pure compute (matmuls), not graphics. Confirms the "GPU has headroom" observation — but the hog test proves that headroom isn't free to fill: pushing GPU work steals power budget from the CPU workers.
 
+## Part 3 — Two FULL production runs at once (the real co-tenancy number, 2026-05-24)
+
+*Jason: "run 2 trainings at once, 2 full 8-process training runs, wandb and everything, at the same time. I want to measure perf degradation."* This is the production-scale version of the synthetic-hog tests above: not a hog vs workers, but **two complete AlphaZero pipelines** sharing the M5 Max. Each run = `run_sweep.py` cell (1 trainer + 8 self-play workers + 1 eval = 10 procs), so the concurrent state is **20 processes** all driving MPS. Two throwaway clones of the WL4 production recipe (`PERFA`/`PERFB`, fresh weights, own wandb runs `dkqo29v3`/`pd8yzq7a`), torn down after measurement.
+
+**Method.** The trainer log's per-epoch `(tot: gen=X train=Y)` split decomposes self-play generation (worker MPS load) from SGD (trainer MPS load). Metrics are regime-independent **rates**, not epoch wall (which is confounded by wave-mode tile adaptivity and by game-length drift as the fresh models degrade): **moves/sec** = games/sec × plies (generation MPS work, invariant to game length since each move = one MCTS search at fixed sims) and **SGD steps/sec** = steps / train-phase-seconds (batch=512 always, so per-step cost is buffer-size-invariant). Solo baseline = PERFA alone (epochs 10–20); concurrent = PERFA epochs 31–42 and PERFB epochs 6–15, windows that fully overlap with both runs at 8-worker load. Buffers were still filling (245k–890k of 1.5M), so this is the **compute-contention** number; the dual-full-1.5M-buffer (~16 GB) memory-pressure regime was not measured.
+
+| metric | solo (1 run) | PERFA concurrent | PERFB concurrent | per-run degradation |
+|---|---|---|---|---|
+| generation (moves/sec) | 392.7 | 205.9 | 219.2 | **−48% / −44%** |
+| SGD (steps/sec) | 26.64 | 10.94 | 13.21 | **−59% / −50%** |
+| epochs/min | 8.84 | 5.22 | 4.64 | −41% / −48% |
+| epoch wall (s) | 6.79 | 11.49 | 12.93 | +69% / +90% |
+
+**The headline: each run runs at roughly HALF speed when you run two at once.** Generation drops ~45%, SGD drops ~55%. The two runs share the machine fairly evenly (PERFB marginally ahead — within window/epoch-range noise).
+
+**Aggregate machine throughput (sum of both runs vs one run) tells the deeper story — and it's an asymmetry:**
+
+| | 1 run (solo) | 2 runs (sum) | aggregate Δ |
+|---|---|---|---|
+| generation (moves/sec) | 392.7 | 425.1 | **+8%** |
+| SGD (steps/sec) | 26.64 | 24.15 | **−9%** |
+
+- **Self-play generation has slack: two runs produce ~8% MORE total moves than one.** Workers alternate Python MCTS tree-traversal with MPS forward passes, leaving MPS-occupancy gaps; the second run's workers fill them. This is the production-path (torch/MPS workers) confirmation of [[project-perf-bench-lesson]] — production OS scheduling interleaves across MPS processes; a single run does **not** saturate MPS generation.
+- **SGD training has NO slack: two trainers do ~9% LESS total work than one.** The trainer runs a tight back-to-back forward+backward loop on batch=512 that pins MPS occupancy high (no gaps), so two trainers collide directly and you lose a little to context-switching.
+- This is exactly the **working-set/occupancy** mechanism from Lpwr2b: self-play = low/gappy MPS occupancy (interleavable → slack); SGD = sustained high occupancy (collides). The gen-vs-train asymmetry is the same lever seen from the production side.
+
+**Practical takeaway.** Running two full runs concurrently is **not** a free doubling, but it's **not catastrophic either**: total machine throughput stays roughly flat (gen +8%, SGD −9%), just split ~50/50 across two runs that each take ~2× longer per epoch. If you need two recipes' results and can tolerate each finishing in ~2× wall-clock, co-tenancy is fine and slightly net-positive on generation. If you need one result fast, run it alone — the SGD side in particular gets nothing from sharing.
+
 ## Implications
 
 ### For the L09c finding

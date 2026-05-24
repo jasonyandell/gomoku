@@ -109,6 +109,7 @@ read is:
 | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | Operational recipe for `scripts/mine_validation_archive.py`: buckets, knobs, throughput, anti-patterns. |
 | [topics/playing-the-model.md](topics/playing-the-model.md) | How to play a trained checkpoint through the local web UI or live SPA. |
 | [topics/external-engine-baselines.md](topics/external-engine-baselines.md) | Rated OSS/source-available Gomocup engine candidates and the Piskvork wrapper plan. |
+| [topics/containerize-training-runs.md](topics/containerize-training-runs.md) | **Backlog (for soon):** containerize the training run, one container at a time, refine the skill for lower startup friction/time. Open question: no Metal/MPS in Docker on macOS — targets off-Mac/at-scale or a non-Docker run unit. |
 | [../scripts/wandb_workspace.py](../scripts/wandb_workspace.py) | Creates W&B workspaces for run overlays. Regenerate when a new run joins the comparison set. |
 
 ### Frontier Lab Ops

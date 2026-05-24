@@ -3,6 +3,12 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-24] topics | Backlog idea filed — containerize the training run
+
+- Added [topics/containerize-training-runs.md](topics/containerize-training-runs.md) — "for soon" backlog capture of Jason's idea: containerize a training run, run one container at a time, refine the `gomoku-train` skill for lower startup friction/time (proper caching). Captured during the research-lab ↔ training integration design discussion.
+- Recorded the one real open question rather than filing a plan that hits a wall: **Docker on macOS has no Metal/MPS passthrough** (Linux-VM containers can't reach the Apple GPU → CPU fallback). So the idea targets either the off-Mac/at-scale path ([[az-at-scale-vs-laptop]]) or a non-Docker reproducible run unit on the Mac (lockfile + warm venv + `run` verb + weight cache). Decide that fork first.
+- Linked from the index Page Catalog (Operations And Use). Not started; no memory entry yet (design still in flux).
+
 ## [2026-05-23] topics | Core ML design-envelope page published + L09c-L09h research lanes queued
 
 - Added [topics/coreml-design-envelope-and-our-fit.md](topics/coreml-design-envelope-and-our-fit.md) — characterizes Core ML / ANE's design center (the iOS/macOS app ML stack: Vision, Siri, AR, FaceID), maps our research-compute gomoku workload against that envelope (20-100× above design call rate, 3-30× below design model size — worst corner), and proposes six concrete research lanes (L09c tiny on ANE, L09d medium on ANE, L09e routing-units sweep, L09f larger-V amortization, L09g model-size sweep at V=512, L09h .mlpackage re-export cost). Frame: "M5 Max as mainframe is learning where it breaks; even if we don't directly leverage it in the end, we'll know."
