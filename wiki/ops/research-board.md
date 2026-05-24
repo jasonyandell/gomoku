@@ -211,18 +211,19 @@ gain.
 
 ## Standings
 
-_Last updated: 2026-05-24T10:29:17Z — 54 chunks run._
+_Last updated: 2026-05-24T13:07:49Z — 70 chunks run._
 
-**Champion so far:** `sims-400` at 965 elo (70/140 epochs).
+**Champion so far:** `sims-400` at 1094 elo (140/140 epochs).
 
-| Rank | Idea | Epochs | Elo | Δelo (last) | Δelo/epoch | Beat heuristic? | Status |
-|-----:|------|:------:|----:|------------:|-----------:|:---------------:|--------|
-| 1 | sims-400 | 70/140 | 965 | -168 | -16.8 | ✓ | queued |
-| 2 | sgd-800 | 60/140 | 614 | -137 | -13.7 |  | queued |
-| 3 | open-div4 | 70/140 | 513 | -238 | -23.8 |  | queued |
-| 4 | buf-30k | 60/140 | 453 | -60 | -6.0 |  | queued |
-| 5 | temp-16 | 70/140 | 437 | -16 | -1.6 |  | queued |
-| 6 | C0-baseline | 50/140 | 389 | -16 | -1.6 |  | queued |
-| 7 | sims-100 | 110/140 | 389 | +0 | +0.0 |  | queued |
-| 8 | ema-099 | 50/140 | 389 | -16 | -1.6 |  | queued |
+| Rank | Idea | Epochs | Elo | Peak | Wall (min) | Δelo/hr | Beat heuristic? | Status |
+|-----:|------|:------:|----:|-----:|-----------:|--------:|:---------------:|--------|
+| 1 | sims-400 | 140/140 | 1094 | 1265 | 140.1 | 614 | ✓ | capped |
+| 2 | sgd-800 | 140/140 | 1081 | 1284 | 105.0 | 874 | ✓ | capped |
+| 3 | open-div4 | 80/140 | 498 | 751 | 35.1 | 867 |  | queued |
+| 4 | buf-30k | 60/140 | 453 | 513 | 25.4 | 364 |  | queued |
+| 5 | temp-16 | 70/140 | 437 | 453 | 29.9 | 153 |  | queued |
+| 6 | C0-baseline | 50/140 | 389 | 405 | 21.6 | 57 |  | queued |
+| 7 | sims-100 | 110/140 | 389 | 389 | 33.2 | -8 |  | queued |
+| 8 | ema-099 | 50/140 | 389 | 405 | 21.6 | 57 |  | queued |
 
+_Δelo/hr = (peak elo − 389 floor) ÷ wall-hours-to-peak: real-strength gain per wall-clock hour, the north-star. Beat-heuristic ✓ = peak ≥ 800._

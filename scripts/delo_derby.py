@@ -144,8 +144,9 @@ def fresh_state(board: dict) -> dict:
             idea["name"]: {
                 "name": idea["name"],
                 "epochs_done": 0,
-                "elo_history": [],          # list of [epoch, elo]
+                "elo_history": [],          # list of [epoch, elo, chunk_wall_secs]
                 "last_delo": 0.0,
+                "wall_secs_total": 0.0,
                 "status": "queued",          # queued | running | capped | errored
                 "wandb_run_id": None,
                 "retries": 0,
@@ -367,21 +368,32 @@ def write_research_board(board: dict, state: dict, board_md_path: Path) -> None:
     beat_elo = float(g.get("beat_heuristic_elo", 800))
     cap = int(g["cap_epochs"])
     chunk = int(g["chunk_epochs"])
+    floor = 389.0  # "beats random, nothing above" — the no-skill elo floor
 
     # Build rows sorted by current elo desc.
     rows = []
     for name, st in state["ideas"].items():
         hist = st.get("elo_history", [])
         elo = hist[-1][1] if hist else None
-        delo = st.get("last_delo", 0.0)
-        delo_per_epoch = (delo / chunk) if chunk else 0.0
-        beat = "✓" if (elo is not None and elo >= beat_elo) else ""
+        # peak elo + cumulative wall-seconds AT the peak (entries are [ep,elo,wall]).
+        peak = None; wall_to_peak = 0.0; cum = 0.0
+        for entry in hist:
+            w = entry[2] if len(entry) >= 3 else 0.0
+            cum += w
+            if peak is None or entry[1] > peak:
+                peak = entry[1]; wall_to_peak = cum
+        wall_total = st.get("wall_secs_total", cum)
+        # Δelo/hr = real-strength gain (above the no-skill floor) per wall-hour to peak.
+        delo_per_hr = ((peak - floor) / (wall_to_peak / 3600.0)) if (peak is not None and wall_to_peak > 0) else None
+        beat = "✓" if (peak is not None and peak >= beat_elo) else ""
         rows.append({
             "name": name,
             "epochs_done": st.get("epochs_done", 0),
             "elo": elo,
-            "delo": delo,
-            "delo_per_epoch": delo_per_epoch,
+            "peak": peak,
+            "delo": st.get("last_delo", 0.0),
+            "wall_min": wall_total / 60.0,
+            "delo_per_hr": delo_per_hr,
             "beat": beat,
             "status": st.get("status", "queued"),
         })
@@ -411,18 +423,21 @@ def write_research_board(board: dict, state: dict, board_md_path: Path) -> None:
         lines.append("**Champion so far:** _(no rated ideas yet)_")
     lines.append("")
 
-    # table
-    lines.append("| Rank | Idea | Epochs | Elo | Δelo (last) | Δelo/epoch | Beat heuristic? | Status |")
-    lines.append("|-----:|------|:------:|----:|------------:|-----------:|:---------------:|--------|")
+    # table — north-star is Δelo/hr (real-strength gain above the floor per wall-hour to peak)
+    lines.append("| Rank | Idea | Epochs | Elo | Peak | Wall (min) | Δelo/hr | Beat heuristic? | Status |")
+    lines.append("|-----:|------|:------:|----:|-----:|-----------:|--------:|:---------------:|--------|")
     for i, r in enumerate(rows, start=1):
         elo_s = f"{r['elo']:.0f}" if r["elo"] is not None else "—"
-        delo_s = f"{r['delo']:+.0f}" if r["elo"] is not None else "—"
-        dpe_s = f"{r['delo_per_epoch']:+.1f}" if r["elo"] is not None else "—"
+        peak_s = f"{r['peak']:.0f}" if r["peak"] is not None else "—"
+        wall_s = f"{r['wall_min']:.1f}" if r["wall_min"] else "—"
+        dph_s = f"{r['delo_per_hr']:.0f}" if r["delo_per_hr"] is not None else "—"
         lines.append(
-            f"| {i} | {r['name']} | {r['epochs_done']}/{cap} | {elo_s} | "
-            f"{delo_s} | {dpe_s} | {r['beat']} | {r['status']} |"
+            f"| {i} | {r['name']} | {r['epochs_done']}/{cap} | {elo_s} | {peak_s} | "
+            f"{wall_s} | {dph_s} | {r['beat']} | {r['status']} |"
         )
     lines.append("")
+    lines.append("_Δelo/hr = (peak elo − 389 floor) ÷ wall-hours-to-peak: real-strength gain "
+                 "per wall-clock hour, the north-star. Beat-heuristic ✓ = peak ≥ 800._")
     standings_block = "\n".join(lines)
 
     # Preserve everything up to and including the sentinel; rewrite below.
@@ -524,9 +539,11 @@ def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace
         # Train succeeded; eval failed. Advance epochs (model DID train) but carry
         # previous elo so we don't lose the chunk's training. Don't mark errored —
         # the model is fine; eval is just missing this round.
+        dt = time.time() - t0
         st["epochs_done"] = target
         st["last_delo"] = 0.0
-        st["elo_history"].append([target, elo_prev])
+        st["elo_history"].append([target, elo_prev, round(dt, 1)])
+        st["wall_secs_total"] = st.get("wall_secs_total", 0.0) + dt
         st["wandb_run_id"] = st.get("wandb_run_id") or extract_wandb_run_id(board, idea_name)
         if st["epochs_done"] >= cap:
             st["status"] = "capped"
@@ -547,9 +564,11 @@ def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace
     parsed = read_last_elo(board, idea_name)
     if parsed is None or lines_after <= lines_before:
         # Eval ran but produced no new parseable elo line: carry previous elo.
+        dt = time.time() - t0
         st["epochs_done"] = target
         st["last_delo"] = 0.0
-        st["elo_history"].append([target, elo_prev])
+        st["elo_history"].append([target, elo_prev, round(dt, 1)])
+        st["wall_secs_total"] = st.get("wall_secs_total", 0.0) + dt
         if st["epochs_done"] >= cap:
             st["status"] = "capped"
         else:
@@ -568,7 +587,8 @@ def run_chunk(board: dict, state: dict, idea_name: str, args: argparse.Namespace
 
     st["epochs_done"] = target
     st["last_delo"] = last_delo
-    st["elo_history"].append([target, elo_now])
+    st["elo_history"].append([target, elo_now, round(dt, 1)])
+    st["wall_secs_total"] = st.get("wall_secs_total", 0.0) + dt
     st["wandb_run_id"] = st.get("wandb_run_id") or extract_wandb_run_id(board, idea_name)
     if st["epochs_done"] >= cap:
         st["status"] = "capped"
