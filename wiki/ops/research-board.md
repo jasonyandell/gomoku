@@ -75,6 +75,73 @@ Re-run the **top 3** (`open-div4`, `temp-16`, `sgd-800`) **HEAD-TO-HEAD**, using
 
 ---
 
+## v3 — prior-art levers (queued, code building 2026-05-24)
+
+A **third board**: race training levers imported from the engines/papers that came
+before us, each picked to attack a **specific v1 finding**. v1 told us we are
+**generation-bound** (train ~10.5s/epoch floor; MCTS gen 2–5×) and that
+**exploration/diversity beats raw compute for the ceiling** — so the v3 roster is
+biased toward levers that get *better targets per unit of generation* rather than
+just spending more compute. Same rules as v1/v2: fresh `--size small --seed 0`,
+**one lever vs C0-baseline**, scored by anchored elo (then head-to-head once the
+ladder saturates). Code lands as opt-in flags (production byte-identical when
+unset) before any cell runs; the board json + run_sweep cells get wired once each
+lever's branch is merged. Source provenance for each card below.
+
+> Implementation note: **Gumbel** and **forced-playouts** modify root selection in
+> the native C MCTS (`_mcts_native.c`) — they're only fair wall-clock derby levers
+> if they run in that fast path. If a lane comes back python-`mcts.py`-only, it's
+> still a valid *target-quality* experiment but its wall-clock isn't comparable;
+> such a lever moves to a sims-matched (not wall-matched) sub-race until the C port
+> lands.
+
+### v3-gumbel  (HIGHEST leverage)
+**Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
+
+**Hypothesis:** Directly attacks v1's #1 finding (generation-bound) and its sharpest failure (`sims-100` "never grokked" under vanilla MCTS). Gumbel *provably* improves the policy even at tiny sim budgets (n=2..16) — so it should let self-play run far fewer sims per move yet still emit strong, low-variance targets, buying generation speed without the target-quality collapse that floored sims-100. The risk: the completed-Q target is a different target shape than visit-count policy; it could interact badly with our short-game distribution or need m/c-tuning to beat plain PUCT at our sim counts.
+
+**Expected Δelo signature:** *Confirm* = at LOW sims (e.g. 100), Gumbel's Δelo/hr clears C0's and clears vanilla-MCTS-at-100 by a wide margin — strong targets cheap = the generation-bound win. *Refute* = Δelo ≈ vanilla PUCT at matched sims (the completed-Q target bought nothing at 9×9 scale) or instability from the target-shape change.
+
+**Config delta vs C0:** `--n-simulations 100 --gumbel-root` (the point is cheap-sims-that-still-train; an A/B at 200 is a secondary cell).
+
+### v3-playoutcap
+**Lever:** `--playout-cap-frac 0.25 --playout-cap-fast-sims 50` — most moves run a small budget and are NOT recorded; ~25% run the full budget and ARE the training targets. **Source:** KataGo, Wu (2019); inherited by KataGomo (the engine we surveyed @ Gomocup 2254).
+
+**Hypothesis:** Concentrate expensive search where it actually trains the net. Generation-bound says wall-clock is dominated by sims/move; spending the full budget on only ¼ of moves (and a cheap budget elsewhere just to keep the game progressing) should multiply games/wall at near-constant target quality — a different route to the same "more, fresher self-play per wall" that cheap-sims chases, but without weakening the *recorded* targets. The risk: the cheap moves still shape the game trajectory, so low-quality intermediate play could bias the distribution the recorded positions come from.
+
+**Expected Δelo signature:** *Confirm* = Δelo/hr above C0 — same-or-better climb at materially less wall, because the recorded targets stay full-strength while the game advances cheaply. *Refute* = a shallower climb (cheap intermediate moves degraded the trajectory the targets are drawn from) or no wall win (the fast moves weren't cheap enough to matter).
+
+**Config delta vs C0:** `--playout-cap-frac 0.25 --playout-cap-fast-sims 50` (full budget stays C0's `--n-simulations 200`).
+
+### v3-forcedplayout
+**Lever:** `--forced-playout-k 2.0` — force ≥ `ceil(sqrt(k·P(a)·N))` visits to each root child, then prune the forced visits back out of the policy target. **Source:** KataGo, Wu (2019).
+
+**Hypothesis:** v1 found exploration beats compute for the ceiling, but "more sims" is the expensive way to explore. Forced playouts buy *root exploration* of promising-by-prior moves that PUCT would starve — without raising the sim budget — and target-pruning keeps the forced visits from polluting the trained policy. So: the ceiling benefit of exploration at the cost profile of a normal sim budget. The risk: at our small sim counts the forced minimums could *crowd out* the search's own signal, and the pruning rule could over/under-correct the target.
+
+**Expected Δelo signature:** *Confirm* = a higher ceiling than C0 (echoing open-div4/temp-16's exploration win) at C0's wall cost — exploration without the sim tax. *Refute* = Δelo ≈ C0 (forcing didn't add useful exploration at 9×9) or instability from target-pruning artifacts.
+
+**Config delta vs C0:** `--n-simulations 200 --forced-playout-k 2.0`.
+
+### v3-swa
+**Lever:** `--swa-window K` — publish self-play generator weights as the flat average of the last K checkpoints, instead of EMA/live. **Source:** Stochastic Weight Averaging / Leela Chess Zero weight-averaging practice.
+
+**Hypothesis:** v1's `ema-099` was a *floor* — the exponential moving average LAGGED the learner on a fast climb, generating from a staler/weaker policy. SWA is the targeted fix: a flat tail-average smooths target generation (the stability EMA was reaching for) *without* the unbounded lag of exponential decay, since old weights fall out of the window entirely. So it should recover EMA's stability benefit on the climb without the lag penalty that sank ema-099. The risk: on a *fast* climb even a short flat window still mixes in too-old weights and lags; or the smoothing simply isn't worth anything when fresh-start gradients are large and directionally consistent.
+
+**Expected Δelo signature:** *Confirm* = lower chunk-to-chunk Δelo variance than C0 AND a climb that stays at-or-above C0 (beating ema-099's floor) — stability without lag. *Refute* = lags like ema-099 (window too wide / climb too fast) or no variance reduction (the live policy was already fine).
+
+**Config delta vs C0:** `--n-simulations 200 --swa-window 5` (tune K; contrast directly with v1's `--ema-tau 0.99`).
+
+### v3-auxhead (Class-C, design-only — see `auxiliary-targets-design.md`)
+**Lever:** an opponent-reply auxiliary policy head (recommended), opt-in via an aux-loss weight; predicts the opponent's next-ply policy for extra gradient per position. **Source:** KataGo auxiliary targets, adapted to 9×9.
+
+**Hypothesis:** Attacks the laptop-scale thin-signal problem ([[az-at-scale-vs-laptop]]): short gomoku games yield few near-opening positions, so each scarce position should teach the net more. An opponent-reply head squeezes a second supervised signal from data we already generate. *This is a model-architecture change (Class C)* — design first, user sign-off before any model.py edit. Card finalized from the design doc.
+
+**Expected Δelo signature:** *Confirm* = steeper Δelo/hr than C0 at equal generation (more signal per position = faster learning from scarce data), aux head dropped at inference so self-play/eval cost is unchanged. *Refute* = aux loss distracts the shared tower (policy/value regress) or the extra signal is redundant with the value target on short games.
+
+**Config delta vs C0:** TBD from the design doc (e.g. `--aux-opponent-reply-weight 0.15`, default 0.0 = off).
+
+---
+
 ## Title cards
 
 ### C0-baseline
