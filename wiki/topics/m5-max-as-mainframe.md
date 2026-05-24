@@ -164,6 +164,20 @@ that makes the next step cheaper.
 
 ## Cross-refs
 
+- [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md)
+  — concrete findings from the 2026-05-23 perf cycle: fp16 on MPS is no
+  longer slow (nearly doubles R-S400 small at V=512); the same chip has
+  bandwidth-bound and dispatch-bound regimes depending on model size;
+  independent perf levers compose multiplicatively to four decimals.
+  Numbers, reproduction commands, Reviewer-audited receipts.
+- [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md)
+  — the "where the chip breaks" companion. Characterizes Core ML / ANE's
+  design center (iOS/macOS app ML stack — Vision/Siri/AR/FaceID), shows
+  where our gomoku workload sits relative to that envelope (20-100× above
+  the design call rate, 3-30× below the design model size — worst corner
+  of the pipeline-overhead-to-compute ratio), and queues L09c-L09h
+  research lanes to map the envelope's edges. Mapping where it breaks is
+  the value, even if we don't directly leverage it in the end.
 - [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — current perf state,
   what's already been ported from zeb, what hasn't.
 - [activity-monitor-perf-runbook.md](activity-monitor-perf-runbook.md) —

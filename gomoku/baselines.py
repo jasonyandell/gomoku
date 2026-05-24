@@ -124,17 +124,21 @@ def _has_immediate_win(mine_after: np.ndarray, opp: np.ndarray) -> bool:
 
 
 def _find_immediate_wins(mine: np.ndarray, opp: np.ndarray, legal_idx: np.ndarray) -> np.ndarray:
-    """Return subset of `legal_idx` that immediately complete 5-in-a-row for `mine`."""
-    wins = []
-    for a in legal_idx:
-        win_idxs = _WINDOWS_THROUGH_CELL[int(a)]
-        if win_idxs.size == 0:
-            continue
-        # Count my stones in each of these windows AFTER placing at a.
-        mw = mine[_WINDOWS[win_idxs]].sum(axis=1) + 1  # +1 for the new stone
-        if (mw >= WIN_LEN).any():
-            wins.append(int(a))
-    return np.asarray(wins, dtype=np.int32)
+    """Return subset of `legal_idx` that immediately complete 5-in-a-row for `mine`.
+
+    Vectorized: for every cell, take the max `mine`-stones-after-placement across
+    the windows through it (masking padded entries), then keep legal cells whose
+    max reaches WIN_LEN. Replaces the per-legal-cell Python loop that was ~52% of
+    deep-lookahead time (called once per leaf, scanning every empty square).
+    """
+    if legal_idx.size == 0:
+        return np.asarray([], dtype=np.int32)
+    mw = mine[_WINDOWS].sum(axis=1)                     # (n_windows,)
+    cell_my_after = mw[_DENSE_WIN_BY_CELL] + 1          # (81, K): +1 for the new stone
+    # Padded (invalid) window slots must not count — zero them before the max.
+    best_after = np.where(_DENSE_WIN_MASK, cell_my_after, 0).max(axis=1)  # (81,)
+    win_cells = best_after >= WIN_LEN                   # (81,) bool
+    return legal_idx[win_cells[legal_idx]].astype(np.int32)
 
 
 def _score_all_moves(mine: np.ndarray, opp: np.ndarray) -> np.ndarray:
@@ -163,6 +167,32 @@ def _score_all_moves(mine: np.ndarray, opp: np.ndarray) -> np.ndarray:
     opp_threat = (cell_my == 0) & _DENSE_WIN_MASK
     opp_clipped = np.minimum(cell_opp, WIN_LEN)
     def_w = _OPP_W[opp_clipped]
+    defense = np.where(opp_threat, def_w, 0.0).sum(axis=1)
+
+    return offense + defense
+
+
+def _score_cells(mine: np.ndarray, opp: np.ndarray, cells: np.ndarray) -> np.ndarray:
+    """Per-cell heuristic score for just `cells`, aligned to `cells`.
+
+    Identical per-cell values to `_score_all_moves` (each cell's score is
+    independent of the others), but the dense (cell, window) gather is
+    restricted to the candidate rows instead of all 81 — the move-ordering
+    hot path inside the alpha-beta tree only needs the candidate scores.
+    """
+    mw = mine[_WINDOWS].sum(axis=1)
+    ow = opp[_WINDOWS].sum(axis=1)
+    dense = _DENSE_WIN_BY_CELL[cells]          # (n_cells, K)
+    msk = _DENSE_WIN_MASK[cells]
+    cell_my = mw[dense]
+    cell_opp = ow[dense]
+
+    my_live = (cell_opp == 0) & msk
+    off_w = _MY_W[np.minimum(cell_my + 1, WIN_LEN)]
+    offense = np.where(my_live, off_w, 0.0).sum(axis=1)
+
+    opp_threat = (cell_my == 0) & msk
+    def_w = _OPP_W[np.minimum(cell_opp, WIN_LEN)]
     defense = np.where(opp_threat, def_w, 0.0).sum(axis=1)
 
     return offense + defense
@@ -350,29 +380,46 @@ def _neighbor_offsets() -> np.ndarray:
 _NEIGHBORS = _neighbor_offsets()
 
 
+def _build_neighbor_mask() -> np.ndarray:
+    """(81, 81) bool: row i is True at every cell within Chebyshev-2 of cell i.
+
+    Precomputed so the per-node candidate dilation is a single gather+reduce
+    instead of a Python loop over the 24 neighbor offsets (which was ~29% of
+    deep-lookahead time — the fancy-index + bounds-mask per offset dominated).
+    """
+    n = BOARD_SIZE * BOARD_SIZE
+    mask = np.zeros((n, n), dtype=bool)
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            i = r * BOARD_SIZE + c
+            for dr, dc in _NEIGHBORS:
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < BOARD_SIZE and 0 <= cc < BOARD_SIZE:
+                    mask[i, rr * BOARD_SIZE + cc] = True
+    return mask
+
+
+_NEIGHBOR_MASK = _build_neighbor_mask()
+
+
 def _candidate_moves(state: GameState) -> np.ndarray:
     """Return legal moves restricted to neighbors of existing stones.
 
     Falls back to the full legal set when the board is empty (start of game).
     """
-    occupied = state.board[0] | state.board[1]
-    if not occupied.any():
+    occ_flat = (state.board[0] | state.board[1]).reshape(-1)
+    occ_idx = np.flatnonzero(occ_flat)
+    if occ_idx.size == 0:
         # Opening — center is fine. Return only e5 to keep the tree tiny on move 1.
         return np.asarray([(BOARD_SIZE // 2) * BOARD_SIZE + (BOARD_SIZE // 2)], dtype=np.int32)
-    legal_mask = state.legal_mask().reshape(BOARD_SIZE, BOARD_SIZE)
-    # Dilate occupied by Chebyshev-2 by checking shifted occupancy.
-    near = np.zeros_like(occupied)
-    rows, cols = np.where(occupied)
-    for dr, dc in _NEIGHBORS:
-        rr = rows + dr
-        cc = cols + dc
-        ok = (rr >= 0) & (rr < BOARD_SIZE) & (cc >= 0) & (cc < BOARD_SIZE)
-        near[rr[ok], cc[ok]] = True
-    cand = near & legal_mask
+    # Chebyshev-2 dilation as a single vectorized gather over the precomputed
+    # neighbor mask: any occupied cell's neighborhood, intersected with empties.
+    near = _NEIGHBOR_MASK[occ_idx].any(axis=0)
+    cand = near & ~occ_flat
     if not cand.any():
         # Pathological: board is full of stones in occupied's neighborhood. Fallback.
         return state.legal_actions()
-    return np.flatnonzero(cand.reshape(-1)).astype(np.int32)
+    return np.flatnonzero(cand).astype(np.int32)
 
 
 # ----- Negamax with alpha-beta -----
@@ -431,8 +478,7 @@ def _negamax(state: GameState, depth: int, alpha: float, beta: float) -> float:
     candidates = _candidate_moves(state)
     # Move ordering: try moves with higher static score first to maximise alpha-beta cuts.
     mine, opp = _flat_planes(state)
-    all_scores = _score_all_moves(mine, opp)
-    move_scores = all_scores[candidates]
+    move_scores = _score_cells(mine, opp, candidates)
     order = np.argsort(-move_scores)
     candidates = candidates[order]
     # Restrict the branching at internal nodes: only keep top-K. The full neighbor
