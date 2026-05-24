@@ -76,6 +76,45 @@ def _select_action(node: Node, c_puct_init: float, c_puct_base: float) -> int:
     return int(np.argmax(score))
 
 
+def _n_forced_visits(k: float, prior: float, root_total: int) -> int:
+    """KataGo forced-playout count for one root child (Wu 2019).
+
+    n_forced(a) = ceil(sqrt(k * P(a) * N_root)). Returns 0 when disabled.
+    """
+    if k <= 0.0 or prior <= 0.0 or root_total <= 0:
+        return 0
+    return int(np.ceil(np.sqrt(k * prior * root_total)))
+
+
+def _select_root_action_forced(node: Node, k: float) -> int:
+    """Root-only forced-playout override. Returns the legal action to force,
+    or -1 if no already-visited child is below its forced quota (caller falls
+    back to plain PUCT). Mirrors the native C `select_forced_root_action`:
+    only children with N>0 are forced (top-up of explored moves), and ties on
+    deficit are broken by prior so selection is deterministic.
+    """
+    total = node.total_visits()
+    if k <= 0.0 or total <= 0:
+        return -1
+    best_action = -1
+    best_deficit = 0
+    best_prior = -1.0
+    for a in np.flatnonzero(node.legal_mask):
+        n = int(node.N[a])
+        if n <= 0:
+            continue
+        nf = _n_forced_visits(k, float(node.P[a]), total)
+        deficit = nf - n
+        if deficit <= 0:
+            continue
+        p = float(node.P[a])
+        if deficit > best_deficit or (deficit == best_deficit and p > best_prior):
+            best_deficit = deficit
+            best_prior = p
+            best_action = int(a)
+    return best_action
+
+
 def _set_priors(node: Node, raw_priors: np.ndarray) -> None:
     """Softmax over legal actions only, store in node.P."""
     masked = np.where(node.legal_mask, raw_priors, -1e9)
@@ -115,7 +154,9 @@ class _PendingLeaf:
     path: list[tuple[Node, int]]  # (parent, action_from_parent) for backprop
 
 
-def _select_one(root: Node, c_puct_init: float, c_puct_base: float) -> _PendingLeaf:
+def _select_one(
+    root: Node, c_puct_init: float, c_puct_base: float, forced_playout_k: float = 0.0
+) -> _PendingLeaf:
     """Descend tree until we reach either an unexpanded node or a terminal."""
     node = root
     path: list[tuple[Node, int]] = []
@@ -124,7 +165,11 @@ def _select_one(root: Node, c_puct_init: float, c_puct_base: float) -> _PendingL
             return _PendingLeaf(leaf=node, path=path)
         if not node.expanded:
             return _PendingLeaf(leaf=node, path=path)
-        a = _select_action(node, c_puct_init, c_puct_base)
+        a = -1
+        if forced_playout_k > 0.0 and node is root:
+            a = _select_root_action_forced(node, forced_playout_k)
+        if a < 0:
+            a = _select_action(node, c_puct_init, c_puct_base)
         if a not in node.children:
             # Lazy child creation
             child_state = node.state.apply(a)
@@ -167,12 +212,15 @@ class MCTSGame:
         c_puct_base: float = 19652.0,
         dirichlet_alpha: float = 0.3,
         dirichlet_eps: float = 0.25,
+        forced_playout_k: float = 0.0,
         rng: np.random.Generator | None = None,
     ):
         self.c_puct = c_puct  # acts as c_puct_init in the AGZ log schedule
         self.c_puct_base = c_puct_base
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_eps = dirichlet_eps
+        # KataGo forced-playouts constant. 0.0 == OFF == byte-identical legacy.
+        self.forced_playout_k = forced_playout_k
         self.rng = rng or np.random.default_rng()
         self.root = Node(state=state)
         _init_node(self.root)
@@ -214,7 +262,10 @@ def run_batched_mcts(
         # We do NOT backprop the root's own value; the root is not a leaf in the AlphaZero sense.
 
     for _ in range(n_simulations):
-        pending = [_select_one(g.root, g.c_puct, g.c_puct_base) for g in games]
+        pending = [
+            _select_one(g.root, g.c_puct, g.c_puct_base, getattr(g, "forced_playout_k", 0.0))
+            for g in games
+        ]
 
         # Split into terminal (no eval needed) and to-evaluate.
         to_eval: list[_PendingLeaf] = []
@@ -250,7 +301,9 @@ def run_batched_mcts(
 # n_simulations=100.
 
 
-def _select_one_vloss(root: Node, c_puct_init: float, c_puct_base: float) -> _PendingLeaf:
+def _select_one_vloss(
+    root: Node, c_puct_init: float, c_puct_base: float, forced_playout_k: float = 0.0
+) -> _PendingLeaf:
     """Like _select_one but applies virtual loss (N += 1) along the path.
 
     Soft virtual loss: we only increment N, not W. Within a wave, that drops
@@ -271,7 +324,11 @@ def _select_one_vloss(root: Node, c_puct_init: float, c_puct_base: float) -> _Pe
             return _PendingLeaf(leaf=node, path=path)
         if not node.expanded:
             return _PendingLeaf(leaf=node, path=path)
-        a = _select_action(node, c_puct_init, c_puct_base)
+        a = -1
+        if forced_playout_k > 0.0 and node is root:
+            a = _select_root_action_forced(node, forced_playout_k)
+        if a < 0:
+            a = _select_action(node, c_puct_init, c_puct_base)
         if a not in node.children:
             child_state = node.state.apply(a)
             child = Node(state=child_state, parent=node, parent_action=a)
@@ -367,6 +424,19 @@ def _bfs_descend_one_per_game(
         U = (pb_c * sqrt_totals)[:, None] * P_rows / denom            # (P, 81)
         score = np.where(L_rows, Q + U, -np.inf)
         actions = np.argmax(score, axis=1)                            # (P,) int
+
+        # KataGo forced playouts at the ROOT only: for any descent currently
+        # sitting at its game's root (empty path so far), override the PUCT
+        # pick with the forced action when this game has k>0 and an
+        # already-visited root child is under its forced quota. Default k==0
+        # leaves `actions` untouched → byte-identical legacy behavior.
+        # Descends to root only at the first level of each descent.
+        for j, i in enumerate(still):
+            k = getattr(games_subset[i], "forced_playout_k", 0.0)
+            if k > 0.0 and nodes[i] is games_subset[i].root:
+                fa = _select_root_action_forced(nodes[i], k)
+                if fa >= 0:
+                    actions[j] = fa
 
         # Descend each still-going descent by one level, applying soft vloss.
         next_active: list[int] = []
@@ -468,13 +538,72 @@ def run_batched_mcts_waves(
             sims_done[i] += w
 
 
-def policy_from_visits(root: Node, temperature: float) -> np.ndarray:
+def _pruned_root_visits(
+    root: Node, k: float, c_puct_init: float, c_puct_base: float
+) -> np.ndarray:
+    """KataGo policy-target pruning (Wu 2019). Return root child visit counts
+    after subtracting forced playouts. Most-visited child keeps all visits; for
+    each other child, subtract up to its n_forced quota WITHOUT letting its PUCT
+    selection value exceed the best child's. k<=0 returns root.N unchanged
+    (byte-identical legacy target). Mirrors native `compute_pruned_root_visits`.
+    """
+    counts = root.N.astype(np.int64).copy()
+    total = int(root.N.sum())
+    if k <= 0.0 or total <= 0:
+        return counts
+    legal = np.flatnonzero(root.legal_mask)
+    if len(legal) == 0:
+        return counts
+    best_action = int(legal[np.argmax(root.N[legal])])
+    pb_c = float(np.log((1.0 + total + c_puct_base) / c_puct_base) + c_puct_init)
+    sqrt_total = float(np.sqrt(total + 1e-8))
+    best_n = int(root.N[best_action])
+    best_q = float(root.W[best_action]) / best_n if best_n > 0 else 0.0
+    best_u = pb_c * float(root.P[best_action]) * sqrt_total / (1.0 + best_n)
+    best_value = best_q + best_u
+    for a in legal:
+        a = int(a)
+        if a == best_action or root.N[a] <= 0:
+            continue
+        nf = _n_forced_visits(k, float(root.P[a]), total)
+        if nf <= 0:
+            continue
+        q = float(root.W[a]) / float(root.N[a])
+        n = int(root.N[a])
+        subtracted = 0
+        while subtracted < nf and n > 1:
+            u_at = pb_c * float(root.P[a]) * sqrt_total / (1.0 + (n - 1))
+            if q + u_at > best_value:
+                break
+            n -= 1
+            subtracted += 1
+        counts[a] = n
+    return counts
+
+
+def policy_from_visits(
+    root: Node,
+    temperature: float,
+    *,
+    forced_playout_k: float = 0.0,
+    c_puct_init: float = 1.25,
+    c_puct_base: float = 19652.0,
+) -> np.ndarray:
     """Return MCTS visit-based policy over actions.
 
     temperature: 0 = greedy (one-hot on max visits), 1 = proportional to visits,
                  small values sharpen.
+
+    forced_playout_k > 0 enables KataGo policy-target pruning: forced-playout
+    visits are subtracted from the visit counts before forming the target.
+    Default 0.0 == OFF == legacy byte-identical behavior.
     """
-    counts = root.N.astype(np.float64)
+    if forced_playout_k > 0.0:
+        counts = _pruned_root_visits(
+            root, forced_playout_k, c_puct_init, c_puct_base
+        ).astype(np.float64)
+    else:
+        counts = root.N.astype(np.float64)
     if temperature <= 0:
         out = np.zeros_like(counts)
         # Break ties uniformly among the most-visited actions.
