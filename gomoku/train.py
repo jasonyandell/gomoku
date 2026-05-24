@@ -47,16 +47,30 @@ def train_step(
     zero_grad: bool = True,
     side: torch.Tensor | None = None,
     ply: torch.Tensor | None = None,
+    aux_pi: torch.Tensor | None = None,
+    aux_mask: torch.Tensor | None = None,
+    aux_weight: float = 0.0,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
     those: pass accum_scale=1/N to scale loss before backward, zero_grad=True
     only on the first microbatch of an accumulation window, and
-    do_optimizer_step=True only on the last microbatch."""
+    do_optimizer_step=True only on the last microbatch.
+
+    V3 aux opponent-reply head: when aux_weight > 0 (and the model has the aux
+    head + aux_pi/aux_mask are provided), a second forward output predicts the
+    opponent's next-ply policy; its masked soft-target CE is added as
+    aux_weight * aux_ce. aux_weight == 0.0 (default) leaves the forward, loss,
+    and SGD graph byte-identical to the pre-aux path — the aux head is never
+    even run."""
     model.train()
     if zero_grad:
         optimizer.zero_grad(set_to_none=True)
-    logits, v = model(planes)
+    use_aux = aux_weight > 0.0 and aux_pi is not None and aux_mask is not None
+    if use_aux:
+        logits, v, aux_logits = model(planes, return_aux=True)
+    else:
+        logits, v = model(planes)
     logp = F.log_softmax(logits, dim=-1)
     # Per-sample policy CE so we can split by side/ply without a second pass.
     per_policy_ce = -(pi * logp).sum(dim=-1)
@@ -64,6 +78,20 @@ def train_step(
     per_value_se = (v - z) ** 2
     vl = per_value_se.mean()
     loss = pl + value_weight * vl
+    aux_l_val = float("nan")
+    if use_aux:
+        aux_logp = F.log_softmax(aux_logits, dim=-1)
+        per_aux_ce = -(aux_pi * aux_logp).sum(dim=-1)  # (B,) soft-target CE
+        mask = aux_mask.bool()
+        if bool(mask.any()):
+            aux_l = per_aux_ce[mask].mean()
+        else:
+            # No valid aux rows this batch — contribute nothing, keep graph
+            # connected to the aux head with a zero-scaled term so params still
+            # receive (zero) grad rather than an autograd error.
+            aux_l = per_aux_ce.sum() * 0.0
+        loss = loss + aux_weight * aux_l
+        aux_l_val = float(aux_l.detach())
     if l2_weight > 0:
         l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
         loss = loss + l2_weight * l2
@@ -90,6 +118,9 @@ def train_step(
         "train/policy_net_entropy": float(net_entropy),
         "train/policy_kl": float(policy_kl),
     }
+    if use_aux:
+        out["loss/aux_policy"] = aux_l_val
+        out["train/aux_mask_frac"] = float(aux_mask.bool().float().mean())
     if side is not None and ply is not None:
         with torch.no_grad():
             ce_cpu = per_policy_ce.detach()
@@ -350,6 +381,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--value-weight", type=float, default=1.0)
+    p.add_argument("--aux-opponent-reply-weight", type=float, default=0.0,
+                   help="V3 KataGo-style auxiliary opponent-reply policy head. "
+                        "0.0 (default) = OFF = byte-identical to today (head not "
+                        "constructed, no aux forward, buffer aux tensors not "
+                        "allocated, SGD graph unchanged). When > 0, a second "
+                        "81-way head predicts the opponent's MCTS policy at the "
+                        "next ply (a free, dense supervised target already in the "
+                        "self-play trajectory); its masked soft-target CE is added "
+                        "to the loss scaled by this weight, and loss/aux_policy is "
+                        "logged. The head is DROPPED at inference (self-play/eval "
+                        "pay nothing). Suggested starting value 0.15; future sweep "
+                        "{0.05, 0.15, 0.3}.")
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
@@ -532,6 +575,15 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
 
+    # V3 aux opponent-reply lever. The single weight flag gates the head
+    # (constructed iff weight > 0), the buffer aux tensors, the self-play aux
+    # target recording, and the aux loss term. 0.0 (default) => everything off
+    # and byte-identical to the pre-aux path.
+    aux_weight = float(args.aux_opponent_reply_weight)
+    aux_on = aux_weight > 0.0
+    if aux_on:
+        print(f"aux opponent-reply head ENABLED (weight={aux_weight})")
+
     # Build / load model
     start_epoch = 0
     total_games = 0
@@ -546,7 +598,11 @@ def main() -> None:
             optimizer.load_state_dict(payload["optimizer_state_dict"])
         print(f"resumed from {args.resume} @ epoch {start_epoch}, total_games={total_games}")
     else:
-        model = build_model(args.size, stem_padding=args.stem_padding).to(device)
+        model = build_model(
+            args.size,
+            stem_padding=args.stem_padding,
+            aux_opponent_reply=aux_on,
+        ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         payload = {}
         print(f"fresh {args.size} model: {n_params(model):,} params")
@@ -607,7 +663,8 @@ def main() -> None:
             f"from {args.validation_archive_path}"
         )
 
-    buffer = ReplayBuffer(args.replay_buffer_size, device=device)
+    buffer = ReplayBuffer(args.replay_buffer_size, device=device,
+                          aux_opponent_reply=aux_on)
     if args.resume:
         # Optional: restore buffer if it was saved.
         payload_buf = payload.get("replay_buffer")
@@ -1188,6 +1245,7 @@ def main() -> None:
                 rng=rng,
                 wave_size=args.wave_size,
                 random_opening_moves=args.random_opening_moves,
+                record_aux=aux_on,
             )
         else:
             evaluator = make_torch_evaluator(model, device)
@@ -1280,7 +1338,13 @@ def main() -> None:
         optimizer_steps_this_cycle = 0
         if buffer.size >= args.batch_size:
             for i in range(steps_this_cycle):
-                planes, pi, z, side, ply = buffer.sample(args.batch_size)
+                if aux_on:
+                    planes, pi, z, side, ply, aux_pi, aux_mask = buffer.sample(
+                        args.batch_size, return_aux=True
+                    )
+                else:
+                    planes, pi, z, side, ply = buffer.sample(args.batch_size)
+                    aux_pi = aux_mask = None
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
                 m = train_step(
@@ -1292,6 +1356,9 @@ def main() -> None:
                     zero_grad=is_first_in_window,
                     side=side,
                     ply=ply,
+                    aux_pi=aux_pi,
+                    aux_mask=aux_mask,
+                    aux_weight=aux_weight,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)

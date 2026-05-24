@@ -153,6 +153,23 @@ def augment(planes: np.ndarray, policy: np.ndarray) -> list[tuple[np.ndarray, np
     return [(_sym_board(planes, s), _sym_policy(policy, s)) for s in range(8)]
 
 
+def augment_with_aux(
+    planes: np.ndarray, policy: np.ndarray, aux_policy: np.ndarray
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Like `augment`, but carries a SECOND policy vector (the auxiliary
+    opponent-reply target) through the SAME D4 symmetry as the position.
+
+    This is the load-bearing alignment guarantee for the aux head: the aux
+    target is an (81,) vector over board cells in the same coordinate frame as
+    `planes`/`policy`, so it MUST be permuted by the identical symmetry `s`, or
+    the label is rotated/reflected relative to its position. Returns 8 triples
+    (aug_planes, aug_policy, aug_aux_policy)."""
+    return [
+        (_sym_board(planes, s), _sym_policy(policy, s), _sym_policy(aux_policy, s))
+        for s in range(8)
+    ]
+
+
 def action_to_str(action: int) -> str:
     r, c = divmod(action, BOARD_SIZE)
     return f"{chr(ord('a') + c)}{r + 1}"

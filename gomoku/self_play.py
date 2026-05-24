@@ -8,7 +8,7 @@ from typing import MutableMapping
 
 import numpy as np
 
-from gomoku.game import GameState, HISTORY_PLY, N_ACTIONS, augment
+from gomoku.game import GameState, HISTORY_PLY, N_ACTIONS, augment, augment_with_aux
 from gomoku.mcts import (
     Evaluator,
     MCTSGame,
@@ -55,6 +55,12 @@ class SelfPlayExample:
     z: float             # value in [-1, 1]
     side: int = 0        # 0=black (first mover), 1=white — for per-color diagnostics
     ply: int = 0         # ply count at which this position was captured
+    # V3 auxiliary opponent-reply target: the MCTS policy `pi` recorded at the
+    # NEXT ply in the same game (the opponent is to move there). None for the
+    # LAST position of a game (no next ply) and for every position when the aux
+    # lever is off — masked out of the aux loss in either case. Under D4
+    # augmentation this vector is transformed by the SAME symmetry as `pi`.
+    aux_pi: np.ndarray | None = None  # (N_ACTIONS,) float32 or None
 
 
 @dataclass
@@ -65,6 +71,83 @@ class GameRecord:
     plies: int
     outcome: float  # +1 if first-mover (black) won, -1 if second-mover (white) won, 0 draw
     archive_start: bool = False  # WL5: True if game was seeded from validation archive
+
+
+def _aux_target_for(
+    traj: list[tuple[np.ndarray, np.ndarray, int]], ply_idx: int, side: int
+) -> np.ndarray | None:
+    """Opponent-reply target for the position at `ply_idx` in `traj`.
+
+    The target is the MCTS policy `pi` recorded at the NEXT trajectory entry —
+    the opponent is to move there. Returns None (→ masked out of the aux loss)
+    when:
+      * this is the LAST recorded ply (no next entry), or
+      * the next recorded entry is the SAME side to move (can happen under
+        Playout-Cap Randomization, where an unrecorded fast move sits between
+        two recorded plies — then the "next recorded" position is NOT the
+        immediate opponent reply, so we decline to use it as a label rather
+        than feed a misaligned target).
+
+    The returned vector is in the same board coordinate frame as the position's
+    own `pi`; D4 alignment is handled downstream by augment_with_aux.
+    """
+    nxt = ply_idx + 1
+    if nxt >= len(traj):
+        return None
+    next_pi, next_side = traj[nxt][1], traj[nxt][2]
+    if int(next_side) == int(side):
+        return None
+    return next_pi
+
+
+def _build_examples(
+    planes: np.ndarray,
+    pi: np.ndarray,
+    z: float,
+    side: int,
+    ply_at_capture: int,
+    aux_pi: np.ndarray | None,
+    augment_symmetries: bool,
+    profile: ProfileStats | None = None,
+) -> list[SelfPlayExample]:
+    """Expand one recorded position into training example(s).
+
+    With D4 augmentation, emits 8 symmetry variants; the aux target (when
+    present) is transformed by the SAME symmetry as planes+pi via
+    augment_with_aux, so the opponent-reply label stays board-aligned with its
+    position. Without augmentation, emits the single position. aux_pi=None
+    propagates to the example unchanged → masked out of the aux loss.
+    """
+    out: list[SelfPlayExample] = []
+    if augment_symmetries:
+        if aux_pi is not None:
+            with _profile_timer(profile, "d4_augment_s"):
+                augmented = list(augment_with_aux(planes, pi, aux_pi))
+            for aug_planes, aug_pi, aug_aux in augmented:
+                with _profile_timer(profile, "example_create_s"):
+                    out.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                        aux_pi=aug_aux.astype(np.float32),
+                    ))
+        else:
+            with _profile_timer(profile, "d4_augment_s"):
+                augmented = list(augment(planes, pi))
+            for aug_planes, aug_pi in augmented:
+                with _profile_timer(profile, "example_create_s"):
+                    out.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                        aux_pi=None,
+                    ))
+    else:
+        with _profile_timer(profile, "example_create_s"):
+            out.append(SelfPlayExample(
+                planes, pi.astype(np.float32), z,
+                side=int(side), ply=int(ply_at_capture),
+                aux_pi=(aux_pi.astype(np.float32) if aux_pi is not None else None),
+            ))
+    return out
 
 
 def _sample_action(pi: np.ndarray, rng: np.random.Generator) -> int:
@@ -164,6 +247,7 @@ def _generate_games_gumbel(
     gumbel_m: int = 16,
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
+    record_aux: bool = False,
 ) -> list[GameRecord]:
     """Self-play generation using Gumbel AlphaZero root selection + Sequential
     Halving (the pure-Python `gomoku.mcts.Node` tree path).
@@ -271,20 +355,15 @@ def _generate_games_gumbel(
     for g_idx, outcome_for_black, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
         n_initial = initial_plies[g_idx]
-        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+        traj = trajectories[g_idx]
+        for ply_idx, (planes, pi, side) in enumerate(traj):
             z = outcome_for_black if side == 0 else -outcome_for_black
             ply_at_capture = n_initial + ply_idx
-            if augment_symmetries:
-                for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(
-                        aug_planes, aug_pi.astype(np.float32), z,
-                        side=int(side), ply=int(ply_at_capture),
-                    ))
-            else:
-                examples.append(SelfPlayExample(
-                    planes, pi.astype(np.float32), z,
-                    side=int(side), ply=int(ply_at_capture),
-                ))
+            aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            examples.extend(_build_examples(
+                planes, pi, z, side, ply_at_capture, aux_pi,
+                augment_symmetries, None,
+            ))
         records.append(GameRecord(
             examples=examples,
             plies=plies,
@@ -315,6 +394,7 @@ def _generate_games_native(
     playout_cap_frac: float = 1.0,
     playout_cap_fast_sims: int = 0,
     profile: ProfileStats | None = None,
+    record_aux: bool = False,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -497,24 +577,15 @@ def _generate_games_native(
         for g_idx, outcome_for_black, plies in sorted(completed):
             examples: list[SelfPlayExample] = []
             n_initial = initial_plies[g_idx]
-            for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+            traj = trajectories[g_idx]
+            for ply_idx, (planes, pi, side) in enumerate(traj):
                 z = outcome_for_black if side == 0 else -outcome_for_black
                 ply_at_capture = n_initial + ply_idx
-                if augment_symmetries:
-                    with _profile_timer(profile, "d4_augment_s"):
-                        augmented = list(augment(planes, pi))
-                    for aug_planes, aug_pi in augmented:
-                        with _profile_timer(profile, "example_create_s"):
-                            examples.append(SelfPlayExample(
-                                aug_planes, aug_pi.astype(np.float32), z,
-                                side=int(side), ply=int(ply_at_capture),
-                            ))
-                else:
-                    with _profile_timer(profile, "example_create_s"):
-                        examples.append(SelfPlayExample(
-                            planes, pi.astype(np.float32), z,
-                            side=int(side), ply=int(ply_at_capture),
-                        ))
+                aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+                examples.extend(_build_examples(
+                    planes, pi, z, side, ply_at_capture, aux_pi,
+                    augment_symmetries, profile,
+                ))
             records.append(GameRecord(
                 examples=examples,
                 plies=plies,
@@ -550,6 +621,7 @@ def generate_games(
     gumbel_m: int = 16,
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
+    record_aux: bool = False,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
@@ -608,6 +680,7 @@ def generate_games(
             gumbel_m=gumbel_m,
             gumbel_c_visit=gumbel_c_visit,
             gumbel_c_scale=gumbel_c_scale,
+            record_aux=record_aux,
         )
     if _can_use_native_mcts(evaluator):
         return _generate_games_native(
@@ -630,6 +703,7 @@ def generate_games(
             playout_cap_frac=playout_cap_frac,
             playout_cap_fast_sims=playout_cap_fast_sims,
             profile=profile,
+            record_aux=record_aux,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
@@ -713,20 +787,15 @@ def generate_games(
     for g_idx, outcome_for_black, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
         n_initial = initial_plies[g_idx]
-        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+        traj = trajectories[g_idx]
+        for ply_idx, (planes, pi, side) in enumerate(traj):
             z = outcome_for_black if side == 0 else -outcome_for_black
             ply_at_capture = n_initial + ply_idx
-            if augment_symmetries:
-                for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(
-                        aug_planes, aug_pi.astype(np.float32), z,
-                        side=int(side), ply=int(ply_at_capture),
-                    ))
-            else:
-                examples.append(SelfPlayExample(
-                    planes, pi, z,
-                    side=int(side), ply=int(ply_at_capture),
-                ))
+            aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            examples.extend(_build_examples(
+                planes, pi, z, side, ply_at_capture, aux_pi,
+                augment_symmetries, None,
+            ))
         records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
 
     return records

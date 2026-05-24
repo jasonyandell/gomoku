@@ -10,7 +10,13 @@ from gomoku.self_play import SelfPlayExample
 
 
 class ReplayBuffer:
-    def __init__(self, capacity: int, device: torch.device | str = "cpu"):
+    def __init__(
+        self,
+        capacity: int,
+        device: torch.device | str = "cpu",
+        *,
+        aux_opponent_reply: bool = False,
+    ):
         self.capacity = capacity
         self.device = torch.device(device)
         self.planes = torch.zeros(
@@ -27,6 +33,21 @@ class ReplayBuffer:
         # the WL5 diagnostics layer for per-color and per-ply-bucket metrics.
         self.side = torch.zeros((capacity,), dtype=torch.int8, device=self.device)
         self.ply = torch.zeros((capacity,), dtype=torch.int16, device=self.device)
+        # V3 aux opponent-reply target + validity mask. LAZY-ALLOCATED: when the
+        # lever is off (default) these tensors are NEVER allocated, so off-case
+        # buffer RAM is byte-identical to a buffer that never knew about aux.
+        # `aux_pi` holds the opponent's next-ply policy (zeros where undefined);
+        # `aux_mask` is True for rows that carry a valid aux target (last-ply
+        # positions and aux-off positions are False → excluded from the aux loss).
+        self.aux_enabled = bool(aux_opponent_reply)
+        if self.aux_enabled:
+            self.aux_pi = torch.zeros(
+                (capacity, N_ACTIONS), dtype=torch.float32, device=self.device
+            )
+            self.aux_mask = torch.zeros((capacity,), dtype=torch.bool, device=self.device)
+        else:
+            self.aux_pi = None
+            self.aux_mask = None
         self.current_weight_version: int = 0
         self.head = 0
         self.size = 0
@@ -44,6 +65,19 @@ class ReplayBuffer:
         z = torch.from_numpy(np.array([e.z for e in examples], dtype=np.float32))
         side = torch.from_numpy(np.array([getattr(e, "side", 0) for e in examples], dtype=np.int8))
         ply = torch.from_numpy(np.array([getattr(e, "ply", 0) for e in examples], dtype=np.int16))
+        if self.aux_enabled:
+            # Build a dense aux-target tensor + validity mask for this add.
+            # examples whose aux_pi is None (last ply / aux-undefined) get a
+            # zero target and mask=False, so they never contribute aux gradient.
+            aux_np = np.zeros((n, N_ACTIONS), dtype=np.float32)
+            aux_mask_np = np.zeros((n,), dtype=bool)
+            for j, e in enumerate(examples):
+                ap = getattr(e, "aux_pi", None)
+                if ap is not None:
+                    aux_np[j] = ap
+                    aux_mask_np[j] = True
+            aux_pi_t = torch.from_numpy(aux_np)
+            aux_mask_t = torch.from_numpy(aux_mask_np)
         ver = int(self.current_weight_version)
         i = 0
         while i < n:
@@ -55,15 +89,30 @@ class ReplayBuffer:
             self.weight_version[self.head:end] = ver
             self.side[self.head:end].copy_(side[i:i + chunk].to(self.device))
             self.ply[self.head:end].copy_(ply[i:i + chunk].to(self.device))
+            if self.aux_enabled:
+                self.aux_pi[self.head:end].copy_(aux_pi_t[i:i + chunk].to(self.device))
+                self.aux_mask[self.head:end].copy_(aux_mask_t[i:i + chunk].to(self.device))
             i += chunk
             self.head = end % self.capacity
             self.size = min(self.size + chunk, self.capacity)
 
-    def sample(self, batch_size: int) -> tuple[torch.Tensor, ...]:
+    def sample(self, batch_size: int, *, return_aux: bool = False) -> tuple[torch.Tensor, ...]:
         if self.size == 0:
             raise ValueError("empty replay buffer")
         idx = torch.randint(0, self.size, (batch_size,), device=self.device)
-        return self.planes[idx], self.pi[idx], self.z[idx], self.side[idx], self.ply[idx]
+        base = (self.planes[idx], self.pi[idx], self.z[idx], self.side[idx], self.ply[idx])
+        if not return_aux:
+            # Default 5-tuple — byte-identical to the pre-aux signature so every
+            # existing caller is untouched.
+            return base
+        # Aux path: append (aux_pi, aux_mask). If the buffer was built without
+        # the aux tensors (lever off), return a zero target + all-False mask so
+        # the trainer's masked aux loss is a no-op and the call never errors.
+        if self.aux_enabled:
+            return base + (self.aux_pi[idx], self.aux_mask[idx])
+        zero_aux = torch.zeros((batch_size, N_ACTIONS), dtype=torch.float32, device=self.device)
+        false_mask = torch.zeros((batch_size,), dtype=torch.bool, device=self.device)
+        return base + (zero_aux, false_mask)
 
     def shape_stats(self, stone_buckets: tuple[int, ...] = (0, 5, 10, 15, 20, 30, 40, 60, 81)
                     ) -> dict[str, float]:
@@ -117,7 +166,7 @@ class ReplayBuffer:
         return out
 
     def state_dict(self) -> dict:
-        return {
+        sd = {
             "capacity": self.capacity,
             "head": self.head,
             "size": self.size,
@@ -129,6 +178,12 @@ class ReplayBuffer:
             "ply": self.ply[:self.size].cpu(),
             "current_weight_version": int(self.current_weight_version),
         }
+        # Only emit aux tensors when the lever is on, so an off-buffer's
+        # checkpoint is byte-identical to the pre-aux schema.
+        if self.aux_enabled:
+            sd["aux_pi"] = self.aux_pi[:self.size].cpu()
+            sd["aux_mask"] = self.aux_mask[:self.size].cpu()
+        return sd
 
     def load_state_dict(self, sd: dict) -> None:
         if sd["capacity"] != self.capacity:
@@ -151,6 +206,19 @@ class ReplayBuffer:
             else:
                 self.ply[:n].zero_()
                 print(f"replay buffer: ply tag missing from checkpoint, zero-filled {n} slots")
+            # Aux target tolerate-missing: when this buffer has the aux head on
+            # but the checkpoint predates it (or was off), zero-fill the target
+            # and set mask=False so old positions contribute no aux gradient
+            # until they evict — mirrors the side/ply missing-tag handling above.
+            if self.aux_enabled:
+                if "aux_pi" in sd and "aux_mask" in sd:
+                    self.aux_pi[:n].copy_(sd["aux_pi"][:n].to(self.device))
+                    self.aux_mask[:n].copy_(sd["aux_mask"][:n].to(self.device))
+                else:
+                    self.aux_pi[:n].zero_()
+                    self.aux_mask[:n].zero_()
+                    print(f"replay buffer: aux target missing from checkpoint, "
+                          f"zero-filled + masked-off {n} slots")
         if "current_weight_version" in sd:
             self.current_weight_version = int(sd["current_weight_version"])
         self.size = n
