@@ -641,6 +641,13 @@ def build_trainer_cmd(cell: dict, dirs: dict, max_epochs: int = 0) -> list[str]:
         cmd += ["--resume", str(cell["prefill_buffer_from"])]
     if cell["sgd_per_position"] > 0:
         cmd += ["--sgd-per-position", str(cell["sgd_per_position"])]
+    # LF1 anti-runaway knobs — opt-in, .get() so pre-LF1 cell dicts still build.
+    if cell.get("sgd_per_game", 0.0) > 0:
+        cmd += ["--sgd-per-game", str(cell["sgd_per_game"])]
+    if cell.get("max_tile_games", 0) > 0:
+        cmd += ["--max-tile-games", str(cell["max_tile_games"])]
+    if cell.get("max_sgd_steps_per_epoch", 0) > 0:
+        cmd += ["--max-sgd-steps-per-epoch", str(cell["max_sgd_steps_per_epoch"])]
     if cell["wave_mode"]:
         cmd += [
             "--wave-mode",
@@ -1155,6 +1162,9 @@ def make_cell_from_args(args: argparse.Namespace) -> dict:
         grad_accum_steps=args.grad_accum_steps,
         wave_mode=args.wave_mode,
         sgd_per_position=args.sgd_per_position,
+        sgd_per_game=args.sgd_per_game,
+        max_tile_games=args.max_tile_games,
+        max_sgd_steps_per_epoch=args.max_sgd_steps_per_epoch,
         batch_size=args.batch_size,
         evaluator=args.evaluator,
         coreml_compute_units=args.coreml_compute_units,
@@ -1194,6 +1204,22 @@ def main() -> None:
                    help="Distributed wave-lockstep mode (WL5 default ON).")
     p.add_argument("--no-wave-mode", dest="wave_mode", action="store_false")
     p.add_argument("--sgd-per-position", type=float, default=0.0025)
+    # LF1 anti-runaway levers (all OPT-IN; defaults leave WL5 byte-identical).
+    # See wiki/topics/perf-bench-vs-real-training-cost.md research lanes 3 & 6.
+    p.add_argument("--sgd-per-game", type=float, default=0.0,
+                   help="LF1: alternative SGD schedule scaling with tile GAME "
+                        "COUNT not positions (lower runaway gain). 0 (default) = "
+                        "unused. When >0, passed to the trainer; note the trainer "
+                        "lets --sgd-per-position win if BOTH are set, so leave "
+                        "--sgd-per-position at 0 to actually use this schedule.")
+    p.add_argument("--max-tile-games", type=int, default=0,
+                   help="LF1: per-version tile cap. 0 (default) = uncapped = "
+                        "WL5. >0 = trainer ingests at most N games per model "
+                        "version, DROPPING the excess (structural tile bound).")
+    p.add_argument("--max-sgd-steps-per-epoch", type=int, default=0,
+                   help="LF1: hard per-epoch SGD step cap. 0 (default) = no cap "
+                        "= WL5. >0 = clamp steps_this_cycle to N regardless of "
+                        "the schedule (decouples SGD work from inflow).")
     p.add_argument("--batch-size", type=int, default=512)
     # Evaluator backend for the self-play workers. The trainer always uses
     # torch on --device; this controls what backend the workers' eval model
