@@ -14,11 +14,13 @@ runs/
 scratch/
 sweep_runs/
 sweep_logs/
+archives/
 *.pt
 *.ckpt
 
 .DS_Store
-.claude/
+.claude/*
+!.claude/skills/
 
 # Frontier lab runtime artifacts (keep .frontier/config.json and lanes.json tracked)
 .frontier/runs/
