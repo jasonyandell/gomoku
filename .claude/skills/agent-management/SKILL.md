@@ -12,6 +12,14 @@ agent view launches and runs sessions; this skill is the one-glance status surfa
 is safe, but stopping/deleting a session affects *other people's live work*, so those
 stay manual and deliberate (see Triage actions).
 
+**Why this skill exists (the north star).** Too many sessions, too many topics. Three
+capabilities — **search** (know what topics are live), the **post office** (talk to the
+sessions), and **session control** (resume/fork/triage) — exist to *land the work*, so the
+operator can run Sid Bidasaria's "stop babysitting your agents" playbook: verify → multi-Claude
+→ background loops, with attention protected. **Everything is log-based: nothing is deleted or
+destroyed, only added or learned.** This skill is the self-improving agent for that problem.
+See [[fleet-management]] and [[cockpit-vs-autopilot]].
+
 ## Quick mental model
 
 `claude agents` opens **agent view**, a TUI that dispatches/monitors background
@@ -106,6 +114,33 @@ edges = grounding weight. Click a session → its opening prompts + copy-paste *
   In an active session use `/branch`; `/rewind` is checkpoint-revert *within* a session, not
   a fork. (Verified: code.claude.com/docs/en/sessions + `claude --help`.)
   `python scripts/session_db.py cmd fork <uuid>` prints the command for pasting.
+
+## Post office — talk to the fleet (`scripts/postoffice.py` + a `cagent`)
+
+The supported ways to message a live session are interactive (agent view / Remote Control)
+or a launch-time Channel; there's no CLI to inject into a running session. The post office
+is the **log-based DIY message bus** that fills that gap, using only supported primitives.
+
+- **Append-only log per mailbox** (`~/.claude/agent-fleet/postoffice/<mb>.log`): senders only
+  ever append; a separate `.cursor` tracks progress. **Nothing is deleted or rewritten — only
+  added or acked.** History and progress are decoupled.
+- **Catch-up recovers missed watches:** `pending` returns *every* post after the cursor, so a
+  cagent that was busy/down/missed an event still drains them all on the next scan (at-least-once).
+- **A `cagent`** (post-office session you spawn in agent view) runs a low-resource event loop:
+  catch up (`pending` → handle/route → `ack --all`) → `wait` (blocks at ~0% CPU until a post or a
+  600s safety timer) **run as a `run_in_background` command so the harness wakes the session on
+  exit** → repeat. No polling, ~no idle tokens.
+
+```
+python scripts/postoffice.py send --to cagent --from you "land the gpu-daemon merge"  # any producer
+python scripts/postoffice.py pending --mailbox cagent      # what the cagent processes
+python scripts/postoffice.py prompt  --mailbox cagent      # paste-able spawn prompt ↓
+```
+**You spawn the cagent** (I can't launch a persistent fleet session): open `claude agents`,
+dispatch a new background session, and paste the output of `postoffice.py prompt`. Per-agent
+mailboxes generalize this into a full bus — each agent self-subscribes to its own `--mailbox`.
+This is a DIY [Channel](https://code.claude.com/docs/en/channels); swap to `--channels` later
+without changing the "drop a post" interface.
 
 ## Working paths (the raw one-liners the tool wraps)
 
@@ -236,6 +271,27 @@ what's stored; any new/modified transcript re-imports just that one (deleted one
 `search`/`topics`/`mindmap` auto-`sync` first and stay fresh cheaply — there's no separate
 "is it stale?" check to add; the mtime compare IS the cache.
 
+### 2026-05-25 (post office — event-driven without polling, and missed-watch recovery)
+
+**You can run a low-resource event loop in a session without polling: a `run_in_background`
+blocking command that the harness re-invokes you on when it exits.**
+- A cagent backgrounds `postoffice.py wait` (which blocks in `tail -n0 -F <log> | head -n1`).
+  While blocked it's ~0% CPU and consumes NO model turns; when a post lands the command exits
+  and the harness wakes the session. This beats `/loop` polling (a turn every interval even
+  when idle) for an always-on reactor. Each wait has a 600s timeout = periodic safety re-scan.
+- **Missed watches are recovered by a cursor, not by the watch.** Never trust "the one new line"
+  the watch saw — on every wake, read ALL posts after the cursor (`pending`) and `ack` through
+  what you handled. The log is append-only; the cursor is a separate file; ack never edits the
+  log. So a fresh cagent (after a crash or context-rotation respawn) just catches up from the
+  cursor — nothing is lost. Lesson: for any file-tail reactor, the watch is the *wake*, the
+  cursor is the *truth*.
+
+**Division of labor: I can't launch a persistent fleet cagent.** Fleet sessions are supervisor-
+dispatched; from a Bash tool I can only spawn my own (lifecycle-bound) subagents or one-shot
+`claude -p`. So the human spawns the cagent in agent view with `postoffice.py prompt` output;
+the skill provides the scripts, log, and prompt. Don't promise to "start the cagent" — hand over
+the paste-able prompt instead.
+
 ### < add new friction-smoothing entries here as they appear >
 
 ## Self-improvement clause
@@ -262,10 +318,11 @@ entries**. The accumulating ledger is the value.
 
 ## Cross-refs
 
+- North star (search + post office + session control → land work → Sid playbook): [/Users/jason/code/gomoku/wiki/topics/fleet-management.md](/Users/jason/code/gomoku/wiki/topics/fleet-management.md)
 - Cockpit-vs-autopilot lens: [/Users/jason/code/gomoku/wiki/topics/cockpit-vs-autopilot.md](/Users/jason/code/gomoku/wiki/topics/cockpit-vs-autopilot.md)
 - Worktree workflow (load-bearing): [/Users/jason/code/gomoku/wiki/topics/branch-and-worktree-workflow.md](/Users/jason/code/gomoku/wiki/topics/branch-and-worktree-workflow.md)
 - Worktree hygiene (janitor+gauge): [/Users/jason/code/gomoku/wiki/topics/worktree-hygiene.md](/Users/jason/code/gomoku/wiki/topics/worktree-hygiene.md)
 - Conventions: [/Users/jason/code/gomoku/wiki/topics/conventions.md](/Users/jason/code/gomoku/wiki/topics/conventions.md)
 - Session recorder: `scripts/worktree_session.py` (records who owns each worktree)
 - Sister skills: [[gomoku-research-lab]] (the lab this fleet often runs), [[gomoku-train]]
-- Memories: [[feedback-cockpit-vs-autopilot]], [[feedback-worktree-per-unit-of-work]], [[feedback-janitor-not-procedure]], [[feedback-autonomy-denylist]], [[feedback-lab-scheduler]]
+- Memories: [[project-fleet-management]], [[feedback-cockpit-vs-autopilot]], [[feedback-worktree-per-unit-of-work]], [[feedback-janitor-not-procedure]], [[feedback-autonomy-denylist]], [[feedback-lab-scheduler]]
