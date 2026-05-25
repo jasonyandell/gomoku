@@ -74,6 +74,10 @@ class Cell:
     save_buffer_every: int = 20
     keep_last_n: int = 3
     stem_padding: int | None = None  # None = use train.py default (3, AGZ edge-fix)
+    # Derby v4 "Whole-board" lever. None = OFF (byte-identical current arch);
+    # True = global pooling on the latter half of residual blocks; int K =
+    # trailing K blocks. See gomoku.model.GlobalPoolResBlock.
+    global_pool: bool | int | None = None
     # Constant-age ingest: when set, ingest by positions instead of games. Pairs
     # with sgd_per_position so SGD steps also scale with positions. Together
     # they keep buffer turnover + training intensity stable regardless of
@@ -617,6 +621,11 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
     ]
     if cell.stem_padding is not None:
         cmd += ["--stem-padding", str(cell.stem_padding)]
+    if cell.global_pool is not None and cell.global_pool is not False:
+        # bare flag (latter half) vs explicit trailing-K-blocks
+        cmd += ["--global-pool"] if cell.global_pool is True else [
+            "--global-pool", str(int(cell.global_pool))
+        ]
     if cell.worker_min_positions > 0:
         cmd += ["--worker-min-positions", str(cell.worker_min_positions)]
     if cell.sgd_per_position is not None:
