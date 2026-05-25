@@ -86,19 +86,24 @@ def train_step(
     use_ownership = (
         ownership_weight > 0.0 and ownership is not None and ownership_mask is not None
     )
-    outputs = model(planes, return_aux=use_aux, return_ownership=use_ownership)
-    # forward() returns (p, v, [aux], [ownership]) in that fixed order; unpack
-    # positionally per the flags requested above.
-    logits, v = outputs[0], outputs[1]
-    idx_extra = 2
     aux_logits = None
     own_logits = None
-    if use_aux:
-        aux_logits = outputs[idx_extra]
-        idx_extra += 1
-    if use_ownership:
-        own_logits = outputs[idx_extra]
-        idx_extra += 1
+    if use_aux or use_ownership:
+        outputs = model(planes, return_aux=use_aux, return_ownership=use_ownership)
+        # forward() returns (p, v, [aux], [ownership]) in that fixed order;
+        # unpack positionally per the flags requested above.
+        logits, v = outputs[0], outputs[1]
+        idx_extra = 2
+        if use_aux:
+            aux_logits = outputs[idx_extra]
+            idx_extra += 1
+        if use_ownership:
+            own_logits = outputs[idx_extra]
+            idx_extra += 1
+    else:
+        # Byte-identical default call (no kwargs) so mock/legacy models whose
+        # forward() takes only `planes` keep working unchanged.
+        logits, v = model(planes)
     logp = F.log_softmax(logits, dim=-1)
     # Per-sample policy CE so we can split by side/ply without a second pass.
     per_policy_ce = -(pi * logp).sum(dim=-1)
