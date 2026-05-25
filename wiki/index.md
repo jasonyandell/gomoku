@@ -17,8 +17,11 @@ reading it front-to-back unless the work actually needs that.
 | Launch, resume, monitor, or stop a run | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | The relevant design page, then the latest run section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
 | Interpret training dynamics | [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) and [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | The run's evidence section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
 | Plan a WL-series follow-up | [topics/training-run-lineage.md](topics/training-run-lineage.md) | [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md), [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md), [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md). |
-| Work on performance or hardware strategy | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md), [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md), [topics/ane-int8-inference.md](topics/ane-int8-inference.md), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md). |
-| Run frontier-lab perf fanout | [ops/status.md](ops/status.md) | [ops/frontier.md](ops/frontier.md), [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), [ops/test-ledger.md](ops/test-ledger.md). |
+| Work on performance or hardware strategy | [topics/research-lab-charter.md](topics/research-lab-charter.md) | [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md), [topics/research-lab-session-runbook.md](topics/research-lab-session-runbook.md), [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md), [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md), [topics/ane-int8-inference.md](topics/ane-int8-inference.md), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md). |
+| Operate the autonomous research lab | [topics/research-lab-charter.md](topics/research-lab-charter.md) | [topics/conventions.md](topics/conventions.md), [topics/research-lab-reviewer-role.md](topics/research-lab-reviewer-role.md), [ops/gpu-queue.md](ops/gpu-queue.md), [ops/best-cells.md](ops/best-cells.md), [ops/perf-log.md](ops/perf-log.md). |
+| Understand cross-cutting conventions (autonomy, merge-commits, memories-to-wiki) | [topics/conventions.md](topics/conventions.md) | [topics/research-lab-charter.md](topics/research-lab-charter.md) for lab-specific rules. |
+| Run a perf cell, training slice, or sweep (procedure) | [topics/research-lab-session-runbook.md](topics/research-lab-session-runbook.md) | [ops/perf-log.md](ops/perf-log.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), [ops/baselines.md](ops/baselines.md). |
+| Run frontier-lab perf fanout | [ops/status.md](ops/status.md) | [ops/frontier.md](ops/frontier.md), [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), [ops/test-ledger.md](ops/test-ledger.md), [ops/perf-log.md](ops/perf-log.md). |
 | Add or interpret external engine baselines | [topics/external-engine-baselines.md](topics/external-engine-baselines.md) | [sources/gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md), then `gomoku.match` / `gomoku.eval_worker`. |
 | Mine or use validation archives | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) and [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md). |
 | Play a checkpoint | [topics/playing-the-model.md](topics/playing-the-model.md) | Latest plateau/run-end notes in [topics/training-run-lineage.md](topics/training-run-lineage.md). |
@@ -92,6 +95,11 @@ read is:
 | [topics/ane-int8-inference.md](topics/ane-int8-inference.md) | Engine-isolation plan and first scout for Core ML / ANE / CPU lanes around MPS training. |
 | [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) | Rail-proof lab for Core ML / ANE residency claims; caps `CPU_AND_NE` label checks below ANE-backed unless powermetrics shows nonzero ANE rail. |
 | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) | Post-WL5 replay-buffer compression plan: bit-packed planes plus FP16 policy, with cheap-test gate. |
+| [topics/conventions.md](topics/conventions.md) | Cross-cutting project conventions: deny-list autonomy (Class A/B/C), merge-commits-never-rebase, memories-also-go-to-wiki, Opus-minutes-not-human-days. Source of truth mirrored in memory. |
+| [topics/research-lab-charter.md](topics/research-lab-charter.md) | Charter for the autonomous research lab: mission, two research areas (perf + training-recipe), GPU-required vs everything-else queues, training-slice protocol, smoke-first doctrine, operating loop, priority function, tier system, reviewer gate, autonomy boundaries, worktree discipline, stop conditions. |
+| [topics/wall-clock-to-elo-metric.md](topics/wall-clock-to-elo-metric.md) | LF1-followup #4 design: wall-clock-to-elo as a first-class metric family (MTTE primary, EPWH/Δelo·Δt⁻¹ secondary) the throughput proxies must be checked against; protocol, val/policy_ce gate, gap analysis vs `delta_e_harness.py`, proposed charter diff. |
+| [topics/research-lab-reviewer-role.md](topics/research-lab-reviewer-role.md) | Codified Reviewer role: when it fires (post-lane + mid-loop), the audit prompts, the three verdicts (APPROVE/REVISE/BLOCK), and what it does NOT do. |
+| [topics/research-lab-session-runbook.md](topics/research-lab-session-runbook.md) | End-to-end procedure for running a GPU-required lab item (perf cell, training slice, or sweep): pre-flight, naming, command surfaces, receipt, surfaces to update. |
 
 ### Operations And Use
 
@@ -101,6 +109,7 @@ read is:
 | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | Operational recipe for `scripts/mine_validation_archive.py`: buckets, knobs, throughput, anti-patterns. |
 | [topics/playing-the-model.md](topics/playing-the-model.md) | How to play a trained checkpoint through the local web UI or live SPA. |
 | [topics/external-engine-baselines.md](topics/external-engine-baselines.md) | Rated OSS/source-available Gomocup engine candidates and the Piskvork wrapper plan. |
+| [topics/containerize-training-runs.md](topics/containerize-training-runs.md) | **Backlog (for soon):** containerize the training run, one container at a time, refine the skill for lower startup friction/time. Open question: no Metal/MPS in Docker on macOS — targets off-Mac/at-scale or a non-Docker run unit. |
 | [../scripts/wandb_workspace.py](../scripts/wandb_workspace.py) | Creates W&B workspaces for run overlays. Regenerate when a new run joins the comparison set. |
 
 ### Frontier Lab Ops
@@ -112,6 +121,9 @@ read is:
 | [ops/baselines.md](ops/baselines.md) | Benchmark command surfaces and reference results. |
 | [ops/experiment-ledger.md](ops/experiment-ledger.md) | Receipt ledger for promote/reject/block decisions. |
 | [ops/test-ledger.md](ops/test-ledger.md) | Validation command ledger for frontier decisions. |
+| [ops/perf-log.md](ops/perf-log.md) | Day-by-day narrative timeline for the M5 Max perf era. |
+| [ops/gpu-queue.md](ops/gpu-queue.md) | Live, ordered queue for GPU-required lab items (perf cells and training slices). Source of truth for the autonomous lab loop. |
+| [ops/best-cells.md](ops/best-cells.md) | Current best cell per quality reference point; promotion log. |
 
 ## Layers
 

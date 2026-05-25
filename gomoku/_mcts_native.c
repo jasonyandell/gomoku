@@ -39,6 +39,7 @@ typedef struct {
     int32_t N[N_ACTIONS];
     float W[N_ACTIONS];
     float P[N_ACTIONS];
+    float logits[N_ACTIONS];  // Gumbel: centered raw logits (illegal -> -INF).
     unsigned char legal[N_ACTIONS];
     unsigned char expanded;
     unsigned char is_terminal;
@@ -55,7 +56,30 @@ typedef struct {
     double c_puct_base;
     double dirichlet_alpha;
     double dirichlet_eps;
+    // KataGo forced-playouts (Wu 2019). 0.0 == OFF == byte-identical legacy
+    // behavior. When > 0, root-only selection forces each already-visited
+    // root child up to n_forced(a) = ceil(sqrt(k * P(a) * N_root)) visits,
+    // and policy() subtracts those forced visits back out (policy-target
+    // pruning) before forming the training target.
+    double forced_playout_k;
     uint64_t rng;
+    // --- Gumbel AlphaZero root selection + Sequential Halving state. ---
+    // gumbel_root==0 => ordinary PUCT (byte-identical legacy). When on, the
+    // root edge is forced to a Sequential-Halving-scheduled candidate rather
+    // than PUCT; internal nodes are unchanged PUCT.
+    int gumbel_root;
+    int gumbel_m;
+    double gumbel_c_visit;
+    double gumbel_c_scale;
+    // Per-current-root Gumbel search state (rebuilt at each advance_root /
+    // each native_gumbel_search_batch root setup).
+    int gumbel_candidates[N_ACTIONS];   // survivor action ids (current phase)
+    int gumbel_n_candidates;            // count of survivors
+    double gumbel_noise[N_ACTIONS];     // g(a), drawn once per root search
+    float root_value;                   // network value at the current root
+    int gumbel_forced_action;           // the candidate to force on next sim (<0 = none)
+    int gumbel_selected_action;         // SH-chosen final action (set by scheduler)
+    unsigned char gumbel_sampled;       // 1 once topk has been drawn this root
 } NativeMCTSGameObject;
 
 typedef struct {
@@ -174,6 +198,20 @@ static double rng_normal(NativeMCTSGameObject *game) {
         u1 = 1e-300;
     }
     return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+}
+
+static double rng_gumbel(NativeMCTSGameObject *game) {
+    // Gumbel(0,1) = -log(-log(U)), U ~ Uniform(0,1). Clamp U away from 0 and 1
+    // (matching gumbel.py's u = clip(u, 1e-300, 1.0); the inner -log(u) also
+    // needs u < 1 to stay finite).
+    double u = rng_uniform(game);
+    if (u < 1e-300) {
+        u = 1e-300;
+    }
+    if (u >= 1.0) {
+        u = 1.0 - 1e-16;
+    }
+    return -log(-log(u));
 }
 
 static double rng_gamma(NativeMCTSGameObject *game, double alpha) {
@@ -568,6 +606,58 @@ static int select_action(CNode const *node, double c_puct_init, double c_puct_ba
     return best_action;
 }
 
+// KataGo forced-playout count for one root child (Wu 2019, "Accelerating
+// Self-Play Learning in Go"). n_forced(a) = ceil(sqrt(k * P(a) * N_root)).
+// N_root is the total visit count over the root's children.
+static inline int n_forced_visits(double k, double prior, int root_total) {
+    if (k <= 0.0 || prior <= 0.0 || root_total <= 0) {
+        return 0;
+    }
+    double q = sqrt(k * prior * (double)root_total);
+    double c = ceil(q);
+    if (c < 0.0) {
+        c = 0.0;
+    }
+    return (int)c;
+}
+
+// Root-only forced-playout override. Returns a legal action to force, or -1
+// if no child is under its forced quota (caller falls back to PUCT). We only
+// force children that have ALREADY been visited at least once (N[a] > 0) and
+// are below their forced quota — matching KataGo, which tops up explored
+// children rather than seeding every legal move. Among eligible children we
+// pick the one with the largest forced-vs-actual deficit, breaking ties by
+// prior, so the selection is deterministic and reproducible.
+static int select_forced_root_action(CNode const *node, double k) {
+    int total = node_total_visits(node);
+    if (total <= 0) {
+        return -1;
+    }
+    int best_action = -1;
+    int best_deficit = 0;
+    double best_prior = -1.0;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (!node->legal[a]) {
+            continue;
+        }
+        if (node->N[a] <= 0) {
+            continue;  // only force already-explored children
+        }
+        int nf = n_forced_visits(k, (double)node->P[a], total);
+        int deficit = nf - node->N[a];
+        if (deficit <= 0) {
+            continue;
+        }
+        if (deficit > best_deficit ||
+            (deficit == best_deficit && (double)node->P[a] > best_prior)) {
+            best_deficit = deficit;
+            best_prior = (double)node->P[a];
+            best_action = a;
+        }
+    }
+    return best_action;
+}
+
 static int select_one_vloss(NativeMCTSGameObject *game, Pending *out) {
     int node_idx = game->root;
     out->path_len = 0;
@@ -577,7 +667,15 @@ static int select_one_vloss(NativeMCTSGameObject *game, Pending *out) {
             out->leaf_index = node_idx;
             return 1;
         }
-        int action = select_action(node, game->c_puct, game->c_puct_base);
+        int action = -1;
+        // Forced playouts apply at the ROOT only (KataGo). Default k==0.0
+        // disables this entirely so behavior is byte-identical to legacy.
+        if (game->forced_playout_k > 0.0 && node_idx == game->root) {
+            action = select_forced_root_action(node, game->forced_playout_k);
+        }
+        if (action < 0) {
+            action = select_action(node, game->c_puct, game->c_puct_base);
+        }
         int child_idx = node->child[action];
         if (child_idx < 0) {
             CState child_state;
@@ -600,6 +698,79 @@ static int select_one_vloss(NativeMCTSGameObject *game, Pending *out) {
         out->path_len++;
         node->N[action] += 1;
         node_idx = child_idx;
+    }
+}
+
+// Gumbel descent: the FIRST edge from the root is FORCED to
+// game->gumbel_forced_action (the Sequential-Halving-scheduled candidate);
+// every node below the root uses ordinary PUCT (identical to
+// select_one_vloss). Mirrors gumbel._simulate_from_child. Virtual loss
+// (N[action]+=1) is applied on the forced root edge exactly as PUCT would,
+// so the wave-batching / vloss bookkeeping is unchanged.
+static int select_one_vloss_gumbel(NativeMCTSGameObject *game, Pending *out) {
+    out->path_len = 0;
+    CNode *root = &game->nodes[game->root];
+    if (root->is_terminal || !root->expanded) {
+        out->leaf_index = game->root;
+        return 1;
+    }
+    int forced = game->gumbel_forced_action;
+    if (forced < 0 || forced >= N_ACTIONS || !root->legal[forced]) {
+        // No valid forced action this slot => contribute nothing (leaf=root,
+        // terminal handling in the caller treats an unexpanded/forced-less
+        // slot specially; we guard by never enqueueing such a slot). Fall
+        // back to PUCT-from-root to stay safe.
+        return select_one_vloss(game, out);
+    }
+    int child_idx = root->child[forced];
+    if (child_idx < 0) {
+        CState child_state;
+        if (!state_apply(&root->state, forced, &child_state)) {
+            return 0;
+        }
+        child_idx = arena_add_node(game, &child_state, game->root, forced);
+        if (child_idx < 0) {
+            return 0;
+        }
+        root = &game->nodes[game->root];
+        root->child[forced] = child_idx;
+    }
+    out->path_nodes[out->path_len] = game->root;
+    out->path_actions[out->path_len] = forced;
+    out->path_len++;
+    root->N[forced] += 1;
+
+    // Descend from the child with ordinary PUCT.
+    int node_idx = child_idx;
+    for (;;) {
+        CNode *node = &game->nodes[node_idx];
+        if (node->is_terminal || !node->expanded) {
+            out->leaf_index = node_idx;
+            return 1;
+        }
+        int action = select_action(node, game->c_puct, game->c_puct_base);
+        int next_child = node->child[action];
+        if (next_child < 0) {
+            CState child_state;
+            if (!state_apply(&node->state, action, &child_state)) {
+                return 0;
+            }
+            next_child = arena_add_node(game, &child_state, node_idx, action);
+            if (next_child < 0) {
+                return 0;
+            }
+            node = &game->nodes[node_idx];
+            node->child[action] = next_child;
+        }
+        if (out->path_len >= MAX_PATH) {
+            PyErr_SetString(PyExc_RuntimeError, "native MCTS path exceeded board size");
+            return 0;
+        }
+        out->path_nodes[out->path_len] = node_idx;
+        out->path_actions[out->path_len] = action;
+        out->path_len++;
+        node->N[action] += 1;
+        node_idx = next_child;
     }
 }
 
@@ -626,6 +797,16 @@ static void set_priors(CNode *node, float const *raw_priors) {
     }
     if (legal_count == 0) {
         return;
+    }
+
+    // Gumbel needs the *centered* raw logits (legal: x - legal_max; illegal:
+    // -INF). Mirrors gumbel.py::_root_logits. This is computed for every node
+    // but only consumed at the root in the Gumbel path; it costs one extra
+    // store per legal action and is otherwise inert (PUCT never reads logits).
+    for (int a = 0; a < N_ACTIONS; a++) {
+        node->logits[a] = node->legal[a]
+            ? (float)((double)raw_priors[a] - max_val)
+            : -INFINITY;
     }
 
     double sum = 0.0;
@@ -676,6 +857,181 @@ static void add_dirichlet_noise(NativeMCTSGameObject *game, CNode *node) {
                                 + game->dirichlet_eps * n);
         }
     }
+}
+
+// ===========================================================================
+// Gumbel AlphaZero root selection + Sequential Halving (Danihelka et al. 2022)
+// Mirrors gomoku/gumbel.py. Root-only; internal nodes keep PUCT. See the
+// C-port spec at the bottom of gomoku/gumbel.py.
+// ===========================================================================
+
+// sigma(q) = (c_visit + max_visit_at_root) * c_scale * q. Matches gumbel._sigma.
+static inline double sigma_q(double q, int max_visit, double c_visit, double c_scale) {
+    return (c_visit + (double)max_visit) * c_scale * q;
+}
+
+// Draw gumbel_noise[a] for each legal a, score = g + logits, and keep the top
+// min(m, n_legal) legal actions (descending by score) into gumbel_candidates.
+// Mirrors gumbel._gumbel_topk (selection-sort to make the descending order
+// deterministic and tie-stable like numpy argsort[::-1] on distinct floats).
+static void gumbel_sample_topk(NativeMCTSGameObject *game, CNode *root, int m) {
+    double scores[N_ACTIONS];
+    int legal_idx[N_ACTIONS];
+    int n_legal = 0;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        game->gumbel_noise[a] = 0.0;
+        if (root->legal[a]) {
+            double g = rng_gumbel(game);
+            game->gumbel_noise[a] = g;
+            scores[a] = g + (double)root->logits[a];
+            legal_idx[n_legal++] = a;
+        } else {
+            scores[a] = -INFINITY;
+        }
+    }
+    int k = m < n_legal ? m : n_legal;
+    if (k < 0) {
+        k = 0;
+    }
+    // Partial selection sort: pick the top-k by score from legal_idx.
+    for (int i = 0; i < k; i++) {
+        int best = i;
+        for (int j = i + 1; j < n_legal; j++) {
+            if (scores[legal_idx[j]] > scores[legal_idx[best]]) {
+                best = j;
+            }
+        }
+        int tmp = legal_idx[i];
+        legal_idx[i] = legal_idx[best];
+        legal_idx[best] = tmp;
+        game->gumbel_candidates[i] = legal_idx[i];
+    }
+    game->gumbel_n_candidates = k;
+    game->gumbel_sampled = 1;
+}
+
+// Score of a single root candidate: g(a) + logits(a) + sigma(q_hat(a)).
+// q_hat(a) = W[a]/N[a] for visited, else 0.0 (matches gumbel.py's SH/argmax
+// scoring, which uses q=0 for unvisited survivors).
+static double gumbel_candidate_score(
+    NativeMCTSGameObject *game, CNode *root, int a, int max_visit
+) {
+    int n = root->N[a];
+    double q = n > 0 ? (double)root->W[a] / (double)n : 0.0;
+    return game->gumbel_noise[a] + (double)root->logits[a]
+         + sigma_q(q, max_visit, game->gumbel_c_visit, game->gumbel_c_scale);
+}
+
+static int gumbel_root_max_visit(CNode *root) {
+    int max_visit = 0;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (root->legal[a] && root->N[a] > max_visit) {
+            max_visit = root->N[a];
+        }
+    }
+    return max_visit;
+}
+
+// Sequential Halving per-phase visits-per-candidate. Mirrors
+// gumbel._sequential_halving_schedule exactly.
+static int gumbel_sh_schedule(int m, int budget, int *out, int max_phases) {
+    if (m <= 1 || budget <= 0) {
+        return 0;
+    }
+    int n_phases = (int)floor(log2((double)m));
+    if (n_phases < 1) {
+        n_phases = 1;
+    }
+    if (n_phases > max_phases) {
+        n_phases = max_phases;
+    }
+    int sizes[N_ACTIONS];
+    int cur = m;
+    for (int i = 0; i < n_phases; i++) {
+        sizes[i] = cur;
+        cur = cur / 2;
+        if (cur < 2) {
+            cur = 2;
+        }
+    }
+    int per_phase_total = budget / n_phases;
+    if (per_phase_total < 1) {
+        per_phase_total = 1;
+    }
+    int used = 0;
+    for (int i = 0; i < n_phases; i++) {
+        int n_per;
+        if (i == n_phases - 1) {
+            int remaining = budget - used;
+            n_per = remaining / sizes[i];
+            if (n_per < 1) {
+                n_per = 1;
+            }
+        } else {
+            n_per = per_phase_total / sizes[i];
+            if (n_per < 1) {
+                n_per = 1;
+            }
+        }
+        out[i] = n_per;
+        used += n_per * sizes[i];
+    }
+    return n_phases;
+}
+
+// Final selection: argmax of g+logits+sigma(q_hat) over current survivors.
+// Mirrors gumbel.py step 4 (first survivor as the initial best, strict > to
+// break ties toward the higher-scoring sampled order).
+static int gumbel_select_score_argmax(NativeMCTSGameObject *game, CNode *root) {
+    if (game->gumbel_n_candidates <= 0) {
+        return -1;
+    }
+    int max_visit = gumbel_root_max_visit(root);
+    int best_a = game->gumbel_candidates[0];
+    double best_score = -INFINITY;
+    for (int i = 0; i < game->gumbel_n_candidates; i++) {
+        int a = game->gumbel_candidates[i];
+        double s = gumbel_candidate_score(game, root, a, max_visit);
+        if (s > best_score) {
+            best_score = s;
+            best_a = a;
+        }
+    }
+    return best_a;
+}
+
+// Keep the top half (by score) of the current survivors in place. Mirrors
+// gumbel.py: keep = max(1, len//2); top = argsort(scores)[::-1][:keep].
+static void gumbel_halve_survivors(NativeMCTSGameObject *game, CNode *root) {
+    int n = game->gumbel_n_candidates;
+    if (n <= 1) {
+        return;
+    }
+    int max_visit = gumbel_root_max_visit(root);
+    double scores[N_ACTIONS];
+    for (int i = 0; i < n; i++) {
+        scores[i] = gumbel_candidate_score(game, root, game->gumbel_candidates[i], max_visit);
+    }
+    int keep = n / 2;
+    if (keep < 1) {
+        keep = 1;
+    }
+    // Partial selection sort of candidates by score desc, keep top `keep`.
+    for (int i = 0; i < keep; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++) {
+            if (scores[j] > scores[best]) {
+                best = j;
+            }
+        }
+        double st = scores[i];
+        scores[i] = scores[best];
+        scores[best] = st;
+        int ct = game->gumbel_candidates[i];
+        game->gumbel_candidates[i] = game->gumbel_candidates[best];
+        game->gumbel_candidates[best] = ct;
+    }
+    game->gumbel_n_candidates = keep;
 }
 
 static int call_evaluator(
@@ -766,6 +1122,62 @@ static int evaluate_and_expand(
     return 1;
 }
 
+// Gumbel root expansion: ALWAYS evaluates the root batch so we can capture the
+// network's root value (for v_mix completion) and the centered logits, even
+// when the root was already expanded via subtree reuse. Mirrors gumbel.py's
+// gumbel_search_root step 1, which re-evaluates the root every call but only
+// _set_priors when unexpanded. `games[i]` are the games whose roots are in
+// `root_leaves[i]` (parallel arrays).
+static int evaluate_and_expand_root_gumbel(
+    PyObject *evaluator,
+    CNode **root_leaves,
+    NativeMCTSGameObject **owner_games,
+    int n
+) {
+    if (n <= 0) {
+        return 1;
+    }
+    PyArrayObject *priors = NULL;
+    PyArrayObject *values = NULL;
+    if (!call_evaluator(evaluator, root_leaves, n, &priors, &values)) {
+        return 0;
+    }
+    float const *prior_data = (float const *)PyArray_DATA(priors);
+    float const *value_data = (float const *)PyArray_DATA(values);
+    for (int i = 0; i < n; i++) {
+        CNode *node = root_leaves[i];
+        owner_games[i]->root_value = value_data[i];
+        if (!node->expanded) {
+            set_priors(node, prior_data + (size_t)i * N_ACTIONS);
+            node->expanded = 1;
+            // Gumbel uses Gumbel noise (drawn in gumbel_sample_topk), NOT
+            // Dirichlet, so no add_dirichlet_noise here.
+        } else {
+            // Subtree-reuse root: P/logits already set by the leaf expansion
+            // that created it. Re-derive the centered logits from the freshly
+            // evaluated raw priors so they match what gumbel.py would compute
+            // for THIS ply (the prior P is left untouched for v_mix weights /
+            // PUCT below root, matching the Python path which also leaves an
+            // already-expanded root's P intact).
+            float const *raw = prior_data + (size_t)i * N_ACTIONS;
+            double max_val = -INFINITY;
+            for (int a = 0; a < N_ACTIONS; a++) {
+                if (node->legal[a] && (double)raw[a] > max_val) {
+                    max_val = (double)raw[a];
+                }
+            }
+            for (int a = 0; a < N_ACTIONS; a++) {
+                node->logits[a] = node->legal[a]
+                    ? (float)((double)raw[a] - max_val)
+                    : -INFINITY;
+            }
+        }
+    }
+    Py_DECREF(priors);
+    Py_DECREF(values);
+    return 1;
+}
+
 static void NativeMCTSGame_dealloc(NativeMCTSGameObject *self) {
     free(self->nodes);
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -782,17 +1194,30 @@ static int NativeMCTSGame_init(
     self->c_puct_base = 19652.0;
     self->dirichlet_alpha = 0.3;
     self->dirichlet_eps = 0.25;
+    self->forced_playout_k = 0.0;  // OFF by default (byte-identical legacy)
+    // Gumbel defaults: OFF (PUCT). When gumbel_root != 0, the root edge is
+    // forced via Sequential Halving; m/c_visit/c_scale follow the paper.
+    int gumbel_root = 0;
+    int gumbel_m = 16;
+    double gumbel_c_visit = 50.0;
+    double gumbel_c_scale = 1.0;
     static char *kwlist[] = {
-        "state", "c_puct", "c_puct_base", "dirichlet_alpha", "dirichlet_eps", "seed", NULL
+        "state", "c_puct", "c_puct_base", "dirichlet_alpha", "dirichlet_eps", "seed",
+        "forced_playout_k", "gumbel_root", "gumbel_m", "gumbel_c_visit", "gumbel_c_scale", NULL
     };
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "|OddddK", kwlist,
+            args, kwargs, "|OddddKdiidd", kwlist,
             &state_obj,
             &self->c_puct,
             &self->c_puct_base,
             &self->dirichlet_alpha,
             &self->dirichlet_eps,
-            &seed)) {
+            &seed,
+            &self->forced_playout_k,
+            &gumbel_root,
+            &gumbel_m,
+            &gumbel_c_visit,
+            &gumbel_c_scale)) {
         return -1;
     }
 
@@ -801,6 +1226,15 @@ static int NativeMCTSGame_init(
     self->node_cap = 0;
     self->root = -1;
     self->rng = seed == 0 ? 1 : (uint64_t)seed;
+    self->gumbel_root = gumbel_root;
+    self->gumbel_m = gumbel_m;
+    self->gumbel_c_visit = gumbel_c_visit;
+    self->gumbel_c_scale = gumbel_c_scale;
+    self->gumbel_n_candidates = 0;
+    self->root_value = 0.0f;
+    self->gumbel_forced_action = -1;
+    self->gumbel_selected_action = -1;
+    self->gumbel_sampled = 0;
 
     CState state;
     if (state_obj == Py_None) {
@@ -816,10 +1250,88 @@ static int NativeMCTSGame_init(
     return 0;
 }
 
+// KataGo policy-target pruning (Wu 2019). Fill `pruned` with the root child
+// visit counts AFTER subtracting forced playouts. The most-visited child keeps
+// all its visits; for each other child we subtract as many visits as possible
+// (up to its n_forced quota) WITHOUT letting its PUCT exploration-selection
+// value exceed the best child's — i.e. we remove only the artificially-forced
+// exploration, never visits PUCT would have spent on its own. With k <= 0 this
+// is a straight copy of root->N (byte-identical legacy target).
+static void compute_pruned_root_visits(
+    NativeMCTSGameObject const *game, CNode const *root, double k, int32_t *pruned
+) {
+    for (int a = 0; a < N_ACTIONS; a++) {
+        pruned[a] = root->N[a];
+    }
+    if (k <= 0.0) {
+        return;
+    }
+    int total = node_total_visits(root);
+    if (total <= 0) {
+        return;
+    }
+    // Most-visited (best) child keeps all its visits.
+    int best_action = -1;
+    int best_count = -1;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (!root->legal[a]) {
+            continue;
+        }
+        if (root->N[a] > best_count) {
+            best_count = root->N[a];
+            best_action = a;
+        }
+    }
+    if (best_action < 0) {
+        return;
+    }
+    // AGZ log-schedule PUCT coefficient (same as select_action). Visit-count
+    // pruning is a target-extraction step; we use the FINAL parent total here.
+    double pb_c = log((1.0 + (double)total + game->c_puct_base) / game->c_puct_base)
+                  + game->c_puct;
+    double sqrt_total = sqrt((double)total + 1e-8);
+
+    // Best child's PUCT exploration-selection value (Q + U) at its real visits.
+    double best_q = root->N[best_action] > 0
+        ? (double)root->W[best_action] / (double)root->N[best_action]
+        : 0.0;
+    double best_u = pb_c * (double)root->P[best_action] * sqrt_total
+                    / (1.0 + (double)root->N[best_action]);
+    double best_value = best_q + best_u;
+
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (a == best_action || !root->legal[a] || root->N[a] <= 0) {
+            continue;
+        }
+        int nf = n_forced_visits(k, (double)root->P[a], total);
+        if (nf <= 0) {
+            continue;
+        }
+        // Q is fixed by W/N at the real visit count (KataGo holds the child's
+        // value constant while shrinking its U via the (1 + n) denominator).
+        double q = (double)root->W[a] / (double)root->N[a];
+        int n = root->N[a];
+        int subtracted = 0;
+        // Remove forced visits one at a time, up to nf, but stop the moment
+        // the child's selection value at the reduced count would meet/exceed
+        // the best child's (i.e. PUCT would have picked it on its own).
+        while (subtracted < nf && n > 1) {
+            double u_at = pb_c * (double)root->P[a] * sqrt_total / (1.0 + (double)(n - 1));
+            if (q + u_at > best_value) {
+                break;  // removing this visit would make the child PUCT-preferred
+            }
+            n -= 1;
+            subtracted += 1;
+        }
+        pruned[a] = n;
+    }
+}
+
 static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *args, PyObject *kwargs) {
     double temperature = 1.0;
-    static char *kwlist[] = {"temperature", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|d", kwlist, &temperature)) {
+    double forced_playout_k = -1.0;  // <0 sentinel: fall back to game's stored k
+    static char *kwlist[] = {"temperature", "forced_playout_k", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|dd", kwlist, &temperature, &forced_playout_k)) {
         return NULL;
     }
     npy_intp dims[1] = {N_ACTIONS};
@@ -829,23 +1341,26 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     }
     float *out = (float *)PyArray_DATA((PyArrayObject *)out_obj);
     CNode *root = &self->nodes[self->root];
+    double k = forced_playout_k >= 0.0 ? forced_playout_k : self->forced_playout_k;
+    int32_t pruned[N_ACTIONS];
+    compute_pruned_root_visits(self, root, k, pruned);
 
     if (temperature <= 0.0) {
-        int max_count = root->N[0];
+        int max_count = pruned[0];
         for (int a = 1; a < N_ACTIONS; a++) {
-            if (root->N[a] > max_count) {
-                max_count = root->N[a];
+            if (pruned[a] > max_count) {
+                max_count = pruned[a];
             }
         }
         int winners = 0;
         for (int a = 0; a < N_ACTIONS; a++) {
-            if (root->N[a] == max_count) {
+            if (pruned[a] == max_count) {
                 winners++;
             }
         }
         float p = winners > 0 ? 1.0f / (float)winners : 0.0f;
         for (int a = 0; a < N_ACTIONS; a++) {
-            out[a] = root->N[a] == max_count ? p : 0.0f;
+            out[a] = pruned[a] == max_count ? p : 0.0f;
         }
         return out_obj;
     }
@@ -853,11 +1368,11 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     double sum = 0.0;
     if (temperature == 1.0) {
         for (int a = 0; a < N_ACTIONS; a++) {
-            sum += (double)root->N[a];
+            sum += (double)pruned[a];
         }
         if (sum > 0.0) {
             for (int a = 0; a < N_ACTIONS; a++) {
-                out[a] = (float)((double)root->N[a] / sum);
+                out[a] = (float)((double)pruned[a] / sum);
             }
         } else {
             int legal_count = 0;
@@ -884,7 +1399,7 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     // probabilities to float32 keeps the output strictly finite.
     double scores[N_ACTIONS];
     for (int a = 0; a < N_ACTIONS; a++) {
-        double x = pow((double)root->N[a], inv_temp);
+        double x = pow((double)pruned[a], inv_temp);
         scores[a] = x;
         sum += x;
     }
@@ -904,21 +1419,21 @@ static PyObject *NativeMCTSGame_policy(NativeMCTSGameObject *self, PyObject *arg
     } else {
         // sum overflowed double (only possible at absurd tau or N). Fall back
         // to argmax-tie distribution so the policy is still a valid pmf.
-        int32_t max_count = root->N[0];
+        int32_t max_count = pruned[0];
         for (int a = 1; a < N_ACTIONS; a++) {
-            if (root->N[a] > max_count) {
-                max_count = root->N[a];
+            if (pruned[a] > max_count) {
+                max_count = pruned[a];
             }
         }
         int winners = 0;
         for (int a = 0; a < N_ACTIONS; a++) {
-            if (root->N[a] == max_count) {
+            if (pruned[a] == max_count) {
                 winners++;
             }
         }
         float p = winners > 0 ? 1.0f / (float)winners : 0.0f;
         for (int a = 0; a < N_ACTIONS; a++) {
-            out[a] = root->N[a] == max_count ? p : 0.0f;
+            out[a] = pruned[a] == max_count ? p : 0.0f;
         }
     }
     return out_obj;
@@ -933,6 +1448,158 @@ static PyObject *NativeMCTSGame_visit_counts(NativeMCTSGameObject *self, PyObjec
     int32_t *out = (int32_t *)PyArray_DATA((PyArrayObject *)out_obj);
     memcpy(out, self->nodes[self->root].N, N_ACTIONS * sizeof(int32_t));
     return out_obj;
+}
+
+// Gumbel completed-policy TARGET. Mirrors gumbel.py::_root_q_completed +
+// completed_policy_target EXACTLY:
+//   q[a] = W[a]/N[a] for visited (already root-perspective via backprop);
+//   v_mix = (root_value + (sum_N/sum_P_visited)*sum(P[a]*q[a])) / (1+sum_N);
+//   q[unvisited] = v_mix;
+//   target = softmax over legal of logits[a] + sigma_q(q[a], maxN).
+static PyObject *NativeMCTSGame_gumbel_policy(NativeMCTSGameObject *self, PyObject *args, PyObject *kwargs) {
+    double c_visit = self->gumbel_c_visit;
+    double c_scale = self->gumbel_c_scale;
+    static char *kwlist[] = {"c_visit", "c_scale", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|dd", kwlist, &c_visit, &c_scale)) {
+        return NULL;
+    }
+    npy_intp dims[1] = {N_ACTIONS};
+    PyObject *out_obj = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    if (out_obj == NULL) {
+        return NULL;
+    }
+    float *out = (float *)PyArray_DATA((PyArrayObject *)out_obj);
+    for (int a = 0; a < N_ACTIONS; a++) {
+        out[a] = 0.0f;
+    }
+    CNode *root = &self->nodes[self->root];
+
+    int n_legal = 0;
+    int max_visit = 0;
+    long sum_n = 0;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (root->legal[a]) {
+            n_legal++;
+            if (root->N[a] > max_visit) {
+                max_visit = root->N[a];
+            }
+            sum_n += root->N[a];
+        }
+    }
+    if (n_legal == 0) {
+        return out_obj;  // no legal actions; all-zero target
+    }
+
+    // Completed Q (v_mix for unvisited). q[visited] = W/N.
+    double q[N_ACTIONS];
+    double weighted_q = 0.0;     // sum over visited of P[a]*q[a]
+    double sum_pi_visited = 0.0; // sum over visited of P[a]
+    for (int a = 0; a < N_ACTIONS; a++) {
+        q[a] = 0.0;
+        if (root->legal[a] && root->N[a] > 0) {
+            q[a] = (double)root->W[a] / (double)root->N[a];
+            weighted_q += (double)root->P[a] * q[a];
+            sum_pi_visited += (double)root->P[a];
+        }
+    }
+    double v_mix;
+    if (sum_n > 0 && sum_pi_visited > 0.0) {
+        v_mix = ((double)self->root_value + ((double)sum_n / sum_pi_visited) * weighted_q)
+                / (1.0 + (double)sum_n);
+    } else {
+        v_mix = (double)self->root_value;
+    }
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (root->legal[a] && root->N[a] == 0) {
+            q[a] = v_mix;
+        }
+    }
+
+    // raw[a] = logits[a] + sigma(q[a]); softmax over legal (illegal -> -inf).
+    double raw[N_ACTIONS];
+    double m = -INFINITY;
+    int any_finite = 0;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (root->legal[a]) {
+            double sig = sigma_q(q[a], max_visit, c_visit, c_scale);
+            raw[a] = (double)root->logits[a] + sig;
+            if (isfinite(raw[a])) {
+                any_finite = 1;
+                if (raw[a] > m) {
+                    m = raw[a];
+                }
+            }
+        } else {
+            raw[a] = -INFINITY;
+        }
+    }
+    if (!any_finite) {
+        float p = 1.0f / (float)n_legal;
+        for (int a = 0; a < N_ACTIONS; a++) {
+            out[a] = root->legal[a] ? p : 0.0f;
+        }
+        return out_obj;
+    }
+    double s = 0.0;
+    double exp_a[N_ACTIONS];
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (root->legal[a]) {
+            exp_a[a] = exp(raw[a] - m);
+            s += exp_a[a];
+        } else {
+            exp_a[a] = 0.0;
+        }
+    }
+    if (s > 0.0) {
+        for (int a = 0; a < N_ACTIONS; a++) {
+            out[a] = (float)(exp_a[a] / s);
+        }
+    } else {
+        float p = 1.0f / (float)n_legal;
+        for (int a = 0; a < N_ACTIONS; a++) {
+            out[a] = root->legal[a] ? p : 0.0f;
+        }
+    }
+    return out_obj;
+}
+
+static PyObject *NativeMCTSGame_gumbel_selected_action(NativeMCTSGameObject *self, PyObject *Py_UNUSED(ignored)) {
+    return PyLong_FromLong(self->gumbel_selected_action);
+}
+
+// Test-only: export the root's internal Gumbel state (W/P/logits/root_value/
+// noise/candidates) so the parity test can recompute the Python reference's
+// completed_policy_target from the EXACT same tree state and assert agreement.
+// Not used in production. Returns a dict.
+static PyObject *NativeMCTSGame_gumbel_debug_state(NativeMCTSGameObject *self, PyObject *Py_UNUSED(ignored)) {
+    CNode *root = &self->nodes[self->root];
+    npy_intp dims[1] = {N_ACTIONS};
+    PyObject *W = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    PyObject *P = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    PyObject *logits = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    PyObject *noise = PyArray_SimpleNew(1, dims, NPY_FLOAT64);
+    if (W == NULL || P == NULL || logits == NULL || noise == NULL) {
+        Py_XDECREF(W); Py_XDECREF(P); Py_XDECREF(logits); Py_XDECREF(noise);
+        return NULL;
+    }
+    memcpy(PyArray_DATA((PyArrayObject *)W), root->W, N_ACTIONS * sizeof(float));
+    memcpy(PyArray_DATA((PyArrayObject *)P), root->P, N_ACTIONS * sizeof(float));
+    memcpy(PyArray_DATA((PyArrayObject *)logits), root->logits, N_ACTIONS * sizeof(float));
+    memcpy(PyArray_DATA((PyArrayObject *)noise), self->gumbel_noise, N_ACTIONS * sizeof(double));
+    PyObject *d = PyDict_New();
+    if (d == NULL) {
+        Py_DECREF(W); Py_DECREF(P); Py_DECREF(logits); Py_DECREF(noise);
+        return NULL;
+    }
+    PyDict_SetItemString(d, "W", W);
+    PyDict_SetItemString(d, "P", P);
+    PyDict_SetItemString(d, "logits", logits);
+    PyDict_SetItemString(d, "noise", noise);
+    PyObject *rv = PyFloat_FromDouble((double)self->root_value);
+    PyDict_SetItemString(d, "root_value", rv);
+    Py_DECREF(rv);
+    Py_DECREF(W); Py_DECREF(P); Py_DECREF(logits); Py_DECREF(noise);
+    return d;
 }
 
 static PyObject *NativeMCTSGame_root_planes(NativeMCTSGameObject *self, PyObject *Py_UNUSED(ignored)) {
@@ -972,6 +1639,12 @@ static PyObject *NativeMCTSGame_advance_root(NativeMCTSGameObject *self, PyObjec
         }
         self->root = next_root;
     }
+    // Per-root Gumbel state is stale once the root moves; force a fresh
+    // topk sample on the next gumbel search.
+    self->gumbel_sampled = 0;
+    self->gumbel_n_candidates = 0;
+    self->gumbel_forced_action = -1;
+    self->gumbel_selected_action = -1;
     Py_RETURN_NONE;
 }
 
@@ -996,6 +1669,9 @@ static PyMethodDef NativeMCTSGame_methods[] = {
     {"root_planes", (PyCFunction)NativeMCTSGame_root_planes, METH_NOARGS, "Return root input planes."},
     {"advance_root", (PyCFunction)NativeMCTSGame_advance_root, METH_VARARGS, "Advance root by action."},
     {"is_terminal", (PyCFunction)NativeMCTSGame_is_terminal, METH_NOARGS, "Return terminal status/value."},
+    {"gumbel_policy", (PyCFunction)NativeMCTSGame_gumbel_policy, METH_VARARGS | METH_KEYWORDS, "Return Gumbel completed-policy training target."},
+    {"gumbel_selected_action", (PyCFunction)NativeMCTSGame_gumbel_selected_action, METH_NOARGS, "Return the Sequential-Halving-selected root action (-1 if none)."},
+    {"gumbel_debug_state", (PyCFunction)NativeMCTSGame_gumbel_debug_state, METH_NOARGS, "Test-only: export root W/P/logits/noise/root_value."},
     {NULL}
 };
 
@@ -1218,8 +1894,326 @@ static PyObject *native_search_batch(PyObject *self, PyObject *args, PyObject *k
     Py_RETURN_NONE;
 }
 
+// ---------------------------------------------------------------------------
+// Gumbel batch search. Per-game Sequential Halving lives inside the lockstep
+// wave: all games run the SAME phase index together, and within a phase the
+// per-game round-robin forced visits are aligned on a global slot index so the
+// per-slot leaf batch stays large (preserves MPS saturation). Games with fewer
+// survivors / exhausted budget simply contribute no leaf that slot — same
+// pattern as wave_counts[i] in native_search_batch. Internal nodes use the
+// UNCHANGED PUCT descent (select_one_vloss_gumbel forces only the root edge).
+//
+// Matches gomoku/gumbel.py::gumbel_search_root semantics:
+//   - topk candidate sampling, SH round-robin then halve-by-score each phase,
+//     final argmax of g+logits+sigma(q_hat); completed-policy target via
+//     NativeMCTSGame_gumbel_policy.
+//   - The per-game visits_spent is capped at n_simulations exactly like the
+//     Python loop's `if visits_spent >= n_simulations: break`.
+typedef struct {
+    int n_phases;
+    int schedule[N_ACTIONS];   // n_per for each phase
+    int phase;                 // current phase index
+    int phase_visits_target;   // total forced visits this phase (rounds*surv, budget-capped)
+    int phase_visits_done;     // forced visits emitted this phase so far
+    int sims_done;             // total forced root visits this game (<= n_simulations)
+    int n_survivors;           // survivors at phase start
+    unsigned char active;      // 0 once this game can no longer search
+} GumbelGameSched;
+
+static void gumbel_free_all(
+    PyObject *seq, NativeMCTSGameObject **games, CNode **root_leaves,
+    NativeMCTSGameObject **owner_games, GumbelGameSched *sched, PendingVec *pending
+) {
+    if (pending != NULL) {
+        pending_vec_free(pending);
+    }
+    free(root_leaves);
+    free(owner_games);
+    free(sched);
+    free(games);
+    Py_XDECREF(seq);
+}
+
+static PyObject *native_gumbel_search_batch(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
+    PyObject *games_obj;
+    PyObject *evaluator;
+    int n_simulations;
+    int wave_size = 16;
+    static char *kwlist[] = {
+        "games", "evaluator", "n_simulations", "wave_size", NULL
+    };
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOi|i", kwlist,
+            &games_obj, &evaluator, &n_simulations, &wave_size)) {
+        return NULL;
+    }
+    if (n_simulations < 0) {
+        PyErr_SetString(PyExc_ValueError, "n_simulations must be non-negative");
+        return NULL;
+    }
+    if (wave_size < 1) {
+        PyErr_SetString(PyExc_ValueError, "wave_size must be >= 1");
+        return NULL;
+    }
+    PyObject *seq = PySequence_Fast(games_obj, "games must be a sequence");
+    if (seq == NULL) {
+        return NULL;
+    }
+    Py_ssize_t n_games_ssize = PySequence_Fast_GET_SIZE(seq);
+    if (n_games_ssize <= 0) {
+        Py_DECREF(seq);
+        Py_RETURN_NONE;
+    }
+    if (n_games_ssize > INT32_MAX) {
+        Py_DECREF(seq);
+        PyErr_SetString(PyExc_ValueError, "too many games");
+        return NULL;
+    }
+    int n_games = (int)n_games_ssize;
+    NativeMCTSGameObject **games = (NativeMCTSGameObject **)malloc(
+        sizeof(NativeMCTSGameObject *) * (size_t)n_games);
+    CNode **root_leaves = (CNode **)malloc(sizeof(CNode *) * (size_t)n_games);
+    NativeMCTSGameObject **owner_games = (NativeMCTSGameObject **)malloc(
+        sizeof(NativeMCTSGameObject *) * (size_t)n_games);
+    GumbelGameSched *sched = (GumbelGameSched *)calloc((size_t)n_games, sizeof(GumbelGameSched));
+    if (games == NULL || root_leaves == NULL || owner_games == NULL || sched == NULL) {
+        gumbel_free_all(seq, games, root_leaves, owner_games, sched, NULL);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    PyObject **items = PySequence_Fast_ITEMS(seq);
+    for (int i = 0; i < n_games; i++) {
+        if (!PyObject_TypeCheck(items[i], &NativeMCTSGameType)) {
+            gumbel_free_all(seq, games, root_leaves, owner_games, sched, NULL);
+            PyErr_SetString(PyExc_TypeError, "all games must be NativeMCTSGame objects");
+            return NULL;
+        }
+        games[i] = (NativeMCTSGameObject *)items[i];
+    }
+
+    // 1. Expand+evaluate all roots in ONE batched call (capture root_value +
+    //    centered logits). Gumbel uses Gumbel noise, NOT Dirichlet noise.
+    int root_count = 0;
+    for (int i = 0; i < n_games; i++) {
+        CNode *root = &games[i]->nodes[games[i]->root];
+        if (!root->is_terminal) {
+            root_leaves[root_count] = root;
+            owner_games[root_count] = games[i];
+            root_count++;
+        }
+    }
+    if (!evaluate_and_expand_root_gumbel(evaluator, root_leaves, owner_games, root_count)) {
+        gumbel_free_all(seq, games, root_leaves, owner_games, sched, NULL);
+        return NULL;
+    }
+
+    // 2. Per-game Gumbel-top-k candidate sampling + SH schedule setup.
+    for (int i = 0; i < n_games; i++) {
+        NativeMCTSGameObject *g = games[i];
+        CNode *root = &g->nodes[g->root];
+        g->gumbel_selected_action = -1;
+        g->gumbel_forced_action = -1;
+        if (root->is_terminal) {
+            sched[i].active = 0;
+            continue;
+        }
+        gumbel_sample_topk(g, root, g->gumbel_m);
+        int k = g->gumbel_n_candidates;
+        if (k <= 0) {
+            sched[i].active = 0;
+            g->gumbel_selected_action = -1;
+            continue;
+        }
+        if (k == 1) {
+            // Single candidate: no search needed, it's the selection.
+            sched[i].active = 0;
+            g->gumbel_selected_action = g->gumbel_candidates[0];
+            continue;
+        }
+        if (n_simulations <= 0) {
+            // No budget: selection = argmax of g+logits+sigma(0) over candidates.
+            sched[i].active = 0;
+            g->gumbel_selected_action = gumbel_select_score_argmax(g, root);
+            continue;
+        }
+        sched[i].n_phases = gumbel_sh_schedule(k, n_simulations, sched[i].schedule, N_ACTIONS);
+        sched[i].phase = 0;
+        sched[i].sims_done = 0;
+        sched[i].active = sched[i].n_phases > 0 ? 1 : 0;
+        if (!sched[i].active) {
+            g->gumbel_selected_action = gumbel_select_score_argmax(g, root);
+        }
+    }
+
+    PendingVec pending;
+    if (!pending_vec_init(&pending, n_games * wave_size > 64 ? n_games * wave_size : 64)) {
+        gumbel_free_all(seq, games, root_leaves, owner_games, sched, NULL);
+        return NULL;
+    }
+
+    // 3. Phase-by-phase Sequential Halving, batched across games within a phase.
+    int max_phases = 0;
+    for (int i = 0; i < n_games; i++) {
+        if (sched[i].active && sched[i].n_phases > max_phases) {
+            max_phases = sched[i].n_phases;
+        }
+    }
+
+    for (int phase = 0; phase < max_phases; phase++) {
+        // Set up this phase's per-game forced-visit budget.
+        for (int i = 0; i < n_games; i++) {
+            GumbelGameSched *s = &sched[i];
+            if (!s->active || phase >= s->n_phases || games[i]->gumbel_n_candidates <= 1) {
+                s->phase_visits_target = 0;
+                s->phase_visits_done = 0;
+                continue;
+            }
+            s->n_survivors = games[i]->gumbel_n_candidates;
+            int n_per = s->schedule[phase];
+            int target = n_per * s->n_survivors;
+            int remaining = n_simulations - s->sims_done;
+            if (target > remaining) {
+                target = remaining;
+            }
+            if (target < 0) {
+                target = 0;
+            }
+            s->phase_visits_target = target;
+            s->phase_visits_done = 0;
+        }
+
+        // Wave loop over global slot index for this phase. Each game emits its
+        // scheduled forced action (round-robin over survivors) per slot.
+        for (;;) {
+            int any = 0;
+            int max_slots = 0;
+            for (int i = 0; i < n_games; i++) {
+                GumbelGameSched *s = &sched[i];
+                int remaining = s->phase_visits_target - s->phase_visits_done;
+                int w = remaining < wave_size ? remaining : wave_size;
+                if (w < 0) {
+                    w = 0;
+                }
+                // store per-game wave count in phase_visits_done's companion:
+                // reuse n_survivors? no — use a transient via remaining check.
+                if (w > 0) {
+                    any = 1;
+                    if (w > max_slots) {
+                        max_slots = w;
+                    }
+                }
+            }
+            if (!any) {
+                break;
+            }
+
+            pending.count = 0;
+            for (int slot = 0; slot < max_slots; slot++) {
+                for (int i = 0; i < n_games; i++) {
+                    GumbelGameSched *s = &sched[i];
+                    int remaining = s->phase_visits_target - s->phase_visits_done;
+                    int w = remaining < wave_size ? remaining : wave_size;
+                    if (w < 0) {
+                        w = 0;
+                    }
+                    if (slot >= w) {
+                        continue;
+                    }
+                    NativeMCTSGameObject *g = games[i];
+                    // Round-robin: forced action = survivors[done % n_survivors].
+                    int idx = s->phase_visits_done % s->n_survivors;
+                    g->gumbel_forced_action = g->gumbel_candidates[idx];
+                    s->phase_visits_done += 1;
+                    s->sims_done += 1;
+
+                    Pending p;
+                    if (!select_one_vloss_gumbel(g, &p)) {
+                        gumbel_free_all(seq, games, root_leaves, owner_games, sched, &pending);
+                        return NULL;
+                    }
+                    p.game_index = i;
+                    CNode *leaf = &g->nodes[p.leaf_index];
+                    if (leaf->is_terminal) {
+                        backprop_value_only(g, &p, leaf->terminal_value);
+                    } else if (!pending_vec_append(&pending, &p)) {
+                        gumbel_free_all(seq, games, root_leaves, owner_games, sched, &pending);
+                        return NULL;
+                    }
+                }
+            }
+
+            if (pending.count > 0) {
+                CNode **leaf_nodes = (CNode **)malloc(sizeof(CNode *) * (size_t)pending.count);
+                if (leaf_nodes == NULL) {
+                    gumbel_free_all(seq, games, root_leaves, owner_games, sched, &pending);
+                    PyErr_NoMemory();
+                    return NULL;
+                }
+                for (int i = 0; i < pending.count; i++) {
+                    Pending *p = &pending.items[i];
+                    leaf_nodes[i] = &games[p->game_index]->nodes[p->leaf_index];
+                }
+                PyArrayObject *priors = NULL;
+                PyArrayObject *values = NULL;
+                if (!call_evaluator(evaluator, leaf_nodes, pending.count, &priors, &values)) {
+                    free(leaf_nodes);
+                    gumbel_free_all(seq, games, root_leaves, owner_games, sched, &pending);
+                    return NULL;
+                }
+                float const *prior_data = (float const *)PyArray_DATA(priors);
+                float const *value_data = (float const *)PyArray_DATA(values);
+                for (int i = 0; i < pending.count; i++) {
+                    Pending *p = &pending.items[i];
+                    NativeMCTSGameObject *owner = games[p->game_index];
+                    CNode *leaf = &owner->nodes[p->leaf_index];
+                    if (!leaf->expanded) {
+                        set_priors(leaf, prior_data + (size_t)i * N_ACTIONS);
+                        leaf->expanded = 1;
+                    }
+                    backprop_value_only(owner, p, value_data[i]);
+                }
+                Py_DECREF(priors);
+                Py_DECREF(values);
+                free(leaf_nodes);
+            }
+        }
+
+        // End of phase: halve survivors by score for each active game.
+        for (int i = 0; i < n_games; i++) {
+            GumbelGameSched *s = &sched[i];
+            if (!s->active || phase >= s->n_phases) {
+                continue;
+            }
+            NativeMCTSGameObject *g = games[i];
+            CNode *root = &g->nodes[g->root];
+            gumbel_halve_survivors(g, root);
+            if (g->gumbel_n_candidates <= 1 || s->sims_done >= n_simulations
+                || phase == s->n_phases - 1) {
+                // No more halving possible / budget exhausted / last phase done.
+                // Finalize selection now (further phases are no-ops for this game).
+                s->active = 0;
+                g->gumbel_selected_action = gumbel_select_score_argmax(g, root);
+            }
+        }
+    }
+
+    // 4. Any game still active (shouldn't normally happen) gets finalized.
+    for (int i = 0; i < n_games; i++) {
+        NativeMCTSGameObject *g = games[i];
+        if (sched[i].active && g->gumbel_selected_action < 0) {
+            CNode *root = &g->nodes[g->root];
+            g->gumbel_selected_action = gumbel_select_score_argmax(g, root);
+        }
+    }
+
+    gumbel_free_all(seq, games, root_leaves, owner_games, sched, &pending);
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef module_methods[] = {
     {"search_batch", (PyCFunction)native_search_batch, METH_VARARGS | METH_KEYWORDS, "Run wave-batched native MCTS over NativeMCTSGame objects."},
+    {"gumbel_search_batch", (PyCFunction)native_gumbel_search_batch, METH_VARARGS | METH_KEYWORDS, "Run wave-batched native Gumbel root + Sequential Halving over NativeMCTSGame objects."},
     {NULL, NULL, 0, NULL}
 };
 
