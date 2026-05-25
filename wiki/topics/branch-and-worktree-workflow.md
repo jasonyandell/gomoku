@@ -26,8 +26,12 @@ cannot touch it, and your `--no-ff` merge stays clean.
 
 ```bash
 # 1. Branch off current main into a private worktree (siblings of the repo).
-git worktree add ~/code/gomoku-<slug> -b feat/<slug>      # feat/perf-<lane> for lab lanes
+#    Prefer the helper — it creates the worktree AND records which Claude session
+#    owns it, so the branch's logs are findable later (see "Session ownership").
+python scripts/worktree_session.py add <slug>            # = git worktree add ~/code/gomoku-<slug> -b feat/<slug> + record
 cd ~/code/gomoku-<slug>
+#    (Raw equivalent if you must: git worktree add ~/code/gomoku-<slug> -b feat/<slug>
+#     then `python scripts/worktree_session.py record` from inside it.)
 
 # 2. (Agent / stale-base case) pin to current local main, then work.
 git merge --no-ff main        # NEVER rebase; isolation:worktree can branch from a stale commit
@@ -57,6 +61,23 @@ A lane that only *runs* things (a sweep / cell with **no file edits**) may run
 from `main` — see [research-lab-charter.md](research-lab-charter.md) operating
 loop, the `run_cells(main, …)` branch. Even then: leave no uncommitted edits
 behind. The moment a lane needs a file change, it gets a worktree.
+
+## Session ownership (find the logs behind a branch, later)
+
+The session that started a worktree is the one whose transcript explains *why*
+that branch exists. `scripts/worktree_session.py` records the mapping at create
+time so you can recover it weeks later — even after the worktree is gone:
+
+- **`<worktree>/.claude-session`** — a gitignored per-worktree file. `cat` it
+  from inside any worktree to see its owning session id + the resume command.
+- **`.git/worktree-sessions.jsonl`** — an append-only registry in the shared
+  git dir. Git never tracks `.git/` contents and it survives `git worktree
+  remove`, so the mapping outlives the worktree (the point of finding logs
+  *later*). `python scripts/worktree_session.py log` prints it.
+
+To attach/read a recorded session's logs: `claude --resume <session-id>`, or
+open `~/.claude/projects/*/<session-id>.jsonl` directly. The id comes from
+`$CLAUDE_CODE_SESSION_ID`.
 
 ## Naming & locations
 
