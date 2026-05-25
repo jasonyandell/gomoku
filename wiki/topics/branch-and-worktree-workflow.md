@@ -43,7 +43,11 @@ git add -p && git commit -m "<what changed>"
 cd ~/code/gomoku
 git merge --no-ff feat/<slug> -m "<lane/area>: <one-line summary>"
 
-# 4. Tear down. Merged → -d (refuses if somehow unmerged: investigate, don't -D blindly).
+# 4. Push once merged — ENCOURAGED, not confirm-gated. It's a clean fast-forward
+#    of your own work. (Only force-pushes / pushes to shared branches still ask.)
+git push
+
+# 5. Tear down. Merged → -d (refuses if somehow unmerged: investigate, don't -D blindly).
 git worktree remove ~/code/gomoku-<slug>
 git branch -d feat/<slug>
 #    Rejected experiment: same teardown, force the branch:

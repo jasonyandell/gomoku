@@ -42,8 +42,11 @@ Prefer MPS over CPU. W&B project: `gomoku` (pull exact run histories, don't gues
 
 ## Conventions that override default behavior
 - **One worktree per unit of work — never edit the shared `main` checkout.**
-  Lifecycle: worktree off `main` → `feat/<slug>` → `git merge --no-ff` → remove
-  worktree + branch (`wiki/topics/branch-and-worktree-workflow.md`). The derby,
+  Lifecycle: worktree off `main` → `feat/<slug>` → `git merge --no-ff` →
+  **`git push`** → remove worktree + branch
+  (`wiki/topics/branch-and-worktree-workflow.md`). Pushing `main` once merged is
+  *encouraged*, not confirm-gated (it's a clean fast-forward of your own work);
+  only force-pushes / shared-branch pushes still ask first. The derby,
   the user's IDE, and other sessions share `main` concurrently; working there
   entangles diffs and blocks clean merges. **Never rebase, fast-forward, squash.**
   Start with `python scripts/worktree_session.py add <slug>` — records the owning

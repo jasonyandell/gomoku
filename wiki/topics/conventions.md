@@ -18,7 +18,7 @@ column is exhaustive.
 | Class | Examples | Policy |
 |---|---|---|
 | **A** — local, reversible | files under `scripts/`, `tests/`, `wiki/`; worktrees + merge-commits on `feat/*`; per-cell artifact dirs under `sweep_logs/`; anything that lives only on disk | **Just do it. No size limit.** |
-| **B** — hard to reverse / affects shared state | git push, wandb writes, archive mutations, `pyproject`/CI/deps, settings.json | **Confirm with the human.** |
+| **B** — hard to reverse / affects shared state | **force-push** or pushing shared/long-lived branches, wandb writes, archive mutations, `pyproject`/CI/deps, settings.json | **Confirm with the human.** |
 | **C** — architectural / multi-day | custom Metal kernels, native C extensions, model architecture changes | **Discuss before starting.** |
 
 ### Anti-patterns
@@ -65,8 +65,11 @@ Every feature/perf/experiment branch lands on `main` via
 `git merge --no-ff <branch> -m "..."` to produce an explicit merge
 commit. Never `git rebase`. Never rely on fast-forward. Never squash.
 
-After merge: `git worktree remove <path>` then `git branch -d <name>`.
-A losing experiment: same cleanup, no rebase to "preserve" it.
+After merge: **`git push`** (push `main` — *encouraged* once merged; it's a
+clean fast-forward of your own work, so it's Class A, not a confirm-gated push),
+then `git worktree remove <path>` and `git branch -d <name>`.
+A losing experiment: same cleanup, no rebase to "preserve" it. (Only force-push
+and pushes to shared/long-lived branches stay Class B — confirm first.)
 
 But don't *rely* on remembering this — the cleanup-after-merge procedure
 fails silently when a session crashes mid-run (our overnight regime). The

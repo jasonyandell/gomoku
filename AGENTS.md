@@ -47,7 +47,10 @@ Training dynamics are subtle; code inspection alone is usually misleading.
 
 **Git workflow (canonical, load-bearing)** — `wiki/topics/branch-and-worktree-workflow.md`.
 Every unit of work happens in its own git worktree off `main`, lands via `git
-merge --no-ff`, and is torn down after (`git worktree remove` + `git branch -d`)
+merge --no-ff`, is **pushed once merged** (`git push` `main` — a clean
+fast-forward of your own work is *encouraged*, not confirm-gated; only
+force-pushes and pushes to shared/long-lived branches still ask first), and is
+torn down after (`git worktree remove` + `git branch -d`)
 — **you do not edit the shared `main` checkout** (the derby, the user's IDE, and
 other agent sessions share it concurrently; working there entangles diffs and
 blocks clean merges). Never rebase, fast-forward, or squash. Start a worktree
