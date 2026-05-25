@@ -274,6 +274,11 @@ def parse_args() -> argparse.Namespace:
                    help="Override ModelConfig.stem_padding (default 3 = michaelnny's "
                         "edge-fix). Set to 1 for the legacy 9x9 internal feature map, "
                         "which is ~2x cheaper per forward but loses the edge-blocking fix.")
+    p.add_argument("--global-pool", type=int, nargs="?", const=-1, default=None,
+                   help="Derby v4 'Whole-board' lever: KataGo-style global pooling "
+                        "in the residual tower. Bare --global-pool applies it to the "
+                        "latter half of blocks; --global-pool K applies it to the "
+                        "trailing K blocks. Omitted = OFF (byte-identical current arch).")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--games-per-epoch", type=int, default=64)
     p.add_argument("--n-simulations", type=int, default=100)
@@ -577,7 +582,13 @@ def main() -> None:
             optimizer.load_state_dict(payload["optimizer_state_dict"])
         print(f"resumed from {args.resume} @ epoch {start_epoch}, total_games={total_games}")
     else:
-        model = build_model(args.size, stem_padding=args.stem_padding).to(device)
+        # --global-pool: None=off, bare flag (-1 sentinel)=latter-half (True),
+        # K>=0 = trailing K blocks.
+        gp = args.global_pool
+        gp_arg = None if gp is None else (True if gp == -1 else gp)
+        model = build_model(
+            args.size, stem_padding=args.stem_padding, global_pool=gp_arg
+        ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         payload = {}
         print(f"fresh {args.size} model: {n_params(model):,} params")

@@ -29,6 +29,16 @@ class ModelConfig:
     # feature map from BOARD_SIZE to BOARD_SIZE+4 after the stem, giving the
     # network a "virtual padding zone" around the real board.
     stem_padding: int = 3
+    # KataGo-style global pooling (Derby v4 "Whole-board" lever). When False
+    # (default), the residual tower is the exact current arch and the
+    # state_dict is byte-identical. When True, the LATTER HALF of residual
+    # blocks become GlobalPoolResBlocks that inject a board-global (mean+max
+    # over spatial dims -> FC -> per-channel bias) signal into every cell. An
+    # int instead of a bool sets how many of the trailing blocks get pooling.
+    # Rationale: a tiny 3x3-conv tower's receptive field barely spans 9x9, so
+    # it cannot cheaply represent board-global facts ("is there a live-four
+    # ANYWHERE?"); global pooling injects that context directly.
+    global_pool: bool | int = False
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -53,6 +63,64 @@ class ResBlock(nn.Module):
         return F.relu(x + h)
 
 
+class GlobalPoolResBlock(nn.Module):
+    """ResBlock with a KataGo-style global-pooling bias.
+
+    Structure (mirrors KataGo's "global pooling bias" in its residual blocks):
+      x -> conv1 -> bn1 -> relu = h          (local features)
+      g = [mean_HW(h) ; max_HW(h)]           (2*C global summary, per sample)
+      b = pool_fc(g)                         (C per-channel biases)
+      h = h + b[:, :, None, None]            (broadcast bias to every cell)
+      h -> conv2 -> bn2
+      out = relu(x + h)
+
+    The bias is the same for every spatial location of a sample but is
+    computed from the WHOLE board, so each cell sees a board-global signal
+    (e.g. "a live-four exists somewhere") that a 3x3-conv stack of this depth
+    cannot otherwise represent. Params added: pool_fc only = 2*C*C + C.
+
+    Note: the first two ops (conv1, bn1) keep the same module names as
+    ResBlock, so fuse_model_for_inference's conv1/bn1/conv2/bn2 fusion still
+    applies. The pool_fc has no BatchNorm and is untouched by fusion.
+    """
+
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channels)
+        # mean + max pooled -> 2*C inputs; one bias per channel out.
+        self.pool_fc = nn.Linear(2 * channels, channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = F.relu(self.bn1(self.conv1(x)))
+        mean = h.mean(dim=(2, 3))                 # (B, C)
+        mx = h.amax(dim=(2, 3))                    # (B, C)
+        bias = self.pool_fc(torch.cat([mean, mx], dim=1))  # (B, C)
+        h = h + bias[:, :, None, None]             # broadcast over H, W
+        h = self.bn2(self.conv2(h))
+        return F.relu(x + h)
+
+
+def _global_pool_block_flags(cfg: ModelConfig) -> list[bool]:
+    """Return, per residual block, whether it uses global pooling.
+
+    global_pool == False -> all False (byte-identical to current arch).
+    global_pool == True  -> the latter half of blocks (n_blocks // 2 trailing).
+    global_pool == int k -> the trailing k blocks (clamped to [0, n_blocks]).
+    """
+    n = cfg.n_blocks
+    gp = cfg.global_pool
+    if gp is False or gp == 0:
+        return [False] * n
+    if gp is True:
+        n_pool = n // 2
+    else:
+        n_pool = max(0, min(int(gp), n))
+    return [i >= n - n_pool for i in range(n)]
+
+
 class GomokuNet(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
@@ -69,7 +137,11 @@ class GomokuNet(nn.Module):
             nn.BatchNorm2d(c),
             nn.ReLU(inplace=True),
         )
-        self.tower = nn.Sequential(*[ResBlock(c) for _ in range(cfg.n_blocks)])
+        gp_flags = _global_pool_block_flags(cfg)
+        self.tower = nn.Sequential(*[
+            GlobalPoolResBlock(c) if use_gp else ResBlock(c)
+            for use_gp in gp_flags
+        ])
 
         # Policy head: 1x1 conv -> flatten -> linear to BOARD_SIZE^2.
         # Note the FC input uses the post-stem spatial size, not BOARD_SIZE.
@@ -95,13 +167,23 @@ class GomokuNet(nn.Module):
         return p, v
 
 
-def build_model(size: str = "small", *, stem_padding: int | None = None) -> GomokuNet:
+def build_model(
+    size: str = "small",
+    *,
+    stem_padding: int | None = None,
+    global_pool: bool | int | None = None,
+) -> GomokuNet:
     if size not in SIZE_PRESETS:
         raise ValueError(f"unknown size {size!r}; options: {list(SIZE_PRESETS)}")
     cfg = SIZE_PRESETS[size]
+    overrides = {}
     if stem_padding is not None:
+        overrides["stem_padding"] = stem_padding
+    if global_pool is not None:
+        overrides["global_pool"] = global_pool
+    if overrides:
         from dataclasses import replace
-        cfg = replace(cfg, stem_padding=stem_padding)
+        cfg = replace(cfg, **overrides)
     return GomokuNet(cfg)
 
 
