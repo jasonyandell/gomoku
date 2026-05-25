@@ -131,6 +131,20 @@ def parse_args() -> argparse.Namespace:
                    help="Gumbel sigma(q) c_visit constant (paper default 50.0).")
     p.add_argument("--gumbel-c-scale", type=float, default=1.0,
                    help="Gumbel sigma(q) c_scale constant (paper default 1.0).")
+    # Derby v4 'Tactically-exact' lever: opt-in EXACT VCF teacher. Default OFF =
+    # byte-identical self-play (solver never runs). When ON, each recorded
+    # training position is solved for a forced Victory-by-Continuous-Fours; if
+    # one exists, the policy target is overwritten with the proven winning move
+    # (one-hot) and the value target with a mate-distance-discounted +1.0.
+    # Applies on ALL self-play paths (native, native-Gumbel, Python-Gumbel,
+    # Python fallback) and the vs-baseline data path. Correctness is paramount:
+    # the solver only labels positions it has proven, so a false positive cannot
+    # enter the buffer.
+    p.add_argument("--vcf-teacher", action="store_true", default=False,
+                   help="Enable the exact VCF (forced-win) teacher: overwrite "
+                        "recorded targets with the solver's proven winning move "
+                        "+ value on forced-win positions. Default OFF = "
+                        "byte-identical self-play.")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -587,6 +601,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             gumbel_m=args.gumbel_m,
             gumbel_c_visit=args.gumbel_c_visit,
             gumbel_c_scale=args.gumbel_c_scale,
+            vcf_teacher=args.vcf_teacher,
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
@@ -603,6 +618,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
         model_first_frac=args.model_first_frac,
         random_opening_moves=args.random_opening_moves,
         forced_playout_k=args.forced_playout_k,
+        vcf_teacher=args.vcf_teacher,
     )
 
 

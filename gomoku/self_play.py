@@ -17,9 +17,64 @@ from gomoku.mcts import (
     run_batched_mcts_waves,
 )
 from gomoku import native_mcts
+from gomoku import vcf
 
 
 ProfileStats = MutableMapping[str, float]
+
+
+# Default value-target discount per attacker move-to-mate for the VCF teacher.
+# dist == 1 (this move makes five) -> +1.0; deeper mates are discounted by
+# VCF_VALUE_DISCOUNT**(dist-1), bottoming out at VCF_VALUE_FLOOR. A proven
+# forced win is still a win, so the floor stays high.
+VCF_VALUE_DISCOUNT = 0.98
+VCF_VALUE_FLOOR = 0.90
+
+
+def _apply_vcf_teacher(
+    planes: np.ndarray,
+    pi: np.ndarray,
+    z: float,
+    *,
+    side: int,
+    profile: ProfileStats | None = None,
+    max_depth: int = vcf.DEFAULT_MAX_DEPTH,
+    max_nodes: int = vcf.DEFAULT_MAX_NODES,
+) -> tuple[np.ndarray, float, bool]:
+    """Opt-in EXACT teacher: if the recorded position is a proven VCF forced
+    win for the side to move, overwrite its policy/value targets with the exact
+    solution.
+
+    Returns ``(new_pi, new_z, fired)``. When no forced win is proved the inputs
+    are returned unchanged and ``fired`` is False. This is only ever called when
+    ``--vcf-teacher`` is set; the default-off path never enters here, keeping
+    self-play byte-identical.
+
+    Policy rewrite: a one-hot on the proven winning move (the exact best move —
+    sharper and more correct than a 100-sim visit estimate).
+
+    Value rewrite: the side to move at this position has a proven win, so its
+    value target becomes a (mate-distance-discounted) +1.0. The stored ``z`` is
+    from the recorded side's perspective and the solver runs on that same
+    side-to-move position, so a positive proof maps directly to a positive ``z``.
+    """
+    with _profile_timer(profile, "vcf_solve_s"):
+        res = vcf.solve_vcf_from_planes(
+            planes, history_ply=HISTORY_PLY, max_depth=max_depth, max_nodes=max_nodes
+        )
+    _profile_add(profile, "vcf_calls", 1.0)
+    if not res.has_forced_win or res.winning_move is None:
+        return pi, z, False
+
+    new_pi = np.zeros_like(pi)
+    new_pi[res.winning_move] = 1.0
+
+    dist = res.mate_distance if res.mate_distance is not None else 1
+    value = VCF_VALUE_DISCOUNT ** max(0, dist - 1)
+    if value < VCF_VALUE_FLOOR:
+        value = VCF_VALUE_FLOOR
+    _profile_add(profile, "vcf_fired", 1.0)
+    return new_pi, float(value), True
 
 
 def _profile_add(profile: ProfileStats | None, key: str, value: float) -> None:
@@ -169,6 +224,7 @@ def _generate_games_native_gumbel(
     gumbel_m: int = 16,
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
+    vcf_teacher: bool = False,
 ) -> list[GameRecord]:
     """Self-play using the NATIVE Gumbel root + Sequential Halving path.
 
@@ -311,6 +367,9 @@ def _generate_games_native_gumbel(
             for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
                 z = outcome_for_black if side == 0 else -outcome_for_black
                 ply_at_capture = n_initial + ply_idx
+                if vcf_teacher:
+                    pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                                  profile=profile)
                 if augment_symmetries:
                     for aug_planes, aug_pi in augment(planes, pi):
                         examples.append(SelfPlayExample(
@@ -352,6 +411,7 @@ def _generate_games_gumbel(
     gumbel_m: int = 16,
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
+    vcf_teacher: bool = False,
 ) -> list[GameRecord]:
     """Self-play generation using Gumbel AlphaZero root selection + Sequential
     Halving (the pure-Python `gomoku.mcts.Node` tree path).
@@ -462,6 +522,9 @@ def _generate_games_gumbel(
         for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
             z = outcome_for_black if side == 0 else -outcome_for_black
             ply_at_capture = n_initial + ply_idx
+            if vcf_teacher:
+                pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                              profile=profile)
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
                     examples.append(SelfPlayExample(
@@ -504,6 +567,7 @@ def _generate_games_native(
     playout_cap_fast_sims: int = 0,
     forced_playout_k: float = 0.0,
     profile: ProfileStats | None = None,
+    vcf_teacher: bool = False,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -690,6 +754,9 @@ def _generate_games_native(
             for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
                 z = outcome_for_black if side == 0 else -outcome_for_black
                 ply_at_capture = n_initial + ply_idx
+                if vcf_teacher:
+                    pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                                  profile=profile)
                 if augment_symmetries:
                     with _profile_timer(profile, "d4_augment_s"):
                         augmented = list(augment(planes, pi))
@@ -741,6 +808,7 @@ def generate_games(
     gumbel_m: int = 16,
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
+    vcf_teacher: bool = False,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
@@ -778,6 +846,16 @@ def generate_games(
     pruning (Wu 2019). Root-only forcing during search, forced visits removed
     from the training target. 0.0 (default) is OFF == byte-identical legacy.
     Composes with PCR (forced-k shapes search + prunes the recorded target).
+
+    `vcf_teacher` (Derby v4 'Tactically-exact' lever) enables the EXACT VCF
+    teacher. Default OFF == byte-identical: the solver is never called and no
+    target is touched. When ON, every RECORDED training position is run through
+    the VCF solver (gomoku/vcf.py); if the side to move has a proven forced win
+    by continuous fours, that position's policy target is overwritten with a
+    one-hot on the exact winning move and its value target with a
+    mate-distance-discounted +1.0. Applied uniformly across all paths (native,
+    native-Gumbel, Python-Gumbel, Python fallback) at the record-build seam, so
+    the control flag composes with gumbel_root / PCR / forced-playouts.
     """
     rng = rng or np.random.default_rng()
     if gumbel_root:
@@ -805,6 +883,7 @@ def generate_games(
                 gumbel_m=gumbel_m,
                 gumbel_c_visit=gumbel_c_visit,
                 gumbel_c_scale=gumbel_c_scale,
+                vcf_teacher=vcf_teacher,
             )
         return _generate_games_gumbel(
             n_games,
@@ -826,6 +905,7 @@ def generate_games(
             gumbel_m=gumbel_m,
             gumbel_c_visit=gumbel_c_visit,
             gumbel_c_scale=gumbel_c_scale,
+            vcf_teacher=vcf_teacher,
         )
     if _can_use_native_mcts(evaluator):
         return _generate_games_native(
@@ -849,6 +929,7 @@ def generate_games(
             playout_cap_fast_sims=playout_cap_fast_sims,
             forced_playout_k=forced_playout_k,
             profile=profile,
+            vcf_teacher=vcf_teacher,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
@@ -940,6 +1021,9 @@ def generate_games(
         for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
             z = outcome_for_black if side == 0 else -outcome_for_black
             ply_at_capture = n_initial + ply_idx
+            if vcf_teacher:
+                pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                              profile=profile)
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
                     examples.append(SelfPlayExample(
@@ -975,6 +1059,7 @@ def generate_games_vs_baseline(
     model_first_frac: float = 0.5,
     random_opening_moves: int = 0,
     forced_playout_k: float = 0.0,
+    vcf_teacher: bool = False,
 ) -> list[GameRecord]:
     """Generate games where the model plays a fixed opponent picker.
 
@@ -1087,6 +1172,8 @@ def generate_games_vs_baseline(
             # planes are canonical (plane 0 = side-to-move = model at the moment
             # the example was recorded), so z is directly outcome_for_model.
             z = outcome_for_model
+            if vcf_teacher:
+                pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=side)
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
                     examples.append(SelfPlayExample(
