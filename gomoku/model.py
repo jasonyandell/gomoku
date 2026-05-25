@@ -29,6 +29,22 @@ class ModelConfig:
     # feature map from BOARD_SIZE to BOARD_SIZE+4 after the stem, giving the
     # network a "virtual padding zone" around the real board.
     stem_padding: int = 3
+    # V3 auxiliary opponent-reply policy head (KataGo-style). When False
+    # (default), the head modules are NOT constructed, so state_dict(), the
+    # param count, and the inference graph are byte-identical to a model
+    # without this field. When True, a structural clone of the policy head
+    # taps the same shared tower; it is a TRAINING-ONLY appendage, never run
+    # by forward() unless the trainer explicitly passes return_aux=True, and
+    # never touched by fuse_model_for_inference. Gated on by the trainer flag
+    # --aux-opponent-reply-weight > 0.
+    aux_opponent_reply: bool = False
+    # V4 auxiliary ownership head (KataGo's biggest sample-efficiency win,
+    # adapted to gomoku). When False (default), NOT constructed -> byte-identical
+    # state_dict / param count / inference graph. When True, a dense head off the
+    # SAME shared tower predicts per-cell final control (81-way). TRAINING-ONLY,
+    # dropped at inference, untouched by fuse_model_for_inference. Gated on by the
+    # trainer flag --aux-ownership-weight > 0.
+    aux_ownership: bool = False
     # KataGo-style global pooling (Derby v4 "Whole-board" lever). When False
     # (default), the residual tower is the exact current arch and the
     # state_dict is byte-identical. When True, the LATTER HALF of residual
@@ -155,7 +171,55 @@ class GomokuNet(nn.Module):
         self.value_fc1 = nn.Linear(cfg.value_filters * spatial * spatial, cfg.value_hidden)
         self.value_fc2 = nn.Linear(cfg.value_hidden, 1)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # V3 auxiliary opponent-reply policy head — a structural clone of the
+        # policy head off the SAME shared tower output `h`. Constructed ONLY
+        # when cfg.aux_opponent_reply is set, so the off-case state_dict and
+        # param count are byte-identical to a head-less model. Predicts the
+        # opponent's MCTS policy at the next ply (training-only target; dropped
+        # at inference — see forward(return_aux=...) and fuse_model_for_inference).
+        if cfg.aux_opponent_reply:
+            self.aux_policy_conv = nn.Conv2d(c, cfg.policy_filters, 1, bias=False)
+            self.aux_policy_bn = nn.BatchNorm2d(cfg.policy_filters)
+            self.aux_policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, N_ACTIONS)
+
+        # V4 auxiliary ownership head — a dense head off the SAME shared tower
+        # output `h`. Predicts per-cell final control (81-way, one scalar per
+        # board cell, no tanh — the loss is a masked MSE against a target in
+        # [-1, 1]). Structural twin of the policy head (1x1 conv -> bn -> relu ->
+        # flatten -> linear to N_ACTIONS). Constructed ONLY when
+        # cfg.aux_ownership is set, so the off-case state_dict / param count /
+        # inference graph are byte-identical to a model without it. TRAINING-
+        # ONLY: never run by forward() unless return_ownership=True, never
+        # touched by fuse_model_for_inference. Independent of the opponent-reply
+        # head — either, both, or neither may be present.
+        if cfg.aux_ownership:
+            self.ownership_conv = nn.Conv2d(c, cfg.value_filters, 1, bias=False)
+            self.ownership_bn = nn.BatchNorm2d(cfg.value_filters)
+            self.ownership_fc = nn.Linear(cfg.value_filters * spatial * spatial, N_ACTIONS)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        return_aux: bool = False,
+        return_ownership: bool = False,
+    ) -> tuple[torch.Tensor, ...]:
+        """Forward pass. Returns (policy, value) by default.
+
+        The two auxiliary heads are independent and gated separately:
+          * return_aux=True (requires cfg.aux_opponent_reply) appends the
+            opponent-reply logits;
+          * return_ownership=True (requires cfg.aux_ownership) appends the
+            per-cell ownership logits.
+        The output tuple is always ordered (policy, value, [aux_policy],
+        [ownership]) with each optional tensor present iff its flag is set:
+          neither -> (p, v)                       [byte-identical default]
+          aux only -> (p, v, aux_policy)          [unchanged 3-tuple contract]
+          ownership only -> (p, v, ownership)
+          both -> (p, v, aux_policy, ownership)
+        Only the trainer passes these flags; self-play and eval call forward(x)
+        and never run either aux head (zero aux FLOPs in the generation-bound
+        path). Requesting a head that was not constructed raises."""
         h = self.tower(self.stem(x))
 
         p = F.relu(self.policy_bn(self.policy_conv(h)))
@@ -164,21 +228,49 @@ class GomokuNet(nn.Module):
         v = F.relu(self.value_bn(self.value_conv(h)))
         v = F.relu(self.value_fc1(v.flatten(1)))
         v = torch.tanh(self.value_fc2(v)).squeeze(-1)
-        return p, v
+
+        out: tuple[torch.Tensor, ...] = (p, v)
+        if return_aux:
+            if not self.cfg.aux_opponent_reply:
+                raise RuntimeError(
+                    "forward(return_aux=True) requires cfg.aux_opponent_reply=True "
+                    "(aux head was not constructed)"
+                )
+            a = F.relu(self.aux_policy_bn(self.aux_policy_conv(h)))
+            a = self.aux_policy_fc(a.flatten(1))
+            out = out + (a,)
+        if return_ownership:
+            if not self.cfg.aux_ownership:
+                raise RuntimeError(
+                    "forward(return_ownership=True) requires cfg.aux_ownership=True "
+                    "(ownership head was not constructed)"
+                )
+            o = F.relu(self.ownership_bn(self.ownership_conv(h)))
+            o = self.ownership_fc(o.flatten(1))
+            out = out + (o,)
+        return out
 
 
 def build_model(
     size: str = "small",
     *,
     stem_padding: int | None = None,
+    aux_opponent_reply: bool = False,
+    aux_ownership: bool = False,
     global_pool: bool | int | None = None,
 ) -> GomokuNet:
     if size not in SIZE_PRESETS:
         raise ValueError(f"unknown size {size!r}; options: {list(SIZE_PRESETS)}")
     cfg = SIZE_PRESETS[size]
-    overrides = {}
+    overrides: dict = {}
     if stem_padding is not None:
         overrides["stem_padding"] = stem_padding
+    # Only override aux flags when explicitly enabled, so the default build path
+    # is byte-identical to before these fields existed.
+    if aux_opponent_reply:
+        overrides["aux_opponent_reply"] = True
+    if aux_ownership:
+        overrides["aux_ownership"] = True
     if global_pool is not None:
         overrides["global_pool"] = global_pool
     if overrides:

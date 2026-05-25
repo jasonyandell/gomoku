@@ -54,16 +54,51 @@ def train_step(
     zero_grad: bool = True,
     side: torch.Tensor | None = None,
     ply: torch.Tensor | None = None,
+    aux_pi: torch.Tensor | None = None,
+    aux_mask: torch.Tensor | None = None,
+    aux_weight: float = 0.0,
+    ownership: torch.Tensor | None = None,
+    ownership_mask: torch.Tensor | None = None,
+    ownership_weight: float = 0.0,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
     those: pass accum_scale=1/N to scale loss before backward, zero_grad=True
     only on the first microbatch of an accumulation window, and
-    do_optimizer_step=True only on the last microbatch."""
+    do_optimizer_step=True only on the last microbatch.
+
+    V3 aux opponent-reply head: when aux_weight > 0 (and the model has the aux
+    head + aux_pi/aux_mask are provided), a second forward output predicts the
+    opponent's next-ply policy; its masked soft-target CE is added as
+    aux_weight * aux_ce.
+
+    V4 aux ownership head: when ownership_weight > 0 (and the model has the
+    ownership head + ownership/ownership_mask are provided), a dense head
+    predicts per-cell final control; its masked MSE against the [-1,1] target is
+    added as ownership_weight * own_mse. The two aux heads are independent.
+
+    With BOTH weights == 0.0 (default) the forward, loss, and SGD graph are
+    byte-identical to the pre-aux path — neither aux head is even run."""
     model.train()
     if zero_grad:
         optimizer.zero_grad(set_to_none=True)
-    logits, v = model(planes)
+    use_aux = aux_weight > 0.0 and aux_pi is not None and aux_mask is not None
+    use_ownership = (
+        ownership_weight > 0.0 and ownership is not None and ownership_mask is not None
+    )
+    outputs = model(planes, return_aux=use_aux, return_ownership=use_ownership)
+    # forward() returns (p, v, [aux], [ownership]) in that fixed order; unpack
+    # positionally per the flags requested above.
+    logits, v = outputs[0], outputs[1]
+    idx_extra = 2
+    aux_logits = None
+    own_logits = None
+    if use_aux:
+        aux_logits = outputs[idx_extra]
+        idx_extra += 1
+    if use_ownership:
+        own_logits = outputs[idx_extra]
+        idx_extra += 1
     logp = F.log_softmax(logits, dim=-1)
     # Per-sample policy CE so we can split by side/ply without a second pass.
     per_policy_ce = -(pi * logp).sum(dim=-1)
@@ -71,6 +106,34 @@ def train_step(
     per_value_se = (v - z) ** 2
     vl = per_value_se.mean()
     loss = pl + value_weight * vl
+    aux_l_val = float("nan")
+    if use_aux:
+        aux_logp = F.log_softmax(aux_logits, dim=-1)
+        per_aux_ce = -(aux_pi * aux_logp).sum(dim=-1)  # (B,) soft-target CE
+        mask = aux_mask.bool()
+        if bool(mask.any()):
+            aux_l = per_aux_ce[mask].mean()
+        else:
+            # No valid aux rows this batch — contribute nothing, keep graph
+            # connected to the aux head with a zero-scaled term so params still
+            # receive (zero) grad rather than an autograd error.
+            aux_l = per_aux_ce.sum() * 0.0
+        loss = loss + aux_weight * aux_l
+        aux_l_val = float(aux_l.detach())
+    own_l_val = float("nan")
+    if use_ownership:
+        # Masked MSE: per-cell (B, 81) squared error, mean over cells then mean
+        # over the valid rows. The ownership head emits raw per-cell logits; the
+        # target lives in [-1, 1] (winner/loser/empty), so a plain MSE (no tanh)
+        # is the regression loss — matches KataGo's ownership objective shape.
+        per_own_se = ((own_logits - ownership) ** 2).mean(dim=-1)  # (B,)
+        omask = ownership_mask.bool()
+        if bool(omask.any()):
+            own_l = per_own_se[omask].mean()
+        else:
+            own_l = per_own_se.sum() * 0.0  # keep head connected, zero grad
+        loss = loss + ownership_weight * own_l
+        own_l_val = float(own_l.detach())
     if l2_weight > 0:
         l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
         loss = loss + l2_weight * l2
@@ -97,6 +160,12 @@ def train_step(
         "train/policy_net_entropy": float(net_entropy),
         "train/policy_kl": float(policy_kl),
     }
+    if use_aux:
+        out["loss/aux_policy"] = aux_l_val
+        out["train/aux_mask_frac"] = float(aux_mask.bool().float().mean())
+    if use_ownership:
+        out["loss/aux_ownership"] = own_l_val
+        out["train/ownership_mask_frac"] = float(ownership_mask.bool().float().mean())
     if side is not None and ply is not None:
         with torch.no_grad():
             ce_cpu = per_policy_ce.detach()
@@ -362,6 +431,33 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--value-weight", type=float, default=1.0)
+    p.add_argument("--aux-opponent-reply-weight", type=float, default=0.0,
+                   help="V3 KataGo-style auxiliary opponent-reply policy head. "
+                        "0.0 (default) = OFF = byte-identical to today (head not "
+                        "constructed, no aux forward, buffer aux tensors not "
+                        "allocated, SGD graph unchanged). When > 0, a second "
+                        "81-way head predicts the opponent's MCTS policy at the "
+                        "next ply (a free, dense supervised target already in the "
+                        "self-play trajectory); its masked soft-target CE is added "
+                        "to the loss scaled by this weight, and loss/aux_policy is "
+                        "logged. The head is DROPPED at inference (self-play/eval "
+                        "pay nothing). Suggested starting value 0.15; future sweep "
+                        "{0.05, 0.15, 0.3}.")
+    p.add_argument("--aux-ownership-weight", type=float, default=0.0,
+                   help="V4 KataGo-style auxiliary ownership head (the biggest "
+                        "sample-efficiency win in KataGo, adapted to gomoku). "
+                        "0.0 (default) = OFF = byte-identical to today (head not "
+                        "constructed, no ownership forward, buffer ownership "
+                        "tensors not allocated, SGD graph unchanged). When > 0, a "
+                        "dense 81-way head predicts per-cell final control "
+                        "(+1 winner's stone / -1 loser's stone / 0 empty at the "
+                        "played-out game's final board — a dense per-position "
+                        "target); its masked MSE is added to the loss scaled by "
+                        "this weight, and loss/aux_ownership is logged. The head "
+                        "is DROPPED at inference (self-play/eval pay nothing). "
+                        "Independent of --aux-opponent-reply-weight: either, "
+                        "both, or neither head may be enabled. Suggested starting "
+                        "value 0.15.")
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
@@ -568,6 +664,26 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
 
+    # V3 aux opponent-reply lever. The single weight flag gates the head
+    # (constructed iff weight > 0), the buffer aux tensors, the self-play aux
+    # target recording, and the aux loss term. 0.0 (default) => everything off
+    # and byte-identical to the pre-aux path.
+    aux_weight = float(args.aux_opponent_reply_weight)
+    aux_on = aux_weight > 0.0
+    if aux_on:
+        print(f"aux opponent-reply head ENABLED (weight={aux_weight})")
+
+    # V4 aux ownership lever (KataGo's biggest sample-efficiency win). The
+    # single weight flag gates the ownership head (constructed iff weight > 0),
+    # the buffer ownership tensors, the self-play ownership-target recording,
+    # and the masked-MSE ownership loss term. 0.0 (default) => everything off
+    # and byte-identical to the pre-ownership path. Independent of aux_on:
+    # a cell may run either, both, or neither head.
+    ownership_weight = float(args.aux_ownership_weight)
+    ownership_on = ownership_weight > 0.0
+    if ownership_on:
+        print(f"aux ownership head ENABLED (weight={ownership_weight})")
+
     # Build / load model
     start_epoch = 0
     total_games = 0
@@ -587,7 +703,11 @@ def main() -> None:
         gp = args.global_pool
         gp_arg = None if gp is None else (True if gp == -1 else gp)
         model = build_model(
-            args.size, stem_padding=args.stem_padding, global_pool=gp_arg
+            args.size,
+            stem_padding=args.stem_padding,
+            aux_opponent_reply=aux_on,
+            aux_ownership=ownership_on,
+            global_pool=gp_arg,
         ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         payload = {}
@@ -649,7 +769,9 @@ def main() -> None:
             f"from {args.validation_archive_path}"
         )
 
-    buffer = ReplayBuffer(args.replay_buffer_size, device=device)
+    buffer = ReplayBuffer(args.replay_buffer_size, device=device,
+                          aux_opponent_reply=aux_on,
+                          aux_ownership=ownership_on)
     if args.resume:
         # Optional: restore buffer if it was saved.
         payload_buf = payload.get("replay_buffer")
@@ -1336,6 +1458,8 @@ def main() -> None:
                 rng=rng,
                 wave_size=args.wave_size,
                 random_opening_moves=args.random_opening_moves,
+                record_aux=aux_on,
+                record_ownership=ownership_on,
             )
         else:
             evaluator = make_torch_evaluator(model, device)
@@ -1444,7 +1568,21 @@ def main() -> None:
         if buffer.size >= args.batch_size:
             for i in range(steps_this_cycle):
                 microbatch_steps_this_cycle += 1
-                planes, pi, z, side, ply = buffer.sample(args.batch_size)
+                aux_pi = aux_mask = ownership = ownership_mask = None
+                if aux_on or ownership_on:
+                    sampled = buffer.sample(
+                        args.batch_size,
+                        return_aux=aux_on,
+                        return_ownership=ownership_on,
+                    )
+                    planes, pi, z, side, ply = sampled[:5]
+                    extra = list(sampled[5:])
+                    if aux_on:
+                        aux_pi, aux_mask = extra.pop(0), extra.pop(0)
+                    if ownership_on:
+                        ownership, ownership_mask = extra.pop(0), extra.pop(0)
+                else:
+                    planes, pi, z, side, ply = buffer.sample(args.batch_size)
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
                 m = train_step(
@@ -1456,6 +1594,12 @@ def main() -> None:
                     zero_grad=is_first_in_window,
                     side=side,
                     ply=ply,
+                    aux_pi=aux_pi,
+                    aux_mask=aux_mask,
+                    aux_weight=aux_weight,
+                    ownership=ownership,
+                    ownership_mask=ownership_mask,
+                    ownership_weight=ownership_weight,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)

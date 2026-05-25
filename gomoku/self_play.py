@@ -8,7 +8,14 @@ from typing import MutableMapping
 
 import numpy as np
 
-from gomoku.game import GameState, HISTORY_PLY, N_ACTIONS, augment
+from gomoku.game import (
+    GameState,
+    HISTORY_PLY,
+    N_ACTIONS,
+    augment,
+    augment_with_aux,
+    augment_with_cell_targets,
+)
 from gomoku.mcts import (
     Evaluator,
     MCTSGame,
@@ -110,6 +117,20 @@ class SelfPlayExample:
     z: float             # value in [-1, 1]
     side: int = 0        # 0=black (first mover), 1=white — for per-color diagnostics
     ply: int = 0         # ply count at which this position was captured
+    # V3 auxiliary opponent-reply target: the MCTS policy `pi` recorded at the
+    # NEXT ply in the same game (the opponent is to move there). None for the
+    # LAST position of a game (no next ply) and for every position when the aux
+    # lever is off — masked out of the aux loss in either case. Under D4
+    # augmentation this vector is transformed by the SAME symmetry as `pi`.
+    aux_pi: np.ndarray | None = None  # (N_ACTIONS,) float32 or None
+    # V4 auxiliary ownership target: per-cell (81,) final control of the
+    # played-out game, in the SAME absolute board frame as this position's
+    # planes. +1 where the eventual WINNER's stone sits at the final board, -1
+    # for the LOSER's stone, 0 for empty (all-zeros on a draw). Constant for
+    # every position of a game (the game has one final board); transformed by
+    # the SAME D4 symmetry as planes/pi/aux_pi under augmentation. None when the
+    # ownership lever is off — masked out of the ownership loss.
+    ownership: np.ndarray | None = None  # (N_ACTIONS,) float32 or None
 
 
 @dataclass
@@ -120,6 +141,142 @@ class GameRecord:
     plies: int
     outcome: float  # +1 if first-mover (black) won, -1 if second-mover (white) won, 0 draw
     archive_start: bool = False  # WL5: True if game was seeded from validation archive
+
+
+def _aux_target_for(
+    traj: list[tuple[np.ndarray, np.ndarray, int]], ply_idx: int, side: int
+) -> np.ndarray | None:
+    """Opponent-reply target for the position at `ply_idx` in `traj`.
+
+    The target is the MCTS policy `pi` recorded at the NEXT trajectory entry —
+    the opponent is to move there. Returns None (→ masked out of the aux loss)
+    when:
+      * this is the LAST recorded ply (no next entry), or
+      * the next recorded entry is the SAME side to move (can happen under
+        Playout-Cap Randomization, where an unrecorded fast move sits between
+        two recorded plies — then the "next recorded" position is NOT the
+        immediate opponent reply, so we decline to use it as a label rather
+        than feed a misaligned target).
+
+    The returned vector is in the same board coordinate frame as the position's
+    own `pi`; D4 alignment is handled downstream by augment_with_aux.
+    """
+    nxt = ply_idx + 1
+    if nxt >= len(traj):
+        return None
+    next_pi, next_side = traj[nxt][1], traj[nxt][2]
+    if int(next_side) == int(side):
+        return None
+    return next_pi
+
+
+def _ownership_target(
+    final_planes: np.ndarray, term_side_abs: int, outcome_for_black: float
+) -> np.ndarray | None:
+    """Per-cell (81,) ownership target from a game's FINAL board.
+
+    `final_planes` is the canonical plane stack of the TERMINAL root (plane 0 =
+    stones of the side to move at terminal, plane HISTORY_PLY = the other side).
+    `term_side_abs` is the ABSOLUTE side to move at terminal (0 = black/first-
+    mover, 1 = white). `outcome_for_black` is +1 if black won, -1 if white won,
+    0 on a draw.
+
+    Returns an (81,) float vector in ABSOLUTE board coordinates: +1 at the
+    eventual WINNER's stones, -1 at the LOSER's stones, 0 at empty cells. On a
+    draw (outcome 0) returns all zeros (no winner/loser to credit). The same
+    vector applies to every position of the game; D4 alignment to each
+    position is handled downstream by augment_with_cell_targets.
+
+    Returns None only if the final planes are unusable (defensive).
+    """
+    if final_planes is None:
+        return None
+    fp = np.asarray(final_planes)
+    # Map the terminal canonical planes to absolute black/white stone masks.
+    cur = fp[0].reshape(-1).astype(np.float32)            # side-to-move @ terminal
+    opp = fp[HISTORY_PLY].reshape(-1).astype(np.float32)  # the other side
+    if int(term_side_abs) == 0:
+        black, white = cur, opp
+    else:
+        black, white = opp, cur
+    if outcome_for_black > 0:        # black won
+        winner, loser = black, white
+    elif outcome_for_black < 0:      # white won
+        winner, loser = white, black
+    else:                            # draw — nobody credited
+        return np.zeros(N_ACTIONS, dtype=np.float32)
+    return (winner - loser).astype(np.float32)
+
+
+def _build_examples(
+    planes: np.ndarray,
+    pi: np.ndarray,
+    z: float,
+    side: int,
+    ply_at_capture: int,
+    aux_pi: np.ndarray | None,
+    augment_symmetries: bool,
+    profile: ProfileStats | None = None,
+    ownership: np.ndarray | None = None,
+) -> list[SelfPlayExample]:
+    """Expand one recorded position into training example(s).
+
+    With D4 augmentation, emits 8 symmetry variants; the per-cell aux targets
+    (opponent-reply `aux_pi` and/or `ownership`, when present) are transformed
+    by the SAME symmetry as planes+pi via augment_with_cell_targets, so each
+    label stays board-aligned with its position. Without augmentation, emits the
+    single position. A None target propagates to the example unchanged → masked
+    out of that target's loss.
+
+    Byte-identical guarantee: when BOTH aux_pi and ownership are None, this uses
+    the plain `augment` (the pre-aux path), so the off-case output is unchanged.
+    """
+    out: list[SelfPlayExample] = []
+    if augment_symmetries:
+        if aux_pi is None and ownership is None:
+            with _profile_timer(profile, "d4_augment_s"):
+                augmented = list(augment(planes, pi))
+            for aug_planes, aug_pi in augmented:
+                with _profile_timer(profile, "example_create_s"):
+                    out.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                        aux_pi=None, ownership=None,
+                    ))
+        else:
+            # One or both per-cell targets present: carry them through the
+            # identical D4 symmetry as planes+pi. Slot order is fixed
+            # [aux_pi, ownership]; a missing target keeps its slot as None so
+            # the example field stays None (masked out of that loss).
+            cell_targets = []
+            aux_slot = ownership_slot = None
+            if aux_pi is not None:
+                aux_slot = len(cell_targets)
+                cell_targets.append(aux_pi)
+            if ownership is not None:
+                ownership_slot = len(cell_targets)
+                cell_targets.append(ownership)
+            with _profile_timer(profile, "d4_augment_s"):
+                augmented = list(augment_with_cell_targets(planes, pi, cell_targets))
+            for aug_planes, aug_pi, aug_targets in augmented:
+                with _profile_timer(profile, "example_create_s"):
+                    out.append(SelfPlayExample(
+                        aug_planes, aug_pi.astype(np.float32), z,
+                        side=int(side), ply=int(ply_at_capture),
+                        aux_pi=(aug_targets[aux_slot].astype(np.float32)
+                                if aux_slot is not None else None),
+                        ownership=(aug_targets[ownership_slot].astype(np.float32)
+                                   if ownership_slot is not None else None),
+                    ))
+    else:
+        with _profile_timer(profile, "example_create_s"):
+            out.append(SelfPlayExample(
+                planes, pi.astype(np.float32), z,
+                side=int(side), ply=int(ply_at_capture),
+                aux_pi=(aux_pi.astype(np.float32) if aux_pi is not None else None),
+                ownership=(ownership.astype(np.float32) if ownership is not None else None),
+            ))
+    return out
 
 
 def _sample_action(pi: np.ndarray, rng: np.random.Generator) -> int:
@@ -225,6 +382,8 @@ def _generate_games_native_gumbel(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    record_aux: bool = False,
+    record_ownership: bool = False,
 ) -> list[GameRecord]:
     """Self-play using the NATIVE Gumbel root + Sequential Halving path.
 
@@ -301,6 +460,9 @@ def _generate_games_native_gumbel(
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []
+    # Ownership: final-board planes + terminal absolute side per game, captured
+    # at the moment of termination. Only populated when record_ownership is on.
+    final_state: dict[int, tuple[np.ndarray, int]] = {}
 
     ply = 0
     while active and ply < max_plies:
@@ -349,6 +511,14 @@ def _generate_games_native_gumbel(
                         outcome_for_black = 1.0 if winner_side == 0 else -1.0
                     else:
                         outcome_for_black = 0.0
+                    if record_ownership:
+                        # After advance_root the root is the TERMINAL board; its
+                        # side-to-move (plane 0) is the player who did NOT just
+                        # move, parity (n_initial+ply+1)%2 in absolute terms.
+                        final_state[g_idx] = (
+                            np.asarray(g.root_planes()).copy(),
+                            (n_initial + ply + 1) % 2,
+                        )
                     completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
                 else:
                     next_active.append(g_idx)
@@ -357,6 +527,10 @@ def _generate_games_native_gumbel(
         ply += 1
 
     for g_idx in active:
+        if record_ownership:
+            # Game hit max_plies without terminating: scored a draw, ownership
+            # target is all-zeros regardless of board, so final planes are moot.
+            final_state[g_idx] = (None, 0)
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     records: list[GameRecord] = []
@@ -364,23 +538,22 @@ def _generate_games_native_gumbel(
         for g_idx, outcome_for_black, plies in sorted(completed):
             examples: list[SelfPlayExample] = []
             n_initial = initial_plies[g_idx]
-            for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+            traj = trajectories[g_idx]
+            ownership = None
+            if record_ownership:
+                fp, term_side = final_state.get(g_idx, (None, 0))
+                ownership = _ownership_target(fp, term_side, outcome_for_black)
+            for ply_idx, (planes, pi, side) in enumerate(traj):
                 z = outcome_for_black if side == 0 else -outcome_for_black
                 ply_at_capture = n_initial + ply_idx
                 if vcf_teacher:
                     pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                   profile=profile)
-                if augment_symmetries:
-                    for aug_planes, aug_pi in augment(planes, pi):
-                        examples.append(SelfPlayExample(
-                            aug_planes, aug_pi.astype(np.float32), z,
-                            side=int(side), ply=int(ply_at_capture),
-                        ))
-                else:
-                    examples.append(SelfPlayExample(
-                        planes, pi.astype(np.float32), z,
-                        side=int(side), ply=int(ply_at_capture),
-                    ))
+                aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+                examples.extend(_build_examples(
+                    planes, pi, z, side, ply_at_capture, aux_pi,
+                    augment_symmetries, profile, ownership=ownership,
+                ))
             records.append(GameRecord(
                 examples=examples,
                 plies=plies,
@@ -412,6 +585,8 @@ def _generate_games_gumbel(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    record_aux: bool = False,
+    record_ownership: bool = False,
 ) -> list[GameRecord]:
     """Self-play generation using Gumbel AlphaZero root selection + Sequential
     Halving (the pure-Python `gomoku.mcts.Node` tree path).
@@ -466,6 +641,7 @@ def _generate_games_gumbel(
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []
+    final_state: dict[int, tuple[np.ndarray, int]] = {}
 
     ply = 0
     while active and ply < max_plies:
@@ -506,6 +682,12 @@ def _generate_games_gumbel(
                     outcome_for_black = 1.0 if winner_side == 0 else -1.0
                 else:
                     outcome_for_black = 0.0
+                if record_ownership:
+                    # g.root.state is the TERMINAL state; plane 0 = side-to-move
+                    # there (the non-mover), abs parity (n_initial+ply+1)%2.
+                    final_state[g_idx] = (
+                        g.root.state.to_planes(), (n_initial + ply + 1) % 2,
+                    )
                 completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
             else:
                 next_active.append(g_idx)
@@ -513,29 +695,30 @@ def _generate_games_gumbel(
         ply += 1
 
     for g_idx in active:
+        if record_ownership:
+            final_state[g_idx] = (None, 0)  # draw -> all-zeros target
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     records: list[GameRecord] = []
     for g_idx, outcome_for_black, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
         n_initial = initial_plies[g_idx]
-        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+        traj = trajectories[g_idx]
+        ownership = None
+        if record_ownership:
+            fp, term_side = final_state.get(g_idx, (None, 0))
+            ownership = _ownership_target(fp, term_side, outcome_for_black)
+        for ply_idx, (planes, pi, side) in enumerate(traj):
             z = outcome_for_black if side == 0 else -outcome_for_black
             ply_at_capture = n_initial + ply_idx
             if vcf_teacher:
                 pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                               profile=profile)
-            if augment_symmetries:
-                for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(
-                        aug_planes, aug_pi.astype(np.float32), z,
-                        side=int(side), ply=int(ply_at_capture),
-                    ))
-            else:
-                examples.append(SelfPlayExample(
-                    planes, pi.astype(np.float32), z,
-                    side=int(side), ply=int(ply_at_capture),
-                ))
+            aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            examples.extend(_build_examples(
+                planes, pi, z, side, ply_at_capture, aux_pi,
+                augment_symmetries, None, ownership=ownership,
+            ))
         records.append(GameRecord(
             examples=examples,
             plies=plies,
@@ -568,6 +751,8 @@ def _generate_games_native(
     forced_playout_k: float = 0.0,
     profile: ProfileStats | None = None,
     vcf_teacher: bool = False,
+    record_aux: bool = False,
+    record_ownership: bool = False,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -639,6 +824,7 @@ def _generate_games_native(
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []
+    final_state: dict[int, tuple[np.ndarray, int]] = {}
 
     ply = 0
     while active and ply < max_plies:
@@ -736,6 +922,13 @@ def _generate_games_native(
                         outcome_for_black = 1.0 if winner_side == 0 else -1.0
                     else:
                         outcome_for_black = 0.0
+                    if record_ownership:
+                        # Post-advance root is the TERMINAL board; side-to-move
+                        # (plane 0) is the non-mover, abs parity (n_initial+ply+1)%2.
+                        final_state[g_idx] = (
+                            np.asarray(g.root_planes()).copy(),
+                            (n_initial + ply + 1) % 2,
+                        )
                     completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
                 else:
                     next_active.append(g_idx)
@@ -744,6 +937,8 @@ def _generate_games_native(
         ply += 1
 
     for g_idx in active:
+        if record_ownership:
+            final_state[g_idx] = (None, 0)  # draw -> all-zeros target
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     records: list[GameRecord] = []
@@ -751,27 +946,22 @@ def _generate_games_native(
         for g_idx, outcome_for_black, plies in sorted(completed):
             examples: list[SelfPlayExample] = []
             n_initial = initial_plies[g_idx]
-            for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+            traj = trajectories[g_idx]
+            ownership = None
+            if record_ownership:
+                fp, term_side = final_state.get(g_idx, (None, 0))
+                ownership = _ownership_target(fp, term_side, outcome_for_black)
+            for ply_idx, (planes, pi, side) in enumerate(traj):
                 z = outcome_for_black if side == 0 else -outcome_for_black
                 ply_at_capture = n_initial + ply_idx
                 if vcf_teacher:
                     pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                   profile=profile)
-                if augment_symmetries:
-                    with _profile_timer(profile, "d4_augment_s"):
-                        augmented = list(augment(planes, pi))
-                    for aug_planes, aug_pi in augmented:
-                        with _profile_timer(profile, "example_create_s"):
-                            examples.append(SelfPlayExample(
-                                aug_planes, aug_pi.astype(np.float32), z,
-                                side=int(side), ply=int(ply_at_capture),
-                            ))
-                else:
-                    with _profile_timer(profile, "example_create_s"):
-                        examples.append(SelfPlayExample(
-                            planes, pi.astype(np.float32), z,
-                            side=int(side), ply=int(ply_at_capture),
-                        ))
+                aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+                examples.extend(_build_examples(
+                    planes, pi, z, side, ply_at_capture, aux_pi,
+                    augment_symmetries, profile, ownership=ownership,
+                ))
             records.append(GameRecord(
                 examples=examples,
                 plies=plies,
@@ -809,6 +999,8 @@ def generate_games(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    record_aux: bool = False,
+    record_ownership: bool = False,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
@@ -884,6 +1076,8 @@ def generate_games(
                 gumbel_c_visit=gumbel_c_visit,
                 gumbel_c_scale=gumbel_c_scale,
                 vcf_teacher=vcf_teacher,
+                record_aux=record_aux,
+                record_ownership=record_ownership,
             )
         return _generate_games_gumbel(
             n_games,
@@ -906,6 +1100,8 @@ def generate_games(
             gumbel_c_visit=gumbel_c_visit,
             gumbel_c_scale=gumbel_c_scale,
             vcf_teacher=vcf_teacher,
+            record_aux=record_aux,
+            record_ownership=record_ownership,
         )
     if _can_use_native_mcts(evaluator):
         return _generate_games_native(
@@ -930,6 +1126,8 @@ def generate_games(
             forced_playout_k=forced_playout_k,
             profile=profile,
             vcf_teacher=vcf_teacher,
+            record_aux=record_aux,
+            record_ownership=record_ownership,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
@@ -952,6 +1150,7 @@ def generate_games(
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []  # (game_idx, outcome_for_black, plies)
+    final_state: dict[int, tuple[np.ndarray, int]] = {}
 
     ply = 0
     while active and ply < max_plies:
@@ -1001,6 +1200,10 @@ def generate_games(
                     outcome_for_black = 1.0 if winner_side == 0 else -1.0
                 else:
                     outcome_for_black = 0.0
+                if record_ownership:
+                    final_state[g_idx] = (
+                        g.root.state.to_planes(), (n_initial + ply + 1) % 2,
+                    )
                 completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
             else:
                 next_active.append(g_idx)
@@ -1011,6 +1214,8 @@ def generate_games(
     # Any games still active at max_plies are scored as draws. Total plies is
     # the MCTS-loop ply plus the per-game random opening prefix.
     for g_idx in active:
+        if record_ownership:
+            final_state[g_idx] = (None, 0)  # draw -> all-zeros target
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     # Build records, applying symmetry augmentation.
@@ -1018,23 +1223,22 @@ def generate_games(
     for g_idx, outcome_for_black, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
         n_initial = initial_plies[g_idx]
-        for ply_idx, (planes, pi, side) in enumerate(trajectories[g_idx]):
+        traj = trajectories[g_idx]
+        ownership = None
+        if record_ownership:
+            fp, term_side = final_state.get(g_idx, (None, 0))
+            ownership = _ownership_target(fp, term_side, outcome_for_black)
+        for ply_idx, (planes, pi, side) in enumerate(traj):
             z = outcome_for_black if side == 0 else -outcome_for_black
             ply_at_capture = n_initial + ply_idx
             if vcf_teacher:
                 pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                               profile=profile)
-            if augment_symmetries:
-                for aug_planes, aug_pi in augment(planes, pi):
-                    examples.append(SelfPlayExample(
-                        aug_planes, aug_pi.astype(np.float32), z,
-                        side=int(side), ply=int(ply_at_capture),
-                    ))
-            else:
-                examples.append(SelfPlayExample(
-                    planes, pi, z,
-                    side=int(side), ply=int(ply_at_capture),
-                ))
+            aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            examples.extend(_build_examples(
+                planes, pi, z, side, ply_at_capture, aux_pi,
+                augment_symmetries, None, ownership=ownership,
+            ))
         records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
 
     return records
