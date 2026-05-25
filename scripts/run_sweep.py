@@ -573,6 +573,64 @@ CELLS: dict[str, Cell] = {
                 epochs=1_000_000, random_opening_moves=0,
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16"],      # same gen as derby-gumbel
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),            # ← the fixed-step lever
+
+    # ── Derby v4 combination lanes ──────────────────────────────────────────
+    # gumbel-fast5s is the CONTROL (above). The next three each take that exact
+    # fixed-step + Gumbel@100 base and add ONE combination lever (no more single-
+    # lever cells; these are our best shots at a GREAT player). All share the
+    # base recipe; the only deltas are global_pool / aux heads / vcf-teacher.
+    "derby-signal": Cell("derby-signal", sgd_per_game=1.0,           # 'Signal-rich': both aux heads
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                # worker records BOTH aux targets; trainer enables BOTH heads via weights>0
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--record-aux", "--record-ownership"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--aux-opponent-reply-weight", "0.15",
+                                  "--aux-ownership-weight", "0.15"]),
+    "derby-wholeboard": Cell("derby-wholeboard", sgd_per_game=1.0,   # 'Whole-board': KataGo global-pooling
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,                                    # ← latter-half global-pool blocks
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "derby-vcf": Cell("derby-vcf", sgd_per_game=1.0,                 # 'VCF-taught': exact tactical labels
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                # worker overwrites policy/value targets with VCF mate labels when found
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--vcf-teacher"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
 }
 
 
