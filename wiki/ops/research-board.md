@@ -208,8 +208,17 @@ and don't trust an early anchored lead before lanes have equal compute.**
 defense), so the top-3 ordering (vcf > signal > wholeboard) is *not* airtight — but
 the directional signals are clean and consistent: **vcf beats everyone, control loses
 to everyone.** Peak checkpoints saved at `sweep_runs/derby_v4/_peaks/<lane>/peak.pt`.
-Above-ladder Rapfi (Gomocup 2625) yardstick on the `vcf` champion: see `perf-log` /
-`sweep_runs/derby_v4/rapfi_vcf.jsonl`.
+
+**Above-ladder Rapfi yardstick (`vcf` champion, 9x9 freestyle, 20 games/budget,
+`sweep_runs/derby_v4/rapfi_vcf.jsonl`):** vcf vs `pbrain-rapfi` (arm64-NEON,
+build 6e0a132) — **100ms: 0W-0L-20D (50%); 500ms: 2W-0L-18D (55%); 1000ms:
+1W-3L-16D (45%)**. Read: **roughly draw-parity** — near-total draws, Rapfi only
+edges ahead at the longest control (3L vs 1W @ 1s). Surprisingly strong for a
+~1700-anchored from-scratch net. CAVEATS: tiny draw-dominated sample (noisy ±10%
+per 2-game swing); **Rapfi's 2625 is a 15x15 Gomocup rating that does NOT transfer
+to 9x9 freestyle** — this says "competitive with Rapfi *on 9x9 freestyle*", NOT
+"~2625 elo"; and 9x9 freestyle is intrinsically drawish under solid two-sided
+defense. Model plays sims=100 vs Rapfi's time budgets (not a matched control).
 
 ### v3-gumbel  (HIGHEST leverage)
 **Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
