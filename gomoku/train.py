@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +21,13 @@ from gomoku.model import build_model, load_checkpoint, n_params, save_checkpoint
 from gomoku.replay_buffer import ReplayBuffer
 from gomoku.self_play import generate_games, generate_games_vs_baseline
 from gomoku.util import load_wandb_key_from_keychain, pick_device
+
+
+class _ShutdownRequested(Exception):
+    """Raised from inside a blocking worker-ingest wait when SIGTERM/SIGINT
+    has set the stop flag. Lets a wait that would otherwise never return
+    (e.g. no workers are alive to deliver the next wave) unwind to the
+    epoch-boundary clean-stop path instead of hanging until SIGKILL."""
 
 
 def policy_loss(logits: torch.Tensor, pi: torch.Tensor) -> torch.Tensor:
@@ -128,6 +137,44 @@ def ema_l2_distance(ema_model, model) -> float:
         for ep, p in zip(ema_model.parameters(), model.parameters()):
             sq += float((p - ep).pow(2).sum())
         return sq ** 0.5
+
+
+def average_state_dicts(state_dicts: list[dict]) -> dict:
+    """V3 SWA lever: flat (uniform) average of a list of model state_dicts.
+
+    Returns a new state_dict where each FLOAT tensor (conv/linear weights,
+    BatchNorm running_mean / running_var, etc.) is the elementwise arithmetic
+    mean across the inputs, and each non-float tensor (e.g. BatchNorm
+    `num_batches_tracked`, an int64 counter) is taken from the LATEST
+    state_dict — averaging an integer batch-counter is meaningless, and the
+    latest value is the most representative for inference.
+
+    Averaging BatchNorm running stats across checkpoints is standard for SWA
+    inference: the running_mean / running_var are floats that move slowly, so a
+    flat tail-average yields valid inference-time normalization without needing
+    a BN-recompute pass. (Classic SWA recomputes BN stats with a forward pass;
+    here the published model is for GENERATION/inference only and the running
+    stats are already well-tracked from training, so averaging is sufficient.)
+
+    All inputs must share the same keys/shapes. Computes in float64 then casts
+    back to each tensor's original float dtype to avoid accumulation drift.
+    """
+    if not state_dicts:
+        raise ValueError("average_state_dicts requires at least one state_dict")
+    latest = state_dicts[-1]
+    out: dict = {}
+    n = len(state_dicts)
+    for key, ref in latest.items():
+        if torch.is_tensor(ref) and ref.is_floating_point():
+            acc = state_dicts[0][key].detach().to(torch.float64)
+            for sd in state_dicts[1:]:
+                acc = acc + sd[key].detach().to(torch.float64)
+            acc = acc / n
+            out[key] = acc.to(ref.dtype)
+        else:
+            # int/long buffers (num_batches_tracked) or non-tensors: take latest.
+            out[key] = ref.detach().clone() if torch.is_tensor(ref) else ref
+    return out
 
 
 def _baseline_log_key(spec) -> str:
@@ -288,7 +335,13 @@ def parse_args() -> argparse.Namespace:
                         "the AZ recipe (1 SGD step per game played). NOTE: when "
                         "game length varies (model swings between attack and defense), "
                         "this knob also varies the per-cycle SGD count and the buffer "
-                        "turnover rate. Prefer --sgd-per-position for stable runs.")
+                        "turnover rate. Prefer --sgd-per-position for stable runs. "
+                        "LF1 NOTE: as an anti-runaway schedule this has LOWER gain "
+                        "than --sgd-per-position, because the tile's game COUNT grows "
+                        "slower than its POSITION count (games lengthen as defense is "
+                        "learned). It does not fully close the runaway loop on its "
+                        "own — pair with --max-tile-games / --max-sgd-steps-per-epoch "
+                        "for a structural bound.")
     p.add_argument("--sgd-per-position", type=float, default=None,
                    help="Position-based version of --sgd-per-game. Each cycle "
                         "computes training_steps = max(--min-training-steps, "
@@ -316,6 +369,23 @@ def parse_args() -> argparse.Namespace:
                         "publish-to-workers lag. 0.0 (default) = disabled, "
                         "matches pre-WL2 behavior. Recommended live value 0.99 "
                         "(~70 SGD-step half-life). EMA update is per-SGD-step.")
+    p.add_argument("--swa-window", type=int, default=0,
+                   help="V3 lever: SWA tail-averaging of the self-play generator "
+                        "weights. When > 0, the weights published to workers "
+                        "(--worker-weights-path) are the FLAT (uniform) average of "
+                        "the last --swa-window saved-checkpoint state_dicts of the "
+                        "LIVE learner, rather than an exponential moving average. "
+                        "0 (default) = OFF = current behavior (EMA if --ema-tau>0, "
+                        "else the live weights). SWA REPLACES the EMA-publish when "
+                        "set: --swa-window and --ema-tau are alternative smoothing "
+                        "strategies for the publish path, not composed. The ring "
+                        "buffer is refreshed at each worker-weights publication "
+                        "(every --save-every epochs), so window K spans K saves. "
+                        "Float tensors (incl. BN running stats) are mean-averaged; "
+                        "int buffers (num_batches_tracked) take the latest. The "
+                        "averaged weights are GENERATION-only — the learner, "
+                        "latest.pt and epochNNNN.pt remain the unaveraged live "
+                        "weights. Recommended starting value 5.")
     p.add_argument("--grad-accum-steps", type=int, default=1,
                    help="WL2 lever #4: gradient accumulation. Accumulate "
                         "gradients across this many minibatches before "
@@ -368,6 +438,14 @@ def parse_args() -> argparse.Namespace:
                         "checkpoint dir AND any leftover *.pt.tmp / orphaned *.pt in the "
                         "worker-input-dir that are older than this many seconds. Keeps "
                         "interrupted writes from accumulating across runs.")
+    p.add_argument("--max-wall-secs", type=float, default=0.0,
+                   help="Time-cap the run: after this many wall-seconds (checked at "
+                        "each epoch boundary), finish the current epoch, force-save a "
+                        "fully-resumable latest.pt (WITH the replay buffer, ignoring "
+                        "--save-buffer-every), and exit 0. 0 = no cap (run to --epochs). "
+                        "This is what makes a training task a clean research SLICE: "
+                        "resume from latest.pt never cold-refills the buffer. A SIGTERM "
+                        "or SIGINT triggers the same clean-save path mid-run.")
     p.add_argument("--no-eval", dest="eval_in_trainer", action="store_false",
                    help="Skip the in-trainer eval block entirely. Pair with "
                         "`python -m gomoku.eval_worker` running separately — it polls "
@@ -415,6 +493,56 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wave-games-per-worker", type=int, default=0,
                    help="Per-worker barrier size for --wave-mode. Defaults to "
                         "--worker-min-games / --wave-workers when possible.")
+    # --- LF1 anti-runaway structural levers (all OPT-IN; 0 = disabled = today) ---
+    # See wiki/topics/perf-bench-vs-real-training-cost.md for the runaway loop:
+    # large wave_size -> gen outpaces trainer -> per-version tile grows ->
+    # sgd_per_position scales steps with inflow -> train phase lengthens ->
+    # even more games pile up. These three flags close that open loop. When all
+    # are unset (default 0/None), the trainer is byte-identical to today (WL5).
+    p.add_argument("--max-tile-games", type=int, default=0,
+                   help="LF1 anti-runaway: cap how many self-play games the trainer "
+                        "ingests per model version (the 'tile'). 0 (default) = "
+                        "uncapped = today's behavior. When > 0, excess games beyond "
+                        "this many per version are DROPPED (deterministically, "
+                        "keeping the earliest games in stable sorted order). This "
+                        "structurally bounds the tile regardless of generation rate, "
+                        "converting the open generation->ingest loop into a closed "
+                        "one. Acts in the wave-mode epoch loop right AFTER the "
+                        "barrier ingest, before the buffer add and before the SGD "
+                        "step schedule reads the tile size. Wave-mode only.")
+    p.add_argument("--max-sgd-steps-per-epoch", type=int, default=0,
+                   help="LF1 anti-runaway: hard upper bound on SGD steps per epoch "
+                        "(per cycle). 0 (default) = no cap = today's behavior. When "
+                        "> 0, the per-cycle step count (from --sgd-per-position, "
+                        "--sgd-per-game, or --training-steps) is clamped to at most "
+                        "this many steps. Decouples SGD work from inflow entirely: "
+                        "structurally cannot run away even if the tile grows. "
+                        "Applied AFTER the schedule computes steps_this_cycle, in "
+                        "every mode (wave or in-process).")
+    p.add_argument("--sgd-steps-per-epoch", type=int, default=0,
+                   help="TRAINER MODE (fixed-step / fast-cadence learner). 0 "
+                        "(default) = OFF = today's behavior (the "
+                        "--sgd-per-position / --sgd-per-game / --training-steps "
+                        "schedule, then the --max-sgd-steps-per-epoch cap). When "
+                        "> 0, the trainer does EXACTLY this many SGD steps per "
+                        "epoch, FIXED, independent of how many games arrived — it "
+                        "does NOT scale with inflow and is structurally incapable "
+                        "of the inflow-driven per-epoch runaway documented in "
+                        "wiki/topics/perf-bench-vs-real-training-cost.md (the LF1 "
+                        "20s->7min/epoch blow-up). Differs from "
+                        "--max-sgd-steps-per-epoch (a min(computed, cap) clamp that "
+                        "still scales below the cap): this PINS the count. In the "
+                        "NON-wave worker-ingest path (--worker-input-dir set, "
+                        "--wave-mode OFF) it ALSO switches ingest to NON-BLOCKING: "
+                        "the epoch drains whatever new games are present this "
+                        "instant (no --worker-min-games / --worker-min-positions "
+                        "barrier) and trains immediately on the buffer, so the "
+                        "trainer never idles waiting for generation. Net effect = "
+                        "the async continuous-learner pattern (parallel actors + "
+                        "fixed-rate learner) on a fast cadence. Tune N so an epoch "
+                        "lands ~5s of SGD. Wave-mode is unaffected (the fixed-step "
+                        "count still applies, but the wave barrier ingest is left "
+                        "intact); intended for the non-wave async path.")
     p.add_argument("--worker-poll-sec", type=float, default=0.5,
                    help="Sleep this long between dir scans when waiting for workers.")
     p.add_argument("--device", type=str, default=None, help="torch device override (e.g. cpu, mps)")
@@ -474,6 +602,31 @@ def main() -> None:
         for p in ema_model.parameters():
             p.requires_grad_(False)
         ema_model.eval()
+
+    # V3 lever: SWA tail-averaging of the self-play generator weights. When
+    # --swa-window > 0 the workers see the flat average of the last K saved
+    # checkpoints' state_dicts (of the live learner) instead of EMA/live
+    # weights. SWA REPLACES the EMA-publish: they are alternative publish-path
+    # smoothers, never composed. `swa_model` holds the recomputed average for
+    # publication; `swa_window_dicts` is the ring buffer of recent CPU
+    # state_dicts. The learner (`model`) and saved latest.pt/epochNNNN.pt are
+    # untouched — only worker_weights.pt reflects the average.
+    swa_model = None
+    swa_window_dicts: deque | None = None
+    if args.swa_window > 0:
+        if args.ema_tau > 0.0:
+            print(f"warning: --swa-window={args.swa_window} REPLACES the EMA "
+                  f"publish path; --ema-tau={args.ema_tau} EMA copy is ignored "
+                  f"for worker publication (SWA and EMA are not composed).")
+        from gomoku.model import GomokuNet
+        swa_model = GomokuNet(model.cfg).to(device)
+        for p in swa_model.parameters():
+            p.requires_grad_(False)
+        swa_model.eval()
+        swa_window_dicts = deque(maxlen=args.swa_window)
+        print(f"SWA generator weights enabled (window={args.swa_window}): "
+              f"workers see the flat mean of the last {args.swa_window} saved "
+              f"checkpoints")
 
     validation_archive: dict | None = None
     if args.validation_archive_path:
@@ -576,6 +729,27 @@ def main() -> None:
     if worker_weights_path:
         print(f"workers will read weights from {worker_weights_path}")
 
+    # --- clean-shutdown support (time-capped research slices) ---
+    # A SIGTERM/SIGINT, or crossing --max-wall-secs, sets the stop flag. We
+    # finish the current epoch, then force a fully-resumable save and exit 0 so
+    # `--resume latest.pt` continues without a cold buffer refill (the LF1 trap).
+    # The signal handler only flips a flag — no I/O in the async context.
+    #
+    # The handler is installed HERE (before the ingest closures and the epoch
+    # loop) so a SIGTERM that arrives while a blocking worker-ingest wait is
+    # spinning is observed: those waits re-check `_stop["requested"]` each poll
+    # and raise `_ShutdownRequested` to unwind to the epoch-boundary stop path.
+    # Without that, a wait for a wave that never arrives (workers dead/orphaned)
+    # would loop forever and the process would have to be SIGKILL'd.
+    _stop = {"requested": False, "reason": ""}
+
+    def _request_stop(signum, _frame):
+        _stop["requested"] = True
+        _stop["reason"] = f"signal {signal.Signals(signum).name}"
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    signal.signal(signal.SIGINT, _request_stop)
+
     def _publish_worker_weights(epoch: int = 0) -> None:
         """Atomic-rename the model + cfg to `worker_weights_path` so workers
         (selfplay or eval) can mtime-poll and reload. Embeds the trainer's
@@ -585,11 +759,31 @@ def main() -> None:
 
         WL2 lever #1: when --ema-tau > 0, workers see the EMA weights, not
         the raw training weights. The 'brain that plays' is decoupled from
-        the 'brain that learns'."""
+        the 'brain that learns'.
+
+        V3 SWA lever: when --swa-window > 0, this REPLACES the EMA/live publish.
+        The live learner's current state_dict is pushed into a ring buffer of
+        the last K checkpoints, the flat average is recomputed into `swa_model`,
+        and that average is what the workers see. The learner (`model`) and the
+        saved latest.pt/epochNNNN.pt are untouched — only worker_weights.pt
+        carries the averaged generator weights."""
         buffer.set_weight_version(epoch)
         if not worker_weights_path:
             return
-        publish_model = ema_model if ema_model is not None else model
+        if swa_model is not None:
+            # Snapshot the live learner onto CPU and push into the tail window,
+            # then recompute the flat average for publication. (CPU clones keep
+            # the ring cheap and detached from the live training tensors.)
+            snapshot = {k: v.detach().to("cpu").clone()
+                        for k, v in model.state_dict().items()}
+            swa_window_dicts.append(snapshot)
+            avg = average_state_dicts(list(swa_window_dicts))
+            swa_model.load_state_dict(avg)
+            publish_model = swa_model
+        elif ema_model is not None:
+            publish_model = ema_model
+        else:
+            publish_model = model
         tmp = worker_weights_path + ".tmp"
         save_checkpoint(tmp, publish_model, optimizer=None,
                         epoch=epoch, total_games=total_games,
@@ -612,6 +806,12 @@ def main() -> None:
         n_games = 0
         n_positions = 0
         while True:
+            # Break out of an otherwise-unbounded wait if shutdown was
+            # requested (SIGTERM/SIGINT). Raised before any work so a stop that
+            # arrives while no games are flowing (e.g. workers dead/orphaned)
+            # unwinds to the epoch-boundary clean-stop path instead of hanging.
+            if _stop["requested"]:
+                raise _ShutdownRequested(_stop["reason"])
             files = sorted(
                 (p for p in worker_input_dir.glob("*.pt")),
                 key=lambda p: p.stat().st_mtime,
@@ -636,6 +836,51 @@ def main() -> None:
                     return out_records
                 if target_positions <= 0 and target_games > 0 and n_games >= target_games:
                     return out_records
+
+    def _drain_worker_batches_nonblocking() -> tuple[list, int, int]:
+        """TRAINER MODE ingest: drain whatever flat worker payloads are present
+        in worker_input_dir RIGHT NOW and return immediately — do NOT wait for
+        any --worker-min-games / --worker-min-positions barrier. The trainer
+        trains on the buffer every cycle regardless of inflow, so it never idles
+        waiting for generation. Returns (records, n_games, n_positions).
+
+        Mirrors _ingest_worker_batches' per-file load/delete, but without the
+        blocking poll loop. Honors the stop flag before doing any work so a
+        SIGTERM observed here unwinds cleanly (same as the blocking path).
+        Non-wave only: it scans the top-level *.pt (the layout selfplay_worker
+        writes when --wave-mode is off), never the v{version}/ tree."""
+        if _stop["requested"]:
+            raise _ShutdownRequested(_stop["reason"])
+        out_records: list = []
+        n_games = 0
+        n_positions = 0
+        files = sorted(
+            (p for p in worker_input_dir.glob("*.pt")),
+            key=lambda p: p.stat().st_mtime,
+        )
+        for f in files:
+            consumed = False
+            try:
+                data = torch.load(f, map_location="cpu", weights_only=False)
+                if not (isinstance(data, dict) and "records" in data):
+                    # Not a self-play record payload (e.g. a worker_weights.pt
+                    # someone parked in the input dir). Leave it in place and
+                    # skip — never delete a file we did not ingest.
+                    continue
+                recs = data["records"]
+                out_records.extend(recs)
+                n_games += int(data.get("n_games", len(recs)))
+                n_positions += int(
+                    data.get("n_examples", sum(len(r.examples) for r in recs))
+                )
+                consumed = True
+            finally:
+                if consumed:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        return out_records, n_games, n_positions
 
     def _normalize_wave_worker_id(raw: object) -> str:
         """Normalize path/payload worker ids to the run_sweep style: w0, w1, ..."""
@@ -760,6 +1005,61 @@ def main() -> None:
         }
         return out_records, out_groups, metrics
 
+    def _cap_tile_games(records: list,
+                        record_groups: list[tuple[int, list]],
+                        cap: int) -> tuple[list, list[tuple[int, list]], dict]:
+        """LF1 per-version tile cap (DROP semantics).
+
+        Given the flat `records` and version-tagged `record_groups` produced by
+        the wave ingest, keep at most `cap` games for EACH model version and
+        DROP the rest. Returns rebuilt (records, record_groups, metrics) that are
+        mutually consistent so the downstream buffer add and SGD-step schedule
+        both see the capped tile.
+
+        Why DROP, not DEFER: the wave drain (`_drain_wave_version`) has already
+        deleted the on-disk payloads by the time we get here, so the excess games
+        only exist in memory. Deferring them would mean re-attributing games
+        generated under version v to a LATER version's tile, which violates the
+        wave-mode invariant "every game in tile v was generated by version v"
+        (wave-of-lockstep-design.md, invariant #1). Dropping the in-memory excess
+        is the only choice that both bounds the tile AND preserves per-version
+        purity. The cost is wasted generation — which is exactly the runaway work
+        the cap exists to stop producing.
+
+        Determinism: groups arrive in stable sorted order (sorted by file path in
+        `_drain_wave_version`, sorted by version in `_drain_stale_wave_versions`).
+        We keep the earliest games per version in that order, so the kept tile is
+        a deterministic prefix.
+        """
+        if cap <= 0:
+            return records, record_groups, {}
+        kept_per_version: dict[int, int] = {}
+        new_groups: list[tuple[int, list]] = []
+        new_records: list = []
+        dropped_games = 0
+        dropped_positions = 0
+        for version, recs in record_groups:
+            already = kept_per_version.get(version, 0)
+            room = max(0, cap - already)
+            if room >= len(recs):
+                keep = recs
+            else:
+                keep = recs[:room]
+            drop = recs[len(keep):]
+            if keep:
+                new_groups.append((version, keep))
+                new_records.extend(keep)
+            kept_per_version[version] = already + len(keep)
+            if drop:
+                dropped_games += len(drop)
+                dropped_positions += sum(len(r.examples) for r in drop)
+        metrics = {
+            "wave/tile_cap_dropped_games": dropped_games,
+            "wave/tile_cap_dropped_positions": dropped_positions,
+            "wave/tile_cap_active": 1 if dropped_games > 0 else 0,
+        }
+        return new_records, new_groups, metrics
+
     def _ingest_worker_wave(version: int) -> tuple[list, list[tuple[int, list]], dict]:
         """Block until the current version has enough games from every worker."""
         if args.wave_workers <= 0 or args.wave_games_per_worker <= 0:
@@ -773,6 +1073,14 @@ def main() -> None:
         total_positions = 0
 
         while True:
+            # Honor a shutdown request mid-barrier. The wave barrier waits for
+            # `all(done)` — every worker delivering its quota for THIS version.
+            # If the workers are dead/orphaned (the derby-kill case), that is
+            # never satisfied, so without this check a SIGTERM/SIGINT would
+            # loop here forever and force a SIGKILL. Raising unwinds to the
+            # epoch-boundary clean-stop path (save resumable latest.pt, exit 0).
+            if _stop["requested"]:
+                raise _ShutdownRequested(_stop["reason"])
             for path in _wave_files_for_version(version):
                 if path in payloads:
                     continue
@@ -903,6 +1211,52 @@ def main() -> None:
     _publish_worker_weights(epoch=start_epoch)
     _sweep_orphans()
 
+    # Stop flag + SIGTERM/SIGINT handler are installed earlier (right after
+    # worker_weights_path is resolved) so the ingest waits can observe them.
+    _wall_start = time.monotonic()
+
+    def _save_resumable(epoch_num: int) -> None:
+        """Force-write a fully-resumable latest.pt RIGHT NOW (ignores
+        --save-buffer-every) plus a labeled snapshot, and republish worker
+        weights. Called at clean shutdown so a capped slice always leaves a
+        latest.pt that embeds the replay buffer."""
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        ckpt_extra: dict = {"replay_buffer": buffer.state_dict()}
+        if ema_model is not None:
+            ckpt_extra["ema_model_state_dict"] = ema_model.state_dict()
+        # Labeled snapshot (weights+optimizer; small) for lineage.
+        snap = os.path.join(args.checkpoint_dir, f"epoch{epoch_num:04d}.pt")
+        snap_extra = ({"ema_model_state_dict": ema_model.state_dict()}
+                      if ema_model is not None else None)
+        save_checkpoint(snap, model, optimizer, epoch=epoch_num,
+                        total_games=total_games, wandb_run_id=wandb_run_id,
+                        extra=snap_extra)
+        # Resumable latest.pt with the buffer embedded.
+        latest = os.path.join(args.checkpoint_dir, "latest.pt")
+        latest_tmp = latest + ".tmp"
+        save_checkpoint(latest_tmp, model, optimizer, epoch=epoch_num,
+                        total_games=total_games, wandb_run_id=wandb_run_id,
+                        extra=ckpt_extra)
+        try:
+            if os.path.islink(latest) or os.path.exists(latest):
+                os.remove(latest)
+            os.replace(latest_tmp, latest)
+        except OSError:
+            pass
+        _publish_worker_weights(epoch=epoch_num)
+
+    # TRAINER MODE running totals (only meaningful when --sgd-steps-per-epoch>0).
+    # cumulative_sgd_steps: SGD microbatch steps across all epochs this slice —
+    # the x-axis for the "loss/val-CE vs CUMULATIVE steps" productive-vs-redundant
+    # test (perf-bench-vs-real-training-cost.md follow-up #5).
+    # cumulative_sgd_positions: steps * batch_size = positions CONSUMED by SGD.
+    # cumulative_new_positions: positions INGESTED from workers.
+    # reuse ratio = consumed / ingested (>1 re-using buffer; <1 fresh gen aging
+    # out unused). These are extra log keys; they do not affect training.
+    cumulative_sgd_steps = 0
+    cumulative_sgd_positions = 0
+    cumulative_new_positions = 0
+
     for epoch in range(start_epoch, start_epoch + args.epochs):
         epoch_start = time.time()
 
@@ -911,18 +1265,51 @@ def main() -> None:
         record_groups: list[tuple[int, list]] = []
         wave_metrics: dict = {}
         if worker_input_dir is not None:
-            if args.wave_mode:
-                stale_records, stale_groups, stale_metrics = _drain_stale_wave_versions(epoch)
-                wave_records, wave_groups, wave_metrics = _ingest_worker_wave(epoch)
-                records = stale_records + wave_records
-                record_groups = stale_groups + wave_groups
-                wave_metrics = {**stale_metrics, **wave_metrics}
-            elif args.worker_min_positions > 0:
-                records = _ingest_worker_batches(target_positions=args.worker_min_positions)
-            else:
-                records = _ingest_worker_batches(
-                    target_games=args.worker_min_games or args.games_per_epoch,
-                )
+            # The worker-ingest waits below can block indefinitely if no games
+            # arrive (workers dead/orphaned). They re-check the stop flag each
+            # poll and raise _ShutdownRequested on SIGTERM/SIGINT; catch it here
+            # and route to the same clean-stop save path used at the epoch
+            # boundary. This epoch did no training (no records ingested), so we
+            # save at `epoch` (not epoch + 1) and exit 0 with a resumable
+            # latest.pt. Identical to the max-wall-secs stop, just reached from
+            # inside the wait instead of after it.
+            try:
+                if args.wave_mode:
+                    stale_records, stale_groups, stale_metrics = _drain_stale_wave_versions(epoch)
+                    wave_records, wave_groups, wave_metrics = _ingest_worker_wave(epoch)
+                    records = stale_records + wave_records
+                    record_groups = stale_groups + wave_groups
+                    wave_metrics = {**stale_metrics, **wave_metrics}
+                    # LF1 per-version tile cap (opt-in; 0 = uncapped = today's path).
+                    # Acts AFTER the barrier ingest and BEFORE buffer add / SGD
+                    # schedule, so the capped tile flows consistently to both.
+                    if args.max_tile_games > 0:
+                        records, record_groups, cap_metrics = _cap_tile_games(
+                            records, record_groups, args.max_tile_games
+                        )
+                        wave_metrics = {**wave_metrics, **cap_metrics}
+                elif args.sgd_steps_per_epoch > 0:
+                    # TRAINER MODE (non-wave): NON-BLOCKING ingest. Drain
+                    # whatever new games are present right now and proceed to
+                    # SGD immediately — no --worker-min-games / -positions
+                    # barrier, so the trainer never idles waiting for inflow.
+                    # It cycles fast and publishes fresh weights each epoch
+                    # while the workers keep generating in the background.
+                    records, _tm_drained_games, _tm_drained_positions = (
+                        _drain_worker_batches_nonblocking()
+                    )
+                elif args.worker_min_positions > 0:
+                    records = _ingest_worker_batches(target_positions=args.worker_min_positions)
+                else:
+                    records = _ingest_worker_batches(
+                        target_games=args.worker_min_games or args.games_per_epoch,
+                    )
+            except _ShutdownRequested:
+                print(f"[stop] {_stop['reason']} during wave ingest at epoch "
+                      f"{epoch}; saving resumable checkpoint (buffer embedded), "
+                      f"exiting", flush=True)
+                _save_resumable(epoch)
+                break
         elif opponent_picker is None:
             evaluator = make_torch_evaluator(model, device)
             records = generate_games(
@@ -986,12 +1373,21 @@ def main() -> None:
 
         # --- training ---
         # Decide how many SGD steps this cycle. Priority (highest first):
+        #   0. --sgd-steps-per-epoch N (TRAINER MODE): FIXED N, independent of
+        #      inflow — structurally incapable of the inflow-driven runaway.
         #   1. --sgd-per-position * positions_ingested  (constant-age recipe)
         #   2. --sgd-per-game * games_ingested          (legacy K-based)
         #   3. --training-steps                          (static fallback)
         n_games_this_cycle = len(records)
         n_positions_this_cycle = sum(len(r.examples) for r in records)
-        if args.sgd_per_position is not None and n_positions_this_cycle > 0:
+        if args.sgd_steps_per_epoch > 0:
+            # TRAINER MODE: pin the per-epoch step count. Does NOT read the
+            # inflow (tile size / positions), so the train phase cannot grow
+            # with generation rate. Bypasses the schedule AND the
+            # --max-sgd-steps-per-epoch cap (a min(N, cap) clamp would be a
+            # no-op anyway against a fixed N).
+            steps_this_cycle = args.sgd_steps_per_epoch
+        elif args.sgd_per_position is not None and n_positions_this_cycle > 0:
             steps_this_cycle = max(
                 args.min_training_steps,
                 round(args.sgd_per_position * n_positions_this_cycle),
@@ -1004,6 +1400,24 @@ def main() -> None:
         else:
             steps_this_cycle = args.training_steps
 
+        # LF1 hard per-epoch SGD step cap (opt-in; 0 = no cap = today's path).
+        # Decouples SGD work from inflow entirely: clamps the computed step count
+        # from ANY schedule above, so the train phase cannot run away even if the
+        # tile grows. Note this clamps ABOVE the --min-training-steps floor; if a
+        # cap below min_training_steps were ever set, the cap wins (it is the
+        # explicit upper bound the operator asked for).
+        steps_before_cap = steps_this_cycle
+        # TRAINER MODE pins the count, so the cap is bypassed (a fixed N is
+        # already inflow-independent; a min(N, cap) clamp would just be a
+        # confusing second knob). Cap applies only in the schedule path.
+        if args.sgd_steps_per_epoch <= 0 and args.max_sgd_steps_per_epoch > 0:
+            steps_this_cycle = min(steps_this_cycle, args.max_sgd_steps_per_epoch)
+        sgd_step_cap_active = (
+            args.sgd_steps_per_epoch <= 0
+            and args.max_sgd_steps_per_epoch > 0
+            and steps_before_cap > steps_this_cycle
+        )
+
         train_metrics_acc: dict[str, list[float]] = {}
         train_start = time.time()
         # WL2 lever #4: grad accumulation. steps_this_cycle is the number of
@@ -1015,8 +1429,10 @@ def main() -> None:
         # the backward work we already paid for).
         accum_n = max(1, int(args.grad_accum_steps))
         optimizer_steps_this_cycle = 0
+        microbatch_steps_this_cycle = 0  # actual forward+backward passes run
         if buffer.size >= args.batch_size:
             for i in range(steps_this_cycle):
+                microbatch_steps_this_cycle += 1
                 planes, pi, z, side, ply = buffer.sample(args.batch_size)
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
@@ -1044,6 +1460,17 @@ def main() -> None:
         train_time = time.time() - train_start
         train_metrics = {k: float(np.mean(v)) for k, v in train_metrics_acc.items()}
 
+        # TRAINER MODE idle-guard: if this epoch did NO SGD (buffer not yet
+        # warm, or no games have arrived from the still-spinning-up workers),
+        # the non-blocking epoch would otherwise busy-spin and peg a CPU. A
+        # short poll-sleep keeps the cadence from free-running before the
+        # buffer fills, WITHOUT ever sleeping when there is real SGD work to do
+        # (so it never wastes the GPU). Re-checks the stop flag so SIGTERM
+        # stays prompt during warm-up.
+        if (args.sgd_steps_per_epoch > 0 and microbatch_steps_this_cycle == 0
+                and not _stop["requested"]):
+            time.sleep(args.worker_poll_sec)
+
         total_games += n_games_this_cycle if worker_input_dir is not None else args.games_per_epoch
 
         # Log key names depend on opponent: self-play tracks black/white, vs-baseline
@@ -1068,6 +1495,8 @@ def main() -> None:
             "time/gen_s": gen_time,
             "time/train_s": train_time,
             "train/steps_this_cycle": steps_this_cycle,
+            "train/steps_before_cap": steps_before_cap,
+            "train/sgd_step_cap_active": 1 if sgd_step_cap_active else 0,
             "train/optimizer_steps_this_cycle": optimizer_steps_this_cycle,
             "train/actual_sgd_per_game": (
                 steps_this_cycle / n_games_this_cycle if n_games_this_cycle else 0.0
@@ -1082,6 +1511,33 @@ def main() -> None:
             # Computed every cycle so wandb shows shape evolution over time.
             **buffer.shape_stats(),
         }
+        # TRAINER MODE metrics (only when --sgd-steps-per-epoch>0; otherwise
+        # NO new keys are emitted, so wave-mode / schedule cells log exactly as
+        # before). These measure the whole point of the mode:
+        #   - cumulative_sgd_steps: x-axis for "loss vs CUMULATIVE steps" — the
+        #     productive-vs-redundant-SGD test (perf page follow-up #5).
+        #   - sample_reuse_ratio: positions CONSUMED by SGD (steps*batch) /
+        #     positions INGESTED. >1 = re-using buffer positions; <1 = fresh
+        #     generation aging out unused.
+        if args.sgd_steps_per_epoch > 0:
+            cumulative_sgd_steps += microbatch_steps_this_cycle
+            cumulative_sgd_positions += microbatch_steps_this_cycle * args.batch_size
+            cumulative_new_positions += n_positions_this_cycle
+            log["train/cumulative_sgd_steps"] = cumulative_sgd_steps
+            log["train/cumulative_sgd_positions"] = cumulative_sgd_positions
+            log["train/cumulative_new_positions"] = cumulative_new_positions
+            log["train/sgd_positions_this_cycle"] = (
+                microbatch_steps_this_cycle * args.batch_size
+            )
+            log["train/sample_reuse_ratio"] = (
+                cumulative_sgd_positions / cumulative_new_positions
+                if cumulative_new_positions > 0 else 0.0
+            )
+            log["train/sample_reuse_ratio_epoch"] = (
+                (microbatch_steps_this_cycle * args.batch_size) / n_positions_this_cycle
+                if n_positions_this_cycle > 0 else 0.0
+            )
+
         # WL2 lever #1: diagnose runaway divergence between learn-brain and
         # play-brain. Logged only when EMA is enabled.
         if ema_model is not None:
@@ -1149,6 +1605,11 @@ def main() -> None:
                 f"workers={wave_metrics.get('wave/games_per_worker_min', 0)}-"
                 f"{wave_metrics.get('wave/games_per_worker_max', 0)} "
                 f"extras={wave_metrics.get('wave/greedy_extras_count', 0)}]"
+            )
+        if args.sgd_steps_per_epoch > 0:
+            msg += (
+                f" trainer[cumsteps={log.get('train/cumulative_sgd_steps', 0)} "
+                f"reuse={log.get('train/sample_reuse_ratio', 0.0):.2f}]"
             )
         wr_bits = [
             f"{key[3:]}={log[f'eval/{key}_winrate']:.0%}"
@@ -1232,6 +1693,22 @@ def main() -> None:
                         pass
             # Sweep .tmp leftovers and unknown files past the age threshold.
             _sweep_orphans()
+
+        # --- clean stop: SIGTERM/SIGINT received, or wall-time cap reached ---
+        # Checked at the epoch boundary so a partial epoch is never interrupted.
+        # Either path force-saves a resumable latest.pt (buffer embedded) so the
+        # next slice resumes without a cold refill, then exits 0 (wandb flushes
+        # on normal exit).
+        if not _stop["requested"] and args.max_wall_secs > 0:
+            if (time.monotonic() - _wall_start) >= args.max_wall_secs:
+                _stop["requested"] = True
+                _stop["reason"] = f"--max-wall-secs {args.max_wall_secs:g}"
+        if _stop["requested"]:
+            print(f"[stop] {_stop['reason']} after epoch {epoch + 1}; "
+                  f"saving resumable checkpoint (buffer embedded), exiting",
+                  flush=True)
+            _save_resumable(epoch + 1)
+            break
 
 
 if __name__ == "__main__":

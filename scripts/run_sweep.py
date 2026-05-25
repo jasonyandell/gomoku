@@ -27,6 +27,7 @@ Per-process logs land in `sweep_logs/<cell>/{trainer,w0..wN,eval}.log`.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -40,6 +41,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Reuse whichever interpreter launched us — works from main repo OR a worktree
 # that doesn't have its own .venv.
 PYTHON = sys.executable
+
+# Time-capped-slice teardown tuning (used only when --max-wall-secs is set).
+# The trainer self-caps at --max-wall-secs on an epoch boundary and exits clean;
+# these govern the supervisor's fallbacks around that.
+TRAINER_CAP_GRACE_SEC = 180.0   # let one long epoch finish past the cap before forcing
+TEARDOWN_GRACE_SEC = 90.0       # time for the trainer's final buffer save (~1.4 GB)
+FINAL_EVAL_TIMEOUT_SEC = 360.0  # one eval_worker cycle incl. lookahead:depth=4
 
 
 @dataclass
@@ -104,6 +112,9 @@ class Cell:
     validation_archive_path: str | None = None
     archive_start_path: str | None = None
     archive_start_frac: float = 0.0
+    # Log this cell to W&B. Real cells do; the SMOKE plumbing cell sets False
+    # so repeated bundle smokes don't litter the project with junk runs.
+    wandb: bool = True
     extra_train_args: list[str] = field(default_factory=list)
     extra_worker_args: list[str] = field(default_factory=list)
 
@@ -111,6 +122,16 @@ class Cell:
 # Sweep matrix: K = sgd-per-game, buffer-size axes.
 # Cell E ≈ what we just ran (control). C is the highest-contrast first try.
 CELLS: dict[str, Cell] = {
+    # Fast bundle-plumbing smoke: tiny model, 2 workers, small buffer, low sims.
+    # Not a training experiment — exists to exercise the launch → supervise →
+    # teardown → --final-eval path quickly (pair with --max-wall-secs). epochs
+    # high + save_buffer_every high so the only resumable save is the clean-stop.
+    "SMOKE": Cell("SMOKE-bundle-plumbing", sgd_per_game=1.0,
+                  buffer_size=5_000, games_per_epoch=8,
+                  size="tiny", stem_padding=1, n_simulations=30,
+                  n_workers=2, games_per_batch=4,
+                  temperature_moves=10, temperature_final=0.1,
+                  save_buffer_every=100_000, epochs=100_000, wandb=False),
     "A": Cell("A-K1-buf50k",   sgd_per_game=1.0, buffer_size=50_000),
     "B": Cell("B-K2-buf50k",   sgd_per_game=2.0, buffer_size=50_000),
     "C": Cell("C-K4-buf50k",   sgd_per_game=4.0, buffer_size=50_000),
@@ -307,6 +328,247 @@ CELLS: dict[str, Cell] = {
                 validation_archive_path="archives/wl5_validation_v1.pt",
                 archive_start_path="archives/wl5_validation_v1.pt",
                 archive_start_frac=0.15),
+    # LF1: the perf lab's R-TRAIN-LEAN-fp16 recipe (+152% throughput vs WL5 in
+    # lab_train_cell) as a REAL training run — the TQ canary. Exact WL5 recipe
+    # with the 3 perf deltas: wave_size 64->512, sgd_per_position 0.0025->0.001,
+    # workers +--fp16-eval. 100-epoch fresh test: does the faster recipe LEARN
+    # cleanly (val/policy_ce down, plies healthy, eval-vs-baselines climbing,
+    # 0 NaN)? Started HOT (chip heat-soaked from the 2026-05-23 perf session;
+    # note for cold/hot comparison). Production adoption stays TQ-gated.
+    "LF1": Cell("LF1-lean-fp16-canary", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                wave_size=512,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.001,
+                save_buffer_every=100,
+                ema_tau=0.99,
+                grad_accum_steps=4,
+                opponent_mix_recent=0.4,
+                opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0,
+                weights_poll_max_sec=8.0,
+                random_opening_moves=0,
+                epochs=1000,
+                validation_archive_path="archives/wl5_validation_v1.pt",
+                archive_start_path="archives/wl5_validation_v1.pt",
+                archive_start_frac=0.15,
+                extra_worker_args=["--fp16-eval"]),
+    # PERFA / PERFB: two IDENTICAL clones of the WL4 production recipe, used
+    # ONLY to measure concurrent-run perf degradation (Jason 2026-05-24). Each
+    # is a full 8-worker + trainer + eval production launch with its own wandb
+    # run. Distinct cell names give independent sweep_runs/sweep_logs dirs so
+    # each run's per-epoch (gen=/train=) timing can be parsed separately. Not a
+    # training experiment — fresh weights, torn down after the measurement.
+    "PERFA": Cell("PERFA-degrade-test", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025,
+                save_buffer_every=100,
+                ema_tau=0.99,
+                grad_accum_steps=4,
+                opponent_mix_recent=0.4,
+                opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0,
+                weights_poll_max_sec=8.0,
+                random_opening_moves=0,
+                epochs=100),
+    "PERFB": Cell("PERFB-degrade-test", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025,
+                save_buffer_every=100,
+                ema_tau=0.99,
+                grad_accum_steps=4,
+                opponent_mix_recent=0.4,
+                opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0,
+                weights_poll_max_sec=8.0,
+                random_opening_moves=0,
+                epochs=100),
+    # Δelo Derby v2 roster (raced by scripts/delo_derby.py via the
+    # run_sweep_wall_slice engine + scripts/derby_v2_board.json). The v1 top-3,
+    # now on the PRODUCTION multiprocess wave-mode recipe (WL4-style base, no
+    # WL5 archive/validation levers — clean fresh race). Each changes exactly
+    # ONE lever vs the shared base. epochs huge so only --max-wall-secs stops a
+    # slice. NOTE (sgd-800): in wave-mode, training intensity is governed by
+    # sgd_per_position; train.py overrides --training-steps when it's set, so
+    # the faithful "2× SGD" lever is sgd_per_position 0.0025 -> 0.005, not
+    # training_steps.
+    "derby-open-div4": Cell("derby-open-div4", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=4),   # ← the one lever (was 0)
+    "derby-temp-16": Cell("derby-temp-16", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=16, temperature_final=0.1,   # ← the one lever (was 30)
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=0),
+    "derby-sgd-800": Cell("derby-sgd-800", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.005, save_buffer_every=100,   # ← the one lever (2× baseline)
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=0),
+    # ── Δelo Derby v3 ── prior-art levers (learn-from-those-who-came-before),
+    # raced wall-matched against the SAME base as the v2 carryovers above. C0 is
+    # the no-lever control; each lever cell changes exactly one thing vs C0 via
+    # the extra_worker_args / extra_train_args escape hatches (the v3 flags live
+    # on selfplay_worker [gen levers] and gomoku.train [swa]). In wave-mode the
+    # workers generate, so playout-cap / forced-playouts / gumbel are WORKER
+    # args; SWA publishes the generator weights, so it is a TRAINER arg.
+    "derby-c0": Cell("derby-c0", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=0),   # control: no lever
+    "derby-playoutcap": Cell("derby-playoutcap", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                # ← the one lever: KataGo playout-cap randomization
+                extra_worker_args=["--playout-cap-frac", "0.25",
+                                   "--playout-cap-fast-sims", "50"]),
+    "derby-forced": Cell("derby-forced", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                # ← the one lever: KataGo forced playouts + target pruning
+                extra_worker_args=["--forced-playout-k", "2.0"]),
+    "derby-swa": Cell("derby-swa", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=400,
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                # ← the one lever: SWA tail-avg generator (replaces the EMA publish)
+                extra_train_args=["--swa-window", "5"]),
+    "derby-gumbel": Cell("derby-gumbel", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,  # cheap sims — the gumbel value-prop
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                # ← the lever: native Gumbel root + SH at cheap sims (good targets, fast gen)
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16"]),
+    "derby-sims100": Cell("derby-sims100", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,  # gumbel's control: plain MCTS at 100 sims
+                n_workers=8, games_per_batch=8, wave_mode=True,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000,
+                random_opening_moves=0),   # control for gumbel: 100 sims, no gumbel (v1: floored)
+    # A/B vs derby-gumbel: SAME generator (Gumbel@100, 8 workers) but the FIXED-STEP /
+    # fast-cadence trainer instead of wave + sgd_per_position. wave_mode=False routes to
+    # the non-wave async path; --sgd-steps-per-epoch N pins SGD to N steps/epoch
+    # (decoupled from the gen flood → structurally can't run away) with non-blocking
+    # ingest (~5s/epoch, many fast epochs). Tests whether "many faster epochs" climbs
+    # faster than wave-scaled SGD when generation floods. N=64 is a ~5s starting point —
+    # confirm/tune from the first chunk's trainer.log epoch wall + watch train/sample_reuse_ratio.
+    "derby-gumbel-fast5s": Cell("derby-gumbel-fast5s", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,  # ← non-wave async path
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,  # (overridden by --sgd-steps-per-epoch)
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16"],      # same gen as derby-gumbel
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),            # ← the fixed-step lever
 }
 
 
@@ -348,8 +610,9 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         "--save-buffer-every", str(cell.save_buffer_every),
         "--keep-last-n", str(cell.keep_last_n),
         "--no-eval",
-        "--wandb", "--wandb-project", "gomoku",
+        "--wandb-project", "gomoku",
         "--run-name", f"9x9-sweep-{cell.name}",
+        ("--wandb" if cell.wandb else "--no-wandb"),
         *cell.extra_train_args,
     ]
     if cell.stem_padding is not None:
@@ -455,7 +718,56 @@ def clean_cell(cell: Cell) -> None:
         base.rmdir()
 
 
-def launch_cell(cell: Cell, foreground: bool, resume_path: str | None = None) -> None:
+def _terminate_all(procs: list[tuple[str, subprocess.Popen]]) -> None:
+    """SIGTERM everything still alive, then wait. The trainer's SIGTERM handler
+    force-saves a resumable latest.pt (buffer embedded), so we give the group up
+    to TEARDOWN_GRACE_SEC to flush before hard-killing any straggler. Workers and
+    the eval_worker are stateless and exit promptly."""
+    for _label, p in procs:
+        if p.poll() is None:
+            p.terminate()
+    deadline = time.monotonic() + TEARDOWN_GRACE_SEC
+    for label, p in procs:
+        try:
+            p.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            print(f"  {label} did not exit within {TEARDOWN_GRACE_SEC:g}s; killing")
+            p.kill()
+
+
+def _run_final_eval(cell: Cell, dirs: dict) -> None:
+    """One-shot eval of the final published weights → a fresh eval/model_elo line
+    in eval_results.jsonl. This is the training machine evaluating itself at the
+    end of a capped slice (eval stays inside the bundle, not the lab's job)."""
+    cmd = eval_cmd(cell, dirs) + ["--max-cycles", "1"]
+    log_path = dirs["log_dir"] / "final_eval.log"
+    print(f"=== final eval (one-shot --max-cycles 1) for cell {cell.name} ===")
+    env = os.environ.copy()
+    env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    env["GOMOKU_DEVICE"] = "cpu"
+    with open(log_path, "a") as log_f:
+        p = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT,
+                             env=env, cwd=str(REPO_ROOT))
+        try:
+            p.wait(timeout=FINAL_EVAL_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            print(f"  final eval exceeded {FINAL_EVAL_TIMEOUT_SEC:g}s; killing")
+            p.kill()
+    # Surface the freshest model_elo so the launcher's stdout carries the result.
+    jsonl = dirs["checkpoint_dir"] / "eval_results.jsonl"
+    try:
+        last = jsonl.read_text().strip().splitlines()[-1]
+        rec = json.loads(last)
+        elo = rec.get("eval/model_elo")
+        ep = rec.get("eval_worker/epoch_evaluated")
+        if elo is not None:
+            print(f"  final eval: epoch={ep} model_elo={elo:.0f}")
+    except (OSError, ValueError, IndexError):
+        print(f"  final eval: no eval_results.jsonl line found at {jsonl}")
+
+
+def launch_cell(cell: Cell, foreground: bool, resume_path: str | None = None,
+                max_wall_secs: float = 0.0, final_eval: bool = False) -> None:
     dirs = cell_dirs(cell)
     dirs["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
     dirs["records_dir"].mkdir(parents=True, exist_ok=True)
@@ -481,6 +793,9 @@ def launch_cell(cell: Cell, foreground: bool, resume_path: str | None = None) ->
     if resume_path:
         t_cmd += ["--resume", str(resume_path)]
         print(f"  trainer resuming from {resume_path}")
+    if max_wall_secs > 0:
+        t_cmd += ["--max-wall-secs", str(max_wall_secs)]
+        print(f"  trainer time-capped at {max_wall_secs:g}s (clean self-save on cap)")
     spawn("trainer", t_cmd)
     # Give the trainer a head start so workers find the initial weights file.
     time.sleep(2.0)
@@ -488,26 +803,50 @@ def launch_cell(cell: Cell, foreground: bool, resume_path: str | None = None) ->
         spawn(f"w{i}", worker_cmd(cell, dirs, f"w{i}", seed=1000 + i))
     spawn("eval", eval_cmd(cell, dirs), env_override={"GOMOKU_DEVICE": "cpu"})
 
-    if not foreground:
+    capped = max_wall_secs > 0
+    if not foreground and not capped:
+        # Fire-and-forget background launch (unchanged behaviour).
         print(f"backgrounded {len(procs)} processes for cell {cell.name}")
         print(f"  tail logs:  tail -F {dirs['log_dir']}/trainer.log")
         print(f"  stop cell:  pkill -f 'sweep-{cell.name}|sweep_runs/{cell.name}/'")
         return
 
-    print(f"foregrounded — Ctrl-C to stop all {len(procs)} processes")
+    # Supervised mode: a foreground run OR a time-capped research slice. We stay
+    # alive, watch the bundle, and tear it down cleanly. In capped mode the
+    # trainer self-caps on an epoch boundary and exits clean (force-saving a
+    # resumable latest.pt); a hard deadline (cap + grace) SIGTERMs a trainer
+    # stuck in a long epoch — its handler still force-saves. This is
+    # backgroundable via nohup: the lab launches it and is notified when the
+    # launcher exits at the cap.
+    trainer_proc = procs[0][1]  # trainer is always spawned first
+    hard_deadline = (time.monotonic() + max_wall_secs + TRAINER_CAP_GRACE_SEC
+                     if capped else None)
+    if capped:
+        print(f"supervising cell {cell.name}: {max_wall_secs:g}s cap "
+              f"(+{TRAINER_CAP_GRACE_SEC:g}s grace), final_eval={final_eval}")
+    else:
+        print(f"foregrounded — Ctrl-C to stop all {len(procs)} processes")
+    forced = False
+    reason = "trainer exited"
     try:
         while True:
             time.sleep(2.0)
-            for label, p in procs:
-                rc = p.poll()
-                if rc is not None:
-                    print(f"  {label} exited with rc={rc}; stopping others")
-                    raise KeyboardInterrupt
+            dead = [lbl for lbl, p in procs if p.poll() is not None]
+            if dead:
+                reason = f"{', '.join(dead)} exited"
+                break
+            if hard_deadline and not forced and time.monotonic() >= hard_deadline:
+                print(f"  [cap] trainer still in an epoch {TRAINER_CAP_GRACE_SEC:g}s "
+                      f"past the {max_wall_secs:g}s cap; SIGTERM for a clean save")
+                trainer_proc.terminate()
+                forced = True
     except KeyboardInterrupt:
-        for label, p in procs:
-            if p.poll() is None:
-                p.terminate()
-        print("stopped all")
+        reason = "KeyboardInterrupt"
+    print(f"=== tearing down cell {cell.name} ({reason}) ===")
+    _terminate_all(procs)
+    if final_eval:
+        _run_final_eval(cell, dirs)
+    print(f"cell {cell.name} done")
 
 
 def main() -> None:
@@ -524,6 +863,17 @@ def main() -> None:
                         "Passes through as --resume to gomoku.train. wandb run id "
                         "embedded in the checkpoint will continue the same wandb "
                         "timeline. Useful for swapping perf configs mid-run.")
+    p.add_argument("--max-wall-secs", type=float, default=0.0,
+                   help="Time-cap the slice: the trainer self-caps at this many "
+                        "wall-seconds (epoch boundary), force-saves a resumable "
+                        "latest.pt, and exits; this launcher supervises the bundle "
+                        "and tears down workers + eval cleanly. 0 = run to the "
+                        "cell's epoch budget (legacy fire-and-forget background). "
+                        "This is how a training run becomes a research SLICE.")
+    p.add_argument("--final-eval", action="store_true",
+                   help="After teardown, run one eval_worker cycle (--max-cycles 1) "
+                        "against the final published weights so eval_results.jsonl "
+                        "ends on a fresh eval/model_elo. Pairs with --max-wall-secs.")
     args = p.parse_args()
 
     if args.list or not args.cell:
@@ -540,7 +890,8 @@ def main() -> None:
         clean_cell(cell)
         return
 
-    launch_cell(cell, foreground=args.foreground, resume_path=args.resume)
+    launch_cell(cell, foreground=args.foreground, resume_path=args.resume,
+                max_wall_secs=args.max_wall_secs, final_eval=args.final_eval)
 
 
 if __name__ == "__main__":
