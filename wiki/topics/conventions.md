@@ -115,6 +115,23 @@ This is the general form of the lab's two-queue fan-out
 orchestration is its lab-specific instantiation. Mirrored in memory:
 [[feedback-fan-out-preserve-context]].
 
+## Two native agent-instruction files
+
+`AGENTS.md` (read by Codex / other agents) and `CLAUDE.md` (auto-loaded by
+Claude Code — which reads `CLAUDE.md`, **not** `AGENTS.md`) are kept as **two
+standalone, fully-duplicated native translations** of the same guidance, each in
+its own voice. We do **not** use a `CLAUDE.md → @AGENTS.md` import: `@`-imports
+are read unreliably by both models, so each file must stand alone.
+
+**The cost is drift, and it is real** — we caught `AGENTS.md` silently missing
+`worktree_session.py` and `--gauge` because they were added only to `CLAUDE.md`.
+So the rule: **when you change a shared rule, edit BOTH files in the same
+change.** Each file carries a "native twin — keep in sync" note at its top.
+Claude-Code-only bits (skills, the `~/.claude` memory system) stay prominent in
+`CLAUDE.md` and appear as a brief "Claude Code specifics" note in `AGENTS.md`.
+
+Mirrored in memory: [[feedback-two-native-agent-docs]].
+
 ## Memories also go to the wiki
 
 When saving a memory under

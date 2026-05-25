@@ -1,73 +1,79 @@
 # CLAUDE.md
 
-AlphaZero for 9×9 free-style gomoku on Apple Silicon (PyTorch + MPS), with
-W&B from day one. This file is the Claude Code entry map. Claude Code auto-loads
-**only `CLAUDE.md`** (not `AGENTS.md`), so the line below imports the shared
-agent orientation; the rest adds Claude-Code-specific operating rules.
+AlphaZero for 9×9 free-style gomoku on Apple Silicon (PyTorch + MPS), W&B from
+day one. This is the Claude Code entry map and a **native twin of `AGENTS.md`** —
+the two are kept deliberately duplicated rather than linked by an `@import`
+(models read imports unreliably). **Change a shared rule here? Change it in
+`AGENTS.md` too.** See `wiki/topics/conventions.md` § Two native
+agent-instruction files.
 
-@AGENTS.md
+## Read first
+1. **`wiki/index.md`** — the maintained synthesis layer and source of truth; pick
+   the doorway for your task. (LLM-wiki pattern: raw evidence stays stable, the
+   wiki compounds learning so each session is smarter than the last.)
+2. **`TRAINING_WIKI.md`** — append-only chronological training notebook (W&B run
+   IDs, checkpoint meanings, failed hypotheses, learning-dynamics
+   interpretation). Read before claiming why training works/fails; add dated
+   corrections, don't rewrite old conclusions.
+3. **`README.md`** — setup + the user-facing command surface.
 
-## Read first (in order)
+General read order: wiki → `TRAINING_WIKI.md` → W&B/logs/checkpoints → code
+(dynamics are subtle; code inspection alone usually misleads).
 
-1. **[wiki/index.md](wiki/index.md)** — the maintained synthesis layer; pick the
-   doorway matching your task. The wiki is the **source of truth**; this repo
-   compounds what we learn instead of rediscovering it each session.
-2. **[README.md](README.md)** — setup and the user-facing command surface.
+## Repo shape
+- `gomoku/`: `game.py` (9×9 state, D4 aug), `model.py` (residual policy/value +
+  checkpoint format), `mcts.py` (PUCT, wave-batched eval), `self_play.py` /
+  `selfplay_worker.py` (record gen), `train.py` (trainer, replay buffer, W&B,
+  checkpointing), `baselines.py`/`eval.py`/`match.py` (fixed opponents + probes).
+- `tests/`, `scripts/`, `web/`+`app/` (playable). `wiki/` (index, log, sources,
+  topics, ops/). `checkpoints*/`, `sweep_logs/`, `sweep_runs/`, `wandb/` =
+  artifacts — evidence; don't clean or overwrite unless asked.
 
 ## Commands
-
 ```bash
 source .venv/bin/activate          # uv venv; uv pip install -e ".[dev]"
-pytest                              # tests/ — run before claiming a change works
-gomoku-train --help                # training loop (checkpoints/latest.pt embeds buffer for resume)
+pytest                              # run before claiming a change works
+gomoku-train --help                # latest.pt embeds the buffer for resume
 gomoku-play --checkpoint checkpoints/latest.pt
 gomoku-web                         # FastAPI UI around a checkpoint
 ```
-
-Native hot-path extensions can be disabled for A/B: `GOMOKU_DISABLE_NATIVE_MCTS=1`,
-`GOMOKU_DISABLE_NATIVE_STATE_OPS=1`. Prefer MPS over CPU paths on this machine.
+Native ext A/B: `GOMOKU_DISABLE_NATIVE_MCTS=1`, `GOMOKU_DISABLE_NATIVE_STATE_OPS=1`.
+Prefer MPS over CPU. W&B project: `gomoku` (pull exact run histories, don't guess).
 
 ## Conventions that override default behavior
-
 - **One worktree per unit of work — never edit the shared `main` checkout.**
-  The canonical lifecycle (worktree off `main` → `feat/<slug>` → `git merge
-  --no-ff` → remove worktree + branch) is in
-  [wiki/topics/branch-and-worktree-workflow.md](wiki/topics/branch-and-worktree-workflow.md).
-  This is load-bearing: the overnight derby, the user's IDE, and other agent
-  sessions routinely share the `main` checkout concurrently. Working there
-  entangles diffs and blocks clean merges. **Never rebase, fast-forward, or squash.**
-  Start worktrees with `python scripts/worktree_session.py add <slug>` — it
-  records the owning Claude session so the branch's logs are findable later via
-  `claude --resume <id>` (`worktree_session.py log` survives teardown).
-- **Run the janitor at session start:** `python scripts/reclaim_worktrees.py --apply`
-  reclaims worktrees/branches leaked by crashed sessions; `--gauge` prints the
-  repo-hygiene metric. Cleanup is a janitor + gauge, not a remembered
-  procedure ([wiki/topics/worktree-hygiene.md](wiki/topics/worktree-hygiene.md)).
-- **Fan out to preserve context.** Your context window is the scarcest resource
-  in a long session. Delegate context-heavy or parallelizable work to subagents
-  (background via `run_in_background: true` when async) — broad searches, log/
-  transcript trawls, many-file reads, independent parallel tasks — and keep only
-  their distilled findings, not the file dumps. Pair edits with `isolation:
-  worktree`. See [wiki/topics/conventions.md](wiki/topics/conventions.md) § Fan
-  out to preserve context.
-- **Don't compete with live GPU/CPU tenants.** A non-lab process on the box (or
-  a running derby) is a reason to wait/escalate, not to barge in. Check before
-  any GPU dispatch.
-- **Wiki/evidence discipline:** the wiki is canonical synthesis; `TRAINING_WIKI.md`
-  is append-only chronological evidence (don't rewrite old conclusions — add
-  dated corrections). Don't clean or overwrite `checkpoints*/`, `sweep_logs/`,
-  `wandb/` unless asked.
+  Lifecycle: worktree off `main` → `feat/<slug>` → `git merge --no-ff` → remove
+  worktree + branch (`wiki/topics/branch-and-worktree-workflow.md`). The derby,
+  the user's IDE, and other sessions share `main` concurrently; working there
+  entangles diffs and blocks clean merges. **Never rebase, fast-forward, squash.**
+  Start with `python scripts/worktree_session.py add <slug>` — records the owning
+  session for `claude --resume <id>` (`worktree_session.py log` survives teardown).
+- **Janitor at session start:** `python scripts/reclaim_worktrees.py --apply`
+  reclaims what crashed sessions leak; `--gauge` prints the repo-hygiene metric.
+  Janitor + gauge, not a remembered procedure (`wiki/topics/worktree-hygiene.md`).
+- **Fan out to preserve context.** Context is the scarcest resource; delegate
+  context-heavy/parallel work to subagents (`run_in_background: true` when async)
+  — broad searches, log trawls, many-file reads, independent tasks — and keep the
+  findings, not the file dumps. Pair edits with `isolation: worktree`.
+  (`wiki/topics/conventions.md` § Fan out to preserve context.)
+- **Don't compete with live GPU/CPU tenants.** A non-lab process / running derby
+  → wait or escalate, not barge in. Check before any GPU dispatch.
+- **Evidence vs synthesis.** Wiki = canonical synthesis; `TRAINING_WIKI.md`
+  append-only (dated corrections). Don't clean/overwrite `checkpoints*/`,
+  `sweep_logs/`, `wandb/` unless asked. File reusable answers back to the wiki.
+- **ML judgment.** Fixed baselines (heuristic/lookahead) for strength, not
+  sibling head-to-head (non-transitive). Short evals are noisy (small-n = hint).
+  Watch `selfplay/plies_mean`: falling + concave buffer-fill = fast-attack
+  collapse. Experiment notes evidence-backed (cmd/config, run ID, checkpoint,
+  metrics). Preserve user work.
 
 ## Skills (invoke when the task matches)
-
-- **`gomoku-train`** — start/resume/stop/tune the training loop, the web UI,
-  play against a checkpoint.
-- **`gomoku-research-lab`** — the autonomous research lab: two-queue scheduler
-  (GPU-serial + parallel agent fan-out), receipts + Reviewer audits, time-capped
-  training slices, the Δelo Derby. The north-star metric is **Δelo/Δt**.
+- **`gomoku-train`** — start/resume/stop/tune the loop, the web UI, play a checkpoint.
+- **`gomoku-research-lab`** — two-queue scheduler (GPU-serial + parallel agent
+  fan-out), receipts + Reviewer audits, time-capped training slices, the Δelo
+  Derby. North-star: **Δelo/Δt**.
 
 ## Persistent memory
-
-Cross-session memory lives at
-`~/.claude/projects/-Users-jason-code-gomoku/memory/` (indexed by `MEMORY.md`).
-Every durable lesson also gets a wiki section — memory points back to the wiki.
+`~/.claude/projects/-Users-jason-code-gomoku/memory/` (indexed by `MEMORY.md`),
+auto-loaded each session. Every durable lesson also gets a wiki section — memory
+points back to the wiki (the source of truth).
