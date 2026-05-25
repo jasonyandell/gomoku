@@ -29,6 +29,15 @@ class ModelConfig:
     # feature map from BOARD_SIZE to BOARD_SIZE+4 after the stem, giving the
     # network a "virtual padding zone" around the real board.
     stem_padding: int = 3
+    # V3 auxiliary opponent-reply policy head (KataGo-style). When False
+    # (default), the head modules are NOT constructed, so state_dict(), the
+    # param count, and the inference graph are byte-identical to a model
+    # without this field. When True, a structural clone of the policy head
+    # taps the same shared tower; it is a TRAINING-ONLY appendage, never run
+    # by forward() unless the trainer explicitly passes return_aux=True, and
+    # never touched by fuse_model_for_inference. Gated on by the trainer flag
+    # --aux-opponent-reply-weight > 0.
+    aux_opponent_reply: bool = False
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -83,7 +92,29 @@ class GomokuNet(nn.Module):
         self.value_fc1 = nn.Linear(cfg.value_filters * spatial * spatial, cfg.value_hidden)
         self.value_fc2 = nn.Linear(cfg.value_hidden, 1)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # V3 auxiliary opponent-reply policy head — a structural clone of the
+        # policy head off the SAME shared tower output `h`. Constructed ONLY
+        # when cfg.aux_opponent_reply is set, so the off-case state_dict and
+        # param count are byte-identical to a head-less model. Predicts the
+        # opponent's MCTS policy at the next ply (training-only target; dropped
+        # at inference — see forward(return_aux=...) and fuse_model_for_inference).
+        if cfg.aux_opponent_reply:
+            self.aux_policy_conv = nn.Conv2d(c, cfg.policy_filters, 1, bias=False)
+            self.aux_policy_bn = nn.BatchNorm2d(cfg.policy_filters)
+            self.aux_policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, N_ACTIONS)
+
+    def forward(
+        self, x: torch.Tensor, *, return_aux: bool = False
+    ) -> tuple[torch.Tensor, ...]:
+        """Forward pass. Returns (policy, value) by default.
+
+        When return_aux=True AND the aux head was constructed
+        (cfg.aux_opponent_reply), returns (policy, value, aux_policy) — the
+        third tensor is the opponent-reply logits. Only the trainer passes
+        return_aux=True; self-play and eval call forward(x) and never run the
+        aux head (zero aux FLOPs in the generation-bound path). Passing
+        return_aux=True on a model without the aux head raises, since there is
+        nothing to return."""
         h = self.tower(self.stem(x))
 
         p = F.relu(self.policy_bn(self.policy_conv(h)))
@@ -92,16 +123,38 @@ class GomokuNet(nn.Module):
         v = F.relu(self.value_bn(self.value_conv(h)))
         v = F.relu(self.value_fc1(v.flatten(1)))
         v = torch.tanh(self.value_fc2(v)).squeeze(-1)
+
+        if return_aux:
+            if not self.cfg.aux_opponent_reply:
+                raise RuntimeError(
+                    "forward(return_aux=True) requires cfg.aux_opponent_reply=True "
+                    "(aux head was not constructed)"
+                )
+            a = F.relu(self.aux_policy_bn(self.aux_policy_conv(h)))
+            a = self.aux_policy_fc(a.flatten(1))
+            return p, v, a
         return p, v
 
 
-def build_model(size: str = "small", *, stem_padding: int | None = None) -> GomokuNet:
+def build_model(
+    size: str = "small",
+    *,
+    stem_padding: int | None = None,
+    aux_opponent_reply: bool = False,
+) -> GomokuNet:
     if size not in SIZE_PRESETS:
         raise ValueError(f"unknown size {size!r}; options: {list(SIZE_PRESETS)}")
     cfg = SIZE_PRESETS[size]
+    overrides: dict = {}
     if stem_padding is not None:
+        overrides["stem_padding"] = stem_padding
+    # Only override aux_opponent_reply when explicitly enabled, so the default
+    # build path is byte-identical to before this field existed.
+    if aux_opponent_reply:
+        overrides["aux_opponent_reply"] = True
+    if overrides:
         from dataclasses import replace
-        cfg = replace(cfg, stem_padding=stem_padding)
+        cfg = replace(cfg, **overrides)
     return GomokuNet(cfg)
 
 
