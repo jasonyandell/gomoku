@@ -3,7 +3,7 @@
   "global": {
     "engine": "run_sweep_wall_slice",
     "slice_secs": 600,
-    "cap_wall_secs": 10800,
+    "cap_wall_secs": 86400,
     "base_out_dir": "sweep_runs/derby_v4",
     "board_md_path": "sweep_runs/derby_v4/standings.md",
     "beat_heuristic_elo": 800

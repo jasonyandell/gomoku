@@ -45,8 +45,17 @@ PYEOF
 
 while true; do
   if race_complete; then
-    echo "$(date -u +%H:%M:%SZ) RACE COMPLETE — watchdog exiting" >> "$NARR"
-    exit 0
+    # Jason's overnight directive: "if it runs out of time budget, keep it going
+    # anyway." Instead of exiting, bump every-lane cap by +12h and let the loop
+    # restart the (now-exited) derby; --resume re-reads the bumped board and
+    # re-activates the capped lanes (is_capped recomputes wall vs the new cap).
+    "$PY" - <<'PYEOF'
+import json
+p="scripts/derby_v4_board.json"; b=json.load(open(p))
+b["global"]["cap_wall_secs"]=float(b["global"]["cap_wall_secs"])+43200.0
+json.dump(b,open(p,"w"),indent=2)
+PYEOF
+    echo "$(date -u +%H:%M:%SZ) all lanes capped — bumped cap +12h, will restart (keep-going-anyway)" >> "$NARR"
   fi
   if ! is_alive; then
     echo "$(date -u +%H:%M:%SZ) derby DOWN — restarting (--resume)" >> "$NARR"
