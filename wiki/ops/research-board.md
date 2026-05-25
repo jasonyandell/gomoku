@@ -108,6 +108,36 @@ byte-identical when off, merged `--no-ff` serially with one native rebuild).
 > **aux-head** (opponent-reply, Class-C model-arch) is built + verified but parked on
 > its **own axis/board** — not in this search/recipe race.
 
+### v3 FINAL — verdict (called as-is 2026-05-24, in prep for new contenders)
+
+> Jason called v3 once `gumbel-fast5s` proved itself, to clear the board for a new
+> round. Standings are the live fine-grained peaks (the slice-close state lags the
+> mid-slice high-water mark — e.g. `gumbel-fast5s` touched 1620 mid-slice but its
+> slice-close points were ~1455). 6 ideas after the mid-run prune of temp-16 /
+> sgd-800 / playoutcap / swa (all stuck at the 389 floor).
+
+| rank | idea | peak | wall→peak | grokked? | what it is |
+|---:|---|---:|---:|:--:|---|
+| 1 | **gumbel-fast5s** | **1620** ✓ | **~17 min** | yes | Gumbel@100 gen + **fixed-step trainer** (non-wave, `--sgd-steps-per-epoch 64`) |
+| 2 | **gumbel** | **1580** ✓ | ~33 min | yes | Gumbel@100 gen + wave + `sgd_per_position` |
+| 3 | forced | 1262 ✓ | ~21 min | yes | KataGo forced playouts + target pruning |
+| 4 | open-div4 | 776 | ~21 min | ~ | v1's #1 (random openings) |
+| 5 | sims100 | 697 | ~23 min | ~ | plain MCTS@100 — gumbel's control |
+| 6 | c0 | 603 | ~21 min | ~ | no-lever control |
+
+**Findings:**
+1. **The Gumbel cheap-sims generator dominates.** `gumbel`/`gumbel-fast5s` (Gumbel@100) peaked ~1580–1620 — *more than 2× the control* `sims100` (plain MCTS@100, 697). So Gumbel doesn't just ride cheap sims, it **rescues** them: good targets at n=100 ≫ plain visit-count targets at n=100. This was the highest-leverage import.
+2. **Fixed-step trainer ≥ wave, at ~2× Δelo/hr.** Same Gumbel@100 generator; only the training mode differs. `gumbel-fast5s` reached an *equal-or-higher* peak (1620 vs 1580 — within eval noise, so call it a tie on ceiling) in **~half the wall** (~17 vs ~33 min). The win is **wall-efficiency / Δelo-rate**, not a ceiling separation. Diagnostics confirm it's healthy, not a fluke: `reuse≈1.2` (each position trained ~1.2×, not re-grinding), `pl` 3.8→1.85 **descending** vs climbing `cumsteps` (productive SGD, *not* the redundant-flattening failure), `plies` ~67 (real defensive play).
+3. **Prior-art compute-efficiency > v1 exploration levers.** `open-div4` (v1's ceiling champion, random openings) reached only 776 here vs gumbel's ~1600. The v1 headline "*exploration beats compute for the ceiling*" is **superseded once you have good cheap targets + efficient training**: Gumbel (target quality per sim) + fixed-step (training efficiency under a gen flood) beat the exploration knobs outright.
+4. **Regime correction (the load-bearing reframe).** Generation now **floods** the trainer (`gen=0.4s ≪ train=3.0s`); "generation-bound" was stale (see correction in v1 finding #5 + `perf-bench-vs-real-training-cost.md`). The cure — a **fixed per-epoch SGD cap decoupled from inflow** (structurally can't run away) — is exactly the fixed-step mode, now empirically the best trainer.
+5. **forced (KataGo) is a solid mid-tier search lever** (1262) — cheaper exploration than more sims, but well below the Gumbel-generator + fixed-step combo.
+
+**Built this round (the durable artifacts, all merged + tested):** native Gumbel C port (`_mcts_native.c`, wall-fair 0.86–1.26× PUCT); the **fixed-step trainer mode** (`--sgd-steps-per-epoch`, non-wave async + non-blocking ingest + `sample_reuse_ratio`/`cumulative_sgd_steps` metrics); the **wave-mode SIGTERM deadlock fix** (+ test); the **Δelo/hr hill-climb scheduler** (never-run → entry-fee → Δelo/hr, peak tiebreaker); `scripts/watch_derby.py` (live elo/Δelo·hr/wall viewer) + `scripts/derby_dashboard.py` (wandb workspace) + `scripts/derby_sync_elo.py`; the discovery that **eval was already in wandb history** (trainer forwards the eval jsonl); and the **generation-flooding** correction (memory + wiki).
+
+**Caveats:** anchored elo saturates ~1700 (the strong climbers are near the ceiling) → a **head-to-head** (`delta_e_harness --head-to-head`) is the rigorous tiebreak if a clean gumbel-vs-fast5s separation is ever needed; the two are within eval noise on ceiling. The fixed-step A/B conflates wave→non-wave + scaled→fixed (the training-*mode* fork, by design, not a single knob).
+
+**Prep for new contenders (next round):** board is clear. Open candidates: the parked **aux-head** (opponent-reply, Class-C — built, awaiting sign-off); an **N-sweep on `--sgd-steps-per-epoch`** (the reuse-ratio knob: how hard can we push fixed-step before redundant SGD?); **reanalyze / curator** ideas (need the train_replay flywheel — their own board); and `gumbel-fast5s` itself is the **new baseline** to beat. Promotion of fixed-step+Gumbel to a production lineage is a deliberate ESCALATE (Jason's call), deferred.
+
 ### v3-gumbel  (HIGHEST leverage)
 **Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
 

@@ -16,6 +16,18 @@ Cross-refs:
 
 ---
 
+## [2026-05-24] Δelo Derby v3 | Prior-art levers crush v1's — Gumbel cheap-sims + fixed-step trainer win at ~2× Δelo/hr; called as-is for new contenders
+
+Jason: "come up with more training ideas by learning from those who came before." We mined the surveyed engines (KataGo/KataGomo, Gumbel AlphaZero, Leela) and raced the imports as a unified Derby v3 against the v1/v2 carryovers and a c0 control, on the production multiprocess recipe with the new Δelo/hr hill-climb scheduler.
+
+The result reframed our whole picture. **The Gumbel cheap-sims generator (good policy targets at n=100) peaked ~1580–1620 — more than 2× the plain-MCTS@100 control (697).** Gumbel doesn't ride cheap sims, it *rescues* them. Then Jason's own idea — "train at 5s, fixed SGD, decoupled from game count" — beat the wave recipe outright: `gumbel-fast5s` (non-wave + `--sgd-steps-per-epoch 64`) hit the same/higher ceiling in *half* the wall-clock (peak 1620 in ~17min vs gumbel-wave 1580 in ~33min). And it's productive, not a fluke: reuse≈1.2, policy loss descending against climbing cumulative steps, ~67-ply defensive games.
+
+The biggest correction: **"generation-bound" was a myth in the current regime.** Jason called it ("our generators are too fast now — check the wiki"), and `perf-bench-vs-real-training-cost.md` confirmed it — generation *floods* the trainer (`gen=0.4s ≪ train=3.0s`). The fix the wiki had already prescribed (a fixed per-epoch SGD cap, structurally incapable of the LF1 runaway) is exactly the fixed-step trainer, now empirically our best mode. v1's "exploration beats compute" is superseded once you have good cheap targets + efficient training: `open-div4` (v1's champion) reached only 776 here.
+
+Built this round (all merged + tested): native Gumbel C port (wall-fair), the fixed-step trainer mode (+ sample_reuse_ratio / cumulative_sgd_steps metrics), the wave-mode SIGTERM deadlock fix, the Δelo/hr hill-climb scheduler (peak tiebreak), the live `watch_derby.py` viewer + the wandb `derby_dashboard.py` + `derby_sync_elo.py`, and the discovery that eval was in wandb history all along.
+
+Called as-is at Jason's word once fixed-step proved itself, to clear the board. **Next contenders:** the parked aux-head (opponent-reply, Class-C), an N-sweep on `--sgd-steps-per-epoch` (the reuse knob), reanalyze/curator (own flywheel board), and `gumbel-fast5s` as the new baseline to beat. Full verdict + standings in research-board.md § "v3 FINAL". Promotion of fixed-step+Gumbel to a production lineage is a deferred ESCALATE.
+
 ## [2026-05-24] Δelo Derby v1 | Exploration beats compute for the ceiling — and we measured the whole thing at 1/3 throttle
 
 Jason's "race to 140" idea, built as `scripts/delo_derby.py`: 8 fresh-start self-play recipes, one lever each vs a C0-baseline control, raced to a 140-epoch budget in 10-epoch chunks, scored by anchored model_elo, allocated by a current-elo priority queue ("feed the leader, everyone reaches 140"). Called at 5/8 capped — the decisive science was in and the remaining 3 were the floor cluster.
