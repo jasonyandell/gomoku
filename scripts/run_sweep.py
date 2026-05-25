@@ -649,6 +649,82 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--vcf-teacher"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+
+    # ── Derby v5 'stack the winners' ────────────────────────────────────────
+    # v4 champion = vcf (VCF mate-teacher on fixed-step + Gumbel@100). v5 asks: do
+    # the other levers COMPOUND on top of vcf? Every cell is the vcf base + ONE
+    # added lever; derby-v5-control is the bare vcf base (the bar to clear). All
+    # start FRESH + fair (global-pool can't warm-start a non-global trunk, so
+    # uniform fresh start keeps it apples-to-apples).
+    "derby-v5-control": Cell("derby-v5-control", sgd_per_game=1.0,   # bare vcf base (the bar)
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--vcf-teacher"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "derby-v5-vcf-signal": Cell("derby-v5-vcf-signal", sgd_per_game=1.0,  # vcf + aux heads
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--vcf-teacher", "--record-aux", "--record-ownership"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--aux-opponent-reply-weight", "0.15",
+                                  "--aux-ownership-weight", "0.15"]),
+    "derby-v5-vcf-wholeboard": Cell("derby-v5-vcf-wholeboard", sgd_per_game=1.0,  # vcf + global-pool
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--vcf-teacher"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "derby-v5-vcf-deep": Cell("derby-v5-vcf-deep", sgd_per_game=1.0,  # deeper/aggressive VCF solver
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                # deeper solver: proves longer forced wins -> more positions labeled
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--vcf-teacher", "--vcf-max-depth", "32",
+                                   "--vcf-max-nodes", "500000"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
 }
 
 

@@ -37,6 +37,25 @@ ProfileStats = MutableMapping[str, float]
 VCF_VALUE_DISCOUNT = 0.98
 VCF_VALUE_FLOOR = 0.90
 
+# Per-process VCF solver budget for the teacher. Defaults to the vcf module's
+# values (byte-identical to the pre-`vcf-deep` behavior); a worker can raise them
+# once at startup via configure_vcf_teacher() so the solver proves LONGER forced
+# wins (the Derby v5 'vcf-deep' lever) without threading the budget through every
+# generator signature. Process-isolated: each selfplay_worker is one process.
+_VCF_MAX_DEPTH = vcf.DEFAULT_MAX_DEPTH
+_VCF_MAX_NODES = vcf.DEFAULT_MAX_NODES
+
+
+def configure_vcf_teacher(max_depth: int | None = None,
+                          max_nodes: int | None = None) -> None:
+    """Set the process-wide VCF teacher solver budget (depth / node cap). None
+    leaves a field at its current value. Call once before generation."""
+    global _VCF_MAX_DEPTH, _VCF_MAX_NODES
+    if max_depth is not None:
+        _VCF_MAX_DEPTH = int(max_depth)
+    if max_nodes is not None:
+        _VCF_MAX_NODES = int(max_nodes)
+
 
 def _apply_vcf_teacher(
     planes: np.ndarray,
@@ -45,8 +64,8 @@ def _apply_vcf_teacher(
     *,
     side: int,
     profile: ProfileStats | None = None,
-    max_depth: int = vcf.DEFAULT_MAX_DEPTH,
-    max_nodes: int = vcf.DEFAULT_MAX_NODES,
+    max_depth: int | None = None,
+    max_nodes: int | None = None,
 ) -> tuple[np.ndarray, float, bool]:
     """Opt-in EXACT teacher: if the recorded position is a proven VCF forced
     win for the side to move, overwrite its policy/value targets with the exact
@@ -65,6 +84,10 @@ def _apply_vcf_teacher(
     from the recorded side's perspective and the solver runs on that same
     side-to-move position, so a positive proof maps directly to a positive ``z``.
     """
+    if max_depth is None:
+        max_depth = _VCF_MAX_DEPTH
+    if max_nodes is None:
+        max_nodes = _VCF_MAX_NODES
     with _profile_timer(profile, "vcf_solve_s"):
         res = vcf.solve_vcf_from_planes(
             planes, history_ply=HISTORY_PLY, max_depth=max_depth, max_nodes=max_nodes

@@ -58,7 +58,11 @@ import torch
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import fuse_model_for_inference, load_checkpoint
-from gomoku.self_play import generate_games, generate_games_vs_baseline
+from gomoku.self_play import (
+    configure_vcf_teacher,
+    generate_games,
+    generate_games_vs_baseline,
+)
 from gomoku.util import pick_device
 
 import tempfile
@@ -145,6 +149,15 @@ def parse_args() -> argparse.Namespace:
                         "recorded targets with the solver's proven winning move "
                         "+ value on forced-win positions. Default OFF = "
                         "byte-identical self-play.")
+    p.add_argument("--vcf-max-depth", type=int, default=None,
+                   help="VCF teacher solver depth cap (Derby v5 'vcf-deep' lever). "
+                        "Default None = vcf.DEFAULT_MAX_DEPTH (16). Higher proves "
+                        "LONGER forced wins -> more positions get exact labels, at "
+                        "more solve time. Only matters with --vcf-teacher.")
+    p.add_argument("--vcf-max-nodes", type=int, default=None,
+                   help="VCF teacher solver global node budget. Default None = "
+                        "vcf.DEFAULT_MAX_NODES (200k). Raise alongside --vcf-max-depth "
+                        "so the deeper search isn't node-capped early.")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -729,6 +742,9 @@ def _write_profile(
 
 def main() -> None:
     args = parse_args()
+    # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
+    # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
+    configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
     device = pick_device(args.device)
     print(f"[{args.worker_id}] device={device}", flush=True)
     print(f"[{args.worker_id}] weights={args.weights_path} output={args.output_dir}", flush=True)
