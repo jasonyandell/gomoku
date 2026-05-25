@@ -38,6 +38,23 @@ class ModelConfig:
     # never touched by fuse_model_for_inference. Gated on by the trainer flag
     # --aux-opponent-reply-weight > 0.
     aux_opponent_reply: bool = False
+    # V4 auxiliary ownership head (KataGo's biggest sample-efficiency win,
+    # adapted to gomoku). When False (default), NOT constructed -> byte-identical
+    # state_dict / param count / inference graph. When True, a dense head off the
+    # SAME shared tower predicts per-cell final control (81-way). TRAINING-ONLY,
+    # dropped at inference, untouched by fuse_model_for_inference. Gated on by the
+    # trainer flag --aux-ownership-weight > 0.
+    aux_ownership: bool = False
+    # KataGo-style global pooling (Derby v4 "Whole-board" lever). When False
+    # (default), the residual tower is the exact current arch and the
+    # state_dict is byte-identical. When True, the LATTER HALF of residual
+    # blocks become GlobalPoolResBlocks that inject a board-global (mean+max
+    # over spatial dims -> FC -> per-channel bias) signal into every cell. An
+    # int instead of a bool sets how many of the trailing blocks get pooling.
+    # Rationale: a tiny 3x3-conv tower's receptive field barely spans 9x9, so
+    # it cannot cheaply represent board-global facts ("is there a live-four
+    # ANYWHERE?"); global pooling injects that context directly.
+    global_pool: bool | int = False
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -62,6 +79,64 @@ class ResBlock(nn.Module):
         return F.relu(x + h)
 
 
+class GlobalPoolResBlock(nn.Module):
+    """ResBlock with a KataGo-style global-pooling bias.
+
+    Structure (mirrors KataGo's "global pooling bias" in its residual blocks):
+      x -> conv1 -> bn1 -> relu = h          (local features)
+      g = [mean_HW(h) ; max_HW(h)]           (2*C global summary, per sample)
+      b = pool_fc(g)                         (C per-channel biases)
+      h = h + b[:, :, None, None]            (broadcast bias to every cell)
+      h -> conv2 -> bn2
+      out = relu(x + h)
+
+    The bias is the same for every spatial location of a sample but is
+    computed from the WHOLE board, so each cell sees a board-global signal
+    (e.g. "a live-four exists somewhere") that a 3x3-conv stack of this depth
+    cannot otherwise represent. Params added: pool_fc only = 2*C*C + C.
+
+    Note: the first two ops (conv1, bn1) keep the same module names as
+    ResBlock, so fuse_model_for_inference's conv1/bn1/conv2/bn2 fusion still
+    applies. The pool_fc has no BatchNorm and is untouched by fusion.
+    """
+
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channels)
+        # mean + max pooled -> 2*C inputs; one bias per channel out.
+        self.pool_fc = nn.Linear(2 * channels, channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = F.relu(self.bn1(self.conv1(x)))
+        mean = h.mean(dim=(2, 3))                 # (B, C)
+        mx = h.amax(dim=(2, 3))                    # (B, C)
+        bias = self.pool_fc(torch.cat([mean, mx], dim=1))  # (B, C)
+        h = h + bias[:, :, None, None]             # broadcast over H, W
+        h = self.bn2(self.conv2(h))
+        return F.relu(x + h)
+
+
+def _global_pool_block_flags(cfg: ModelConfig) -> list[bool]:
+    """Return, per residual block, whether it uses global pooling.
+
+    global_pool == False -> all False (byte-identical to current arch).
+    global_pool == True  -> the latter half of blocks (n_blocks // 2 trailing).
+    global_pool == int k -> the trailing k blocks (clamped to [0, n_blocks]).
+    """
+    n = cfg.n_blocks
+    gp = cfg.global_pool
+    if gp is False or gp == 0:
+        return [False] * n
+    if gp is True:
+        n_pool = n // 2
+    else:
+        n_pool = max(0, min(int(gp), n))
+    return [i >= n - n_pool for i in range(n)]
+
+
 class GomokuNet(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
@@ -78,7 +153,11 @@ class GomokuNet(nn.Module):
             nn.BatchNorm2d(c),
             nn.ReLU(inplace=True),
         )
-        self.tower = nn.Sequential(*[ResBlock(c) for _ in range(cfg.n_blocks)])
+        gp_flags = _global_pool_block_flags(cfg)
+        self.tower = nn.Sequential(*[
+            GlobalPoolResBlock(c) if use_gp else ResBlock(c)
+            for use_gp in gp_flags
+        ])
 
         # Policy head: 1x1 conv -> flatten -> linear to BOARD_SIZE^2.
         # Note the FC input uses the post-stem spatial size, not BOARD_SIZE.
@@ -103,18 +182,44 @@ class GomokuNet(nn.Module):
             self.aux_policy_bn = nn.BatchNorm2d(cfg.policy_filters)
             self.aux_policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, N_ACTIONS)
 
+        # V4 auxiliary ownership head — a dense head off the SAME shared tower
+        # output `h`. Predicts per-cell final control (81-way, one scalar per
+        # board cell, no tanh — the loss is a masked MSE against a target in
+        # [-1, 1]). Structural twin of the policy head (1x1 conv -> bn -> relu ->
+        # flatten -> linear to N_ACTIONS). Constructed ONLY when
+        # cfg.aux_ownership is set, so the off-case state_dict / param count /
+        # inference graph are byte-identical to a model without it. TRAINING-
+        # ONLY: never run by forward() unless return_ownership=True, never
+        # touched by fuse_model_for_inference. Independent of the opponent-reply
+        # head — either, both, or neither may be present.
+        if cfg.aux_ownership:
+            self.ownership_conv = nn.Conv2d(c, cfg.value_filters, 1, bias=False)
+            self.ownership_bn = nn.BatchNorm2d(cfg.value_filters)
+            self.ownership_fc = nn.Linear(cfg.value_filters * spatial * spatial, N_ACTIONS)
+
     def forward(
-        self, x: torch.Tensor, *, return_aux: bool = False
+        self,
+        x: torch.Tensor,
+        *,
+        return_aux: bool = False,
+        return_ownership: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         """Forward pass. Returns (policy, value) by default.
 
-        When return_aux=True AND the aux head was constructed
-        (cfg.aux_opponent_reply), returns (policy, value, aux_policy) — the
-        third tensor is the opponent-reply logits. Only the trainer passes
-        return_aux=True; self-play and eval call forward(x) and never run the
-        aux head (zero aux FLOPs in the generation-bound path). Passing
-        return_aux=True on a model without the aux head raises, since there is
-        nothing to return."""
+        The two auxiliary heads are independent and gated separately:
+          * return_aux=True (requires cfg.aux_opponent_reply) appends the
+            opponent-reply logits;
+          * return_ownership=True (requires cfg.aux_ownership) appends the
+            per-cell ownership logits.
+        The output tuple is always ordered (policy, value, [aux_policy],
+        [ownership]) with each optional tensor present iff its flag is set:
+          neither -> (p, v)                       [byte-identical default]
+          aux only -> (p, v, aux_policy)          [unchanged 3-tuple contract]
+          ownership only -> (p, v, ownership)
+          both -> (p, v, aux_policy, ownership)
+        Only the trainer passes these flags; self-play and eval call forward(x)
+        and never run either aux head (zero aux FLOPs in the generation-bound
+        path). Requesting a head that was not constructed raises."""
         h = self.tower(self.stem(x))
 
         p = F.relu(self.policy_bn(self.policy_conv(h)))
@@ -124,6 +229,7 @@ class GomokuNet(nn.Module):
         v = F.relu(self.value_fc1(v.flatten(1)))
         v = torch.tanh(self.value_fc2(v)).squeeze(-1)
 
+        out: tuple[torch.Tensor, ...] = (p, v)
         if return_aux:
             if not self.cfg.aux_opponent_reply:
                 raise RuntimeError(
@@ -132,8 +238,17 @@ class GomokuNet(nn.Module):
                 )
             a = F.relu(self.aux_policy_bn(self.aux_policy_conv(h)))
             a = self.aux_policy_fc(a.flatten(1))
-            return p, v, a
-        return p, v
+            out = out + (a,)
+        if return_ownership:
+            if not self.cfg.aux_ownership:
+                raise RuntimeError(
+                    "forward(return_ownership=True) requires cfg.aux_ownership=True "
+                    "(ownership head was not constructed)"
+                )
+            o = F.relu(self.ownership_bn(self.ownership_conv(h)))
+            o = self.ownership_fc(o.flatten(1))
+            out = out + (o,)
+        return out
 
 
 def build_model(
@@ -141,6 +256,8 @@ def build_model(
     *,
     stem_padding: int | None = None,
     aux_opponent_reply: bool = False,
+    aux_ownership: bool = False,
+    global_pool: bool | int | None = None,
 ) -> GomokuNet:
     if size not in SIZE_PRESETS:
         raise ValueError(f"unknown size {size!r}; options: {list(SIZE_PRESETS)}")
@@ -148,10 +265,14 @@ def build_model(
     overrides: dict = {}
     if stem_padding is not None:
         overrides["stem_padding"] = stem_padding
-    # Only override aux_opponent_reply when explicitly enabled, so the default
-    # build path is byte-identical to before this field existed.
+    # Only override aux flags when explicitly enabled, so the default build path
+    # is byte-identical to before these fields existed.
     if aux_opponent_reply:
         overrides["aux_opponent_reply"] = True
+    if aux_ownership:
+        overrides["aux_ownership"] = True
+    if global_pool is not None:
+        overrides["global_pool"] = global_pool
     if overrides:
         from dataclasses import replace
         cfg = replace(cfg, **overrides)

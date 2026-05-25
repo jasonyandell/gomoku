@@ -57,6 +57,9 @@ def train_step(
     aux_pi: torch.Tensor | None = None,
     aux_mask: torch.Tensor | None = None,
     aux_weight: float = 0.0,
+    ownership: torch.Tensor | None = None,
+    ownership_mask: torch.Tensor | None = None,
+    ownership_weight: float = 0.0,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
@@ -67,17 +70,35 @@ def train_step(
     V3 aux opponent-reply head: when aux_weight > 0 (and the model has the aux
     head + aux_pi/aux_mask are provided), a second forward output predicts the
     opponent's next-ply policy; its masked soft-target CE is added as
-    aux_weight * aux_ce. aux_weight == 0.0 (default) leaves the forward, loss,
-    and SGD graph byte-identical to the pre-aux path — the aux head is never
-    even run."""
+    aux_weight * aux_ce.
+
+    V4 aux ownership head: when ownership_weight > 0 (and the model has the
+    ownership head + ownership/ownership_mask are provided), a dense head
+    predicts per-cell final control; its masked MSE against the [-1,1] target is
+    added as ownership_weight * own_mse. The two aux heads are independent.
+
+    With BOTH weights == 0.0 (default) the forward, loss, and SGD graph are
+    byte-identical to the pre-aux path — neither aux head is even run."""
     model.train()
     if zero_grad:
         optimizer.zero_grad(set_to_none=True)
     use_aux = aux_weight > 0.0 and aux_pi is not None and aux_mask is not None
+    use_ownership = (
+        ownership_weight > 0.0 and ownership is not None and ownership_mask is not None
+    )
+    outputs = model(planes, return_aux=use_aux, return_ownership=use_ownership)
+    # forward() returns (p, v, [aux], [ownership]) in that fixed order; unpack
+    # positionally per the flags requested above.
+    logits, v = outputs[0], outputs[1]
+    idx_extra = 2
+    aux_logits = None
+    own_logits = None
     if use_aux:
-        logits, v, aux_logits = model(planes, return_aux=True)
-    else:
-        logits, v = model(planes)
+        aux_logits = outputs[idx_extra]
+        idx_extra += 1
+    if use_ownership:
+        own_logits = outputs[idx_extra]
+        idx_extra += 1
     logp = F.log_softmax(logits, dim=-1)
     # Per-sample policy CE so we can split by side/ply without a second pass.
     per_policy_ce = -(pi * logp).sum(dim=-1)
@@ -99,6 +120,20 @@ def train_step(
             aux_l = per_aux_ce.sum() * 0.0
         loss = loss + aux_weight * aux_l
         aux_l_val = float(aux_l.detach())
+    own_l_val = float("nan")
+    if use_ownership:
+        # Masked MSE: per-cell (B, 81) squared error, mean over cells then mean
+        # over the valid rows. The ownership head emits raw per-cell logits; the
+        # target lives in [-1, 1] (winner/loser/empty), so a plain MSE (no tanh)
+        # is the regression loss — matches KataGo's ownership objective shape.
+        per_own_se = ((own_logits - ownership) ** 2).mean(dim=-1)  # (B,)
+        omask = ownership_mask.bool()
+        if bool(omask.any()):
+            own_l = per_own_se[omask].mean()
+        else:
+            own_l = per_own_se.sum() * 0.0  # keep head connected, zero grad
+        loss = loss + ownership_weight * own_l
+        own_l_val = float(own_l.detach())
     if l2_weight > 0:
         l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
         loss = loss + l2_weight * l2
@@ -128,6 +163,9 @@ def train_step(
     if use_aux:
         out["loss/aux_policy"] = aux_l_val
         out["train/aux_mask_frac"] = float(aux_mask.bool().float().mean())
+    if use_ownership:
+        out["loss/aux_ownership"] = own_l_val
+        out["train/ownership_mask_frac"] = float(ownership_mask.bool().float().mean())
     if side is not None and ply is not None:
         with torch.no_grad():
             ce_cpu = per_policy_ce.detach()
@@ -305,6 +343,11 @@ def parse_args() -> argparse.Namespace:
                    help="Override ModelConfig.stem_padding (default 3 = michaelnny's "
                         "edge-fix). Set to 1 for the legacy 9x9 internal feature map, "
                         "which is ~2x cheaper per forward but loses the edge-blocking fix.")
+    p.add_argument("--global-pool", type=int, nargs="?", const=-1, default=None,
+                   help="Derby v4 'Whole-board' lever: KataGo-style global pooling "
+                        "in the residual tower. Bare --global-pool applies it to the "
+                        "latter half of blocks; --global-pool K applies it to the "
+                        "trailing K blocks. Omitted = OFF (byte-identical current arch).")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--games-per-epoch", type=int, default=64)
     p.add_argument("--n-simulations", type=int, default=100)
@@ -400,6 +443,21 @@ def parse_args() -> argparse.Namespace:
                         "logged. The head is DROPPED at inference (self-play/eval "
                         "pay nothing). Suggested starting value 0.15; future sweep "
                         "{0.05, 0.15, 0.3}.")
+    p.add_argument("--aux-ownership-weight", type=float, default=0.0,
+                   help="V4 KataGo-style auxiliary ownership head (the biggest "
+                        "sample-efficiency win in KataGo, adapted to gomoku). "
+                        "0.0 (default) = OFF = byte-identical to today (head not "
+                        "constructed, no ownership forward, buffer ownership "
+                        "tensors not allocated, SGD graph unchanged). When > 0, a "
+                        "dense 81-way head predicts per-cell final control "
+                        "(+1 winner's stone / -1 loser's stone / 0 empty at the "
+                        "played-out game's final board — a dense per-position "
+                        "target); its masked MSE is added to the loss scaled by "
+                        "this weight, and loss/aux_ownership is logged. The head "
+                        "is DROPPED at inference (self-play/eval pay nothing). "
+                        "Independent of --aux-opponent-reply-weight: either, "
+                        "both, or neither head may be enabled. Suggested starting "
+                        "value 0.15.")
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
@@ -615,6 +673,17 @@ def main() -> None:
     if aux_on:
         print(f"aux opponent-reply head ENABLED (weight={aux_weight})")
 
+    # V4 aux ownership lever (KataGo's biggest sample-efficiency win). The
+    # single weight flag gates the ownership head (constructed iff weight > 0),
+    # the buffer ownership tensors, the self-play ownership-target recording,
+    # and the masked-MSE ownership loss term. 0.0 (default) => everything off
+    # and byte-identical to the pre-ownership path. Independent of aux_on:
+    # a cell may run either, both, or neither head.
+    ownership_weight = float(args.aux_ownership_weight)
+    ownership_on = ownership_weight > 0.0
+    if ownership_on:
+        print(f"aux ownership head ENABLED (weight={ownership_weight})")
+
     # Build / load model
     start_epoch = 0
     total_games = 0
@@ -629,10 +698,16 @@ def main() -> None:
             optimizer.load_state_dict(payload["optimizer_state_dict"])
         print(f"resumed from {args.resume} @ epoch {start_epoch}, total_games={total_games}")
     else:
+        # --global-pool: None=off, bare flag (-1 sentinel)=latter-half (True),
+        # K>=0 = trailing K blocks.
+        gp = args.global_pool
+        gp_arg = None if gp is None else (True if gp == -1 else gp)
         model = build_model(
             args.size,
             stem_padding=args.stem_padding,
             aux_opponent_reply=aux_on,
+            aux_ownership=ownership_on,
+            global_pool=gp_arg,
         ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         payload = {}
@@ -695,7 +770,8 @@ def main() -> None:
         )
 
     buffer = ReplayBuffer(args.replay_buffer_size, device=device,
-                          aux_opponent_reply=aux_on)
+                          aux_opponent_reply=aux_on,
+                          aux_ownership=ownership_on)
     if args.resume:
         # Optional: restore buffer if it was saved.
         payload_buf = payload.get("replay_buffer")
@@ -1383,6 +1459,7 @@ def main() -> None:
                 wave_size=args.wave_size,
                 random_opening_moves=args.random_opening_moves,
                 record_aux=aux_on,
+                record_ownership=ownership_on,
             )
         else:
             evaluator = make_torch_evaluator(model, device)
@@ -1491,13 +1568,21 @@ def main() -> None:
         if buffer.size >= args.batch_size:
             for i in range(steps_this_cycle):
                 microbatch_steps_this_cycle += 1
-                if aux_on:
-                    planes, pi, z, side, ply, aux_pi, aux_mask = buffer.sample(
-                        args.batch_size, return_aux=True
+                aux_pi = aux_mask = ownership = ownership_mask = None
+                if aux_on or ownership_on:
+                    sampled = buffer.sample(
+                        args.batch_size,
+                        return_aux=aux_on,
+                        return_ownership=ownership_on,
                     )
+                    planes, pi, z, side, ply = sampled[:5]
+                    extra = list(sampled[5:])
+                    if aux_on:
+                        aux_pi, aux_mask = extra.pop(0), extra.pop(0)
+                    if ownership_on:
+                        ownership, ownership_mask = extra.pop(0), extra.pop(0)
                 else:
                     planes, pi, z, side, ply = buffer.sample(args.batch_size)
-                    aux_pi = aux_mask = None
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
                 m = train_step(
@@ -1512,6 +1597,9 @@ def main() -> None:
                     aux_pi=aux_pi,
                     aux_mask=aux_mask,
                     aux_weight=aux_weight,
+                    ownership=ownership,
+                    ownership_mask=ownership_mask,
+                    ownership_weight=ownership_weight,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)

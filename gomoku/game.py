@@ -170,6 +170,29 @@ def augment_with_aux(
     ]
 
 
+def augment_with_cell_targets(
+    planes: np.ndarray, policy: np.ndarray, cell_targets: list[np.ndarray]
+) -> list[tuple[np.ndarray, np.ndarray, list[np.ndarray]]]:
+    """Like `augment`, but ALSO carries an arbitrary list of per-cell (81,)
+    target vectors (e.g. the opponent-reply aux target and/or the ownership
+    target) through the SAME D4 symmetry as the position.
+
+    Every entry of `cell_targets` is an (81,) vector over board cells in the
+    same coordinate frame as `planes`/`policy`, so each MUST be permuted by the
+    identical symmetry `s`, or the label is rotated/reflected relative to the
+    board it describes (the load-bearing alignment guarantee for the aux heads).
+    Returns 8 triples (aug_planes, aug_policy, [aug_target0, aug_target1, ...]).
+    """
+    return [
+        (
+            _sym_board(planes, s),
+            _sym_policy(policy, s),
+            [_sym_policy(t, s) for t in cell_targets],
+        )
+        for s in range(8)
+    ]
+
+
 def action_to_str(action: int) -> str:
     r, c = divmod(action, BOARD_SIZE)
     return f"{chr(ord('a') + c)}{r + 1}"

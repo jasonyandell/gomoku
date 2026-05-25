@@ -141,6 +141,14 @@ def parse_args() -> argparse.Namespace:
                         "field recorded. Must match the trainer's "
                         "--aux-opponent-reply-weight > 0 so the buffer/head pick "
                         "the target up.")
+    p.add_argument("--record-ownership", action="store_true", default=False,
+                   help="V4 aux ownership head: record the played-out game's "
+                        "final per-cell control (+1 winner / -1 loser / 0 empty) "
+                        "as an auxiliary training target on each recorded "
+                        "position (self-play path only). Default off = no "
+                        "ownership field recorded. Must match the trainer's "
+                        "--aux-ownership-weight > 0 so the buffer/head pick the "
+                        "target up.")
     p.add_argument("--profile-output", type=str, default=None,
                    help="Write a JSON timing profile for bounded worker runs. "
                         "The profile separates native_search_batch, evaluator, "
@@ -595,6 +603,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             gumbel_c_visit=args.gumbel_c_visit,
             gumbel_c_scale=args.gumbel_c_scale,
             record_aux=getattr(args, "record_aux", False),
+            record_ownership=getattr(args, "record_ownership", False),
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
