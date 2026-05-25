@@ -138,6 +138,40 @@ byte-identical when off, merged `--no-ff` serially with one native rebuild).
 
 **Prep for new contenders (next round):** board is clear. Open candidates: the parked **aux-head** (opponent-reply, Class-C — built, awaiting sign-off); an **N-sweep on `--sgd-steps-per-epoch`** (the reuse-ratio knob: how hard can we push fixed-step before redundant SGD?); **reanalyze / curator** ideas (need the train_replay flywheel — their own board); and `gumbel-fast5s` itself is the **new baseline** to beat. Promotion of fixed-step+Gumbel to a production lineage is a deliberate ESCALATE (Jason's call), deferred.
 
+## v4 — best-shot COMBINATIONS (LAUNCHED 2026-05-25, `scripts/derby_v4_board.json`)
+
+The first **combination** round (Jason: "no more one-lever — put forth our top 3
+combinations that we think have the best shot at being great gomoku players").
+Every lane shares the **v3-winning base** (fixed-step `--sgd-steps-per-epoch 64` +
+Gumbel@100, non-wave) so the only delta per lane is the headline lever. Wall-slice
+engine (`run_sweep_wall_slice`), 600s slices, **10800s (3 hr) per-idea cap** (the
+deeper bets need absorption room — see `absorption-phase` memory), Δelo/hr
+hill-climb priority. All four lanes start **fresh + fair** (the control is a
+distinct cell `derby-v4-control`, byte-identical to `gumbel-fast5s`, so it does not
+resume v3's 8.8G checkpoint).
+
+| lane | cell | lever (vs control) | source |
+|---|---|---|---|
+| **control** | `derby-v4-control` | none — fresh v3 winner (fixed-step + Gumbel@100) | Derby v3 |
+| **signal** | `derby-signal` | KataGo aux supervision: opp-reply policy head + per-cell ownership head, both `@0.15` | KataGo |
+| **wholeboard** | `derby-wholeboard` | KataGo global-pooling residual blocks (latter half; +4.79% params) | KataGo |
+| **vcf** | `derby-vcf` | exact VCF mate-teacher (overwrites policy/value targets on forced wins; value disc 0.98/floor 0.90) | Rapfi/classical |
+
+**Integration (all merged to `main`, tests green, smoke-validated):** global-pool
+(`c5a81d7`), VCF solver (`3a6c6d9`, 400-fuzz vs independent referee = zero false
+positives), opp-reply+ownership aux heads (`5eb6eec`/`36a446a`, byte-identical-off
+verified 96/96 examples + both heads ENABLED in smoke), Rapfi yardstick
+(`0c30427`, START 9 → OK). Cells + board `251d1bf`/`3acdb00`; watchdog `b85c113`.
+**Yardstick:** Rapfi (Gomocup Elo 2625) runs separately on the leader (above-ladder),
+not as a per-chunk anchor.
+
+**Live:** dashboard `https://wandb.ai/jasonyandell-forge42/gomoku?nw=gv4fh2vq2rr`;
+`scripts/derby_v4_watchdog.sh` supervises (restart-if-dead + `narration.log`);
+`python scripts/watch_derby.py --board scripts/derby_v4_board.json` for the live
+terminal board. **Known minor:** max-plies *draws* yield `ownership=None` (masked)
+rather than the all-zeros the code comment promises — benign (no winner to credit;
+trained models rarely draw at max_plies). Under Reviewer at launch.
+
 ### v3-gumbel  (HIGHEST leverage)
 **Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
 
