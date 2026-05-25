@@ -1,0 +1,20 @@
+[
+  {"id": "orchestration", "label": "Agent orchestration / cockpit",
+   "keywords": ["agent view", "fleet", "cockpit", "autopilot", "dispatch", "scheduler", "daemon", "gpu queue", "worktree", "subagent"]},
+  {"id": "derby", "label": "Δelo Derby / recipes",
+   "keywords": ["derby", "gumbel", "vcf", "playout", "forced", "recipe", "elo", "round robin", "swa"]},
+  {"id": "training", "label": "Training loop",
+   "keywords": ["trainer", "epoch", "sgd", "checkpoint", "selfplay", "self-play", "wandb", "run_sweep", "plies"]},
+  {"id": "buffer", "label": "Replay buffer / data flow",
+   "keywords": ["buffer", "curation", "curator", "replay", "archive", "sampling", "ablation"]},
+  {"id": "ane_perf", "label": "ANE / perf / hardware",
+   "keywords": ["ANE", "neural engine", "coreml", "fp16", "throughput", "perf", "heat", "mps", "contention"]},
+  {"id": "gomocup", "label": "Gomocup / engines / NNUE",
+   "keywords": ["gomocup", "rapfi", "nnue", "alphazero", "alpha_zero", "value head", "baseline", "lookahead"]},
+  {"id": "wiki_hygiene", "label": "Wiki / repo / disk hygiene",
+   "keywords": ["wiki", "orphan", "hygiene", "janitor", "reclaim", "disk", "cleanup", "karpathy"]},
+  {"id": "skills_meta", "label": "Skills / self-improvement / verification",
+   "keywords": ["skill", "verification", "self-improving", "friction", "loop", "routine", "title card"]},
+  {"id": "transcript_research", "label": "Talks / external research",
+   "keywords": ["sid", "transcript", "babysitting", "youtube", "whisper", "gemini"]}
+]

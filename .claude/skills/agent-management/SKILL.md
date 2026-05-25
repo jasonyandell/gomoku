@@ -73,6 +73,40 @@ prompts (where a topic is actually named); `--scope all` adds assistant text.
 A **healthy** gauge reads: `sharing main: 0–1`, `leaked locked agent-worktrees: 0`,
 `needs-input: 0`. Anything higher is the fleet accreting entropy — see Hygiene.
 
+## Fast search + topic mindmap (SQLite cache) — `session_db.py`, `session_mindmap.py`
+
+`agent_fleet.py search` re-scans transcripts live (zero setup, fine for one-offs). For
+repeated search or a visual map, build the **SQLite FTS cache**. Transcripts stay the
+source of truth; the cache rebuilds one session at a time on an **mtime miss**:
+
+```
+# Build/refresh the cache (incremental — only changed transcripts re-import):
+python scripts/session_db.py --repo ~/code/gomoku sync
+# Fast FTS search — prints rank + resume + fork commands (auto-syncs first):
+python scripts/session_db.py --repo ~/code/gomoku search "next step OR strategy" --scope human
+# Recompute topic<->session grounding from scripts/topics.json (editable taxonomy):
+python scripts/session_db.py --repo ~/code/gomoku topics
+```
+DB lives at `~/.claude/agent-fleet/<project>.db` (outside the repo). `scripts/topics.json`
+is a plain, editable taxonomy: each topic is a set of keyword phrases; the cache counts
+how many of a session's messages match → the grounding weight.
+
+### The mindmap (local web)
+```
+python scripts/session_mindmap.py --repo ~/code/gomoku --serve   # build + open in browser
+```
+Topic-hub graph: boxes = topics, dots = sessions (sized by how much they touched topics),
+edges = grounding weight. Click a session → its opening prompts + copy-paste **resume** and
+**fork** commands. (Graph lib loads from a CDN; the data is embedded and local.)
+
+### Resuming vs forking a conversation
+- **Resume** (continue the same session): `claude --resume <uuid>`
+- **Fork** (new branch; copies history to a new id, original untouched): `claude --resume <uuid> --fork-session`
+  Forks from the latest message; previously-approved permissions do NOT carry to the fork.
+  In an active session use `/branch`; `/rewind` is checkpoint-revert *within* a session, not
+  a fork. (Verified: code.claude.com/docs/en/sessions + `claude --help`.)
+  `python scripts/session_db.py cmd fork <uuid>` prints the command for pasting.
+
 ## Working paths (the raw one-liners the tool wraps)
 
 ```bash
@@ -182,6 +216,25 @@ couldn't, because the target sessions were dead and transcript-only.**
   `status`) whenever the question is "find the session where…".
 - Lesson: the fleet board is a *liveness* view; topic recall needs a *corpus* view. They're
   different surfaces — don't try to answer "where did we discuss X" from the live board.
+
+### 2026-05-25 (SQLite cache + mindmap — FTS phrase-quoting, and cache-by-mtime)
+
+**Two topics silently computed 0 session edges because their keywords had hyphens/
+underscores ('self-play', 'run_sweep', 'self-improving').**
+- Symptom: `session_db.py topics` showed `training` and `skills_meta` at 0 sessions while
+  every other topic matched 24–30 — obviously wrong (every session mentions training).
+- Root cause: a bare FTS5 query term like `self-play` parses `-` as an operator and raises
+  `OperationalError`; `recompute_topics` caught it per-topic and `continue`d, so the whole
+  topic dropped to 0 with no error surfaced.
+- Fix: `build_fts_query` now quotes EVERY keyword as a phrase (`"self-play"`) — avoids the
+  operator parse AND matches the intended phrase. Lesson: quote anything you hand to FTS5
+  `MATCH`; and a per-item try/except that swallows errors turns a syntax bug into a silent
+  empty result — surface it or you'll trust a wrong zero.
+
+**The cache key is the transcript's mtime.** `sync` skips a session iff its file mtime equals
+what's stored; any new/modified transcript re-imports just that one (deleted ones pruned). So
+`search`/`topics`/`mindmap` auto-`sync` first and stay fresh cheaply — there's no separate
+"is it stale?" check to add; the mtime compare IS the cache.
 
 ### < add new friction-smoothing entries here as they appear >
 
