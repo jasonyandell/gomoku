@@ -69,6 +69,7 @@ read is:
 | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | Gomoku-specific adaptation of the LLM wiki pattern. |
 | [topics/training-run-lineage.md](topics/training-run-lineage.md) | Compact route map for the Z and WL-series run sequence. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
+| [sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md](sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md) | Transcript of Sid Bidasaria's "Stop babysitting your agents" talk (verification → multi-Claude → background loops). Locally Whisper-transcribed because the video has no captions. |
 
 ### Training Dynamics
 

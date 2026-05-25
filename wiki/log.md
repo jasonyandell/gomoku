@@ -3,6 +3,20 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-05-25] sources | Added Sid Bidasaria "Stop babysitting your agents" talk transcript
+
+Filed [sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md](sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md)
+— the *correct* Sid talk (`wI0ptqCSL0I`, Claude channel, 2026-05-20), not the
+SDK/GitHub-Action talk (`dRsjO-88nBs`). The video has no YouTube caption track,
+so the gemini MCP couldn't transcribe it; audio was pulled with `yt-dlp` and run
+through **Whisper locally on the M5 Max** (raw output at
+`~/.claude/jobs/60c8a964/out/`). Light ASR cleanup: Whisper heard "Claude" as
+"Cloud" throughout (corrected), misspelled the name, and looped on a few phrases
+during silent demo stretches (collapsed). Talk arc: verification (teach Claude to
+check its own work) → multi-Claude (run several once they're reliable) →
+background loops (`/loop`, routines) to take the keyboard out of the hot path.
+Indexed under the Source Records table.
+
 ## [2026-05-24] wiki | Lab identity rename: perf lab → research lab; perf-queue → gpu-queue
 
 Four files renamed via `git mv`; no content added or deleted elsewhere:
