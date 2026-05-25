@@ -1,0 +1,5 @@
+6e0a1329e725d854d316cbe3e1fd436d7f86926e
+engine: Rapfi (pbrain-rapfi)
+source: https://github.com/dhbloo/rapfi
+preset: arm64-clang-NEON-DOTPROD (internal classical config; no external weights)
+built: 2026-05-24

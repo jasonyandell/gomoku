@@ -14,6 +14,7 @@ runs/
 scratch/
 sweep_runs/
 sweep_logs/
+lab_queue/
 archives/
 *.pt
 *.ckpt
@@ -31,3 +32,9 @@ archives/
 node_modules/
 app/dist/
 .wrangler/
+
+# Rapfi external-engine yardstick: ignore the source clone/build (88MB) and the
+# built binary; keep the build script + BUILD_COMMIT.txt provenance tracked so
+# the binary is reproducible via engines/rapfi/build_rapfi.sh.
+.rapfi-build/
+engines/rapfi/pbrain-rapfi
