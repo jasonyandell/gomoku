@@ -37,7 +37,7 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 
 ## Receipts
 
-### 2026-05-24 — Δelo Derby v3 (UNIFIED prior-art race) — CALLED as-is; fixed-step trainer + Gumbel@100 win (~2× Δelo/hr)
+### 2026-05-24 — Δelo Derby v3 (UNIFIED prior-art race) — CALLED as-is; Gumbel@100 dominates; fixed-step co-equal with wave (structural wins, NOT a rate separation)
 
 ```yaml
 lane: delo-derby-v3 (scripts/delo_derby.py + scripts/derby_v3_board.json — unified race of v1/v2 carryovers + prior-art levers mined from KataGo/Gumbel/Leela, one lever vs c0, run_sweep wave-mode + the new fixed-step mode, wall-native, Δelo/hr hill-climb priority).
@@ -45,7 +45,7 @@ hypothesis: prior-art compute-efficiency levers (Gumbel cheap-sims targets; Kata
 code_ref: native Gumbel C port (gomoku/_mcts_native.c); fixed-step trainer --sgd-steps-per-epoch (gomoku/train.py); wave-SIGTERM deadlock fix (+ tests/test_wave_sigterm_shutdown.py); Δelo/hr scheduler delo_derby.py pick_priority (never-run→entry-fee→Δelo/hr, peak tiebreak); cells derby-{c0,open-div4,forced,gumbel,sims100,gumbel-fast5s} in scripts/run_sweep.py.
 hardware: M5 Max / MPS; 1 trainer + 8 selfplay_workers (wave cells) or non-wave async (gumbel-fast5s).
 result: |
-  gumbel-fast5s (fixed-step + Gumbel@100) peak 1620 ✓ in ~17min ≈ 2× Δelo/hr of gumbel-wave (1580 ✓, ~33min); both ≫ sims100 control (697, plain MCTS@100) → Gumbel RESCUES cheap sims; both ≫ open-div4 (776, v1 ceiling champion). forced (KataGo) 1262. Fixed-step healthy: reuse≈1.2, pl 3.8→1.85 descending vs climbing cumsteps (productive, not redundant). Regime: gen=0.4s ≪ train=3.0s (generation FLOODS the trainer; "gen-bound" stale).
+  Gumbel@100 generator dominates: gumbel-fast5s 1620 ✓ / gumbel-wave 1580 ✓ both ≫ sims100 control (697, plain MCTS@100) → Gumbel RESCUES cheap sims; both ≫ open-div4 (776, v1 ceiling champion) on equal-or-less budget. forced (KataGo) 1262. Fixed-step (fast5s) vs wave (gumbel): CO-EQUAL — peaks within eval noise (1620 vs 1580); on the canonical Δelo/hr (standings.md, (peak−389)/wall-to-peak) wave EDGES it 3031 vs 2825 (~10%; flips to ~1.5× for fast5s on a time-to-peak basis). NO clean rate separation. Fixed-step's wins are STRUCTURAL: peak in one contiguous slice + structurally can't run away (vs sgd_per_position) + validated the gen-flooding fix → the cleaner v4 control. Healthy: reuse ~1.4 settling ~1.05, pl 4.39→1.72 descending vs climbing cumsteps (productive, not redundant). Regime: gen≈0.3s ≪ train≈2.6s (generation FLOODS the trainer; "gen-bound" stale).
 decision: research finding (promote-class). fixed-step+Gumbel@100 is the new baseline; promotion to a production lineage is a deferred ESCALATE (Jason's call). Board cleared for new contenders. Mid-run prune: temp-16/sgd-800/playoutcap/swa (floor-stuck).
 caveats: anchored elo saturates ~1700; gumbel vs gumbel-fast5s within eval noise on ceiling (head-to-head NOT run); fast5s A/B is the training-MODE fork (wave+scaled vs non-wave+fixed), not a single knob.
 reviewer: SPAWNED (pending)
