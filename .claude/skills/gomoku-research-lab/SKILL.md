@@ -159,7 +159,7 @@ Bash background mode + harness notification on completion. Don't poll.
 
 ## Fan-out orchestration (the parallel CPU-queue mode)
 
-Canonical branch/worktree workflow: `wiki/topics/branch-and-worktree-workflow.md`. The rules below are this skill's agent-specific instantiation of it — including the load-bearing rule that **even you (the orchestrator) work in a worktree, never directly in the shared `main` checkout**, since the derby and other sessions share it.
+Canonical branch/worktree workflow: `wiki/topics/branch-and-worktree-workflow.md`. The rules below are this skill's agent-specific instantiation of it — including the load-bearing rule that **even you (the orchestrator) work in a worktree, never directly in the shared `main` checkout**, since the derby and other sessions share it. This section is also the lab instantiation of the general **"fan out to preserve context"** convention (`wiki/topics/conventions.md`): delegate context-heavy/parallel work so the orchestrator keeps findings, not file dumps.
 
 When a lane block has multiple independent sub-lanes (e.g. the LF1-followups: code + analysis + design), run it as a **two-queue fan-out**: dispatch every CPU-queue sub-lane as a background Agent in parallel, while you personally drive the single serial GPU lane. This is the lab's highest-throughput mode and it stays clean if you follow the rules below (validated 2026-05-23 on the LF1-followups block — Jason: "this is smooth").
 

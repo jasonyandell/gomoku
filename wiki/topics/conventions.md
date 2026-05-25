@@ -84,6 +84,37 @@ commit them, it's safe every time and rebase bores me." Safety driven
 
 Mirrored in memory: [[feedback-merge-commits]].
 
+## Fan out to preserve context
+
+The orchestrator session's **context window is the scarcest resource** in a long
+run — once it fills, the through-line of reasoning degrades and compaction can
+drop detail. Treat it as a budget: delegate work that would spend context
+without adding to the decision thread. Fan out to a subagent — **background
+(`run_in_background: true`) when it can run async** — when:
+
+- a search/investigation must read many files or long logs/transcripts to
+  extract a small conclusion (grep sweeps, log trawls, "where is X / how does Y
+  work");
+- two or more **independent** tasks can run at once (dispatch them in one
+  message so they run concurrently);
+- a task will emit lots of intermediate tool output you won't need verbatim;
+- editing work can be isolated (pair with `isolation: worktree`,
+  [[feedback-worktree-per-unit-of-work]]).
+
+The subagent does the noisy work in **its** context and returns only the
+distilled result; the orchestrator keeps the conclusion, **not** the file
+dumps. Background agents notify on completion — don't poll. Reserve the main
+thread for reasoning, decisions, and integration that must stay coherent.
+
+**Anti-patterns:** reading ten files in the main thread to answer one question;
+running independent subtasks serially; pulling a whole log/file into context
+when a subagent could hand back the one line that matters.
+
+This is the general form of the lab's two-queue fan-out
+([[feedback-lab-scheduler]]); the `gomoku-research-lab` skill § Fan-out
+orchestration is its lab-specific instantiation. Mirrored in memory:
+[[feedback-fan-out-preserve-context]].
+
 ## Memories also go to the wiki
 
 When saving a memory under

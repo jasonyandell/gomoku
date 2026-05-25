@@ -43,6 +43,13 @@ Native hot-path extensions can be disabled for A/B: `GOMOKU_DISABLE_NATIVE_MCTS=
   reclaims worktrees/branches leaked by crashed sessions; `--gauge` prints the
   repo-hygiene metric. Cleanup is a janitor + gauge, not a remembered
   procedure ([wiki/topics/worktree-hygiene.md](wiki/topics/worktree-hygiene.md)).
+- **Fan out to preserve context.** Your context window is the scarcest resource
+  in a long session. Delegate context-heavy or parallelizable work to subagents
+  (background via `run_in_background: true` when async) — broad searches, log/
+  transcript trawls, many-file reads, independent parallel tasks — and keep only
+  their distilled findings, not the file dumps. Pair edits with `isolation:
+  worktree`. See [wiki/topics/conventions.md](wiki/topics/conventions.md) § Fan
+  out to preserve context.
 - **Don't compete with live GPU/CPU tenants.** A non-lab process on the box (or
   a running derby) is a reason to wait/escalate, not to barge in. Check before
   any GPU dispatch.
