@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -157,8 +158,11 @@ def main() -> None:
     for rid in dupes:
         run_settings[rid] = ws.RunSettings(disabled=True)
 
+    # Constrain the workspace to EXACTLY this board's players — an anchored regex
+    # alternation of the board's run names, so other derbies' runs (e.g. v3/v4)
+    # never bleed into a v5 dashboard.
     runset = ws.RunsetSettings(
-        query="9x9-sweep-derby-",   # the v3 run-name prefix (excludes the v1 derby-* runs)
+        query="|".join(f"^{re.escape(n)}$" for n in want_names),
         regex_query=True,
         run_settings=run_settings,
         # surface the elo leaderboard + key shape columns in the runs table
