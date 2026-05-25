@@ -226,6 +226,10 @@ more cells "for confidence" when the first one already settled it.
 ## Operating loop (autonomous)
 
 ```
+# Session start: reclaim what crashed prior sessions leaked, before anything else.
+run("python scripts/reclaim_worktrees.py --apply")   # liveness-aware; safe while others live
+narrate(run("python scripts/reclaim_worktrees.py --gauge"))  # repo-hygiene metric
+
 while queue:
     lane = pick_top_unblocked(queue)
     if box_busy(): break             # never compete with other tenants
@@ -335,9 +339,14 @@ REVISE / BLOCK; BLOCK surfaces to the user. The loop does not commit a
 
 ## Worktree discipline
 
+> Canonical workflow: [branch-and-worktree-workflow.md](branch-and-worktree-workflow.md).
+> This section is the lab's instantiation of it.
+
 Worktrees exist for **code-change lanes** (anything that requires
 editing python or env defaults beyond what the CLI surface supports).
-Pure cell-list sweeps stay on `main`.
+Pure cell-list sweeps stay on `main` — but only because they make **no
+file edits**; the moment a lane edits a file it gets a worktree, and you
+never leave uncommitted edits sitting in the shared `main` checkout.
 
 Lifecycle for a code-change lane:
 

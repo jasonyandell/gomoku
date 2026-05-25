@@ -56,12 +56,26 @@ Mirrored in memory: [[feedback-lab-runs-forever]].
 
 ## Branch integration: merge-commit, never rebase
 
+The full lifecycle (worktree off `main` → `feat/<slug>` → merge `--no-ff` →
+teardown, and why you never edit the shared `main` checkout) is canonical in
+[branch-and-worktree-workflow.md](branch-and-worktree-workflow.md). This
+section is the integration rule it builds on.
+
 Every feature/perf/experiment branch lands on `main` via
 `git merge --no-ff <branch> -m "..."` to produce an explicit merge
 commit. Never `git rebase`. Never rely on fast-forward. Never squash.
 
 After merge: `git worktree remove <path>` then `git branch -d <name>`.
 A losing experiment: same cleanup, no rebase to "preserve" it.
+
+But don't *rely* on remembering this — the cleanup-after-merge procedure
+fails silently when a session crashes mid-run (our overnight regime). The
+backstop is the **session-start janitor** `scripts/reclaim_worktrees.py`
+(see [worktree-hygiene.md](worktree-hygiene.md)): it reclaims agent
+worktrees orphaned by dead sessions and deletes merged branches, and is
+safe to run while other sessions are live. Run it (and its `--gauge`) every
+session start. This is the "janitor + gauge, not a procedure" rule
+([[feedback-janitor-not-procedure]]).
 
 **Why:** Jason's words at lab kickoff — "embrace [worktrees], and merge
 commit them, it's safe every time and rebase bores me." Safety driven
