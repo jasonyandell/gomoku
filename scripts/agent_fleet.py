@@ -31,6 +31,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -159,6 +160,30 @@ def compute_gauges(board: list[dict], git_worktrees: list[dict], repo_root: str)
     }
 
 
+# ---------- corpus search (find a session by topic, across ALL transcripts) ----------
+
+def rank_search(corpus: list[dict], pattern: str, scope: str = "human") -> list[dict]:
+    """Rank sessions by regex hits. corpus items: {ai_id,title,session_id,human,assistant}.
+
+    scope: 'human' (typed prompts — where you'd express a topic), 'assistant', or 'all'.
+    Searching the corpus, not just the live fleet, is the whole point: dead sessions
+    (no job-state, transcript-only) are invisible to status/gauge but findable here."""
+    rx = re.compile(pattern, re.IGNORECASE)
+    out = []
+    for s in corpus:
+        fields = []
+        if scope in ("human", "all"):
+            fields += s.get("human", [])
+        if scope in ("assistant", "all"):
+            fields += s.get("assistant", [])
+        hits = [t for t in fields if rx.search(t or "")]
+        if hits:
+            out.append({"ai_id": s["ai_id"], "title": s.get("title", ""),
+                        "session_id": s.get("session_id", ""),
+                        "n": len(hits), "sample": hits[0]})
+    return sorted(out, key=lambda r: -r["n"])
+
+
 # ---------- transcript digest ----------
 
 def _text_blocks(msg) -> list[str]:
@@ -273,6 +298,43 @@ def find_transcript(ai_id: str) -> str | None:
     return hits[-1] if hits else None
 
 
+def project_dir_for(repo_root: str) -> Path:
+    """~/.claude/projects encodes the cwd by replacing '/' with '-'."""
+    return PROJECTS / os.path.realpath(repo_root).replace("/", "-")
+
+
+def load_corpus(project_dir: str) -> list[dict]:
+    """Every transcript in a project dir, reduced to {ai_id,title,session_id,human,assistant}."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(project_dir, "*.jsonl"))):
+        title, human, assistant = "", [], []
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    t = ev.get("type")
+                    if t == "ai-title":
+                        title = ev.get("aiTitle", title)
+                    elif t == "last-prompt":
+                        q = (ev.get("lastPrompt") or "").strip()
+                        if q and (not human or human[-1] != q):
+                            human.append(q)
+                    elif t == "assistant":
+                        assistant += [b.strip() for b in _text_blocks(ev.get("message")) if b.strip()]
+        except OSError:
+            continue
+        sid = os.path.splitext(os.path.basename(p))[0]
+        out.append({"ai_id": sid[:8], "title": title, "session_id": sid,
+                    "human": human, "assistant": assistant})
+    return out
+
+
 def _gather(repo_root: str, cwd: str | None):
     fleet = load_fleet(cwd)
     roster_idx = index_roster(_read_json(ROSTER, {}))
@@ -325,6 +387,19 @@ def cmd_digest(args):
     return 0
 
 
+def cmd_search(args):
+    corpus = load_corpus(str(project_dir_for(args.repo)))
+    ranked = rank_search(corpus, args.pattern, args.scope)[:args.limit]
+    if not ranked:
+        print("no sessions matched", file=sys.stderr)
+        return 1
+    for r in ranked:
+        print(f"{r['ai_id']}  hits={r['n']:<3} {(r['title'] or '<untitled>')[:36]:36}"
+              f"  resume: claude --resume {r['session_id']}")
+        print(f"           ↳ {r['sample'][:150]}")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Inspect the `claude agents` fleet (read-only).")
     p.add_argument("--repo", default=os.getcwd(), help="repo root (default: cwd)")
@@ -343,6 +418,13 @@ def main(argv=None):
     d.add_argument("ai_id")
     d.add_argument("--tail", type=int, default=30)
     d.set_defaults(func=cmd_digest)
+
+    se = sub.add_parser("search", help="find a session by topic across ALL transcripts (incl. dead ones)")
+    se.add_argument("pattern", help="case-insensitive regex, e.g. 'next step|strategy|what to learn'")
+    se.add_argument("--scope", choices=["human", "assistant", "all"], default="human",
+                    help="search typed prompts (default), assistant replies, or both")
+    se.add_argument("--limit", type=int, default=10)
+    se.set_defaults(func=cmd_search)
 
     args = p.parse_args(argv)
     return args.func(args)

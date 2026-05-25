@@ -58,7 +58,17 @@ python scripts/agent_fleet.py gauge --json   # machine-readable
 
 # Summarize one session's transcript (asks / result lines / narrative tail / tools):
 python scripts/agent_fleet.py digest <ai-id>
+
+# Find a session by topic across ALL transcripts — incl. DEAD / transcript-only ones
+# (status/gauge only see the live fleet + jobs board; search sees everything):
+python scripts/agent_fleet.py search "next step|strategy"     # --scope human|assistant|all
 ```
+
+**Finding "the session where I was talking about X" is a `search`, not a `status`.** Old or
+crashed sessions have no `~/.claude/jobs/<ai-id>/state.json`, so they never appear in `status`
+or `gauge` — but `search` scans every transcript in the project, ranks by hit count, and prints
+the `claude --resume <uuid>` command for each. Default `--scope human` searches the user's typed
+prompts (where a topic is actually named); `--scope all` adds assistant text.
 
 A **healthy** gauge reads: `sharing main: 0–1`, `leaked locked agent-worktrees: 0`,
 `needs-input: 0`. Anything higher is the fleet accreting entropy — see Hygiene.
@@ -153,6 +163,25 @@ the digest shows the same ask 10×. (`agent_fleet.py digest` handles both.)
   `git worktree unlock <path> && git worktree remove <path>` after confirming the branch
   is merged. Candidate to fold into the reclaim janitor (unlock+remove if branch is an
   ancestor of main and the owning session is dead).
+
+### 2026-05-25 (finding a session by topic — status/gauge are blind to dead sessions)
+
+**Asked to find "the session where I was considering next steps for the AI"; `status`/`digest`
+couldn't, because the target sessions were dead and transcript-only.**
+- Symptom: the two best matches (`410251ca` "alpha_zero strategy analysis", `e7428a34` "wl1
+  wave-lockstep") had no `~/.claude/jobs/<ai-id>/state.json` — they're older sessions whose
+  processes long since exited, leaving only the transcript JSONL. `build_board` is the union of
+  the live fleet and the jobs board, so neither showed up. I hand-rolled a jq+grep over every
+  transcript twice (the first keyword net was too narrow and missed the strategy session).
+- Root cause: the skill had no "search the full transcript corpus by topic" capability — only
+  live/durable-state inspection. But "which session was I talking about X in?" is a corpus
+  search, and the user's typed prompts (`last-prompt`) are where topics are actually named.
+- Fix: added `agent_fleet.py search <regex> [--scope human|assistant|all]` (pure `rank_search`
+  + `load_corpus`, tested). It ranks every transcript by hit count and prints the resume command.
+  Dogfooded: `search "next step|strategy|what to learn"` ranks `410251ca` #1. Use `search` (not
+  `status`) whenever the question is "find the session where…".
+- Lesson: the fleet board is a *liveness* view; topic recall needs a *corpus* view. They're
+  different surfaces — don't try to answer "where did we discuss X" from the live board.
 
 ### < add new friction-smoothing entries here as they appear >
 

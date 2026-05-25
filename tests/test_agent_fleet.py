@@ -113,6 +113,24 @@ def test_compute_gauges_counts_leaked_locked():
     assert g["leaked_locked_worktree_branches"] == ["feat/a"]
 
 
+def test_rank_search_ranks_by_hits_and_respects_scope():
+    corpus = [
+        {"ai_id": "410251ca", "title": "alpha_zero strategy analysis",
+         "session_id": "410251ca-9352", "human": ["what can we learn and how improve"],
+         "assistant": ["next steps: adopt X", "and next steps again"]},
+        {"ai_id": "8acd3c77", "title": "git branch hygiene",
+         "session_id": "8acd3c77-0000", "human": ["clean up worktrees"], "assistant": []},
+    ]
+    # human scope: only the strategy session mentions learning/improve
+    h = af.rank_search(corpus, r"learn|improve|next step", scope="human")
+    assert [r["ai_id"] for r in h] == ["410251ca"]
+    # all scope: assistant 'next steps' counts too → strategy session ranks first by hit count
+    a = af.rank_search(corpus, r"next step", scope="all")
+    assert a[0]["ai_id"] == "410251ca" and a[0]["n"] == 2
+    # non-matching pattern → empty
+    assert af.rank_search(corpus, r"zzzznomatch", scope="all") == []
+
+
 def test_digest_session(tmp_path):
     p = tmp_path / "s.jsonl"
     rows = [
