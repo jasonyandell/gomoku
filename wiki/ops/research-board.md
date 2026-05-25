@@ -170,7 +170,46 @@ not as a per-chunk anchor.
 `python scripts/watch_derby.py --board scripts/derby_v4_board.json` for the live
 terminal board. **Known minor:** max-plies *draws* yield `ownership=None` (masked)
 rather than the all-zeros the code comment promises — benign (no winner to credit;
-trained models rarely draw at max_plies). Under Reviewer at launch.
+trained models rarely draw at max_plies). Under Reviewer at launch. Reviewer
+verdict: **PASS** (no BLOCK; merge resolution correct, control fair, aux NaN-safe,
+VCF no false positives).
+
+### v4 FINAL — verdict (stopped 2026-05-25 after ~12.3 hr / 67 chunks, 0 watchdog restarts)
+
+Ran fully autonomously overnight (cap raised 3h→24h mid-run so the leader kept
+getting fed). Anchored elo **saturated ~1700**, so the overnight peaks were a tight
+66-elo cluster that anchored eval can't separate — resolved with a **head-to-head
+round-robin** (`scripts/round_robin.py`, reuses `delta_e_harness.head_to_head_eval`;
+120 games/pair, paired 4-ply openings, sims=100).
+
+| metric | vcf | control | signal | wholeboard |
+|---|---:|---:|---:|---:|
+| anchored peak elo | **1784** | 1760 | 1738 | 1718 |
+| H2H round-robin rating | **+31** | −29 | +6 | −8 |
+| H2H rank | **1** | **4** | 2 | 3 |
+
+**The head-to-head reshuffled the order — and that's the lesson.** On anchored elo
+`control` (plain v3 winner, no extra lever) looked like #2 (peak 1760), but played
+directly against its peers it **loses all three matchups** (−9/−29/−50) and ranks
+**last** — its anchored score was overtrained inflation against the fixed ladder.
+**`vcf` is the genuine champion on BOTH metrics**: highest anchored peak (1784) AND
+beats every lane head-to-head (+14/+29/+50). The **exact VCF mate-teacher is the
+standout v4 lever.** The two KataGo combos (signal=aux heads, wholeboard=global-pool)
+land in the middle and did *not* cleanly separate from the baseline.
+
+**Compute-fairness caveat (load-bearing):** early "leads" were undertraining
+artifacts. `vcf` sat at ~1497 for hours looking like a clear 4th, then — once the
+Δelo/hr hill-climb kept feeding the only lane still gaining — climbed straight to
+#1. The scheduler's apparent "over-feeding" of the laggard was the most informative
+allocation of the night. Lesson: **rank above the anchored ceiling with head-to-head,
+and don't trust an early anchored lead before lanes have equal compute.**
+
+**Statistical honesty:** H2H CIs are wide (±62 elo; high draw rates ~50%, i.e. good
+defense), so the top-3 ordering (vcf > signal > wholeboard) is *not* airtight — but
+the directional signals are clean and consistent: **vcf beats everyone, control loses
+to everyone.** Peak checkpoints saved at `sweep_runs/derby_v4/_peaks/<lane>/peak.pt`.
+Above-ladder Rapfi (Gomocup 2625) yardstick on the `vcf` champion: see `perf-log` /
+`sweep_runs/derby_v4/rapfi_vcf.jsonl`.
 
 ### v3-gumbel  (HIGHEST leverage)
 **Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
