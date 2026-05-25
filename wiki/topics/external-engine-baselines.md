@@ -9,6 +9,41 @@ broader Gomoku engine ecosystem.
 
 Source trail: [../sources/gomocup-external-engines-2026-05-22.md](../sources/gomocup-external-engines-2026-05-22.md).
 
+## Status: Rapfi BUILT + RUNS + accepts START 9 (2026-05-24)
+
+PRACTICALITY VERDICT: **YES**. Rapfi builds and runs as a 9x9 freestyle
+yardstick on the M5 Max, and the eval wrapper is implemented and smoke-tested.
+
+- Build: shallow-cloned `dhbloo/rapfi@6e0a132`, `brew install cmake ninja`,
+  configured with the `arm64-clang-NEON-DOTPROD` CMake preset (M5 Max has
+  `hw.optional.arm.FEAT_DotProd=1`), built with ninja in ~seconds. Binary is
+  `pbrain-rapfi` (Mach-O arm64, ~1.9MB).
+- 9x9 fit: source `gomocup.cpp` accepts any `5 <= size <= MAX_BOARD_SIZE`
+  (MAX_BOARD_SIZE = 22). `START 9` → `OK`; empty-board `BEGIN` → `4,4` (center,
+  legal). `START 4` → `ERROR Unsupported board size!` (confirms the smoke is
+  meaningful). So 9x9 is supported at the source level, not just "recommended".
+- Weights: Rapfi has a built-in **internal classical config** (`internalConfig.cpp`,
+  `model_type` 1/2) — it runs with **zero external weight files**. The stronger
+  NNUE path needs the `Networks` submodule (mix9svqfreestyle_bsmix.bin.lz4, ~10MB)
+  + `--config Networks/config-example/gomocalc-mix9svq.toml`; that is a future
+  strength lever, not required for a working yardstick.
+- Wrapper: `external:cmd=...,timeout_ms=...,label=...` player spec in
+  `gomoku.match`, implemented in `gomoku/external_engine.py`. Encodes
+  `state.board[0]` (side-to-move = the engine) as field 1, `board[1]` as field 2;
+  protocol coords are X=col, Y=row. Skips `MESSAGE`/`DEBUG` chatter; validates
+  the reply is empty + in-range; raises on illegal/out-of-range/EOF.
+- Eval path: `scripts/eval_vs_rapfi.py` runs a checkpoint vs Rapfi at several
+  timeout tiers (difficulty tiers), color-alternated, writing JSONL with explicit
+  provenance (engine, build ref, timeout, board size, rule, wrapper version).
+- Reproducible build: `engines/rapfi/build_rapfi.sh` (binary + the 88MB source
+  clone are gitignored; `BUILD_COMMIT.txt` + the build script are tracked).
+- Smoke result: WL5 seed model (sims=100) vs rapfi(timeout=100ms), 4 games,
+  color-alternated → 2W-0L-2D (75%). Same at timeout=1000ms in a 4-game sample.
+  Note: at low time controls with the internal classical config Rapfi is weak;
+  pushing it stronger likely needs the NNUE weights (follow-up).
+
+EVAL-ONLY. Do not mix Rapfi into self-play training.
+
 ## Current Recommendation
 
 Start with **Rapfi** as the first external baseline.

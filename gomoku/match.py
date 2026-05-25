@@ -11,6 +11,10 @@ Player spec format: `kind[:k=v,k=v,...]`. Supported kinds:
     heuristic
     lookahead   (depth=N, default 4)
     model       (checkpoint=PATH required, sims=N default 100, c_puct=F default 1.5)
+    external    (cmd=PATH required Gomocup/Piskvork engine; timeout_ms=N default 1000,
+                 label=STR, rule=N default 0=freestyle, size=N default board size)
+                 EVAL-ONLY external-engine yardstick (e.g. Rapfi). Spawns a
+                 subprocess; cmd= must not contain commas (spec separator).
 """
 
 from __future__ import annotations
@@ -59,7 +63,7 @@ def parse_spec(s: str) -> PlayerSpec:
     else:
         kind, kwargs = s.strip(), {}
     kind = kind.strip().lower()
-    if kind not in ("random", "heuristic", "defensive", "pacifist", "lookahead", "model"):
+    if kind not in ("random", "heuristic", "defensive", "pacifist", "lookahead", "model", "external"):
         raise SystemExit(f"unknown player kind {kind!r}")
     return PlayerSpec(raw=s, kind=kind, kwargs=kwargs)
 
@@ -103,6 +107,11 @@ def build_player(spec: PlayerSpec) -> Player:
             evaluator = make_torch_evaluator(model, device)
             _model_cache[key] = mcts_picker(evaluator, n_simulations=sims, c_puct=c_puct)
         return _model_cache[key]
+    if spec.kind == "external":
+        # Lazy import — keeps zero-torch / zero-subprocess paths clean.
+        from gomoku.external_engine import build_external_player
+
+        return build_external_player(spec.kwargs)
     raise SystemExit(f"unhandled kind {spec.kind!r}")
 
 
