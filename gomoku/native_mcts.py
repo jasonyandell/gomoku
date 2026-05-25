@@ -27,5 +27,24 @@ def search_batch(*args: Any, **kwargs: Any) -> None:
     _native.search_batch(*args, **kwargs)
 
 
+def gumbel_search_batch(*args: Any, **kwargs: Any) -> None:
+    """Wave-batched native Gumbel root selection + Sequential Halving.
+
+    Per-game Sequential Halving runs inside the lockstep wave (all games share
+    the phase index; the per-game round-robin forced visits batch their leaf
+    evaluations across games, exactly like ``search_batch``). After the call,
+    each game exposes ``gumbel_selected_action()`` (the SH-chosen move) and
+    ``gumbel_policy(c_visit, c_scale)`` (the completed-policy training target).
+    """
+    if _native is None:
+        raise RuntimeError("native MCTS extension is not available")
+    _native.gumbel_search_batch(*args, **kwargs)
+
+
+def has_native_gumbel() -> bool:
+    """True if the built extension implements the native Gumbel batch path."""
+    return _native is not None and hasattr(_native, "gumbel_search_batch")
+
+
 def backend() -> Any | None:
     return _native
