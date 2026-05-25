@@ -231,20 +231,23 @@ def render(board_path: str) -> None:
     name_t = Path(board_path).stem.replace("_board", "")
     print(f"\n  Δelo Derby — {name_t}   (cap {cap_h:.1f}h/idea · priority: never-run → Δelo/hr hill-climb)")
     print(f"  {time.strftime('%Y-%m-%d %H:%M:%S')}   {proj_url or '(wandb unavailable)'}")
-    print("  " + "-" * 108)
-    print(f"  {'#':>2} {'idea':<11} {'elo':>5} {'peak':>5} {'e':>4} {'Δelo/hr':>8} {'chk':>3} "
+    # Fixed-width ASCII columns. The run-marker (`>`) and beat-mark (`✓`) each get
+    # their OWN 1-char slot (header reserves a space there) so they can't shove the
+    # rest of the row; idea is <14 to fit the longest name ("gumbel-fast5s").
+    print("  " + "-" * 90)
+    print(f"  {'#':>2} {' '}{'idea':<14} {'elo':>5} {'peak':>5}{' '} {'e':>4} {'Δelo/hr':>8} {'chk':>3} "
           f"{'status':<9} {'pl':>6} {'vl':>6} {'plies':>6} {'wall_m':>6}")
-    print("  " + "-" * 108)
+    print("  " + "-" * 90)
     for i, x in enumerate(rows, 1):
         beat = "✓" if (x["peak"] or 0) >= 800 else " "
-        run_mark = "►" if x["status"] == "running" else " "
+        run = ">" if x["status"] == "running" else " "
         # live elo/hr slope from the fine-grained eval series ('—' = <2 eval points)
         rate = _fmt(x["rate"], "8.1f") if x["rate"] is not None else "—"
-        print(f"  {i:>2} {run_mark}{x['idea']:<10} {_fmt(x['elo'], '5.0f')} {_fmt(x['peak'], '5.0f')}{beat}"
+        print(f"  {i:>2} {run}{x['idea']:<14} {_fmt(x['elo'], '5.0f')} {_fmt(x['peak'], '5.0f')}{beat} "
               f"{_fmt(x['ep'], '4.0f')} {rate:>8} {_fmt(x['chunks'], '3.0f')} {x['status']:<9} "
               f"{_fmt(x['pl'], '6.3f')} {_fmt(x['vl'], '6.3f')} {_fmt(x['plies'], '6.1f')} "
               f"{_fmt(x['wall_min'], '6.1f')}")
-    print("  " + "-" * 108)
+    print("  " + "-" * 90)
     # footer: one status line (leader · next pick) + one compact legend line
     bits = []
     lead = next((x for x in rows if x["elo"] is not None), None)
@@ -256,7 +259,7 @@ def render(board_path: str) -> None:
         bits.append(f"next: {next_pick} ({'entry-fee' if nr is None else f'Δelo/hr {nr:.0f}'})")
     if bits:
         print("  " + "    ·    ".join(bits))
-    print("  e=epoch · elo/Δelo·hr/wall_m are LIVE (mid-slice) · ✓=beat-heuristic · "
+    print("  >=running · ✓=beat-heuristic · e=epoch · elo/Δelo·hr/wall_m LIVE (mid-slice) · "
           "scheduler ranks on slice-close (next may lag)\n")
 
 
