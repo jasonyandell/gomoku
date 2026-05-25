@@ -23,6 +23,11 @@ archives/
 .claude/*
 !.claude/skills/
 
+# Per-worktree owner record written by scripts/worktree_session.py (find session
+# logs later via `claude --resume`). The durable registry lives in .git/ and is
+# never tracked. See wiki/topics/branch-and-worktree-workflow.md.
+.claude-session
+
 # Frontier lab runtime artifacts (keep .frontier/config.json and lanes.json tracked)
 .frontier/runs/
 .frontier/worktrees/
