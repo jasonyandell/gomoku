@@ -528,8 +528,10 @@ def _generate_games_native_gumbel(
 
     for g_idx in active:
         if record_ownership:
-            # Game hit max_plies without terminating: scored a draw, ownership
-            # target is all-zeros regardless of board, so final planes are moot.
+            # Game hit max_plies without terminating: scored a draw. final_planes
+            # is None => _ownership_target returns None => this game is MASKED OUT
+            # of the ownership loss (not scored). A genuine board-full draw, by
+            # contrast, carries real final_planes and IS scored as all-zeros.
             final_state[g_idx] = (None, 0)
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
@@ -696,7 +698,7 @@ def _generate_games_gumbel(
 
     for g_idx in active:
         if record_ownership:
-            final_state[g_idx] = (None, 0)  # draw -> all-zeros target
+            final_state[g_idx] = (None, 0)  # max-plies draw -> ownership MASKED OUT (None), not scored
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     records: list[GameRecord] = []
@@ -938,7 +940,7 @@ def _generate_games_native(
 
     for g_idx in active:
         if record_ownership:
-            final_state[g_idx] = (None, 0)  # draw -> all-zeros target
+            final_state[g_idx] = (None, 0)  # max-plies draw -> ownership MASKED OUT (None), not scored
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     records: list[GameRecord] = []
@@ -1215,7 +1217,7 @@ def generate_games(
     # the MCTS-loop ply plus the per-game random opening prefix.
     for g_idx in active:
         if record_ownership:
-            final_state[g_idx] = (None, 0)  # draw -> all-zeros target
+            final_state[g_idx] = (None, 0)  # max-plies draw -> ownership MASKED OUT (None), not scored
         completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     # Build records, applying symmetry augmentation.
