@@ -575,10 +575,28 @@ CELLS: dict[str, Cell] = {
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),            # ← the fixed-step lever
 
     # ── Derby v4 combination lanes ──────────────────────────────────────────
-    # gumbel-fast5s is the CONTROL (above). The next three each take that exact
-    # fixed-step + Gumbel@100 base and add ONE combination lever (no more single-
-    # lever cells; these are our best shots at a GREAT player). All share the
-    # base recipe; the only deltas are global_pool / aux heads / vcf-teacher.
+    # derby-v4-control is a FRESH instance of the v3-winning recipe (byte-identical
+    # to derby-gumbel-fast5s) under a NEW name, so all four v4 lanes start from
+    # scratch on the same wall budget (fair race) with a clean wandb timeline and
+    # no collision with v3's 8.8G derby-gumbel-fast5s checkpoint dir. The next three
+    # each take that exact fixed-step + Gumbel@100 base and add ONE combination
+    # lever (no more single-lever cells; these are our best shots at a GREAT
+    # player). Only deltas are global_pool / aux heads / vcf-teacher.
+    "derby-v4-control": Cell("derby-v4-control", sgd_per_game=1.0,   # fresh copy of the v3 winner
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     "derby-signal": Cell("derby-signal", sgd_per_game=1.0,           # 'Signal-rich': both aux heads
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=100,
