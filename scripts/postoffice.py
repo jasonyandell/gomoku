@@ -103,7 +103,15 @@ def ack(root, mailbox: str, through: int | None) -> int:
 
 
 def wait(root, mailbox: str, timeout: int) -> str:
-    """Block (≈0 CPU) until a new post is appended, or `timeout` seconds. Run in background."""
+    """Block (≈0 CPU) until a new post is appended, or `timeout` seconds. Run in background.
+
+    Pending-aware (closes the race a cagent caught 2026-05-25): `tail -n0 -F` only fires on
+    posts appended AFTER it starts, so a post that landed between the caller's last `pending`
+    check and this `wait` would be invisible until the timeout. So if unhandled mail already
+    sits in the log (`total > cursor`), return immediately — don't block on a watch that has
+    already missed it. The cursor stays the source of truth; the watch is only the wake."""
+    if len(read_log(root, mailbox)) > get_cursor(root, mailbox):
+        return "pending"
     log, _ = _paths(root, mailbox)
     log.touch()
     try:
@@ -112,6 +120,21 @@ def wait(root, mailbox: str, timeout: int) -> str:
         return "post"
     except subprocess.TimeoutExpired:
         return "timeout"
+
+
+def list_mailboxes(root) -> list[str]:
+    d = Path(root)
+    return sorted(p.stem for p in d.glob("*.log")) if d.exists() else []
+
+
+def feed(root, n: int = 20) -> list[tuple]:
+    """Recent posts across ALL mailboxes, chronological — the cross-mailbox 'what's been said'."""
+    rows = []
+    for mb in list_mailboxes(root):
+        for p in read_log(root, mb):
+            rows.append((p.get("ts", ""), mb, p))
+    rows.sort(key=lambda r: r[0])
+    return rows[-n:]
 
 
 # ---------- self-improvement: append-only lessons + a notes runbook ----------
@@ -183,8 +206,12 @@ added, acked, or learned. Run this loop FOREVER and never stop it:
 2. BLOCK until the next post (sleeps at ~0% CPU; 600s safety re-scan). Run this as a
    BACKGROUND command (run_in_background: true) so the harness wakes you when it returns:
      {po} wait --mailbox {mailbox} --timeout 600
+   `wait` is pending-aware: it returns `pending` IMMEDIATELY if mail already sits unhandled
+   (so it can't miss a post that arrived during step 1). Still, after launching it, do NOT
+   trust the watch alone — IMMEDIATELY re-run `pending` once to close any gap; pending is the
+   source of truth, the wake is just a nudge. (A past cagent lost a post to this race.)
 
-3. When the wait returns (a post arrived, or the 10-min timer fired), GO BACK TO STEP 1.
+3. When the wait returns (a post, the timer, or `pending`), GO BACK TO STEP 1.
 
 SELF-IMPROVEMENT — this is how you and your successors get smarter; the log compounds:
 - Hit friction (couldn't route a post, an ambiguous request, a recurring pattern, context got
@@ -239,6 +266,21 @@ def cmd_log(a):
     return 0
 
 
+def cmd_mailboxes(a):
+    mbs = list_mailboxes(a.root)
+    print("\n".join(mbs) if mbs else "(no mailboxes yet)")
+    return 0
+
+
+def cmd_feed(a):
+    rows = feed(a.root, a.n)
+    if not rows:
+        print("(no posts in any mailbox yet)")
+    for ts, mb, p in rows:
+        print(f"{ts}  {p.get('from','?')}->{mb}: {p.get('body','')[:150]}")
+    return 0
+
+
 def cmd_lesson(a):
     r = append_lesson(a.root, a.mailbox, a.text, tags=a.tags)
     print(f"lesson {r['id']} recorded")
@@ -287,6 +329,9 @@ def main(argv=None):
 
     pr = sub.add_parser("prompt"); pr.add_argument("--mailbox", default="cagent"); pr.set_defaults(func=cmd_prompt)
     lg = sub.add_parser("log"); lg.add_argument("--mailbox", required=True); lg.set_defaults(func=cmd_log)
+    mb = sub.add_parser("mailboxes", help="list all mailboxes"); mb.set_defaults(func=cmd_mailboxes)
+    fd = sub.add_parser("feed", help="recent posts across ALL mailboxes (what's been said)")
+    fd.add_argument("--n", type=int, default=20); fd.set_defaults(func=cmd_feed)
 
     le = sub.add_parser("lesson", help="append a friction/lesson (self-improvement ledger)")
     le.add_argument("--mailbox", required=True); le.add_argument("--tags", default=""); le.add_argument("text")

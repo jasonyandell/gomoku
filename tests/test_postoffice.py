@@ -91,6 +91,23 @@ def test_notes_runbook_accumulates(tmp_path):
     assert n.count("\n- (") == 2                          # two dated bullets
 
 
+def test_wait_is_pending_aware(tmp_path):
+    # a cagent (a4c2c77e) caught this race: a post already in the log must not be missed.
+    po.append_post(tmp_path, "cagent", "arrived before the watch armed")
+    assert po.wait(tmp_path, "cagent", timeout=30) == "pending"   # returns at once, no block
+    po.ack(tmp_path, "cagent", through=None)
+    assert po.wait(tmp_path, "cagent", timeout=1) == "timeout"     # nothing pending → blocks to timeout
+
+
+def test_feed_and_mailboxes_cross_mailbox(tmp_path):
+    po.append_post(tmp_path, "cagent", "ping", sender="operator")
+    po.append_post(tmp_path, "reply", "pong", sender="cagent")
+    assert po.list_mailboxes(tmp_path) == ["cagent", "reply"]
+    rows = po.feed(tmp_path, n=20)
+    assert {mb for _, mb, _ in rows} == {"cagent", "reply"}        # both mailboxes in one view
+    assert [p["body"] for _, _, p in rows][-1] == "pong"           # chronological
+
+
 def test_spawn_prompt_has_self_improvement():
     pr = po.spawn_prompt("cagent")
     assert "SELF-IMPROVEMENT" in pr

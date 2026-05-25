@@ -141,7 +141,11 @@ is the **log-based DIY message bus** that fills that gap, using only supported p
 python scripts/postoffice.py send --to cagent --from you "land the gpu-daemon merge"  # any producer
 python scripts/postoffice.py pending --mailbox cagent      # what the cagent processes
 python scripts/postoffice.py prompt  --mailbox cagent      # paste-able spawn prompt ↓
+python scripts/postoffice.py feed                          # recent posts across ALL mailboxes
+python scripts/postoffice.py mailboxes                     # list every mailbox
 ```
+To see *what the post office said* (e.g. a cagent's reply), use `feed` — don't guess which
+mailbox; it shows every mailbox chronologically in one view.
 **You spawn the cagent** (I can't launch a persistent fleet session): open `claude agents`,
 dispatch a new background session, and paste the output of `postoffice.py prompt`. Per-agent
 mailboxes generalize this into a full bus — each agent self-subscribes to its own `--mailbox`.
@@ -297,6 +301,24 @@ dispatched; from a Bash tool I can only spawn my own (lifecycle-bound) subagents
 `claude -p`. So the human spawns the cagent in agent view with `postoffice.py prompt` output;
 the skill provides the scripts, log, and prompt. Don't promise to "start the cagent" — hand over
 the paste-able prompt instead.
+
+### 2026-05-25 (live cagent test — the self-improving agent found a real `wait()` race)
+
+**A `wait()` returns only on posts appended AFTER it starts (`tail -n0 -F`), so a post landing
+between the loop's `pending` check and `wait` arming is invisible until the 600s timeout.**
+- Found by the live `cagent` (session a4c2c77e) during its first ping test: my post sat unacked
+  while its watch blocked. It diagnosed the root cause, logged it as a tagged lesson, added a
+  runbook rule, and worked around it (re-check `pending` right after arming the watch).
+- Tool-level fix (so no cagent has to work around it): `wait` is now **pending-aware** — if
+  `total > cursor` it returns `"pending"` immediately instead of blocking on a watch that's
+  already missed the post. The "re-check pending after arming; pending is the truth" rule is
+  also baked into the spawn prompt for future first-cagents.
+- Meta: this is the loop working as designed — **the self-improving agent improved the skill.**
+  Watch = wake, cursor = truth, now enforced by the tool, not just the runbook.
+
+**Seeing "what the post office said" required looping over `*.log` by hand — no cross-mailbox
+view.** Added `postoffice.py feed` (recent posts across all mailboxes, chronological) and
+`mailboxes` (list them). When the question is "what did it reply?", use `feed`, not guesswork.
 
 ### < add new friction-smoothing entries here as they appear >
 
