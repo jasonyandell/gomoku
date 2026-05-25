@@ -99,6 +99,19 @@ DB lives at `~/.claude/agent-fleet/<project>.db` (outside the repo). `scripts/to
 is a plain, editable taxonomy: each topic is a set of keyword phrases; the cache counts
 how many of a session's messages match → the grounding weight.
 
+### Semantic topic-find (haiku-as-RAG) — "when did this TOPIC last come up?"
+`search` matches words; this matches **meaning**, ranked by recency:
+```
+python scripts/topic_find.py "what's next for the ML"
+python scripts/topic_find.py "comparing our model against an external engine"
+```
+No embeddings / vector store: with a few dozen sessions the whole corpus (each session's date +
+title + **the user's own prompts** — already cached, and the best topic fingerprint) fits in one
+Haiku context, so it hands Haiku every card + the query in a single `claude -p --model haiku` call
+and lets it pick + rank. Use this (not `search`) when the topic was phrased differently than you'd
+grep for. (Recency is transcript mtime, which the daemon can bump on idle "settle" ticks — a known
+rough edge; still finds the session.)
+
 ### The mindmap (local web)
 ```
 python scripts/session_mindmap.py --repo ~/code/gomoku --serve   # build + open in browser
@@ -319,6 +332,20 @@ between the loop's `pending` check and `wait` arming is invisible until the 600s
 **Seeing "what the post office said" required looping over `*.log` by hand — no cross-mailbox
 view.** Added `postoffice.py feed` (recent posts across all mailboxes, chronological) and
 `mailboxes` (list them). When the question is "what did it reply?", use `feed`, not guesswork.
+
+### 2026-05-25 (semantic topic recall — FTS misses meaning; haiku-as-RAG, no vector store)
+
+**"Find the most recent session where I discussed X" failed when X was phrased differently
+than the transcript — FTS `search` only matches tokens.** The user asked for a RAG.
+- Fix: `scripts/topic_find.py` — but NOT a vector RAG. With ~40 sessions the whole corpus fits
+  one Haiku context, so RAG collapses to "stuff every session card + the query into ONE
+  `claude -p --model haiku` call and let it match + rank by recency." The card is each session's
+  date + title + the USER's own prompts (already cached; the user's words are the best fingerprint).
+- Lesson: **when the corpus fits the context window, you don't need retrieval — you need one good
+  prompt.** Reserve embedding-RAG for when the corpus stops fitting (hundreds+ of sessions).
+- Known rough edge: recency uses transcript mtime, which the daemon's idle "settle" ticks bump
+  (so many sessions read as "today"); a truer signal is last-human-message time, which session_db
+  doesn't store yet. Good enough to surface the session; tighten if recency-precision matters.
 
 ### < add new friction-smoothing entries here as they appear >
 
