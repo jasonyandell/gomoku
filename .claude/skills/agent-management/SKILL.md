@@ -130,6 +130,12 @@ is the **log-based DIY message bus** that fills that gap, using only supported p
   catch up (`pending` → handle/route → `ack --all`) → `wait` (blocks at ~0% CPU until a post or a
   600s safety timer) **run as a `run_in_background` command so the harness wakes the session on
   exit** → repeat. No polling, ~no idle tokens.
+- **The post office is self-improving** (like this skill, but at runtime). Two append-only
+  layers: a raw `<mb>.lessons.jsonl` ledger (`postoffice.py lesson "symptom → fix"`) and a
+  curated `<mb>.notes.md` runbook (`postoffice.py learn "rule"`) that every cagent **reads on
+  startup** (step 0 of the spawn loop, `postoffice.py notes`). So each cagent inherits its
+  predecessors' rules and adds its own — a respawned/fresh cagent starts *smarter*, losing
+  nothing. `notes.md` is the agent-authored runtime layer; this SKILL is the human-curated one.
 
 ```
 python scripts/postoffice.py send --to cagent --from you "land the gpu-daemon merge"  # any producer

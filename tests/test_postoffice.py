@@ -69,3 +69,31 @@ def test_spawn_prompt_is_pasteable():
     assert "postoffice.py pending --mailbox cagent" in pr
     assert "postoffice.py wait --mailbox cagent" in pr
     assert "run_in_background" in pr and "FOREVER" in pr
+
+
+def test_lessons_are_append_only(tmp_path):
+    po.append_lesson(tmp_path, "cagent", "ambiguous post -> asked for clarification")
+    raw1 = (tmp_path / "cagent.lessons.jsonl").read_text()
+    r2 = po.append_lesson(tmp_path, "cagent", "perf post -> route to lab", tags="routing")
+    raw2 = (tmp_path / "cagent.lessons.jsonl").read_text()
+    assert raw2.startswith(raw1)                          # additive only
+    L = po.read_lessons(tmp_path, "cagent")
+    assert len(L) == 2 and L[1]["tags"] == "routing" and L[1]["id"] == r2["id"]
+
+
+def test_notes_runbook_accumulates(tmp_path):
+    assert po.read_notes(tmp_path, "cagent") == ""        # empty until a rule is learned
+    po.append_note(tmp_path, "cagent", "route perf posts to the lab mailbox")
+    po.append_note(tmp_path, "cagent", "ack in batches, not per-post")
+    n = po.read_notes(tmp_path, "cagent")
+    assert "operating notes" in n                          # header seeded once
+    assert "route perf posts" in n and "ack in batches" in n
+    assert n.count("\n- (") == 2                          # two dated bullets
+
+
+def test_spawn_prompt_has_self_improvement():
+    pr = po.spawn_prompt("cagent")
+    assert "SELF-IMPROVEMENT" in pr
+    assert "notes --mailbox cagent" in pr      # reads runbook on startup (step 0)
+    assert "lesson --mailbox cagent" in pr     # records friction
+    assert "learn --mailbox cagent" in pr      # promotes durable rule into runbook

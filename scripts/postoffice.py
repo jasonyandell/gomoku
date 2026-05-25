@@ -114,19 +114,69 @@ def wait(root, mailbox: str, timeout: int) -> str:
         return "timeout"
 
 
+# ---------- self-improvement: append-only lessons + a notes runbook ----------
+
+def _aux_paths(root, mailbox: str):
+    d = Path(root)
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{mailbox}.lessons.jsonl", d / f"{mailbox}.notes.md"
+
+
+def append_lesson(root, mailbox: str, text: str, tags: str = "") -> dict:
+    """Append-only friction ledger — the raw record of everything a cagent learned."""
+    lessons, _ = _aux_paths(root, mailbox)
+    rec = {"id": uuid.uuid4().hex[:8], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+           "tags": tags, "text": text}
+    with open(lessons, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    return rec
+
+
+def read_lessons(root, mailbox: str) -> list[dict]:
+    lessons, _ = _aux_paths(root, mailbox)
+    if not lessons.exists():
+        return []
+    out = []
+    for line in lessons.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return out
+
+
+def read_notes(root, mailbox: str) -> str:
+    """The curated operating runbook a cagent reads on startup (the durable rules)."""
+    _, notes = _aux_paths(root, mailbox)
+    return notes.read_text(encoding="utf-8") if notes.exists() else ""
+
+
+def append_note(root, mailbox: str, rule: str) -> None:
+    _, notes = _aux_paths(root, mailbox)
+    if not notes.exists():
+        notes.write_text(f"# {mailbox} — operating notes (read on startup; append only, never delete)\n\n")
+    with open(notes, "a", encoding="utf-8") as f:
+        f.write(f"- ({time.strftime('%Y-%m-%d')}) {rule}\n")
+
+
 # ---------- cagent spawn prompt ----------
 
 def spawn_prompt(mailbox: str) -> str:
     po = f"python {SCRIPTS}/postoffice.py"
     return f"""\
-You are `cagent` — a low-resource POST OFFICE for the agent fleet, mailbox `{mailbox}`.
-Your inbox is an append-only log: nothing is ever deleted, only added or acked. Run this
-loop FOREVER and never stop it:
+You are `cagent` — a low-resource, SELF-IMPROVING POST OFFICE for the agent fleet, mailbox
+`{mailbox}`. Your inbox AND your lessons are append-only logs: nothing is ever deleted, only
+added, acked, or learned. Run this loop FOREVER and never stop it:
 
-1. CATCH UP (this recovers anything that arrived while you were busy or asleep):
+0. READ YOUR NOTES — the operating runbook your predecessors accumulated. Follow it:
+     {po} notes --mailbox {mailbox}
+
+1. CATCH UP (recovers anything that arrived while you were busy or asleep):
      {po} pending --mailbox {mailbox}
-   For each pending post, do what it asks — handle it directly, or ROUTE it by posting to
-   the named mailbox, or REPLY with `{po} send --to <mailbox> --from {mailbox} "<text>"`.
+   For each pending post, do what it asks — handle it directly, or ROUTE it by posting to the
+   named mailbox, or REPLY with `{po} send --to <mailbox> --from {mailbox} "<text>"`.
    Then mark them all processed (advance the cursor; never edit the log):
      {po} ack --mailbox {mailbox} --all
 
@@ -136,10 +186,15 @@ loop FOREVER and never stop it:
 
 3. When the wait returns (a post arrived, or the 10-min timer fired), GO BACK TO STEP 1.
 
-Keep each handling terse to conserve context. If your context grows large, post a note to
-`{mailbox}` recording the current cursor and ask to be re-spawned fresh — the log + cursor
-make that seamless (a fresh cagent just catches up from the cursor). Anyone reaches you with
-`{po} send --to {mailbox} "..."`."""
+SELF-IMPROVEMENT — this is how you and your successors get smarter; the log compounds:
+- Hit friction (couldn't route a post, an ambiguous request, a recurring pattern, context got
+  tight)? Record it: `{po} lesson --mailbox {mailbox} "symptom -> what you did -> fix"`.
+- If it's a DURABLE operating rule the next cagent should START with, also add it to the notes
+  that step 0 reads: `{po} learn --mailbox {mailbox} "the rule"`.
+- Never delete notes or lessons; only add or refine. When your context grows large, post a note
+  to `{mailbox}` with the current cursor and ask to be re-spawned fresh — your successor reads
+  your notes (step 0) and catches up from the cursor, so it starts SMARTER than you, losing
+  nothing. Anyone reaches you with `{po} send --to {mailbox} "..."`."""
 
 
 # ---------- CLI ----------
@@ -184,6 +239,35 @@ def cmd_log(a):
     return 0
 
 
+def cmd_lesson(a):
+    r = append_lesson(a.root, a.mailbox, a.text, tags=a.tags)
+    print(f"lesson {r['id']} recorded")
+    return 0
+
+
+def cmd_lessons(a):
+    rows = read_lessons(a.root, a.mailbox)
+    if not rows:
+        print(f"(no lessons yet for {a.mailbox})")
+    for r in rows:
+        tg = f" [{r['tags']}]" if r.get("tags") else ""
+        print(f"{r.get('ts','')} {r['id']}{tg} {r['text']}")
+    return 0
+
+
+def cmd_learn(a):
+    append_note(a.root, a.mailbox, a.rule)
+    print("note added to runbook")
+    return 0
+
+
+def cmd_notes(a):
+    n = read_notes(a.root, a.mailbox)
+    print(n if n.strip() else
+          f"(no notes yet — add a rule with: postoffice.py learn --mailbox {a.mailbox} \"<rule>\")")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Append-only message bus for the agents fleet.")
     p.add_argument("--root", default=str(ROOT), help=f"postoffice dir (default {ROOT})")
@@ -203,6 +287,16 @@ def main(argv=None):
 
     pr = sub.add_parser("prompt"); pr.add_argument("--mailbox", default="cagent"); pr.set_defaults(func=cmd_prompt)
     lg = sub.add_parser("log"); lg.add_argument("--mailbox", required=True); lg.set_defaults(func=cmd_log)
+
+    le = sub.add_parser("lesson", help="append a friction/lesson (self-improvement ledger)")
+    le.add_argument("--mailbox", required=True); le.add_argument("--tags", default=""); le.add_argument("text")
+    le.set_defaults(func=cmd_lesson)
+    les = sub.add_parser("lessons", help="list recorded lessons")
+    les.add_argument("--mailbox", required=True); les.set_defaults(func=cmd_lessons)
+    ln = sub.add_parser("learn", help="add a durable rule to the cagent runbook (read on startup)")
+    ln.add_argument("--mailbox", required=True); ln.add_argument("rule"); ln.set_defaults(func=cmd_learn)
+    no = sub.add_parser("notes", help="print the cagent operating runbook")
+    no.add_argument("--mailbox", required=True); no.set_defaults(func=cmd_notes)
 
     args = p.parse_args(argv)
     return args.func(args)
