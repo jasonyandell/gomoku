@@ -330,7 +330,8 @@ def build_eval_cmd(board: dict, idea: dict) -> list[str]:
     return cmd
 
 
-def build_sweep_slice_cmd(board: dict, idea: dict, resume: bool) -> list[str]:
+def build_sweep_slice_cmd(board: dict, idea: dict, resume: bool,
+                          final_eval: bool = True) -> list[str]:
     """Compose the v2 (run_sweep_wall_slice) chunk command — ONE process.
 
     `python scripts/run_sweep.py --cell <CELL> [--resume <idea>/checkpoints/latest.pt]
@@ -350,7 +351,8 @@ def build_sweep_slice_cmd(board: dict, idea: dict, resume: bool) -> list[str]:
         latest = idea_checkpoint_dir(board, idea["name"]) / "latest.pt"
         cmd += ["--resume", str(latest)]
     cmd += ["--max-wall-secs", str(slice_secs)]
-    cmd += ["--final-eval"]
+    if final_eval:
+        cmd += ["--final-eval"]
     return cmd
 
 
@@ -798,6 +800,143 @@ def _handle_chunk_failure(board: dict, state: dict, idea_name: str,
     write_research_board(board, state, board_md_path_for(board))
 
 
+# ---------------------------------------------------------------------------
+# Pipelined eval (opt-in --pipeline-eval): decouple --final-eval from the training
+# slice. After a slice we snapshot the (small) worker_weights.pt, spawn a background
+# CPU eval_worker on that snapshot, and immediately start the next slice. The eval
+# (CPU) overlaps the next training (MPS) and lands its elo a slice or two later; the
+# hill-climb consumes whatever has landed. chunks_done / wall / cap are set at chunk
+# time (unaffected), so ONLY the Δelo/hr priority signal is lagged ~1 slice.
+# ---------------------------------------------------------------------------
+_PIPELINE_EVALS: list[dict] = []
+
+
+def _pipeline_eval_cmd(snapshot: Path, out_dir: Path) -> list[str]:
+    # Mirrors run_sweep.eval_cmd (same baselines/games/sims) but on a snapshot, one-shot.
+    return [
+        PYTHON, "-u", "-m", "gomoku.eval_worker",
+        "--checkpoint-path", str(snapshot), "--output-dir", str(out_dir),
+        "--baselines", "random,heuristic,lookahead:depth=2,lookahead:depth=4",
+        "--n-games", "20", "--sims", "100", "--device", "cpu",
+        "--n-workers", "4", "--max-cycles", "1",
+    ]
+
+
+def _read_elo_from_jsonl(jsonl: Path) -> Optional[tuple[float, Optional[int]]]:
+    """Last parseable (model_elo, epoch) from an arbitrary eval_results.jsonl, or None."""
+    if not jsonl.exists():
+        return None
+    try:
+        lines = jsonl.read_text().splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ELO_KEY in rec:
+            ep = rec.get(EPOCH_KEY)
+            return float(rec[ELO_KEY]), (int(ep) if ep is not None else None)
+    return None
+
+
+def spawn_pipeline_eval(board: dict, idea_name: str, elo_prev: float, dt: float) -> None:
+    """Snapshot worker_weights.pt and launch a background CPU eval on it. Best-effort:
+    a failed spawn just means this slice yields no elo point (training is unharmed)."""
+    import shutil
+    src = idea_checkpoint_dir(board, idea_name) / "worker_weights.pt"
+    if not src.exists():
+        derby_print(f"[derby/pipe] {idea_name}: no worker_weights.pt yet; no eval this slice")
+        return
+    base = resolve_path(board["global"]["base_out_dir"])
+    pend_dir = base / "_pending_eval" / f"{idea_name}_{int(time.time()*1000)}"
+    try:
+        pend_dir.mkdir(parents=True, exist_ok=True)
+        snap = pend_dir / "weights.pt"
+        shutil.copy2(src, snap)
+    except OSError as e:
+        derby_print(f"[derby/pipe] {idea_name}: snapshot failed ({e}); no eval this slice")
+        return
+    logf = open(pend_dir / "eval.log", "w")
+    proc = subprocess.Popen(_pipeline_eval_cmd(snap, pend_dir),
+                            cwd=str(REPO_ROOT), stdout=logf, stderr=subprocess.STDOUT)
+    _PIPELINE_EVALS.append({
+        "idea": idea_name, "proc": proc, "logf": logf, "dir": pend_dir,
+        "snapshot": snap, "jsonl": pend_dir / "eval_results.jsonl",
+        "elo_prev": elo_prev, "dt": dt,
+    })
+    derby_print(f"[derby/pipe] {idea_name}: bg eval spawned (pid={proc.pid}); next slice starts now")
+
+
+def collect_pipeline_evals(board: dict, state: dict, *, block: bool = False) -> None:
+    """Never-raise wrapper (called outside the per-chunk try/except, so a harvest bug
+    must not kill the race)."""
+    try:
+        _collect_pipeline_evals_impl(board, state, block=block)
+    except Exception as e:
+        derby_print(f"[derby/pipe] collect failed (non-fatal): {e}")
+
+
+def _collect_pipeline_evals_impl(board: dict, state: dict, *, block: bool = False) -> None:
+    """Harvest finished background evals: append the lagged elo point, snapshot a new
+    peak from that slice's weights, persist. block=True waits for all (end of race)."""
+    import shutil
+    if not _PIPELINE_EVALS:
+        return
+    state_p = state_path_for(board)
+    milestones = milestones_log_path(board)
+    remaining = []
+    for e in _PIPELINE_EVALS:
+        if block:
+            try:
+                e["proc"].wait(timeout=400)
+            except Exception:
+                pass
+        elif e["proc"].poll() is None:
+            remaining.append(e)
+            continue
+        try:
+            e["logf"].close()
+        except Exception:
+            pass
+        st = state["ideas"][e["idea"]]
+        parsed = _read_elo_from_jsonl(e["jsonl"])
+        if parsed is not None:
+            elo_now, epoch_eval = parsed
+            st["last_delo"] = elo_now - e["elo_prev"]
+            st["elo_history"].append([epoch_eval if epoch_eval is not None
+                                      else st.get("epochs_done", 0), elo_now, round(e["dt"], 1)])
+            if epoch_eval is not None:
+                st["epochs_done"] = epoch_eval
+            if st.get("peak_elo") is None or elo_now > st["peak_elo"]:
+                try:
+                    peak_dir = idea_peak_dir(board, e["idea"])
+                    peak_dir.mkdir(parents=True, exist_ok=True)
+                    dst = peak_dir / "peak.pt"
+                    tmp = dst.with_suffix(".pt.tmp")
+                    shutil.copy2(e["snapshot"], tmp)
+                    os.replace(tmp, dst)
+                    st["peak_elo"] = elo_now
+                    st["peak_path"] = str(dst)
+                    log_line(milestones, f"PEAK {e['idea']} new high elo {elo_now:.0f} "
+                                         f"(pipelined) -> {dst}")
+                except OSError:
+                    st["peak_elo"] = elo_now
+            derby_print(f"[derby/pipe] {e['idea']}: eval landed elo={elo_now:.0f} "
+                        f"(Δ{st['last_delo']:+.0f}, lagged)")
+        else:
+            derby_print(f"[derby/pipe] {e['idea']}: bg eval produced no elo line; skipped")
+        shutil.rmtree(e["dir"], ignore_errors=True)
+    _PIPELINE_EVALS[:] = remaining
+    state["updated"] = now_iso()
+    atomic_write_json(state_p, state)
+    write_research_board(board, state, board_md_path_for(board))
+
+
 def run_sweep_chunk(board: dict, state: dict, idea_name: str,
                     args: argparse.Namespace) -> None:
     """v2 engine: advance an idea by ONE WALL-TIME SLICE via the production recipe.
@@ -822,6 +961,7 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
     st = state["ideas"][idea_name]
     idea_spec = next(i for i in board["ideas"] if i["name"] == idea_name)
 
+    pipeline = getattr(args, "pipeline_eval", False)
     resume = st["wall_secs_total"] > 0  # first chunk fresh; later chunks --resume latest.pt
     elo_prev = st["elo_history"][-1][1] if st["elo_history"] else 0.0
     chunk_log = idea_chunk_log(board, idea_name)
@@ -847,7 +987,7 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
     if args.chunk_timeout and args.chunk_timeout > slice_timeout:
         slice_timeout = args.chunk_timeout
     lines_before = count_jsonl_lines(board, idea_name)
-    cmd = build_sweep_slice_cmd(board, idea_spec, resume=resume)
+    cmd = build_sweep_slice_cmd(board, idea_spec, resume=resume, final_eval=not pipeline)
     rc, status = run_subprocess(cmd, chunk_log, slice_timeout)
     dt = time.time() - t0
     # A COMPLETED slice bills at least its requested wall slice toward the per-idea
@@ -870,6 +1010,21 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
     st["wall_secs_total"] = st.get("wall_secs_total", 0.0) + billed_dt
     st["chunks_done"] = st.get("chunks_done", 0) + 1
     st["wandb_run_id"] = st.get("wandb_run_id") or extract_wandb_run_id(board, idea_name)
+
+    if pipeline:
+        # Pipelined: the training slice is done + saved. Hand eval to a background CPU
+        # worker on a worker_weights snapshot and RETURN so the next slice starts now.
+        # The elo point + peak land later via collect_pipeline_evals(); wall/cap/chunks
+        # are already billed above, so only the Δelo/hr signal is lagged.
+        st["status"] = "capped" if st["wall_secs_total"] >= cap_wall else "queued"
+        state["total_chunks_run"] += 1
+        state["updated"] = now_iso()
+        atomic_write_json(state_p, state)
+        spawn_pipeline_eval(board, idea_name, elo_prev, dt)
+        derby_print(f"[derby/v2] {idea_name} slice done ({dt:.0f}s, "
+                    f"{st['wall_secs_total']:.0f}/{cap_wall:.0f}s); eval pipelined (lagged)")
+        write_research_board(board, state, board_md_path_for(board))
+        return
 
     # --- parse the fresh elo line written by --final-eval ---
     lines_after = count_jsonl_lines(board, idea_name)
@@ -1167,6 +1322,13 @@ def main() -> int:
                     help="Per-subprocess timeout in seconds (default 1800)")
     ap.add_argument("--max-retries", type=int, default=1,
                     help="Retry a failed chunk up to N times before marking errored")
+    ap.add_argument("--pipeline-eval", action="store_true",
+                    help="v2 only: decouple --final-eval from the training slice — "
+                         "snapshot worker_weights.pt, run a background CPU eval on it, "
+                         "and start the next slice immediately. The elo point lands "
+                         "lagged ~1 slice (hill-climb uses what's available). Reclaims "
+                         "the eval window for training; needs the GPU/CPU split to "
+                         "overlap (eval is CPU). Default off = serial (byte-identical).")
     args = ap.parse_args()
 
     board_path = resolve_path(args.board)
@@ -1174,6 +1336,13 @@ def main() -> int:
     base = resolve_path(board["global"]["base_out_dir"])
     base.mkdir(parents=True, exist_ok=True)
     derby_log = base / "derby.log"
+
+    # Pipelined eval can be set on the CLI OR pinned in the board (global.pipeline_eval),
+    # so a plain `--resume` (e.g. the watchdog's restart) preserves the mode.
+    if board.get("global", {}).get("pipeline_eval"):
+        args.pipeline_eval = True
+    if getattr(args, "pipeline_eval", False):
+        derby_print("[derby] PIPELINED eval mode: --final-eval decoupled; elo lands lagged.")
 
     if args.dry_run:
         do_dry_run(board)
@@ -1230,6 +1399,9 @@ def main() -> int:
 
         # ----- Priority loop -----
         while budget_left():
+            # Harvest any background evals that landed during the last slice so the
+            # hill-climb ranks on the freshest available Δelo (no-op unless pipelined).
+            collect_pipeline_evals(board, state)
             candidates = active_ideas(board, state)
             atomic_write_json(state_p, state)  # persist any capped-status reconciliation
             if not candidates:
@@ -1246,8 +1418,13 @@ def main() -> int:
 
         if not budget_left():
             derby_print(f"[derby] hit --max-chunks={args.max_chunks}; stopping.")
+        # Drain any in-flight pipelined evals so the final standings include the last
+        # slices' elo points + peak snapshots (no-op unless pipelined).
+        collect_pipeline_evals(board, state, block=True)
     except KeyboardInterrupt:
-        derby_print("[derby] interrupted; state is consistent. Re-run with --resume.")
+        derby_print("[derby] interrupted; draining pipelined evals; state consistent. "
+                    "Re-run with --resume.")
+        collect_pipeline_evals(board, state, block=True)
         atomic_write_json(state_p, state)
         return 130
     except Exception as e:

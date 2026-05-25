@@ -1,17 +1,38 @@
 {
-  "_doc": "Delo Derby v5 'Stack the winners' — v4's champion was `vcf` (exact VCF mate-teacher on the fixed-step + Gumbel@100 base): it won the head-to-head round-robin AND held ~draw-parity with Rapfi on 9x9 freestyle. v5 asks the compounding question: do the OTHER v4 levers ADD anything on top of vcf? Every lane = the vcf base + exactly ONE added lever; `control` is the bare vcf base (the bar to clear). All four start FRESH and fair on the same wall budget (global-pool changes the trunk so it can't warm-start from a non-global checkpoint — uniform fresh start keeps the comparison apples-to-apples). Lever sources: signal=KataGo aux heads (opp-reply + ownership @0.15), wholeboard=KataGo global-pooling residual blocks, deep=a deeper VCF solver (max_depth 16->32, nodes 200k->500k) that proves LONGER forced wins so more positions get exact mate labels. Engine `run_sweep_wall_slice`: each chunk advances an idea by ONE wall slice via `run_sweep --cell <CELL> --resume <cell_name>/checkpoints/latest.pt --max-wall-secs <slice_secs> --final-eval`. Per-idea cap is wall-seconds. Priority = never-run/entry-fee first, then highest Δelo/HOUR (hill-climb). v4 lesson baked in: anchored elo SATURATES ~1700, so the real ranking is a head-to-head round-robin AFTER the race (`scripts/round_robin.py` over the saved peak.pt checkpoints) — the anchored standings are only the climb signal. 'cell' == run_sweep.CELLS key; 'cell_name' == that Cell's .name. All four cells are in run_sweep.CELLS.",
+  "_doc": "Delo Derby v5 'Stack the winners' \u2014 v4's champion was `vcf` (exact VCF mate-teacher on the fixed-step + Gumbel@100 base): it won the head-to-head round-robin AND held ~draw-parity with Rapfi on 9x9 freestyle. v5 asks the compounding question: do the OTHER v4 levers ADD anything on top of vcf? Every lane = the vcf base + exactly ONE added lever; `control` is the bare vcf base (the bar to clear). All four start FRESH and fair on the same wall budget (global-pool changes the trunk so it can't warm-start from a non-global checkpoint \u2014 uniform fresh start keeps the comparison apples-to-apples). Lever sources: signal=KataGo aux heads (opp-reply + ownership @0.15), wholeboard=KataGo global-pooling residual blocks, deep=a deeper VCF solver (max_depth 16->32, nodes 200k->500k) that proves LONGER forced wins so more positions get exact mate labels. Engine `run_sweep_wall_slice`: each chunk advances an idea by ONE wall slice via `run_sweep --cell <CELL> --resume <cell_name>/checkpoints/latest.pt --max-wall-secs <slice_secs> --final-eval`. Per-idea cap is wall-seconds. Priority = never-run/entry-fee first, then highest \u0394elo/HOUR (hill-climb). v4 lesson baked in: anchored elo SATURATES ~1700, so the real ranking is a head-to-head round-robin AFTER the race (`scripts/round_robin.py` over the saved peak.pt checkpoints) \u2014 the anchored standings are only the climb signal. 'cell' == run_sweep.CELLS key; 'cell_name' == that Cell's .name. All four cells are in run_sweep.CELLS.",
   "global": {
     "engine": "run_sweep_wall_slice",
-    "slice_secs": 600,
+    "slice_secs": 300,
     "cap_wall_secs": 86400,
     "base_out_dir": "sweep_runs/derby_v5",
     "board_md_path": "sweep_runs/derby_v5/standings.md",
-    "beat_heuristic_elo": 800
+    "beat_heuristic_elo": 800,
+    "pipeline_eval": true
   },
   "ideas": [
-    {"name": "control",       "cell": "derby-v5-control",        "cell_name": "derby-v5-control",        "lever": "BAR - bare vcf base (VCF mate-teacher + fixed-step + Gumbel@100), the v4 champion recipe. Every other v5 lane is read as a delta vs this."},
-    {"name": "vcf-signal",     "cell": "derby-v5-vcf-signal",     "cell_name": "derby-v5-vcf-signal",     "lever": "vcf + KataGo aux supervision: opp-reply policy head + per-cell ownership head, both @0.15 (worker --record-aux --record-ownership). Does richer gradient COMPOUND with exact mate labels?"},
-    {"name": "vcf-wholeboard", "cell": "derby-v5-vcf-wholeboard", "cell_name": "derby-v5-vcf-wholeboard", "lever": "vcf + KataGo global-pooling residual blocks (--global-pool, latter half; +4.79% params). Does whole-board structure COMPOUND with exact mate labels?"},
-    {"name": "vcf-deep",       "cell": "derby-v5-vcf-deep",       "cell_name": "derby-v5-vcf-deep",       "lever": "vcf with a DEEPER solver (--vcf-max-depth 32 --vcf-max-nodes 500000 vs default 16/200k): proves longer forced wins so MORE positions get exact mate labels. Does pushing the winning lever harder help?"}
+    {
+      "name": "control",
+      "cell": "derby-v5-control",
+      "cell_name": "derby-v5-control",
+      "lever": "BAR - bare vcf base (VCF mate-teacher + fixed-step + Gumbel@100), the v4 champion recipe. Every other v5 lane is read as a delta vs this."
+    },
+    {
+      "name": "vcf-signal",
+      "cell": "derby-v5-vcf-signal",
+      "cell_name": "derby-v5-vcf-signal",
+      "lever": "vcf + KataGo aux supervision: opp-reply policy head + per-cell ownership head, both @0.15 (worker --record-aux --record-ownership). Does richer gradient COMPOUND with exact mate labels?"
+    },
+    {
+      "name": "vcf-wholeboard",
+      "cell": "derby-v5-vcf-wholeboard",
+      "cell_name": "derby-v5-vcf-wholeboard",
+      "lever": "vcf + KataGo global-pooling residual blocks (--global-pool, latter half; +4.79% params). Does whole-board structure COMPOUND with exact mate labels?"
+    },
+    {
+      "name": "vcf-deep",
+      "cell": "derby-v5-vcf-deep",
+      "cell_name": "derby-v5-vcf-deep",
+      "lever": "vcf with a DEEPER solver (--vcf-max-depth 32 --vcf-max-nodes 500000 vs default 16/200k): proves longer forced wins so MORE positions get exact mate labels. Does pushing the winning lever harder help?"
+    }
   ]
 }
