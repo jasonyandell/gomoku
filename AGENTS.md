@@ -59,9 +59,16 @@ evidence.
 - Wiki index first, then the training notebook, then W&B/logs/checkpoints, then
   code. The training dynamics are subtle enough that code inspection alone is
   usually misleading.
-- Git hygiene is important here. For substantial work, use a dedicated
-  worktree, make small coherent commits as you go, merge the finished branch
-  back to `main`, push it, and remove the worktree when it is no longer needed.
+- Git workflow is canonical and load-bearing here:
+  [wiki/topics/branch-and-worktree-workflow.md](wiki/topics/branch-and-worktree-workflow.md).
+  **Every unit of work happens in its own worktree off `main`, lands via `git
+  merge --no-ff`, and is torn down afterward — you do not edit the shared
+  `main` checkout.** The overnight derby, the user's IDE, and other agent
+  sessions routinely share that checkout; working there entangles diffs and
+  blocks clean merges. Never rebase, fast-forward, or squash. Run the
+  session-start janitor (`python scripts/reclaim_worktrees.py --apply`) to
+  reclaim what crashed sessions leak — cleanup is a janitor, not a remembered
+  procedure ([wiki/topics/worktree-hygiene.md](wiki/topics/worktree-hygiene.md)).
 - File reusable answers back into the wiki. If a question produces a useful
   synthesis, add a topic page or update the index/log so the next session does
   not rediscover it from scratch.

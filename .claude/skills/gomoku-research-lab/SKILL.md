@@ -159,6 +159,8 @@ Bash background mode + harness notification on completion. Don't poll.
 
 ## Fan-out orchestration (the parallel CPU-queue mode)
 
+Canonical branch/worktree workflow: `wiki/topics/branch-and-worktree-workflow.md`. The rules below are this skill's agent-specific instantiation of it — including the load-bearing rule that **even you (the orchestrator) work in a worktree, never directly in the shared `main` checkout**, since the derby and other sessions share it.
+
 When a lane block has multiple independent sub-lanes (e.g. the LF1-followups: code + analysis + design), run it as a **two-queue fan-out**: dispatch every CPU-queue sub-lane as a background Agent in parallel, while you personally drive the single serial GPU lane. This is the lab's highest-throughput mode and it stays clean if you follow the rules below (validated 2026-05-23 on the LF1-followups block — Jason: "this is smooth").
 
 **Step 1 — route every sub-lane by queue.** Read the lane block, then tag each sub-lane:
@@ -220,7 +222,11 @@ After every lane completes, before moving on:
 
 ## Handoffs, hygiene & discipline
 
-**Worktree hygiene (multi-agent fan-out).** Every spawned code/doc agent's FIRST step is `git merge --no-ff main` (NEVER rebase) — `isolation: worktree` can branch from a STALE base commit (hit repeatedly; see the friction log). After merging an agent's branch back: `git worktree list`, `git worktree prune`, `git branch -d feat/<merged>`. Harness-locked worktrees (`pid …` lock) auto-clean — don't force-unlock them.
+**Worktree hygiene (multi-agent fan-out).** Every spawned code/doc agent's FIRST step is `git merge --no-ff main` (NEVER rebase) — `isolation: worktree` can branch from a STALE base commit (hit repeatedly; see the friction log). After merging an agent's branch back: `git worktree list`, `git worktree prune`, `git branch -d feat/<merged>`.
+
+**The janitor, not a remembered procedure (2026-05-25).** `isolation: worktree` locks each agent worktree to the spawning session's PID and the harness removes it *only on graceful session exit*. Our regime is overnight autonomous derbies that get killed / crash / OOM — those leak a worktree + a dead-PID lock + a `feat/*` or `worktree-agent-*` branch every time. By 2026-05-25 this had silently grown to 26 worktrees / 57 branches. The old advice here ("harness auto-cleans — don't force-unlock") was *wrong for the crash case* and, worse, it was a procedure — procedures that must run at session-end fail exactly when the session dies. The fix is a liveness-aware janitor that runs at session **start**:
+- **Session start (run every time):** `python scripts/reclaim_worktrees.py` (dry-run preview) → `--apply` to reclaim. It removes ONLY agent worktrees whose lock PID is dead, deletes merged + empty-scratch branches, and never touches live-session worktrees, external (`~/.codex/`) worktrees, or `feat/*` with unmerged work. Safe to run while other sessions / the derby are live (the PID check protects them). Pass `--include-scratch` to also drop `worktree-agent-*` branches that carry only superseded commits (it prints reflog-recoverable hashes first).
+- **Per reporting cycle:** the cron narrator emits `python scripts/reclaim_worktrees.py --gauge` — a one-line `repo-hygiene: worktrees=N (orphaned=K) branches=M (merged-undeleted=J)` metric. `orphaned>0` or `merged-undeleted>3` ⇒ run `--apply`. This is the *gauge* that makes slow entropy visible the day it grows.
 
 **Handoffs to [[gomoku-train]] (the machine — cross-ref, don't duplicate its steps):**
 - A recipe WON and you want to ship it → gomoku-train's publish flow (HuggingFace push + Cloudflare deploy).
@@ -234,6 +240,10 @@ After every lane completes, before moving on:
 ## Friction-smoothing log
 
 Things that bit us before, with their fixes. **Read this on session start; append after every session.** This is the part of the skill that compounds across runs.
+
+**Meta — what kind of fix to write (this is how the lab learns in new ways).** This log's default sensor is *narrated friction*: something bit us in the moment, we wrote it down. That sensor is blind to **slow entropy that no single moment surfaces** — leaked worktrees, undeleted branches, disk creep, buffer drift, stale crons. Nobody ever had a bad *moment* over "26 worktrees"; the cost was only legible in aggregate, a week later. So when you write a fix here, classify it:
+- If the fix is a **procedure** ("remember to run X after Y") — that's a smell. Procedures decay and fail silently exactly when a session crashes. **Upgrade it to a janitor + a gauge:** a *janitor* is idempotent, liveness-aware, and runs at a robust trigger (session **start**, not session-end); a *gauge* is a one-line metric in the cron narrator so you'd notice the day it stops working. (First instance: `scripts/reclaim_worktrees.py` — see Worktree hygiene above and `wiki/topics/worktree-hygiene.md`.)
+- **The standing rule: for every class of artifact the lab creates (worktrees, branches, checkpoints, buffers, sweep_logs, crons), there should be a janitor that reclaims it and a gauge that counts it.** When you add a creator, add its janitor+gauge in the same change. Audit the existing creators against this rule when you touch them.
 
 ### 2026-05-23 (session that doubled R-S400 and R-TRAIN)
 
