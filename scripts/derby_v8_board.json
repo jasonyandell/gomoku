@@ -1,5 +1,5 @@
 {
-  "_doc": "Delo Derby v8 — the RUNNING POOL (2026-05-26). Operating model (Jason): the derby is the single GPU executor; it doles 300s (5-min) chunks by Δelo-rate (peak-progress + patience). The derby RUNNER (the orchestrating Claude session) keeps it stocked and swaps contestants in/out by judgement — a lane that plateaus or gets starved is swapped for a fresh cell from run_sweep.CELLS; a climber keeps getting fed. Everything gets run eventually, so no single pick is 'wrong'. Beads are NOT used to run the GPU — beads are CODE-only work for OTHER sessions that lands a new cell 'available for the derby'; the runner then swaps it in. cap_wall_secs is a generous backstop (4h), NOT a hard 1h kill — the ~hourly assessment + swap is the runner's job, so a climbing lane is never cut off. Current 4 contestants on the v5+v6 best base (vcf + global-pool): control (the bar), mate-discount (v6 H2H winner solo), stack (vcf+global-pool + value-discount + max-plies = combine the v6 winners, the 'best recipe' bet), buffer-comp (recency curator, the gated new lever). Swap-pool candidates already in CELLS: derby-v7-adjudicate, derby-x-stack. Verdict = head-to-head round-robin (scripts/round_robin.py) over peaks — anchored elo saturates ~1700.",
+  "_doc": "Delo Derby v8 \u2014 the RUNNING POOL (2026-05-26). Operating model (Jason): the derby is the single GPU executor; it doles 300s (5-min) chunks by \u0394elo-rate (peak-progress + patience). The derby RUNNER (the orchestrating Claude session) keeps it stocked and swaps contestants in/out by judgement \u2014 a lane that plateaus or gets starved is swapped for a fresh cell from run_sweep.CELLS; a climber keeps getting fed. Everything gets run eventually, so no single pick is 'wrong'. Beads are NOT used to run the GPU \u2014 beads are CODE-only work for OTHER sessions that lands a new cell 'available for the derby'; the runner then swaps it in. cap_wall_secs is a generous backstop (4h), NOT a hard 1h kill \u2014 the ~hourly assessment + swap is the runner's job, so a climbing lane is never cut off. Current 4 contestants on the v5+v6 best base (vcf + global-pool): control (the bar), mate-discount (v6 H2H winner solo), stack (vcf+global-pool + value-discount + max-plies = combine the v6 winners, the 'best recipe' bet), buffer-comp (recency curator, the gated new lever). Swap-pool candidates already in CELLS: derby-v7-adjudicate, derby-x-stack. Verdict = head-to-head round-robin (scripts/round_robin.py) over peaks \u2014 anchored elo saturates ~1700.",
   "global": {
     "engine": "run_sweep_wall_slice",
     "slice_secs": 300,
@@ -13,9 +13,29 @@
     "starvation_factor": 2
   },
   "ideas": [
-    {"name": "control",       "cell": "derby-v7-control",       "cell_name": "derby-v7-control",       "lever": "BAR - vcf + global-pooling (v5 H2H champion base)."},
-    {"name": "mate-discount", "cell": "derby-v7-mate-discount", "cell_name": "derby-v7-mate-discount", "lever": "+ --value-discount 0.98 (v6 H2H winner) on the global-pool base."},
-    {"name": "stack",         "cell": "derby-x-stack",          "cell_name": "derby-x-stack",          "lever": "+ --value-discount 0.98 + --max-plies 45 (combine the v6 winners) - the best-recipe-so-far bet."},
-    {"name": "buffer-comp",   "cell": "derby-v7-buffer-comp",   "cell_name": "derby-v7-buffer-comp",   "lever": "+ --buffer-recency-frac 0.5 (recency curator) - the gated new lever."}
+    {
+      "name": "control",
+      "cell": "derby-v7-control",
+      "cell_name": "derby-v7-control",
+      "lever": "BAR - vcf + global-pooling (v5 H2H champion base)."
+    },
+    {
+      "name": "mate-discount",
+      "cell": "derby-v7-mate-discount",
+      "cell_name": "derby-v7-mate-discount",
+      "lever": "+ --value-discount 0.98 (v6 H2H winner) on the global-pool base."
+    },
+    {
+      "name": "disc-recency",
+      "cell": "derby-x-disc-recency",
+      "cell_name": "derby-x-disc-recency",
+      "lever": "+ --value-discount 0.98 + --buffer-recency-frac 0.5 (stack the two v8 CLIMBERS) - replaces 'stack' (--max-plies 45 regressed below peak while its no-truncation twin mate-discount led)."
+    },
+    {
+      "name": "buffer-comp",
+      "cell": "derby-v7-buffer-comp",
+      "cell_name": "derby-v7-buffer-comp",
+      "lever": "+ --buffer-recency-frac 0.5 (recency curator) - the gated new lever."
+    }
   ]
 }
