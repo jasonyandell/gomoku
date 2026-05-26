@@ -7,6 +7,35 @@ A race between 8 fresh-start self-play training recipes ("ideas") to a fixed
 each idea gets a production-style title card, but the question it answers is
 *which training recipe climbs fastest*.
 
+## CURRENT (2026-05-26) — Derby v8 LIVE, beads-runner operating model
+
+**The lab runs as a single GPU executor (the derby) + code-only beads (other sessions).**
+The orchestrating session IS the "derby runner": it owns the GPU, runs the derby in
+300s (5-min) chunks doled by Δelo-rate (peak-progress + patience), and **swaps
+contestants in/out by judgement** (plateaued/starved lane → fresh cell; a climber is
+never swapped; everything gets run). **Beads never run the GPU** — a bead = code-only
+work for another session that lands a cell in `run_sweep.CELLS` "available for the
+derby." Config-only levers (existing flags) skip beads — the runner just adds the cell
+and races it. (Full model: `wiki/topics/research-loop.md`; memory
+`project_derby_operating_model.md` is the resume index.)
+
+- **Live board:** `scripts/derby_v8_board.json` (base `sweep_runs/derby_v8`), 4
+  contestants on the **vcf + global-pool** base: `control`, `mate-discount`
+  (`--value-discount 0.98`), `stack` (+`--max-plies 45`), `buffer-comp`
+  (`--buffer-recency-frac 0.5`). Pipelined eval on; cap = 4h backstop (not a hard 1h kill).
+- **Resume:** `python scripts/delo_derby.py --board scripts/derby_v8_board.json --resume`
+  → confirm ONE `delo_derby` PID → `nohup bash scripts/derby_watchdog.sh
+  scripts/derby_v8_board.json >/dev/null 2>&1 &`. A derby-runner **cron** (~30 min)
+  drives swap/restock; the watchdog (startup-grace) keeps it alive.
+- **Winner lineage** (rank by HEAD-TO-HEAD — anchored elo saturates ~1700, always
+  `scripts/round_robin.py` over `_peaks/*/peak.pt`): vcf mate-teacher (v4) →
+  **+global-pool** (v5 H2H win, compounds) → **+value-discount** (v6 H2H win, fixes the
+  wins-anchored/loses-H2H overtraining gap). **sgd-steps sweep DEAD** (over-trains).
+- **Backlog (beads, `derby-` prefix):** un-gated ideas = status `deferred` (hidden from
+  `bd ready`); gate = `bd update <id> --status open`. Code-heavy epics: VCT solver
+  (`derby-58f`, being built in a `gomoku-vct-solver` worktree), Rapfi opening-book
+  (`derby-pyg`), reanalyze (`derby-3vs`).
+
 ## Rules
 
 - **Race to 140 epochs.** 140 is the milestone because that's roughly where a
