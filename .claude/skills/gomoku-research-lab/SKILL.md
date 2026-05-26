@@ -435,6 +435,16 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 - Fix: redirect stdin per call — `bd update "$id" --flag val </dev/null` — or run each update as its own explicit command. With `</dev/null` a 20-id backfill stamped 20/20. (Belongs with the beads provenance backlink: every derby idea now carries `external_ref: claude-session:$CLAUDE_CODE_SESSION_ID` = the session that created it; `claude --resume <id>` recovers its reasoning. `bd show` displays it as `External:`.)
 - Lesson: any `bd <verb>` in a shell loop gets `</dev/null`. Verify batch bd ops with a count (`bd list --status X | grep -c`), never trust the loop's exit.
 
+### 2026-05-26 (beads-runner model + the watchdog startup-race that spawns a DUPLICATE derby)
+
+**Operating model clarified (Jason): the derby is the SINGLE GPU executor (the "derby runner" = the orchestrating session); beads are CODE-ONLY work for OTHER sessions that land a cell "available for the derby."** A bead must NEVER run the GPU (`run_sweep`/training) — two GPU executors collide. Symptom that triggered this: I'd filed "experiment" beads whose recipe was `run python scripts/run_sweep.py … --max-wall-secs 3600` (code+GPU) — a separate bead-runner executing those would fight the live derby. Fix: closed them (those cells already exist; the derby races them directly), and reworked the epic "race" subtasks to end at "add cell + mark available" (no GPU). Rule: config-only levers (existing flags) don't even need a bead — the derby runner just adds the cell + races it; reserve beads for genuinely code-heavy builds (solver/sampler/harness). The derby doles 300s chunks by Δelo-rate; the runner swaps plateaued/starved lanes for fresh cells by judgement (a climber is never swapped); cap_wall_secs is a generous backstop, not a hard 1h kill.
+
+**Launching the watchdog immediately after the derby spawns a DUPLICATE orchestrator.**
+- Symptom: `pgrep -f 'delo_derby.py --board scripts/derby_v8'` returned 2. Two orchestrators on one board both try to run chunks → GPU collision / doubled work.
+- Root cause: the watchdog's first `is_alive` check (a `pgrep` for the derby) ran before the just-launched derby was matchable, so it concluded "derby DOWN" and started a second one with `--resume`.
+- Fix: (a) launch order — start the derby, confirm `pgrep`=1, THEN start the watchdog; (b) hardened `scripts/derby_watchdog.sh` with a startup grace (`sleep ${WATCHDOG_STARTUP_GRACE:-20}` before the first check) so it can't race a fresh derby — important because every restart path (manual or cron) launches derby+watchdog together. Detection: after any launch, assert exactly one `delo_derby.py --board <board>` PID.
+- Lesson: any "launch process + launch its watchdog" pair needs the watchdog to grace-wait, or you get a duplicate the moment the watchdog wins the race. Always assert a single orchestrator after launch.
+
 ### < add new friction-smoothing entries here as they appear >
 
 ## Self-improvement clause

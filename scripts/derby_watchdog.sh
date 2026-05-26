@@ -52,6 +52,10 @@ json.dump(b,open(p,"w"),indent=2)
 PYEOF
 }
 
+# Startup grace: don't race a just-launched derby (else the first is_alive check
+# misses it and we spawn a DUPLICATE orchestrator). Wait before the first check.
+sleep "${WATCHDOG_STARTUP_GRACE:-20}"
+
 while true; do
   if race_complete; then
     bump_cap
