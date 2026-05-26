@@ -11,13 +11,15 @@ it. (Set up 2026-05-25.)
    the current standings, recent verdicts, the wiki "open candidates", the friction
    log, and the existing backlog (to avoid dupes), then files **1–3 NEW ideas** as
    beads with a title-card description (lever / hypothesis / expected Δelo signature /
-   maps-to-cell / build cost). It **only proposes** — label `proposed`. It does not
-   implement or race.
-2. **Jason (gates).** The intake gate. Jason reviews `proposed` ideas and relabels the
-   ones worth building to `ready` (`bd update <id> --label ready` or just say which).
-   Anything still `proposed` is parked, not built. This is the "researcher proposes,
-   you gate" decision (2026-05-25).
-3. **Orchestrator (implements + races).** Pulls `ready` ideas, vets (one lever?
+   maps-to-cell / build cost). It **only proposes** — files at **status `deferred`**
+   (hidden from `bd ready`). It does not implement or race.
+2. **Jason (gates).** The intake gate. Jason reviews deferred ideas
+   (`bd list --status deferred`) and **gates** the ones worth building with
+   `bd update <id> --status open` (or just says which). Anything still `deferred` is
+   parked and never surfaces in `bd ready`. This is the "researcher proposes, you
+   gate" decision (2026-05-25), enforced by STATUS so it can't be bypassed.
+3. **Orchestrator (implements + races).** Pulls gated (`open`) ideas via `bd ready`,
+   vets (one lever?
    byte-identical-off? implementable?), implements the cell + board entry (CPU-queue
    fan-out per the lab skill), `--dry-run`, hot-adds to the live derby board
    (`delo_derby --resume` reconciles a new board entry as a fresh lane). Moves the
@@ -29,19 +31,26 @@ it. (Set up 2026-05-25.)
 
 ## Backlog = Beads (repo-local, prefix `derby-`)
 
-Initialized in `.beads/` (dolt, embedded). Idea lifecycle via labels on
-`label:derby-idea`:
+Initialized in `.beads/` (dolt, embedded). **The gate is the STATUS, not a label**
+(see the friction note below — a label gate is invisible to `bd ready`, so un-gated
+ideas get picked up). `label:derby-idea` tags the whole backlog; descriptive labels
+(`researcher`, `from-verdict`) say where an idea came from. Lifecycle by STATUS:
 
-| label | meaning | who sets it |
-|---|---|---|
-| `proposed` | researcher filed it; awaiting the gate | researcher |
-| `ready` | Jason approved to build | Jason |
-| (status `in_progress`) | orchestrator is implementing / racing it | orchestrator |
-| (status `closed`) | verdict filed (promoted / rejected / superseded) | orchestrator |
+| status | meaning | who sets it | in `bd ready`? |
+|---|---|---|:--:|
+| `deferred` | researcher filed it; **awaiting the gate** | researcher | **no** (hidden) |
+| `open` | Jason **gated** it — approved to build | Jason | **yes** |
+| `in_progress` | orchestrator is implementing / racing it | orchestrator | no |
+| `closed` | verdict filed (promoted / rejected / superseded) | orchestrator | no |
 
-Commands: `bd list --label derby-idea` (whole backlog), `bd ready` / `bd list
---label ready` (gated, buildable), `bd update <id> --label ready`,
-`bd close <id> --reason "<verdict>"`.
+`bd ready` = status `open` AND no blocking deps. So filing as `deferred` keeps an
+un-gated idea OUT of `bd ready` — you can never accidentally pick up something Jason
+hasn't approved. Commands:
+- backlog: `bd list --label derby-idea`; awaiting-gate: `bd list --status deferred`
+- **gate (Jason):** `bd update <id> --status open`  ← the one action that approves an idea
+- build (orchestrator): `bd update <id> --status in_progress`; `bd close <id>`
+- An EPIC's subtasks are also `deferred` until the epic is gated; gating an epic =
+  open the epic + its subtasks (they then flow via their `blocks` deps).
 
 ## Δelo/hr — peak-progress + patience (the gas pedal)
 
@@ -62,14 +71,14 @@ last-chunk slope which starved mid-swing lanes):
 
 Every artifact class gets a janitor + a gauge:
 - **Gauge:** `bd list --label derby-idea` counts by label — surface
-  `backlog: proposed=P ready=R racing=I closed=C` in the cron narrator each cycle.
-- **Janitor:** close `proposed` ideas superseded by a landed verdict or a dup; close
+  `backlog: deferred=P gated=R racing=I closed=C` (by status) in the cron narrator.
+- **Janitor:** close `deferred` ideas superseded by a landed verdict or a dup; close
   `derby-idea` beads whose cell lost decisively and won't be revisited. Run on review.
 
 ## Running the researcher
 
 On-demand: spawn a `general-purpose` agent with the researcher brief (reads standings
-+ verdicts + wiki + backlog, files 1–3 `proposed` beads). For overnight/away pushes,
++ verdicts + wiki + backlog, files 1–3 ideas at status `deferred`). For overnight/away pushes,
 arm it as a cron (same pattern as the scoreboard cron) at a modest cadence (~3–4h).
 It is **session-armed**; re-arm for each long push. It never implements — the gate is
 Jason, the build is the orchestrator.

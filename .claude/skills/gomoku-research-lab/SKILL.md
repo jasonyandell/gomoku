@@ -417,6 +417,18 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 - Fix / what worked: retry Bash a few times (a worker dying on its own ENOSPC frees a few KB — enough for the tiny output file), then immediately `rm -rf sweep_runs/derby-*/checkpoints/_records` (transient, already-ingested game shards; regenerated on resume) — freed ~21G here. `_records` is the safe disposable lever; never delete `latest.pt`/`_peaks` to free space (those are the resumable/best checkpoints).
 - Lesson: on a training box, watch free disk as a first-class health metric — a full disk silently corrupts clean-saves AND disables your own tooling. The derby's footprint is large (~160G across cells; `derby_v3/_peaks` alone was 80G of best-checkpoint snapshots, `_records` 21G of disposable shards). Add a disk-free check (`df -h /System/Volumes/Data`) to session-start hygiene alongside the BOX IDLE + editable-install checks, and clear `_records` between long runs.
 
+### 2026-05-25 (continuous-research loop on Beads — a label gate is invisible to `bd ready`)
+
+**Modeling the "Jason gates ideas" approval step with a LABEL (`proposed`/`ready`) let un-gated ideas surface in `bd ready` — anyone pulling work could pick up something never approved.**
+- Symptom: stood up the research-idea backlog in beads with the gate as a label (`proposed` until Jason approved → `ready`). But `bd ready` returned ALL 9 un-gated ideas as workable.
+- Root cause: **`bd ready` = status `open` AND no blocking deps — it is label-agnostic.** A label gate is decorative; `ready` doesn't consult it. So every freshly-filed idea (status `open` by default, no blockers) shows as ready-to-claim regardless of its `proposed` label.
+- Fix: **model the gate with STATUS, not a label.** Valid bd statuses: `open, in_progress, blocked, deferred, closed, pinned, hooked`. File un-gated ideas at **`deferred`** (validated: drops out of `bd ready`, still appears in `bd list --status deferred`, reversible). Gating = `bd update <id> --status open` (one action, now it's `ready`). Subtasks of an un-gated epic are `deferred` too. This is structural (a state machine `bd ready` actually enforces), not a procedure that can be forgotten. Loop doc updated: `wiki/topics/research-loop.md`.
+- Lesson: when you build a gate/approval step on a tracker, encode it in the field the "what's ready?" query actually filters on. For beads that's STATUS (`deferred` vs `open`), never a label.
+
+**Two adjacent gotchas from the same session:**
+- **Batch `bd update` via a `for` loop with `\` line-continuation in the `VAR=...\` assignment silently no-op'd** (0 updates persisted, one stray `X`) while the identical single `bd update <id> --status deferred` worked. Don't trust a multi-line shell var + loop for bd batch ops — use explicit IDs on one logical line and verify with a status tally (`bd list --status deferred | grep -c`).
+- **The repo-local `.beads` DB is SHARED across git worktrees + has a `bd daemon --interval 5s` syncing it.** A parallel `~/code/gomoku-vct-solver` worktree (someone building the VCT solver ahead of its gate) had CLAIMED `derby-1p5` to `in_progress` concurrently. Expect concurrent claims/edits from other worktrees/sessions; the daemon reconciles. Check `bd list --status in_progress` before assuming a status you didn't set is stale — another worktree may own it. (Governance flag: an UN-GATED epic was being worked in a worktree — gate-enforcement is social for worktrees that bypass `bd ready`.)
+
 ### < add new friction-smoothing entries here as they appear >
 
 ## Self-improvement clause
