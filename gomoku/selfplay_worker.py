@@ -60,6 +60,7 @@ from gomoku.mcts import make_torch_evaluator
 from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import (
     configure_vcf_teacher,
+    configure_value_discount,
     generate_games,
     generate_games_vs_baseline,
 )
@@ -158,6 +159,12 @@ def parse_args() -> argparse.Namespace:
                    help="VCF teacher solver global node budget. Default None = "
                         "vcf.DEFAULT_MAX_NODES (200k). Raise alongside --vcf-max-depth "
                         "so the deeper search isn't node-capped early.")
+    p.add_argument("--value-discount", type=float, default=None,
+                   help="Derby v6 'mate-discounted-value': scale ordinary outcome "
+                        "value targets by gamma^(plies_to_end) (e.g. 0.98). Default "
+                        "None/1.0 = flat ±1 (byte-identical). Generalizes the VCF "
+                        "mate-distance discount to all outcomes; applied before the "
+                        "VCF teacher so forced wins still overwrite with their value.")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -745,6 +752,7 @@ def main() -> None:
     # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
+    configure_value_discount(args.value_discount)
     device = pick_device(args.device)
     print(f"[{args.worker_id}] device={device}", flush=True)
     print(f"[{args.worker_id}] weights={args.weights_path} output={args.output_dir}", flush=True)

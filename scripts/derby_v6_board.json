@@ -1,0 +1,22 @@
+{
+  "_doc": "Delo Derby v6 'researcher round 1' — first batch gated from the beads backlog (researcher proposes / Jason gates, 2026-05-25). All lanes ride the vcf base (the v4/v5 champion: exact VCF mate-teacher + fixed-step --sgd-steps-per-epoch 64 + Gumbel@100); `control` = bare vcf base, the bar to clear. Levers: (adjudicate) --max-plies 45 first cut at the games/hr lever (truncate dead/drifting games -> more fresh openings/hr; the blunt cap is the cheap probe before the value-confidence resignation follow-on); (mate-discount) --value-discount 0.98 generalizes the VCF mate-distance value-discount to ALL outcomes (z = outcome*gamma^plies_to_end), targeting the v4 'control wins anchored but loses head-to-head' overtraining artifact; (sgd128/sgd256) an --sgd-steps-per-epoch sweep above the 64 baseline (= control) to find the reuse-ratio optimum. Engine run_sweep_wall_slice; PIPELINED eval (global.pipeline_eval) so the slice's --final-eval is decoupled onto a background CPU worker and the next slice starts immediately. Priority = peak-progress + patience (global.peak_window/patience_chunks/starvation_factor): rate scores the CEILING's rise over a window (a mid-swing dip doesn't zero it), a lane with chunks_since_new_peak < patience stays prioritized through its swing, and a non-capped lane unfed too long is force-fed. v4/v5 lesson: anchored elo SATURATES ~1700 -> the real verdict is a head-to-head round-robin (scripts/round_robin.py over the peak.pt checkpoints) AFTER the race; anchored standings are only the climb signal. 'cell'==run_sweep.CELLS key; all five cells are in CELLS.",
+  "global": {
+    "engine": "run_sweep_wall_slice",
+    "slice_secs": 300,
+    "cap_wall_secs": 86400,
+    "base_out_dir": "sweep_runs/derby_v6",
+    "board_md_path": "sweep_runs/derby_v6/standings.md",
+    "beat_heuristic_elo": 800,
+    "pipeline_eval": true,
+    "peak_window": 6,
+    "patience_chunks": 4,
+    "starvation_factor": 2
+  },
+  "ideas": [
+    {"name": "control",       "cell": "derby-v6-control",       "cell_name": "derby-v6-control",       "lever": "BAR - bare vcf base (VCF mate-teacher + fixed-step 64 + Gumbel@100). Every v6 lane is read as a delta vs this."},
+    {"name": "adjudicate",    "cell": "derby-v6-adjudicate",    "cell_name": "derby-v6-adjudicate",    "lever": "vcf + --max-plies 45: truncate dead/drifting games -> more fresh openings/hr (attacks the Delo/hr north-star). Blunt-cap first cut; value-confidence resignation is the follow-on (bead derby-24a)."},
+    {"name": "mate-discount", "cell": "derby-v6-mate-discount", "cell_name": "derby-v6-mate-discount", "lever": "vcf + --value-discount 0.98: z = outcome*gamma^plies_to_end (vs flat +/-1). Generalizes the VCF discount to all outcomes; targets the anchored-vs-H2H overtraining gap. Verdict by head-to-head. (bead derby-2yn)"},
+    {"name": "sgd128",        "cell": "derby-v6-sgd128",        "cell_name": "derby-v6-sgd128",        "lever": "vcf + --sgd-steps-per-epoch 128 (2x the 64 baseline). Half of the reuse-ratio sweep. (bead derby-g2j)"},
+    {"name": "sgd256",        "cell": "derby-v6-sgd256",        "cell_name": "derby-v6-sgd256",        "lever": "vcf + --sgd-steps-per-epoch 256 (4x baseline). The other reuse-ratio sweep point; watch train/sample_reuse_ratio + pl-descent for over-training. (bead derby-g2j)"}
+  ]
+}

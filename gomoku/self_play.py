@@ -57,6 +57,31 @@ def configure_vcf_teacher(max_depth: int | None = None,
         _VCF_MAX_NODES = int(max_nodes)
 
 
+# Value-discount (Derby v6 'mate-discounted-value'): scale ordinary outcome value
+# targets by gamma^(plies_to_end) so positions near a decisive end get crisp ±1 and
+# far-from-end positions get hedged targets — generalizing the VCF mate-distance
+# discount to ALL outcomes. Per-process (set once by the worker). 1.0 = OFF (flat
+# ±1, byte-identical to pre-v6). Applied to the base z BEFORE the VCF teacher, so a
+# proven forced win still overwrites with its own (steeper) mate-discounted value.
+_VALUE_DISCOUNT = 1.0
+
+
+def configure_value_discount(gamma: float | None = None) -> None:
+    """Set the process-wide value-target discount (gamma in (0,1]); 1.0 = flat
+    outcomes (current behavior). Call once before generation."""
+    global _VALUE_DISCOUNT
+    if gamma is not None:
+        _VALUE_DISCOUNT = float(gamma)
+
+
+def _discount_z(z: float, plies_to_end: int) -> float:
+    """Scale an outcome value target by gamma^plies_to_end. No-op when gamma>=1.0 or
+    z==0 (draws stay 0). plies_to_end = recorded-trajectory steps to game end."""
+    if _VALUE_DISCOUNT >= 1.0 or z == 0.0:
+        return z
+    return z * (_VALUE_DISCOUNT ** max(0, plies_to_end))
+
+
 def _apply_vcf_teacher(
     planes: np.ndarray,
     pi: np.ndarray,
@@ -570,6 +595,7 @@ def _generate_games_native_gumbel(
                 ownership = _ownership_target(fp, term_side, outcome_for_black)
             for ply_idx, (planes, pi, side) in enumerate(traj):
                 z = outcome_for_black if side == 0 else -outcome_for_black
+                z = _discount_z(z, len(traj) - 1 - ply_idx)
                 ply_at_capture = n_initial + ply_idx
                 if vcf_teacher:
                     pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
@@ -735,6 +761,7 @@ def _generate_games_gumbel(
             ownership = _ownership_target(fp, term_side, outcome_for_black)
         for ply_idx, (planes, pi, side) in enumerate(traj):
             z = outcome_for_black if side == 0 else -outcome_for_black
+            z = _discount_z(z, len(traj) - 1 - ply_idx)
             ply_at_capture = n_initial + ply_idx
             if vcf_teacher:
                 pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
@@ -978,6 +1005,7 @@ def _generate_games_native(
                 ownership = _ownership_target(fp, term_side, outcome_for_black)
             for ply_idx, (planes, pi, side) in enumerate(traj):
                 z = outcome_for_black if side == 0 else -outcome_for_black
+                z = _discount_z(z, len(traj) - 1 - ply_idx)
                 ply_at_capture = n_initial + ply_idx
                 if vcf_teacher:
                     pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
@@ -1255,6 +1283,7 @@ def generate_games(
             ownership = _ownership_target(fp, term_side, outcome_for_black)
         for ply_idx, (planes, pi, side) in enumerate(traj):
             z = outcome_for_black if side == 0 else -outcome_for_black
+            z = _discount_z(z, len(traj) - 1 - ply_idx)
             ply_at_capture = n_initial + ply_idx
             if vcf_teacher:
                 pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
