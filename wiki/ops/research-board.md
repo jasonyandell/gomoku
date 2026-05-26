@@ -220,6 +220,89 @@ to 9x9 freestyle** — this says "competitive with Rapfi *on 9x9 freestyle*", NO
 "~2625 elo"; and 9x9 freestyle is intrinsically drawish under solid two-sided
 defense. Model plays sims=100 vs Rapfi's time budgets (not a matched control).
 
+## v5 — STACK THE WINNERS (LAUNCHED 2026-05-25, `scripts/derby_v5_board.json`)
+
+v4's champion was the **exact VCF mate-teacher** (`--vcf-teacher`) on the fixed-step
++ Gumbel@100 base. v5 asks the **compounding question**: do the *other* v4 levers
+ADD anything on top of vcf, or is bare vcf already the bar? Every lane = the vcf
+base + exactly ONE added lever; `control` is the bare vcf base (the bar to clear).
+All four start **fresh + fair** on the same wall budget (global-pool changes the
+trunk so it can't warm-start from a non-global checkpoint — uniform fresh start
+keeps it apples-to-apples). Engine `run_sweep_wall_slice`, Δelo/hr hill-climb
+priority, peak checkpoints at `sweep_runs/derby_v5/_peaks/<lane>/peak.pt`.
+
+| lane | lever (vs control = bare vcf base) | source |
+|---|---|---|
+| **control** | none — bare vcf base (VCF mate-teacher + fixed-step + Gumbel@100) | Derby v4 champion |
+| **vcf-signal** | + KataGo aux heads: opp-reply policy + per-cell ownership, both `@0.15` | KataGo |
+| **vcf-wholeboard** | + KataGo global-pooling residual blocks (latter half; +4.79% params) | KataGo |
+| **vcf-deep** | + deeper VCF solver (`--vcf-max-depth 32 --vcf-max-nodes 500000` vs 16/200k) — proves longer forced wins → more exact mate labels | Rapfi/classical |
+
+### v5 FINAL — verdict (stopped 2026-05-26 at 38 chunks; H2H is the verdict)
+
+> **Read this from the head-to-head, not the anchored peaks.** Anchored elo
+> SATURATES ~1700 and at 38 chunks the peaks are a NOISY, less-settled cluster
+> than v4's 67-chunk run. v5 was also **restarted several times mid-race to ship
+> infrastructure** (board cap 3h→24h, slice 600s→300s, PIPELINED eval, and the new
+> peak-progress+patience priority metric) — so within-v5 wall-clock / Δelo-rate
+> comparisons are **confounded**. The honest framing: v5 is BOTH a lever-compounding
+> test AND the round where we built two durable infra wins (pipelined eval + the
+> peak-progress metric). The clean signal is the post-race **H2H round-robin**
+> (`scripts/round_robin.py`, 120 games/pair, paired 4-ply openings, sims=100,
+> `sweep_runs/derby_v5/round_robin.json`).
+
+| metric | vcf-wholeboard | vcf-deep | vcf-signal | control |
+|---|---:|---:|---:|---:|
+| anchored peak elo | **1634** | 1455 | 1606 | 1476 |
+| H2H round-robin rating | **+81** | +44 | +7 | −132 |
+| H2H rank | **1** | 2 | 3 | **4** |
+
+Pairwise H2H Δelo (row vs column; + = row beats column):
+
+| | control | vcf-signal | vcf-wholeboard | vcf-deep |
+|---|---:|---:|---:|---:|
+| **control** | · | −95 | −165 | −137 |
+| **vcf-signal** | +95 | · | −44 | −29 |
+| **vcf-wholeboard** | +165 | +44 | · | +35 |
+| **vcf-deep** | +137 | +29 | −35 | · |
+
+**Compounding verdict (from H2H): the levers DO compound on vcf — bare vcf is NOT
+the bar, it's the floor.** `control` (bare vcf base) **loses all three matchups**
+(−95/−165/−137) and ranks dead last; every +1-lever lane beats it head-to-head.
+The standout add-on is **vcf-wholeboard** (KataGo global-pooling): it beats every
+peer (+44/+35 over signal/deep, +165 over control) AND holds the top anchored peak
+(1634). So whole-board structure stacked on exact mate labels is the v5 win.
+
+**The H2H reshuffled the order (the v4 lesson, again):** on anchored elo `vcf-signal`
+(1606) looked like the clear #2 and `vcf-deep` (1455) the clear last — but played
+directly, **vcf-deep ranks #2 (+44) and signal drops to #3 (+7)**, and deep beats
+signal head-to-head (+29). vcf-signal's high anchored peak was ladder-inflation it
+couldn't cash against live opponents; vcf-deep's low anchored peak understated a
+model that actually plays well. **Don't trust an anchored lead near the ceiling.**
+
+**Honest caveats:** H2H CIs are wide (±62–69 elo, draw rates ~30–35% decisive→~65%
+draws, i.e. strong two-sided defense), so the **middle order (deep > signal, +44 vs
++7) is inside noise** and not airtight; only the bookends are clean (wholeboard
+clearly #1, control clearly #4). The anchored peaks are only ~38 chunks (vs v4's 67)
+and the mid-race restarts mean the climb signal is muddier than v4's. What IS robust:
+**every lever beats bare vcf, and global-pool is the strongest of the three.** The
+load-bearing read is directional, not the exact middle ordering.
+
+**Two durable infra wins shipped mid-race (the other half of v5's value):**
+**(1) pipelined eval** — eval runs concurrently with the next training slice instead
+of blocking it (the `(pipelined)` PEAK milestones), so the GPU queue stays fed; and
+**(2) the peak-progress + patience priority metric** — the scheduler now ranks lanes
+by recent peak-progress with a patience window rather than raw last-chunk Δelo/hr,
+which is what kept feeding lanes still gaining (the v4 lesson that the laggard `vcf`
+was the most informative allocation, now baked into the scheduler).
+
+**Next = v6.** vcf-wholeboard is the new base to beat (vcf + global-pool). Open
+questions: does **vcf + global-pool + aux** stack a fourth lever cleanly, or do the
+two KataGo levers (signal/wholeboard) overlap? A **longer, restart-free** v5-rerun
+(no mid-race infra churn) would settle the muddy middle order; and the vcf-wholeboard
+champion is the natural candidate for the **Rapfi above-ladder yardstick** + a
+promotion-to-lineage ESCALATE (Jason's call).
+
 ### v3-gumbel  (HIGHEST leverage)
 **Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
 

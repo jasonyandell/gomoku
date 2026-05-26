@@ -16,6 +16,25 @@ Cross-refs:
 
 ---
 
+## [2026-05-26] Δelo Derby v5 | "Stack the winners": the other levers DO compound on vcf — bare vcf is the floor, not the bar; global-pool wins H2H
+
+v4 found the **exact VCF mate-teacher** was the standout lever on the fixed-step + Gumbel@100 base. v5 asked the compounding question: do the *other* v4 levers ADD anything on top of vcf? Four lanes, all on the vcf base, each +1 lever, fresh & fair: `control` = bare vcf base (the bar), `vcf-signal` = +KataGo aux heads (opp-reply + ownership @0.15), `vcf-wholeboard` = +global-pooling residual blocks, `vcf-deep` = +deeper VCF solver (depth 16→32, nodes 200k→500k).
+
+Anchored elo saturates ~1700, so — as in v4 — the **verdict is the post-race head-to-head round-robin** (`scripts/round_robin.py`, 120 games/pair, paired 4-ply openings, sims=100). The H2H rating (mean-centered) and pairwise grid:
+
+| metric | vcf-wholeboard | vcf-deep | vcf-signal | control |
+|---|---:|---:|---:|---:|
+| anchored peak elo | **1634** | 1455 | 1606 | 1476 |
+| H2H rating | **+81** | +44 | +7 | **−132** |
+
+Pairwise (row beats column, +Δelo): control loses all three (−95 vs signal, −165 vs wholeboard, −137 vs deep); wholeboard beats everyone (+44 over signal, +35 over deep, +165 over control); deep beats signal +29.
+
+**The compounding verdict: the levers compound — bare vcf is the FLOOR.** `control` (bare vcf base) loses every head-to-head and ranks dead last; every +1-lever lane beats it. The standout is **vcf-wholeboard** (KataGo global-pooling stacked on exact mate labels): it beats all peers AND holds the top anchored peak (1634). **The H2H reshuffled the order vs anchored, the v4 lesson again** — vcf-signal looked like the clear #2 on anchored (1606) but drops to #3 H2H (+7), while vcf-deep (worst anchored at 1455) climbs to #2 (+44) and beats signal directly. Anchored leads near the ceiling don't cash against live opponents.
+
+**Honest framing — v5 was BOTH a science round AND an infra round.** v5 was restarted several times mid-race to ship infrastructure (board cap 3h→24h, slice 600s→300s, **pipelined eval**, and the new **peak-progress + patience priority metric**), so within-v5 wall-clock / Δelo-rate comparisons are confounded — lean on the H2H + peaks, not the rates. The anchored peaks are only ~38 chunks (vs v4's 67), so the **middle H2H order (deep > signal, +44 vs +7) is inside the wide CIs (±62–69, ~65% draws)** and not airtight; only the bookends are clean (wholeboard #1, control #4). What's robust: **every lever beats bare vcf, and global-pool is the strongest.** Two durable infra wins landed this round: **pipelined eval** (eval overlaps the next training slice instead of blocking the GPU queue) and the **peak-progress+patience scheduler metric** (ranks lanes by recent peak-progress with a patience window, not raw last-chunk Δelo/hr — keeps feeding lanes still gaining, the v4 laggard lesson baked in).
+
+**Next = v6.** vcf-wholeboard (vcf + global-pool) is the new base to beat. Open: does a *fourth* lever (vcf + global-pool + aux) stack cleanly or do the two KataGo levers overlap? A longer, restart-free rerun would settle the muddy middle order; the vcf-wholeboard champion is the natural Rapfi-yardstick + promotion-ESCALATE candidate (Jason's call). Full verdict + standings in research-board.md § "v5 FINAL". Peaks at `sweep_runs/derby_v5/_peaks/<lane>/peak.pt`; H2H at `sweep_runs/derby_v5/round_robin.json`.
+
 ## [2026-05-24] Δelo Derby v3 | Gumbel cheap-sims generator dominates; fixed-step trainer co-equal with wave (structural wins); called as-is for new contenders
 
 Jason: "come up with more training ideas by learning from those who came before." We mined the surveyed engines (KataGo/KataGomo, Gumbel AlphaZero, Leela) and raced the imports as a unified Derby v3 against the v1/v2 carryovers and a c0 control, on the production multiprocess recipe with the new Δelo/hr hill-climb scheduler.
