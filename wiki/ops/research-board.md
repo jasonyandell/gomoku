@@ -303,6 +303,90 @@ two KataGo levers (signal/wholeboard) overlap? A **longer, restart-free** v5-rer
 champion is the natural candidate for the **Rapfi above-ladder yardstick** + a
 promotion-to-lineage ESCALATE (Jason's call).
 
+## v6 — RESEARCHER ROUND 1 (LAUNCHED 2026-05-26, `scripts/derby_v6_board.json`)
+
+First batch gated from the **beads backlog** (researcher proposes / Jason gates,
+2026-05-25). All five lanes ride the **vcf base** (the v4/v5 champion: exact VCF
+mate-teacher + fixed-step `--sgd-steps-per-epoch 64` + Gumbel@100); `control` =
+bare vcf base, the bar. Three independent levers, each a delta vs control:
+
+| lane | lever (vs control = bare vcf base) | bead | source |
+|---|---|---|---|
+| **control** | none — bare vcf base | — | v4/v5 champion |
+| **adjudicate** | + `--max-plies 45` — truncate dead/drifting games → more fresh openings/hr (attacks Δelo/hr); blunt-cap first cut, confidence-resign is the follow-on | derby-24a | AGZ resignation |
+| **mate-discount** | + `--value-discount 0.98` — z = outcome·γ^plies_to_end; generalizes the VCF mate-distance discount to ALL outcomes; targets the v4 "wins anchored but loses H2H" overtraining gap | derby-2yn | our VCF path |
+| **sgd128** | + `--sgd-steps-per-epoch 128` (2× the 64 baseline) — reuse-ratio sweep | derby-g2j | — |
+| **sgd256** | + `--sgd-steps-per-epoch 256` (4× baseline) — reuse-ratio sweep | derby-g2j | — |
+
+### v6 FINAL — verdict (closed 2026-05-26 at 168 chunks; H2H is the verdict)
+
+> **Read this from the head-to-head.** Anchored elo SATURATES ~1700 and at 168
+> chunks the lanes are well-explored but the anchored peaks are a noisy cluster near
+> the ceiling (adjudicate 1682, control & mate-discount tied 1665, sgd256 1606, sgd128
+> 1555). The real verdict is the post-race **H2H round-robin** (`scripts/round_robin.py`,
+> 120 games/pair, paired 4-ply openings, sims=100, `sweep_runs/derby_v6/round_robin.json`).
+> mate-discount's WHOLE POINT is to fix the anchored-vs-H2H gap, so for it the H2H
+> verdict is the only one that counts.
+
+| metric | mate-discount | adjudicate | control | sgd256 | sgd128 |
+|---|---:|---:|---:|---:|---:|
+| anchored peak elo | 1665 | **1682** | 1665 | 1606 | 1555 |
+| H2H round-robin rating | **+46** | +20 | +7 | −31 | −41 |
+| H2H rank | **1** | 2 | 3 | 4 | **5** |
+
+Pairwise H2H Δelo (row vs column; + = row beats column):
+
+| | control | adjudicate | mate-discount | sgd128 | sgd256 |
+|---|---:|---:|---:|---:|---:|
+| **control** | · | −44 | −20 | +50 | +41 |
+| **adjudicate** | +44 | · | −58 | +53 | +41 |
+| **mate-discount** | +20 | +58 | · | +44 | +61 |
+| **sgd128** | −50 | −53 | −44 | · | −17 |
+| **sgd256** | −41 | −41 | −61 | +17 | · |
+
+**Per-lever verdicts (from the H2H, the row that matters):**
+
+**(a) adjudicate — YES, games/hr translated to real strength.** `--max-plies 45`
+beats control head-to-head (+44, control winrate 0.438 over 120 games) and ranks #2.
+Truncating dead/drifting games didn't poison the value head with false early
+terminations (the AGZ false-resign worry); the extra fresh openings/hr cashed into a
+stronger model. The blunt cap is a clean win — and the confidence-resign + disable-frac
+follow-on (still in derby-24a's design) is the natural next refinement, now de-risked.
+
+**(b) mate-discount — YES, it beats control HEAD-TO-HEAD (+20) and TOPS the table
+(+46).** This is the hypothesis the lever was built for: distance-discounting the value
+target for ALL outcomes (not just VCF mates) closes the v4 "wins anchored but loses
+H2H" overtraining gap. mate-discount is tied with control on anchored peak (both 1665)
+yet **beats control when they actually play** (+20) AND beats adjudicate directly
+(+58) despite adjudicate's higher anchored peak (1682) — exactly the anchored-understates-
+H2H signature the discount was meant to produce. It's the **clear #1** and the v6 win.
+
+**(c) more SGD/epoch — NO, it HURT.** Both `sgd128` (−41) and `sgd256` (−31) rank
+below control (+7) and **lose to it head-to-head** (control +50 over sgd128, +41 over
+sgd256). Pushing SGD steps/epoch above the 64 baseline over-trains on the same buffer
+(redundant-sample flattening) and costs real strength. sgd256 edges sgd128 (+17) but
+that's inside noise; the robust read is **64 is at or below the reuse-ratio optimum —
+do NOT raise it.** (If anything the sweep wants a point *below* 64, not above.)
+
+**Honest caveats:** H2H CIs are wide (±62 elo, ~30–40% decisive → ~60–70% draws, strong
+two-sided defense), so the bookends are clean but the middle is soft. **What's robust:**
+the two losers (sgd128/sgd256) clearly sit below the three winners (every cross-pair is
+−41…−61, all outside or at the CI edge), and **mate-discount clearly beats sgd128/sgd256
+and adjudicate** (+44/+61/+58). **What's inside noise:** the control↔mate-discount (−20)
+and control↔adjudicate (−44) margins and the mate-discount-vs-adjudicate ordering are
+each near one CI half-width — directionally mate-discount > adjudicate > control, but not
+airtight at the top. The load-bearing reads (mate-discount #1, both sgd lanes lose to
+control) survive the CIs.
+
+**Carry-forward = mate-discount (`--value-discount 0.98`).** It's the cleanest single
+win of the round: tops the H2H, fixes the exact overtraining artifact it was designed
+for, and is a one-flag change that composes with the vcf base. adjudicate is the
+**second** carry candidate — it's a pure generation lever (orthogonal to the value-target
+lever), so mate-discount + adjudicate is the natural v7 stack to test for compounding.
+**sgd128/sgd256 are dead** — the 64 baseline stays (or drops). Open: does mate-discount
+stack on the v5 global-pool champion (vcf + global-pool + value-discount)? And the
+adjudicate confidence-resign follow-on (derby-24a design) vs the blunt `--max-plies` cap.
+
 ### v3-gumbel  (HIGHEST leverage)
 **Lever:** `--gumbel-root` (+ `--gumbel-m 16`, `--gumbel-c-visit 50`, `--gumbel-c-scale 1`) — Gumbel-top-k root sampling + Sequential Halving, completed-Q policy target. **Source:** Gumbel AlphaZero/MuZero, Danihelka et al. (DeepMind, 2022).
 

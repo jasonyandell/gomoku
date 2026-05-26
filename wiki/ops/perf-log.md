@@ -16,6 +16,25 @@ Cross-refs:
 
 ---
 
+## [2026-05-26] Δelo Derby v6 | "Researcher round 1": mate-discount wins H2H (the overtraining-fix lands), adjudicate's games/hr is real, more SGD/epoch HURTS
+
+First batch gated from the **beads backlog** (researcher proposes / Jason gates). Five lanes, all on the vcf base (v4/v5 champion: exact VCF mate-teacher + fixed-step 64 + Gumbel@100); `control` = bare vcf base. Three independent levers: `adjudicate` (+`--max-plies 45`, a games/hr generation lever), `mate-discount` (+`--value-discount 0.98`, z = outcome·γ^plies_to_end — generalizes the VCF mate-distance discount to ALL outcomes, built to fix the v4 "wins anchored but loses H2H" overtraining gap), and an `--sgd-steps-per-epoch` reuse-ratio sweep above the 64 baseline (`sgd128`/`sgd256`).
+
+Anchored elo saturates ~1700, so — as in v4/v5 — the **verdict is the post-race head-to-head round-robin** (`scripts/round_robin.py`, 120 games/pair, paired 4-ply openings, sims=100). Anchored peaks vs H2H rating:
+
+| metric | mate-discount | adjudicate | control | sgd256 | sgd128 |
+|---|---:|---:|---:|---:|---:|
+| anchored peak elo | 1665 | **1682** | 1665 | 1606 | 1555 |
+| H2H rating | **+46** | +20 | +7 | −31 | −41 |
+
+H2H ranking: **mate-discount > adjudicate > control > sgd256 > sgd128**. Pairwise (row beats column, +Δelo): mate-discount beats everyone (+20 control, +58 adjudicate, +44 sgd128, +61 sgd256); adjudicate beats control +44 but loses to mate-discount −58; control beats both sgd lanes (+50 sgd128, +41 sgd256); sgd256 beats sgd128 +17 (noise).
+
+**Three clean per-lever answers.** **(a) adjudicate's games/hr translated to real strength** — `--max-plies 45` beats control head-to-head (+44, control winrate 0.438), no false-resign value poisoning; truncating dead games into more fresh openings/hr cashed out. **(b) mate-discount beats control HEAD-TO-HEAD (+20) and TOPS the table (+46)** — the exact hypothesis it was built for. It's TIED with control on anchored peak (both 1665) yet wins when they actually play, and beats higher-anchored adjudicate (1682) directly +58: the anchored-understates-H2H signature the discount was designed to produce. The v4 overtraining artifact is fixable, and this is the fix. **(c) more SGD/epoch HURTS** — both sgd128 (−41) and sgd256 (−31) rank below control and lose to it head-to-head (control +50/+41); pushing steps/epoch above 64 over-trains the buffer (redundant-sample flattening). The 64 baseline is at or below the reuse-ratio optimum — do not raise it.
+
+**Caveats (honest):** H2H CIs ~±62 with ~60–70% draws, so the bookends are clean (sgd lanes clearly below the three winners; mate-discount clearly beats both sgd + adjudicate) but the top margins (control↔mate-discount −20, control↔adjudicate −44) are near one CI half-width — directionally mate-discount > adjudicate > control, not airtight. The load-bearing reads (mate-discount #1, both sgd lanes lose to control) survive.
+
+**Carry-forward = mate-discount (`--value-discount 0.98`)** — cleanest single win, one flag, composes with vcf. **adjudicate is the second carry candidate** (orthogonal generation lever → mate-discount + adjudicate is the natural v7 compounding test). sgd128/sgd256 are dead; 64 stays. Open: does mate-discount stack on the v5 global-pool champion? And the adjudicate confidence-resign follow-on (derby-24a) vs the blunt cap. Beads derby-24a/derby-2yn/derby-g2j closed. Full verdict + standings in research-board.md § "v6 FINAL". Peaks at `sweep_runs/derby_v6/_peaks/<lane>/peak.pt`; H2H at `sweep_runs/derby_v6/round_robin.json`.
+
 ## [2026-05-26] Δelo Derby v5 | "Stack the winners": the other levers DO compound on vcf — bare vcf is the floor, not the bar; global-pool wins H2H
 
 v4 found the **exact VCF mate-teacher** was the standout lever on the fixed-step + Gumbel@100 base. v5 asked the compounding question: do the *other* v4 levers ADD anything on top of vcf? Four lanes, all on the vcf base, each +1 lever, fresh & fair: `control` = bare vcf base (the bar), `vcf-signal` = +KataGo aux heads (opp-reply + ownership @0.15), `vcf-wholeboard` = +global-pooling residual blocks, `vcf-deep` = +deeper VCF solver (depth 16→32, nodes 200k→500k).
