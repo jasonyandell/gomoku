@@ -429,6 +429,12 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 - **Batch `bd update` via a `for` loop with `\` line-continuation in the `VAR=...\` assignment silently no-op'd** (0 updates persisted, one stray `X`) while the identical single `bd update <id> --status deferred` worked. Don't trust a multi-line shell var + loop for bd batch ops — use explicit IDs on one logical line and verify with a status tally (`bd list --status deferred | grep -c`).
 - **The repo-local `.beads` DB is SHARED across git worktrees + has a `bd daemon --interval 5s` syncing it.** A parallel `~/code/gomoku-vct-solver` worktree (someone building the VCT solver ahead of its gate) had CLAIMED `derby-1p5` to `in_progress` concurrently. Expect concurrent claims/edits from other worktrees/sessions; the daemon reconciles. Check `bd list --status in_progress` before assuming a status you didn't set is stale — another worktree may own it. (Governance flag: an UN-GATED epic was being worked in a worktree — gate-enforcement is social for worktrees that bypass `bd ready`.)
 
+**`bd update` reads stdin — a tight `for` loop of `bd update` silently eats its own iteration list (only the first runs).**
+- Symptom: `for id in $ids; do bd update "$id" --status deferred; done` reported success but persisted 0 changes (and printed the remaining IDs as bare lines); the IDENTICAL single `bd update <id> …` worked every time. Hit it twice — once batch-setting status=deferred, once batch-setting `--external-ref`.
+- Root cause: `bd update` consumes stdin; inside a `for` loop the first invocation drains the rest of the loop's input/IDs, so iterations 2..N never run (or run with mangled args).
+- Fix: redirect stdin per call — `bd update "$id" --flag val </dev/null` — or run each update as its own explicit command. With `</dev/null` a 20-id backfill stamped 20/20. (Belongs with the beads provenance backlink: every derby idea now carries `external_ref: claude-session:$CLAUDE_CODE_SESSION_ID` = the session that created it; `claude --resume <id>` recovers its reasoning. `bd show` displays it as `External:`.)
+- Lesson: any `bd <verb>` in a shell loop gets `</dev/null`. Verify batch bd ops with a count (`bd list --status X | grep -c`), never trust the loop's exit.
+
 ### < add new friction-smoothing entries here as they appear >
 
 ## Self-improvement clause

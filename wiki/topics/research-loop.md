@@ -52,6 +52,14 @@ hasn't approved. Commands:
 - An EPIC's subtasks are also `deferred` until the epic is gated; gating an epic =
   open the epic + its subtasks (they then flow via their `blocks` deps).
 
+**Provenance backlink.** Every idea carries `external_ref: claude-session:<id>` — the
+Claude session that CREATED it (`$CLAUDE_CODE_SESSION_ID` at create time; shows as
+`External:` in `bd show`). To recover the reasoning/context that generated an idea,
+`claude --resume <id>`. Stamp it at create: MCP `create(external_ref="claude-session:"+sid)`
+or CLI `bd create … --external-ref "claude-session:$CLAUDE_CODE_SESSION_ID"`.
+Gotcha: `bd update` reads stdin, so a tight `for` loop of `bd update` eats its own
+iteration list — always `bd update … </dev/null` in a loop (else only the first runs).
+
 ## Δelo/hr — peak-progress + patience (the gas pedal)
 
 `scripts/delo_derby.py:delo_per_hr` + `pick_priority` (rebuilt 2026-05-25, replacing
