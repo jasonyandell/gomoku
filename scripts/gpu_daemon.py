@@ -69,6 +69,7 @@ import fcntl
 import json
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -107,6 +108,15 @@ DRAIN_GRACE_SEC = TEARDOWN_GRACE_SEC + FINAL_EVAL_TIMEOUT_SEC + 60.0
 ELO_KEY = "eval/model_elo"
 EPOCH_KEY = "eval_worker/epoch_evaluated"
 
+# Disk preflight: refuse to dispatch a job when free space is below this floor.
+# A 300s train chunk writes checkpoints + records; a near-full disk is what killed
+# Derby v3 (wiki/topics/cockpit-vs-autopilot.md "turn blockers into guardrails").
+DEFAULT_MIN_FREE_GB = 10.0
+
+# Poison-pill guard: a job that crashes the daemon every launch must eventually
+# land in failed/ rather than re-queue forever and wedge the lane.
+MAX_REQUEUE = 3
+
 
 # ---------------------------------------------------------------------------
 # small helpers
@@ -135,6 +145,27 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def disk_free_bytes(path: Path = REPO_ROOT) -> int:
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return 0
+
+
+def disk_ok(min_free_bytes: float, path: Path = REPO_ROOT) -> bool:
+    """True if there's headroom to safely write a job's checkpoints/records."""
+    return disk_free_bytes(path) >= min_free_bytes
+
+
+def parse_iso(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +266,43 @@ def sort_pending(jobs: list[dict]) -> list[dict]:
             str(j.get("id", "")),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# programmatic API — the seam clients (the broker, delo_derby) submit through.
+# A client never scrapes stdout: submit() returns the job id, poll() returns a
+# documented dict. This is what makes the daemon "the one queue" (Jason 2026-05-26).
+# ---------------------------------------------------------------------------
+def submit(queue: "Queue", spec: dict) -> str:
+    """Normalize + enqueue a job spec; return its id. Raises ValueError if invalid.
+
+    spec is the same declarative dict a config file holds, e.g.
+    {"kind":"train","cell":"derby-v7-control","max_wall_secs":300,
+     "final_eval":True,"resume_from":"auto","tier":2,"priority":0.0,"note":"..."}.
+    """
+    job = normalize_job(dict(spec))  # copy: don't mutate the caller's dict
+    queue.write("pending", job)
+    queue.event(job["id"], "submit", {"kind": job["kind"], "tier": job["tier"]})
+    return job["id"]
+
+
+def poll(queue: "Queue", job_id: str) -> Optional[dict]:
+    """Status of a submitted job, or None if the id is unknown.
+
+    Returns {"state", "returncode", "result", "job"}. For a finished train job,
+    result["model_elo"] is ALWAYS present (None when no eval line was produced),
+    so a client never has to guess whether the key exists.
+    """
+    found = queue.find(job_id)
+    if not found:
+        return None
+    state, job = found
+    return {
+        "state": state,
+        "returncode": job.get("returncode"),
+        "result": job.get("result") or {},
+        "job": job,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -398,11 +466,13 @@ def foreign_tenants(exclude_pids: set[int]) -> list[str]:
 # the daemon
 # ---------------------------------------------------------------------------
 class Daemon:
-    def __init__(self, queue: Queue, poll_secs: float, preflight: bool, once: bool):
+    def __init__(self, queue: Queue, poll_secs: float, preflight: bool, once: bool,
+                 min_free_bytes: float = DEFAULT_MIN_FREE_GB * 1e9):
         self.q = queue
         self.poll_secs = poll_secs
         self.preflight = preflight
         self.once = once
+        self.min_free_bytes = min_free_bytes
         self.stop = False
         self.proc: Optional[subprocess.Popen] = None
         self._termed = False
@@ -460,13 +530,34 @@ class Daemon:
 
     # -- startup reconcile ----------------------------------------------------
     def reconcile(self) -> None:
-        """A hard crash leaves a job in running/. Re-queue it (train jobs resume)."""
+        """A hard crash leaves a job in running/. Re-queue it (train jobs resume).
+
+        Two guards: (1) if the prior child's process group is still alive (daemon
+        was kill -9'd but its `start_new_session` child survived), SIGTERM it first
+        so we never launch a SECOND tenant on the same cell; (2) a job that keeps
+        crashing the daemon is capped at MAX_REQUEUE and sent to failed/ instead of
+        re-queueing forever.
+        """
         for job in self.q.list_jobs("running"):
+            pgid = job.get("child_pgid")
+            if isinstance(pgid, int) and pid_alive(pgid):
+                self.log(f"reconcile: orphan child pgid {pgid} of {job['id']} alive; SIGTERM")
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if job.get("requeued", 0) >= MAX_REQUEUE:
+                job["error"] = f"exceeded MAX_REQUEUE ({MAX_REQUEUE}) — poison pill"
+                job["ended_at"] = now_iso()
+                self.q.move("running", "failed", job)
+                self.log(f"reconcile: {job['id']} hit requeue cap -> failed")
+                continue
             self.log(f"reconcile: re-queueing interrupted job {job['id']}")
             if job.get("kind") == "train":
                 job["resume_from"] = "auto"
             job["requeued"] = job.get("requeued", 0) + 1
             job.pop("started_at", None)
+            job.pop("child_pgid", None)
             self.q.move("running", "pending", job)
 
     # -- main loop ------------------------------------------------------------
@@ -492,6 +583,13 @@ class Daemon:
                             self.log(f"    {ln}")
                         time.sleep(max(self.poll_secs, 10.0))
                         continue
+                if not disk_ok(self.min_free_bytes):
+                    free_gb = disk_free_bytes() / 1e9
+                    floor_gb = self.min_free_bytes / 1e9
+                    self.log(f"disk preflight: {free_gb:.1f}GB free < {floor_gb:.0f}GB "
+                             f"floor; holding dispatch (the Derby-v3 guardrail).")
+                    time.sleep(max(self.poll_secs, 30.0))
+                    continue
                 self.run_job(pending[0])
             self.log("daemon stopped.")
         finally:
@@ -529,6 +627,11 @@ class Daemon:
                 env=os.environ.copy(),
                 start_new_session=True,  # own process group -> we can signal the whole bundle
             )
+            # Record the child's pgid (== its pid, it's a session leader) so a
+            # later reconcile after a hard daemon crash can detect/kill an orphan
+            # before re-launching a SECOND tenant on the same cell.
+            job["child_pgid"] = self.proc.pid
+            self.q.write("running", job)
             rc = self._supervise(job, t0)
 
         wall = time.monotonic() - t0
@@ -543,6 +646,12 @@ class Daemon:
             if rc is not None:
                 return rc
             now = time.monotonic()
+            # Cancel requested via marker (works for raw jobs too, unlike pkill-by-cell):
+            # SIGTERM our own child group and give it the drain window to clean-save.
+            if drain_deadline is None and self.q.cancel_marker(job["id"]).exists():
+                self.log(f"job {job['id']} cancel requested; SIGTERM child group")
+                self._terminate_child()
+                drain_deadline = now + DRAIN_GRACE_SEC
             if self.stop and drain_deadline is None:
                 self._terminate_child()  # idempotent; handler likely already did it
                 drain_deadline = now + DRAIN_GRACE_SEC
@@ -577,8 +686,10 @@ class Daemon:
         result: dict[str, Any] = {"log": str(self.q.log_path(job["id"]))}
         if job["kind"] == "train":
             elo = read_last_elo(job["cell"])
-            if elo is not None:
-                result["model_elo"], result["epoch"] = elo[0], elo[1]
+            # Always populate the key so a client never has to test for presence:
+            # None means "done but no eval/model_elo line was produced".
+            result["model_elo"] = elo[0] if elo is not None else None
+            result["epoch"] = elo[1] if elo is not None else None
         job["result"] = result
 
         cancel_requested = self.q.cancel_marker(job["id"]).exists()
@@ -612,7 +723,8 @@ class Daemon:
 # ---------------------------------------------------------------------------
 def cmd_daemon(args) -> int:
     q = Queue(args.queue_dir)
-    Daemon(q, poll_secs=args.poll_secs, preflight=not args.no_preflight, once=args.once).run()
+    Daemon(q, poll_secs=args.poll_secs, preflight=not args.no_preflight, once=args.once,
+           min_free_bytes=args.min_free_gb * 1e9).run()
     return 0
 
 
@@ -623,14 +735,13 @@ def cmd_submit(args) -> int:
     else:
         job = _job_from_flags(args)
     try:
-        job = normalize_job(job)
+        job_id = submit(q, job)
     except ValueError as e:
         print(f"submit: {e}", file=sys.stderr)
         return 2
-    q.write("pending", job)
-    q.event(job["id"], "submit", {"kind": job["kind"], "tier": job["tier"]})
-    print(f"queued {job['id']}  (tier {job['tier']}, priority {job['priority']})")
-    print(f"  config: {q.job_path('pending', job['id'])}")
+    _, queued = q.find(job_id)
+    print(f"queued {job_id}  (tier {queued['tier']}, priority {queued['priority']})")
+    print(f"  config: {q.job_path('pending', job_id)}")
     if not q.daemon_alive():
         print("  note: no daemon is running — start one with "
               "`python scripts/gpu_daemon.py daemon`")
@@ -660,18 +771,41 @@ def _job_from_flags(args) -> dict:
     return job
 
 
+def _running_with_progress(q: "Queue") -> list[dict]:
+    """Running jobs annotated with elapsed/eta for a glance pane (file is untouched)."""
+    now = datetime.now(timezone.utc)
+    out = []
+    for job in q.list_jobs("running"):
+        job = dict(job)
+        started = parse_iso(job.get("started_at"))
+        if started is not None:
+            elapsed = (now - started).total_seconds()
+            job["elapsed_secs"] = round(elapsed, 1)
+            cap = safety_timeout(job) if job.get("kind") == "train" else None
+            if job.get("kind") == "train":
+                # show against the trainer's own wall cap, not the safety pad
+                wall_cap = float(job.get("max_wall_secs") or 0.0)
+                job["eta_secs"] = round(max(0.0, wall_cap - elapsed), 1) if wall_cap else None
+        out.append(job)
+    return out
+
+
 def cmd_status(args) -> int:
     q = Queue(args.queue_dir)
+    counts = {st: len(list(q.state_dir(st).glob("*.json"))) for st in STATES}
     snap = {
         "daemon": {
             "alive": q.daemon_alive(),
             "pid": q.daemon_pid(),
             "queue_dir": str(q.root),
+            "disk_free_gb": round(disk_free_bytes() / 1e9, 1),
         },
-        "running": q.list_jobs("running"),
+        "counts": counts,
+        "running": _running_with_progress(q),
         "pending": sort_pending(q.list_jobs("pending")),
         "done": q.list_jobs("done")[-10:],
         "failed": q.list_jobs("failed")[-10:],
+        "cancelled": q.list_jobs("cancelled")[-10:],
     }
     if args.json:
         print(json.dumps(snap, indent=2, sort_keys=True))
@@ -679,9 +813,16 @@ def cmd_status(args) -> int:
 
     d = snap["daemon"]
     state = "RUNNING" if d["alive"] else "DOWN"
-    print(f"daemon: {state}  pid={d['pid']}  queue={d['queue_dir']}")
+    c = snap["counts"]
+    print(f"daemon: {state}  pid={d['pid']}  disk_free={d['disk_free_gb']}GB  "
+          f"queue={d['queue_dir']}")
+    print(f"counts: pending={c['pending']} running={c['running']} done={c['done']} "
+          f"failed={c['failed']} cancelled={c['cancelled']}")
     for job in snap["running"]:
-        print(f"\nRUNNING  {job['id']}")
+        el = job.get("elapsed_secs")
+        eta = job.get("eta_secs")
+        prog = f"  {el:.0f}s elapsed" + (f" / ~{eta:.0f}s left" if eta is not None else "")
+        print(f"\nRUNNING  {job['id']}{prog if el is not None else ''}")
         print(f"    {_one_line(job)}")
         print(f"    started {job.get('started_at')}  log {q.log_path(job['id'])}")
     pend = snap["pending"]
@@ -737,16 +878,16 @@ def cmd_cancel(args) -> int:
         print(f"cancelled (was pending) {args.id}")
         return 0
     if state == "running":
-        q.cancel_marker(args.id).touch()  # daemon files it under cancelled on exit
-        pid = job.get("host_pid")
-        cpid = None
-        # the daemon recorded its own pid; the child is in the daemon's child group.
-        # We can't address the child's pgid directly here, so ask the daemon to act:
-        # touch the marker + SIGTERM the run_sweep tree via pkill on this job's cell.
-        if job["kind"] == "train":
-            subprocess.run(["pkill", "-TERM", "-f", f"sweep_runs/{job['cell']}/"],
-                           check=False)
-        print(f"cancel requested for RUNNING {args.id} (clean stop in progress)")
+        # Drop a marker; the daemon's supervise loop SIGTERMs its OWN child group
+        # on the next tick (clean-saves a resumable latest.pt) and files the job
+        # under cancelled/. This addresses the child by pgid, not a pkill-by-path
+        # that could also hit a foreign run_sweep on the same cell.
+        q.cancel_marker(args.id).touch()
+        if not q.daemon_alive():
+            print(f"cancel marker set for {args.id}, but NO daemon is running to act "
+                  f"on it — start the daemon or kill the job manually", file=sys.stderr)
+            return 1
+        print(f"cancel requested for RUNNING {args.id} (daemon will clean-stop it)")
         return 0
     print(f"job {args.id} is already {state}; nothing to cancel")
     return 0
@@ -776,6 +917,9 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--poll-secs", type=float, default=5.0)
     d.add_argument("--no-preflight", action="store_true",
                    help="skip the foreign-tenant idle check (use only if you own the box)")
+    d.add_argument("--min-free-gb", type=float, default=DEFAULT_MIN_FREE_GB,
+                   help=f"disk preflight floor (default {DEFAULT_MIN_FREE_GB}GB); "
+                        f"hold dispatch below this to avoid the Derby-v3 disk-full death")
     d.add_argument("--once", action="store_true", help="drain pending then exit (testing)")
     d.set_defaults(func=cmd_daemon)
 

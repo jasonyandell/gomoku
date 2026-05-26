@@ -189,3 +189,64 @@ def test_cancel_pending(queue, restore_signals):
     queue.write("pending", job)
     queue.move("pending", "cancelled", job)  # what cmd_cancel does for pending
     assert queue.find(job["id"])[0] == "cancelled"
+
+
+# --- programmatic submit/poll API (the broker's seam) -----------------------
+def test_submit_returns_id_and_enqueues(queue):
+    job_id = gd.submit(queue, {"kind": "raw", "cmd": ["true"], "note": "api"})
+    assert isinstance(job_id, str) and job_id
+    st, job = queue.find(job_id)
+    assert st == "pending" and job["note"] == "api"
+
+
+def test_submit_does_not_mutate_caller_spec(queue):
+    spec = {"kind": "raw", "cmd": ["true"]}
+    gd.submit(queue, spec)
+    assert "id" not in spec and "status" not in spec  # submit copied the dict
+
+
+def test_submit_rejects_bad_spec(queue):
+    with pytest.raises(ValueError):
+        gd.submit(queue, {"kind": "train"})  # missing cell
+
+
+def test_poll_unknown_returns_none(queue):
+    assert gd.poll(queue, "no-such-job") is None
+
+
+def test_poll_roundtrip_to_done(queue, restore_signals):
+    job_id = gd.submit(queue, {"kind": "raw", "cmd": [sys.executable, "-c", "print('p')"]})
+    _drain(queue, restore_signals)
+    info = gd.poll(queue, job_id)
+    assert info["state"] == "done"
+    assert info["returncode"] == 0
+    assert "log" in info["result"]  # result is always a dict
+
+
+# --- disk preflight (the Derby-v3 guardrail) --------------------------------
+def test_disk_ok_floor():
+    free = gd.disk_free_bytes()
+    assert gd.disk_ok(0)            # any disk clears a zero floor
+    assert not gd.disk_ok(free + 10 * 1e9)  # nobody clears free+10GB
+
+
+# --- reconcile guards -------------------------------------------------------
+def test_reconcile_poison_pill_caps_to_failed(queue):
+    job = _raw("poison", [sys.executable, "-c", "print('x')"], )
+    job["requeued"] = gd.MAX_REQUEUE  # already at the cap
+    queue.write("running", job)
+    d = gd.Daemon(queue, poll_secs=0.05, preflight=False, once=True)
+    d.reconcile()
+    assert queue.find(job["id"])[0] == "failed"
+
+
+def test_reconcile_dead_pgid_requeues_normally(queue):
+    job = _raw("orphan", [sys.executable, "-c", "print('x')"])
+    job["child_pgid"] = 2 ** 30  # a pid that cannot be alive
+    queue.write("running", job)
+    d = gd.Daemon(queue, poll_secs=0.05, preflight=False, once=True)
+    d.reconcile()
+    st, recon = queue.find(job["id"])
+    assert st == "pending"
+    assert recon.get("requeued", 0) >= 1
+    assert "child_pgid" not in recon  # cleared on re-queue
