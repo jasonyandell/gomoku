@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "derby",
+  "project_id": "6403bf7e-d90e-4f91-9446-3d1fb86081ea"
+}

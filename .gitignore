@@ -43,3 +43,8 @@ app/dist/
 # the binary is reproducible via engines/rapfi/build_rapfi.sh.
 .rapfi-build/
 engines/rapfi/pbrain-rapfi
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
