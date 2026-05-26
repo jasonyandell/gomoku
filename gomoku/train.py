@@ -402,6 +402,14 @@ def parse_args() -> argparse.Namespace:
                         "michaelnny/alpha_zero's gomoku config — much larger than our "
                         "earlier 500k runs, which gives the network more diverse "
                         "opponent-version exposure before old positions evict.")
+    p.add_argument("--buffer-recency-frac", type=float, default=0.0,
+                   help="Derby v7 'buffer-composition' curator: fraction of each "
+                        "training batch drawn from the most-recent --buffer-recency-window "
+                        "positions (rest uniform). 0.0 (default) = pure uniform sampling "
+                        "(byte-identical). >0 over-samples fresh positions from the "
+                        "stronger net.")
+    p.add_argument("--buffer-recency-window", type=int, default=200_000,
+                   help="Size of the 'recent' slice for --buffer-recency-frac.")
     p.add_argument("--training-steps", type=int, default=400,
                    help="SGD steps per epoch. Static unless --sgd-per-game is set.")
     p.add_argument("--sgd-per-game", type=float, default=None,
@@ -777,6 +785,10 @@ def main() -> None:
     buffer = ReplayBuffer(args.replay_buffer_size, device=device,
                           aux_opponent_reply=aux_on,
                           aux_ownership=ownership_on)
+    buffer.configure_curator(args.buffer_recency_frac, args.buffer_recency_window)
+    if args.buffer_recency_frac > 0.0:
+        print(f"buffer curator: recency_frac={args.buffer_recency_frac} "
+              f"window={args.buffer_recency_window}")
     if args.resume:
         # Optional: restore buffer if it was saved.
         payload_buf = payload.get("replay_buffer")

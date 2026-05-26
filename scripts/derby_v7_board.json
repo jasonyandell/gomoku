@@ -1,0 +1,21 @@
+{
+  "_doc": "Delo Derby v7 'best base' — rebased on the v5 head-to-head winner (vcf + KataGo global-pooling), which is now the control/base, replacing bare vcf. Gated 2026-05-26 (derby-4kg rebase + derby-co5 buffer-composition). Lanes: (control) vcf+global-pool — the strongest known recipe through v5/v6, the new bar; (mate-discount) + --value-discount 0.98, the v6 H2H WINNER carried forward to confirm it still compounds on the stronger base; (adjudicate) + --max-plies 45, the v6 #2, the orthogonal games/hr lever; (buffer-comp) + --buffer-recency-frac 0.5, the gated new lever — a recency curator that draws half of each training batch from the most-recent 200k positions (fresher distribution from the stronger net). sgd-sweep was DROPPED (v6: more SGD/epoch over-trains, 64 stays). Engine run_sweep_wall_slice; PIPELINED eval (global.pipeline_eval); priority = peak-progress + patience (global.peak_window/patience_chunks/starvation_factor). Verdict = head-to-head round-robin (scripts/round_robin.py over the peak.pt checkpoints) AFTER the race — anchored elo saturates ~1700. The v6 lesson held twice now: the H2H reshuffles the anchored order, so don't trust anchored peaks for the final call. All four cells are in run_sweep.CELLS.",
+  "global": {
+    "engine": "run_sweep_wall_slice",
+    "slice_secs": 300,
+    "cap_wall_secs": 86400,
+    "base_out_dir": "sweep_runs/derby_v7",
+    "board_md_path": "sweep_runs/derby_v7/standings.md",
+    "beat_heuristic_elo": 800,
+    "pipeline_eval": true,
+    "peak_window": 6,
+    "patience_chunks": 4,
+    "starvation_factor": 2
+  },
+  "ideas": [
+    {"name": "control",       "cell": "derby-v7-control",       "cell_name": "derby-v7-control",       "lever": "NEW BASE - vcf + global-pooling (the v5 H2H winner). The bar every v7 lane is read against; replaces bare vcf."},
+    {"name": "mate-discount", "cell": "derby-v7-mate-discount", "cell_name": "derby-v7-mate-discount", "lever": "+ --value-discount 0.98 (v6 H2H WINNER). Does the value-calibration win still compound on top of global-pooling? (beads derby-2yn)"},
+    {"name": "adjudicate",    "cell": "derby-v7-adjudicate",    "cell_name": "derby-v7-adjudicate",    "lever": "+ --max-plies 45 (v6 #2, games/hr). Orthogonal generation lever re-tested on the new base. (bead derby-24a)"},
+    {"name": "buffer-comp",   "cell": "derby-v7-buffer-comp",   "cell_name": "derby-v7-buffer-comp",   "lever": "+ --buffer-recency-frac 0.5: recency curator draws 50% of each batch from the most-recent 200k positions (fresher distribution). Gated new lever. (bead derby-co5)"}
+  ]
+}

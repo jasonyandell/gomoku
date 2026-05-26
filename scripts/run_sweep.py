@@ -808,6 +808,81 @@ CELLS: dict[str, Cell] = {
                 epochs=1_000_000, random_opening_moves=0,
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher"],
                 extra_train_args=["--sgd-steps-per-epoch", "256"]),
+
+    # ── Derby v7 'best base' ───────────────────────────────────────────────
+    # Rebased on the v5 H2H winner: vcf + global-pooling (the new control/base).
+    # Folds in the v6 H2H winners as carry lanes (mate-discount #1, adjudicate #2 —
+    # re-tested on the stronger base to confirm they still compound) + the gated new
+    # lever: buffer-composition (recency curator). sgd-sweep is dead (v6). Base recipe
+    # = vcf (gumbel + --vcf-teacher + fixed-step 64) + global_pool=True.
+    "derby-v7-control": Cell("derby-v7-control", sgd_per_game=1.0,  # vcf+wholeboard = new base
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "derby-v7-mate-discount": Cell("derby-v7-mate-discount", sgd_per_game=1.0,  # + v6 winner
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "derby-v7-adjudicate": Cell("derby-v7-adjudicate", sgd_per_game=1.0,  # + v6 #2
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--max-plies", "45"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "derby-v7-buffer-comp": Cell("derby-v7-buffer-comp", sgd_per_game=1.0,  # gated new lever
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                # curated sampling: 50% of each batch from the most-recent 200k positions
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--buffer-recency-frac", "0.5"]),
 }
 
 

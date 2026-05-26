@@ -68,6 +68,32 @@ class ReplayBuffer:
         self.current_weight_version: int = 0
         self.head = 0
         self.size = 0
+        # Curated sampling (Derby v7 'buffer-composition'). 0.0 = uniform (default,
+        # byte-identical). >0 = draw that fraction of each batch from the most-recent
+        # `_recency_window` positions (the ring's tail before `head`), rest uniform —
+        # over-sampling fresh positions from the stronger net. Set via configure_curator().
+        self._recency_frac = 0.0
+        self._recency_window = 200_000
+
+    def configure_curator(self, recency_frac: float = 0.0,
+                          recency_window: int = 200_000) -> None:
+        """Set the recency-mix curator. recency_frac in [0,1] (0 = uniform); the
+        recent slice is the last `recency_window` added positions."""
+        self._recency_frac = max(0.0, min(1.0, float(recency_frac)))
+        self._recency_window = max(1, int(recency_window))
+
+    def _sample_indices(self, batch_size: int) -> torch.Tensor:
+        """Pick batch indices. Uniform unless the recency curator is on (and the
+        buffer has grown past the window), in which case a recency_frac slice is
+        drawn from the most-recent `recency_window` positions, the rest uniform."""
+        if self._recency_frac <= 0.0 or self.size < self._recency_window:
+            return torch.randint(0, self.size, (batch_size,), device=self.device)
+        n_recent = int(round(batch_size * self._recency_frac))
+        window = min(self._recency_window, self.size)
+        off = torch.randint(0, window, (n_recent,), device=self.device)
+        recent = (self.head - 1 - off) % self.size          # tail of the ring (most recent)
+        unif = torch.randint(0, self.size, (batch_size - n_recent,), device=self.device)
+        return torch.cat([recent, unif])
 
     def set_weight_version(self, version: int) -> None:
         """Set the weight-version tag applied to subsequent add() calls."""
@@ -138,7 +164,7 @@ class ReplayBuffer:
     ) -> tuple[torch.Tensor, ...]:
         if self.size == 0:
             raise ValueError("empty replay buffer")
-        idx = torch.randint(0, self.size, (batch_size,), device=self.device)
+        idx = self._sample_indices(batch_size)
         base = (self.planes[idx], self.pi[idx], self.z[idx], self.side[idx], self.ply[idx])
         if not return_aux and not return_ownership:
             # Default 5-tuple — byte-identical to the pre-aux signature so every
