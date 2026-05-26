@@ -972,6 +972,7 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
     beat_before = st.get("peak_elo") is not None and st["peak_elo"] >= beat_elo
 
     st["status"] = "running"
+    st["last_picked"] = state.get("total_chunks_run", 0)  # for the starvation floor
     state["updated"] = now_iso()
     atomic_write_json(state_p, state)
 
@@ -1131,26 +1132,61 @@ def idea_started(board: dict, st: dict) -> bool:
 FLOOR_ELO = 389.0  # "beats random, nothing above" — the no-skill floor (matches render_standings)
 
 
-def delo_per_hr(state: dict, name: str) -> float | None:
-    """Δelo/HOUR — the recent elo-climb RATE (last-chunk slope) for an idea.
+# --- Δelo/hr priority knobs (Jason 2026-05-25: "peak-progress + patience"). --------
+# The gas pedal. Defaults here; a board may override via global.{peak_window,
+# patience_chunks,starvation_factor}. Rationale: training goes through swings —
+# vl/pl oscillate, then resettle at a NEW max, repeating. The old last-chunk-slope
+# metric read a mid-swing dip as "stopped climbing" and STARVED a lane that was
+# about to break higher. Peak-progress scores the CEILING's rise (a dip below the
+# running peak no longer zeroes the rate); patience keeps a recently-peaking lane in
+# the priority tier through its swing; the starvation floor guarantees a demoted lane
+# still gets periodic gas (in case it's a slow resettle, not a true plateau).
+PEAK_WINDOW_CHUNKS = 6     # lookback (chunks) for the peak-progress rate
+PATIENCE_CHUNKS = 4        # chunks-since-new-peak before a lane is treated as plateaued
+STARVATION_FACTOR = 2      # a non-capped lane unfed for FACTOR*n_candidates picks is force-fed
 
-    Returns None when the rate is NOT YET MEASURABLE (fewer than 2 elo points):
-    you cannot compute a climb rate from a single measurement, and at round-0
-    every fresh idea sits at the same no-skill floor (~389), indistinguishable.
-    Such ideas are "entry fee" — they need another chunk to establish a slope
-    before the hill-climb can rank them (handled in pick_priority).
 
-    With >=2 points: (elo[-1] - elo[-2]) / last_chunk_wall_hours — the most recent
-    gradient, so compute follows where strength is currently rising fastest.
+def chunks_since_new_peak(hist: list) -> int:
+    """How many of the most-recent chunks did NOT set a new running-max elo.
+    0 means the latest chunk set a new high (lane is actively peaking)."""
+    if not hist:
+        return 0
+    peak = float("-inf")
+    since = 0
+    for h in hist:
+        if h[1] > peak + 1e-9:
+            peak = h[1]
+            since = 0
+        else:
+            since += 1
+    return since
+
+
+def delo_per_hr(state: dict, name: str, window: int = PEAK_WINDOW_CHUNKS) -> float | None:
+    """PEAK-PROGRESS rate: how fast the lane's CEILING has risen over the last
+    `window` chunks, in elo/hour. Robust to within-phase swings — a dip BELOW the
+    running peak does not reduce the rate, only a failure to set NEW peaks does.
+
+    Returns None when not yet measurable (<2 elo points): at round-0 every fresh
+    idea sits at the same no-skill floor (~389), indistinguishable — those are the
+    "entry fee" group ranked separately in pick_priority.
+
+    rate = (best elo in the last `window` chunks  -  best elo BEFORE that window)
+           / (wall of the last `window` chunks, in hours).
+    For a young lane (<= window points) the baseline is its first measured elo, so
+    the rate is its overall climb-from-start rate.
     """
     hist = state["ideas"][name].get("elo_history") or []
     if len(hist) < 2:
-        return None  # never-run OR measured-once: rate not yet defined
-    last_wall = hist[-1][2] if len(hist[-1]) >= 3 else 0.0
-    wall_hr = last_wall / 3600.0
-    if wall_hr <= 0:
+        return None
+    recent = hist[-window:]
+    before = hist[:-window]
+    best_recent = max(h[1] for h in recent)
+    best_before = max((h[1] for h in before), default=hist[0][1])
+    window_hr = sum((h[2] if len(h) >= 3 else 0.0) for h in recent) / 3600.0
+    if window_hr <= 0:
         return 0.0
-    return (hist[-1][1] - hist[-2][1]) / wall_hr
+    return (best_recent - best_before) / window_hr
 
 
 def pick_priority(board: dict, state: dict, candidates: list[str]) -> str:
@@ -1166,28 +1202,49 @@ def pick_priority(board: dict, state: dict, candidates: list[str]) -> str:
          it over-fed an already-peaked champion and starved a faster-climbing
          challenger). Tie-break: higher current elo, fewer chunks, then name.
 
-    On the oscillation tradeoff (why v1 once moved OFF a Δ-rule): ranking by the
-    RATE is not the v1 pathology. v1 ranked by last-chunk *raw Δelo* and fed the
-    WORST idea (a floored idea at Δ0 outranked a strong idea whose chunk dipped). Here
-    a floored idea sits at Δ0/hr and ANY genuine climber (Δ>0/hr) outranks it; a strong
-    idea that dips for one chunk is correctly paused (it stopped climbing) and the
-    cap-guarantee (everyone caps eventually) prevents permanent starvation."""
+    PEAK-PROGRESS + PATIENCE (Jason 2026-05-25). Three ordered groups:
+      0. ENTRY-FEE — ideas without a measurable rate (<2 elo points). Drained first
+         (never-run before measured-once), same as before.
+      1. STARVATION FLOOR — any non-capped lane unfed for >= starvation_factor *
+         n_candidates picks is force-fed (most-starved first), so a demoted-but-
+         maybe-slow-resettling lane still gets periodic gas. Prevents the tight
+         patience from fully cutting off a late bloomer.
+      2. HILL-CLIMB w/ PATIENCE — lanes still ACTIVELY PEAKING (chunks_since_new_peak
+         < patience) outrank PLATEAUED ones (>= patience); within a group, steepest
+         peak-progress rate, then peak elo, current elo, fewer chunks, name.
+
+    Why this beats last-chunk-slope: training swings (vl/pl oscillate then resettle at
+    a new max). The old metric read a mid-swing dip as Δ<=0 and starved a lane about
+    to break higher. Peak-progress scores the ceiling's rise (the dip doesn't count
+    against it); patience keeps a recently-peaking lane in the priority group through
+    its swing; the floor backstops a genuine slow-resettle that patience demoted."""
+    g = board.get("global", {})
+    window = int(g.get("peak_window", PEAK_WINDOW_CHUNKS))
+    patience = int(g.get("patience_chunks", PATIENCE_CHUNKS))
+    starv_factor = int(g.get("starvation_factor", STARVATION_FACTOR))
+    total = state.get("total_chunks_run", 0)
+
+    # 0) entry-fee
+    entry = [n for n in candidates if delo_per_hr(state, n, window) is None]
+    if entry:
+        return sorted(entry, key=lambda n: (len(state["ideas"][n].get("elo_history") or []),
+                                            state["ideas"][n].get("chunks_done", 0), n))[0]
+
+    # 1) starvation floor — force-feed a lane ignored too long
+    starv_thresh = max(1, starv_factor * len(candidates))
+    starved = [n for n in candidates
+               if total - state["ideas"][n].get("last_picked", 0) >= starv_thresh]
+    if starved:
+        return sorted(starved, key=lambda n: (state["ideas"][n].get("last_picked", 0), n))[0]
+
+    # 2) hill-climb with patience
     def key(name: str):
         st = state["ideas"][name]
         hist = st.get("elo_history") or []
-        npts = len(hist)
-        rate = delo_per_hr(state, name)            # None until 2 elo points exist
-        chunks = st.get("chunks_done", st.get("epochs_done", 0))
-        if rate is None:
-            # ENTRY-FEE group: needs (another) chunk to establish a Δelo/hr slope.
-            # Fewest elo points first → never-run (0) before measured-once (1);
-            # then fewest chunks, then name. This drains round-0 then round-1.
-            return (0, npts, chunks, name)
-        # HILL-CLIMB group: steepest recent Δelo/hr first; TIES broken by PEAK elo
-        # (demonstrated potential — Jason 2026-05-24: two equal Δelo/hr → the one
-        # that reached higher wins), then current elo, fewer chunks, name.
+        rate = delo_per_hr(state, name, window) or 0.0
+        plateaued = 1 if chunks_since_new_peak(hist) >= patience else 0
         peak = max((h[1] for h in hist), default=float("-inf"))
-        return (1, -rate, -peak, -hist[-1][1], chunks, name)
+        return (plateaued, -rate, -peak, -hist[-1][1], st.get("chunks_done", 0), name)
     return sorted(candidates, key=key)[0]
 
 
