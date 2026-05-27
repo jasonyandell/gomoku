@@ -303,16 +303,14 @@ key beads are being de-staled + shipped:
   per-move teacher cap (`_VCT_TEACHER_MAX_DEPTH=4`/`_VCT_TEACHER_MAX_NODES=800`; cell carries
   `--vct-max-depth 4 --vct-max-nodes 800`). CPU-proven: the wide-open position that took 5722 nodes/14.6s
   at 7/20k now bails in 131 nodes/320ms (~45×); short VCT wins still proven; byte-identical-off; 49 tests pass.
-- ▶ **NEXT RUNNER ACTION to close `derby-b6r` (the only thing left — a GPU step, can't be done by the
-  researcher):** the code is done + CPU-proven; the bead reserves closure for a live 2-chunk derby smoke
-  (CPU tests can't reproduce live flooding). **Swap the bounded `derby-x-vct` onto the board and race ~2
-  chunks; confirm buf > 0 (not gen-starved) + the epoch wall.** Free a lane by **retiring an RR5 dud**:
-  `wdl-recency` (H2H −36) or `wdl-max` (H2H −41) are refuted stacks — they only *look* alive on anchored
-  elo (`wdl-max` anchored 1649) but lost H2H, so the anchored-elo swap heuristic is keeping dead lanes
-  fed. Retire one → swap in `derby-x-vct` → racing it IS the b6r smoke. **If the smoke shows buf fills
-  but the epoch is still slow** (the 320ms/move worst case × open-board moves may keep epoch >> 3s), the
-  ready follow-on is the **board-fill gate below** (threshold 32 stones, ~1.12× VCF) — or an even tighter
-  node cap.
+- ✅ **`derby-b6r` SMOKE-VERIFIED + CLOSED, then RACED:** runner smoked the bounded `derby-x-vct` (buf
+  76k+, ~2.6s epochs — gen-starvation gone), closed b6r, raced it as a real A/B vs the VCF champion.
+- ❌ **RR6 VERDICT (245 chunks, `round_robin_vct245.json`): VCT REJECTED — `vct −69` vs champion `+44`**
+  (~110 elo below; `vdisc-099 +25`, `wdl +0`). The deeper continuous-threes teacher does NOT beat the
+  continuous-fours (VCF) champion — the aggressive bound caps it and/or shallow threat-teaching adds noise.
+  **EXACT-SOLVER TEACHER FAMILY COMPLETE: VCF is the sweet spot.** Neither the deeper offensive teacher
+  (VCT) nor the defensive teacher (1xf) beats it. The whole loss-tail / exact-solver axis is exhausted at
+  this scale — VCF mate-teaching is the keeper, full stop. (`derby-58f`/`derby-6us` closeable.)
 - *(My parallel board-fill gate `feat/vct-gencost-gate` was HALTED as redundant once the node-bound
   merged — kept only as a conditional QUALITY follow-on if the aggressive cap proves to weaken VCT's
   deep-win detection too much. **Its profiling is preserved as ready-to-use evidence:** empirical
