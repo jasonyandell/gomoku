@@ -26,10 +26,10 @@
       "lever": "+ --value-discount 0.98 (v6 H2H winner) on the global-pool base."
     },
     {
-      "name": "crossgame",
-      "cell": "derby-x-crossgame",
-      "cell_name": "derby-x-crossgame",
-      "lever": "CROSS-GAME VALUE SIDECAR (derby-eft, code by another session) on the champion base (vcf+gp+value-discount 0.98) - trainer blends sampled z with the visit-gated, value-discounted cross-game average for that position. Clean A/B vs mate-discount. Replaces 'disc-recency' (combo characterized: peak 1634, +82 H2H; peak.pt kept as anchor)."
+      "name": "disc-recency",
+      "cell": "derby-x-disc-recency",
+      "cell_name": "derby-x-disc-recency",
+      "lever": "value-discount 0.98 + buffer-recency-frac 0.5 (the combo) - RESUMED at peak 1634 to keep a full board of strong contenders while crossgame's O(N) sidecar ingest is fixed (bead derby-eda). Open Q: does the combo catch mate-discount at full maturity?"
     },
     {
       "name": "vdisc-099",
