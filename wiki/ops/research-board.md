@@ -259,6 +259,13 @@ key beads are being de-staled + shipped:
   Merged `22d8a82` (branch `feat/defense-teacher`), closed. Policy/refutation mode deferred (defense
   non-unique). ⚠ Live gen-cost under flooding to be confirmed by the runner's full-load epoch-50+
   re-race (the ingest-perf-flooding lesson).
+  - **COLOR-SPLIT FIRST READ (the shipped `gi7` instrument working + confirming the premise):** on
+    `derby-x-defense` vs heuristic — **black 10-0-0, white 3-7-0** (7 losses as WHITE, 0 as black).
+    The loss-tail hypothesis (losses cluster on white / second-player defense gap) is now **quantified**,
+    not just theorized — exactly what the color-split eval was built to surface. (RR5 aggregate H2H put
+    defense at −133, but the aggregate is dragged by the white losses while black is perfect; the
+    teacher's *efficacy* = does its white-loss-rate beat the champion's white-loss-rate over maturity —
+    the runner's color-split comparison, pending. The instrument is now in place to make that call.)
 
 **Loss-tail epic `derby-7ic` — DEFENSE arm DELIVERED** (gi7 + 1xf shipped; the wiki's *central* problem
 — never-lose-as-white — now has both its measurement instrument and its exact-relabel teacher).
