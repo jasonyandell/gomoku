@@ -59,6 +59,17 @@ and races it. (Full model: `wiki/topics/research-loop.md`; memory
   weight 0.15: clear dud, plateaued — retired for `derby-x-mish`). Interim (fresh lanes
   still maturing), but the ranking is clean: WDL is the promising survivor; soft-policy
   and gumbel-m8 don't beat the champion.
+- **v8 RR4 — CLOSING verdict (174 chunks, `round_robin_174chunks.json`, all matured):**
+  **mate-discount +80 🥇** (champion decisive #1) · **wdl +35 🥈** (WDL head — REPLICATED
+  +35 across RR3 & RR4, the one reliable keeper, ~45 elo back) · vdisc-099 +22 · gumbel-m8
+  −48 · **mish −89** (Mish activation — DUD; its fast anchored climb to 1634 was
+  misleading, H2H it's last → another anchored-vs-H2H divergence, the C-cost-free
+  nonlinearity doesn't help play strength). **v8 conclusion: of the whole gomocup-AZ
+  survey, only the WDL value head survives as a carry-forward lever; gumbel-m≠16,
+  Mish, soft-policy, max-plies, cross-game(perf-blocked) all rejected. Champion =
+  vcf + global-pool + value-discount 0.98 (scalar), now anchored ~1811 and still
+  climbing.** Next: stack the keeper — WDL + recency (config-only) racing as
+  `derby-x-wdl-recency`.
   → confirm ONE `delo_derby` PID → `nohup bash scripts/derby_watchdog.sh
   scripts/derby_v8_board.json >/dev/null 2>&1 &`. A derby-runner **cron** (~30 min)
   drives swap/restock; the watchdog (startup-grace) keeps it alive.
