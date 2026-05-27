@@ -848,6 +848,31 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-gumbel-m8' = Gumbel-m sweep (gomocup-AZ survey 2026-05-27). VERBATIM clone
+    # of derby-v7-mate-discount (the reigning champion: gumbel-root + vcf-teacher +
+    # value-discount 0.98 + global-pool) with ONE lever: --gumbel-m 16 -> 8. The
+    # Gumbel top-k/Sequential-Halving breadth has been frozen at the v3 default (16)
+    # and NEVER swept in any derby (red-team flag). m=8 focuses the n=100 sims on
+    # fewer root candidates -> more sims/candidate -> sharper completed-Q targets;
+    # tests whether narrower-but-deeper root search beats the default breadth in our
+    # drawish regime. Config-only, byte-identical to the champion except this flag.
+    "derby-x-gumbel-m8": Cell("derby-x-gumbel-m8", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "8", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # 'x-crossgame' = the cross-game value sidecar (Derby 'position-stats',
     # bead derby-eft). VERBATIM clone of derby-v7-mate-discount (the reigning
     # base recipe: gumbel-root + vcf-teacher + value-discount 0.98 + global-pool

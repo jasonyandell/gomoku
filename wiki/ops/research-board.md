@@ -64,6 +64,34 @@ and races it. (Full model: `wiki/topics/research-loop.md`; memory
   (`derby-58f`, being built in a `gomoku-vct-solver` worktree), Rapfi opening-book
   (`derby-pyg`), reanalyze (`derby-3vs`).
 
+## Open candidates — gomocup-AZ implementation survey (2026-05-27)
+
+Researcher pass (session `87a46d75`) studying the AlphaZero-native gomocup engines
+(**AlphaGomoku/MK** — Gomocup 2025 #2; **KataGo/KataGomo**) for levers we have NOT
+raced. Full survey = [../sources/gomocup-az-techniques-2026-05-27.md](../sources/gomocup-az-techniques-2026-05-27.md);
+intake mechanics = [../topics/derby-registration.md](../topics/derby-registration.md).
+Six candidates were **red-teamed** (background reviewer) against the v1→v8 verdicts,
+`TRAINING_WIKI.md`, the derby-idea backlog, and `model.py`/`mcts.py`. Verdicts:
+
+| # | candidate | red-team verdict | why | status |
+|---|---|---|---|---|
+| 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **registered `derby-cgf`** (code-heavy bead; Class-C arch fork; WDL-native value-discount + VCF-stamp semantics specified to keep it one-lever) |
+| — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | **registered cell `derby-x-gumbel-m8`** (config-only, no bead — runner swaps in) |
+| 2 | draw-contempt (`drawValue`) | **KILL standalone** | a knob *on* the WDL head (follow-on sweep, not its own cell); also conflicts with the White "force-the-draw" objective (`derby-7ic`) → needs color-split eval, don't run blind | folded into the WDL line (future cell) |
+| 3 | LCB root move selection | **KILL** | written against visit-count selection; production is **Gumbel SH argmax over completed-Q** (`self_play.py:548`); no per-node variance accumulator (scalar `W` only); redundant with Gumbel's `sigma(q_hat)`; C-hot-path cost | rejected — recorded so it's not re-proposed |
+| 4 | variance/uncertainty-scaled PUCT | **KILL** | no variance state + wrong engine (SH governs the root, not per-node cPUCT); closest analog v3 `forced` landed mid-tier *below* Gumbel; high C build cost, low expected Δelo | rejected |
+| 5 | moves-left head | **KILL** | throughput goal already WON by adjudicate (`--max-plies 45`, +44 H2H v6); value-target half duplicated by the champion `--value-discount`; novel residue (search tie-break) is small + C-hot-path | rejected (revisit only if a delta-vs-value-discount is articulated) |
+| 6 | in-search VCF proven-score backup | **KILL** | not a dup of `derby-58f` (different axis) but contradicts the explicit `derby-7ic` design ("RELABEL via teacher, NOT runtime alpha-beta"); a VCF solve per node on the generation hot path is the worst possible thing for Δelo/**hour** | rejected (a root-only cheap variant could be reconsidered later) |
+
+**Also surfaced by the red-team (future, training-side, cheap):** per-sample / uncertainty
+target loss weighting (down-weight low-visit positions — KataGo); policy-surprise target
+weighting (weight targets by how far search moved the prior). **Correctly absent (do not
+propose):** a score/margin head — degenerate for win/draw/loss gomoku.
+
+**Loop discipline:** `derby-cgf` (WDL) is held for the gate/factory (Class-C); the runner
+swaps `derby-x-gumbel-m8` in when a lane frees. Promote new candidates over the research
+loop, keeping this table + the survey source page current. North star = **Δelo/wall**.
+
 ## Rules
 
 - **Race to 140 epochs.** 140 is the milestone because that's roughly where a
