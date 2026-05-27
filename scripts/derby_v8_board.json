@@ -14,10 +14,10 @@
   },
   "ideas": [
     {
-      "name": "defense",
-      "cell": "derby-x-defense",
-      "cell_name": "derby-x-defense",
-      "lever": "--defense-teacher (builder d322133, bead derby-1xf): value-only DEFENSIVE exact-solver teacher - the complement to VCF (teaches forced defenses/unavoidable losses). Novel lever on champion base. FRESH seed-0. Replaces dir15 (dirichlet 0.15 knob, low-value, ~flat at 1385; peak.pt kept)."
+      "name": "vct",
+      "cell": "derby-x-vct",
+      "cell_name": "derby-x-vct",
+      "lever": "--vct-teacher (RE-RACE after derby-b6r bound the per-move solve aggressively, depth4/nodes800, e8cee60). Victory-by-continuous-threats exact teacher, clean A/B vs VCF champion. FRESH seed-0. SMOKE: buf must FILL (gen-starvation gone). Replaces defense (RR5 dud -133; peak.pt kept)."
     },
     {
       "name": "mate-discount",
