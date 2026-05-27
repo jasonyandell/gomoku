@@ -32,10 +32,10 @@
       "lever": "AGGRESSIVE COMBO (builder 84d4438): WDL head + deeper VCF (--vcf-max-depth 32) + recency 0.5 - stack ALL validated winners. FRESH seed-0. vs wdl-recency on board isolates the deep-VCF contribution. Replaces base wdl (+35 H2H LOCKED/replicated; peak.pt kept as keeper anchor)."
     },
     {
-      "name": "wdl-recency",
-      "cell": "derby-x-wdl-recency",
-      "cell_name": "derby-x-wdl-recency",
-      "lever": "STACK the v8 keeper: WDL value head (RR3/RR4 #2 @+35) + recency curator (proven additive). Config-only on champion base. FRESH seed-0. Replaces mish (RR4 dud -89; peak.pt kept)."
+      "name": "vct",
+      "cell": "derby-x-vct",
+      "cell_name": "derby-x-vct",
+      "lever": "--vct-teacher REPLACES --vcf-teacher (builder 2501397, epic derby-58f): victory-by-continuous-THREATS exact solver (superset of VCF continuous-fours) - stronger offensive exact teacher. Clean A/B vs VCF champion. FRESH seed-0. Replaces wdl-recency (1395, subsumed by wdl-max; peak.pt kept). WATCH epoch time (VCT search >> VCF = top perf risk)."
     }
   ]
 }
