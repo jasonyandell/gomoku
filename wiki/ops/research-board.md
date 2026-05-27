@@ -242,15 +242,18 @@ key beads are being de-staled + shipped:
 - ✅ Wired `--vct-teacher` (`derby-rxf`, closed) using the already-built `solve_vct`; mirror of the VCF
   teacher, VCT replaces VCF (superset: +23 threes-only wins over VCF's 16, verified). **400-fuzz =
   ZERO false positives** (`derby-y8r`, closed). Byte-identical-off. Merged `896ced4`.
-- ⚠️ **BUT `derby-x-vct` is NOT race-ready:** VCT solve is **~530ms mean (up to ~19s) on open/sparse
-  boards** (vs the VCF teacher's sub-ms), called per recorded position → would tank Δelo/hr on early-game
-  positions (the in-search-VCF failure mode). **DO NOT race `derby-x-vct` until gated.**
-- 🔨 **Gen-cost gate in flight (`feat/vct-gencost-gate`):** a **board-fill gate** — run full VCT only when
-  the board is dense enough that the solve is cheap (~2ms at 45-60 stones), fall back to sub-ms VCF on
-  sparse boards (which have no forced wins to find anyway). Bounds the gen-cost to ~VCF baseline while
-  keeping VCT's mid/endgame label value. Once merged + re-measured near baseline, `derby-x-vct` is
-  race-ready. (Honest lesson: a deeper exact solver is only a *teacher* lever if its per-position cost is
-  gated — the offensive analogue of the in-search-VCF kill.)
+- ⚠️ **Gen-cost: the ungated VCT gen-STARVED** — the runner raced `derby-x-vct`, got buf=0/games=0
+  (one wide-open position = ~5700 nodes / ~15s pure-Python at the loose depth-7/20k defaults; 8 workers
+  each blocked per move → generation fully starved). Pulled it, filed bug `derby-b6r`. Confirms the
+  in-search-VCF failure mode (exact-solve-on-the-gen-hot-path tanks Δelo/hr).
+- ✅ **FIXED (`derby-b6r`, merged `a94b156`/`e8cee60`, branch `feat/vct-teacher-bound`):** aggressive
+  per-move node/time bound so the VCT solve returns 'unknown' fast and self-play proceeds. **derby-b6r
+  stays IN_PROGRESS until the runner's required 2-chunk GPU smoke** (buf grows, epoch ~3s) confirms it
+  live — that's the GPU runner's verification, then `derby-x-vct` races.
+- *(My parallel board-fill gate `feat/vct-gencost-gate` was HALTED as redundant once the node-bound
+  merged — kept only as a conditional QUALITY follow-on if the aggressive cap proves to weaken VCT's
+  deep-win detection too much. Honest lesson stands: a deeper exact solver is only a teacher lever if its
+  per-position cost is bounded — the offensive analogue of the in-search-VCF kill.)
 
 ### Toward v9 — the gomocup-AZ STACKING thesis (planned ahead, gated on v8 verdicts)
 
