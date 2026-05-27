@@ -32,10 +32,10 @@
       "lever": "WDL (win/draw/loss) value head (bead derby-cgf, researcher #1 Delta-elo/wall bet) - categorical {W,D,L} adds info capacity for our ~60-70% draw data; forward derives scalar v=P(win)-P(loss) so MCTS/anchor untouched, stays ONE lever (WDL loss = native re-expression of value-discount+VCF). FRESH seed-0 (WDL ckpt != scalar). Clean A/B vs mate-discount. Replaces disc-recency (combo characterized +82 H2H; ckpt kept)."
     },
     {
-      "name": "vdisc-099",
-      "cell": "derby-x-vdisc-099",
-      "cell_name": "derby-x-vdisc-099",
-      "lever": "value-discount 0.99 (milder) - RESUMED ~1395. Reverted from crossgame: derby-4bq bounded the store but per-epoch ingest is still O(new) -> ~30s/epoch under flooding (bead derby-eda REOPENED, premature close corrected)."
+      "name": "soft-policy",
+      "cell": "derby-x-soft-policy",
+      "cell_name": "derby-x-soft-policy",
+      "lever": "--soft-policy-weight 0.15 (researcher training-side lever: soften policy targets / policy-surprise weighting) on champion base. FRESH seed-0. Replaces vdisc-099 (value-discount 0.99 RESULT-LOCKED: lever robust 0.97/0.98/0.99=1665/1699/1682; peak.pt kept as anchor)."
     }
   ]
 }
