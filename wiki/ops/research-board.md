@@ -99,6 +99,26 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   weight) are both *policy-signal-enrichment* levers **correlated with soft-policy** — file them
   only after soft-policy's result is known (if soft-policy wins, they're well-motivated; if it
   loses, they're likely weak too). Don't fire correlated bets blind.
+**Round-3 — ARCHITECTURE axis (deep source read of AlphaGomoku/KataGo net code, 2026-05-27):**
+
+- **REGISTERED `derby-sib` → cell `derby-x-mish`** (the arch pick): swap ReLU→**Mish** activation
+  (`--activation mish`, default relu = byte-identical). KataGo's `act()` factory offers it;
+  zero added params, identical state_dict keys, **model.py-only**. *Load-bearing infra fact
+  (verified): our native-C MCTS engine does NOT compute the forward — it does tree ops and calls
+  back to a PyTorch `evaluate_planes` evaluator (`_mcts_native.c` has no conv/relu). So an
+  activation swap needs NO native-C kernel* (correcting the initial worry). Fresh-start (ReLU-
+  trained weights misbehave under Mish), judge on climb-rate. Code-heavy bead, `open` → factory.
+- **SE (squeeze-excitation) blocks — DEPRIORITIZED, not filed:** the best *structural* uncorrelated
+  lever (AlphaGomoku defaults to SE inside ConvNext; KataGo has none; it's a per-channel
+  multiplicative *gate*, distinct from our global-pool's additive *bias*). But on our ~0.8M-param
+  4×64 net the gain is uncertain and the unfused per-block GAP→FC→sigmoid the PyTorch eval must
+  run is a possible small latency tax on the gen rate that defines Δelo/wall. File only if Mish
+  clears the field and we want to spend a fresh-start arch lane. (`--se-blocks`, byte-identical-off.)
+- **Nested-bottleneck / ConvNext depthwise — DOA (do NOT file):** KataGo's nested-bottleneck is a
+  width/depth-amortization trick for deep wide trunks (b18c384); at 4×64 it has nothing to amortize
+  and shrinks effective width, and it's multi-knob. ConvNext depthwise-7×7 is multi-knob + MPS-
+  unfriendly. Wrong tools for our net size.
+
 - **Multi-knob future study (NOT derby-shaped):** our optimizer is bare `AdamW(lr)` with no
   scheduler/warmup/grad-clip; both upstreams use SGD-momentum + LR warmup/decay + clip — real
   headroom but violates one-lever-per-cell, so it's a deliberate later study, not a single cell.
@@ -107,14 +127,17 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (D4 = the full gomoku symmetry group, we're already complete); a score/margin head (degenerate
   for win/draw/loss).
 
-**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 2):** THREE researcher
-contestants now built — `derby-x-wdl` + `derby-x-gumbel-m8` **racing** (both beat-heuristic,
-the two steepest Δelo/hr on the board), `derby-x-soft-policy` **built + waiting** as a swap-pool
-candidate (board full at 4 lanes). The factory turns a bead → built cell in ~6-20 min. The loop
-**promoted nothing live this tick by design** (sequencing discipline — the cheap policy-signal
-runners-up are correlated with the unraced soft-policy). Instead it is advancing research on an
-**orthogonal axis (network architecture: SE/bottleneck blocks)** to have an uncorrelated candidate
-ready when a lane frees. Researcher monitors only — the derby-runner owns the GPU swaps. North
+**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 3):** FOUR researcher
+contestants registered across FOUR distinct axes — `derby-x-wdl` (value-rep) + `derby-x-gumbel-m8`
+(search-breadth) **racing** (both beat-heuristic, the two steepest Δelo/hr on the board);
+`derby-x-soft-policy` (policy-signal) **built + waiting**; `derby-x-mish` (activation, `derby-sib`)
+just filed → factory. The factory turns a bead → built cell in ~6-20 min; the runner swaps waiting
+cells in by judgement as lanes free. This tick **explored the architecture axis** and, per good
+EV discipline, filed the ONE cheap clean lever (Mish, param-free, model.py-only) while
+**deprioritizing SE** (fresh-start + latency-uncertain on our tiny net) and ruling
+nested-bottleneck/ConvNext DOA — recorded so they're not re-chased. The correlated policy-signal
+runners-up stay HELD on soft-policy's result. Researcher monitors only — the derby-runner owns the
+GPU swaps. North
 star = **Δelo/wall**.
 
 ## Rules
