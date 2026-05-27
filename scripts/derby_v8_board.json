@@ -32,10 +32,10 @@
       "lever": "+ --value-discount 0.98 + --buffer-recency-frac 0.5 (stack the two v8 CLIMBERS) - replaces 'stack' (--max-plies 45 regressed below peak while its no-truncation twin mate-discount led)."
     },
     {
-      "name": "buffer-comp",
-      "cell": "derby-v7-buffer-comp",
-      "cell_name": "derby-v7-buffer-comp",
-      "lever": "+ --buffer-recency-frac 0.5 (recency curator) - the gated new lever."
+      "name": "vdisc-099",
+      "cell": "derby-x-vdisc-099",
+      "cell_name": "derby-x-vdisc-099",
+      "lever": "MILDER value-discount 0.99 - brackets the optimum (with vdisc-097's 0.97 = a 0.97/0.98/0.99 gradient). Replaces 'buffer-comp' (pure recency, plateaued csnp8; result locked +82 H2H, peak.pt kept as anchor)."
     }
   ]
 }
