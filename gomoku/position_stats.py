@@ -101,15 +101,85 @@ def _pack_trits(mine: np.ndarray, opp: np.ndarray) -> PosKey:
     return (hi, lo, top)
 
 
-def canonical_key_from_board(board2: np.ndarray) -> PosKey:
-    """Canonical D4-invariant key for a (2, N, N) occupancy array where
-    board2[0] = side-to-move stones, board2[1] = opponent stones. The key is the
-    LEXICOGRAPHIC min of the packed value over all 8 D4 orientations -> identical
-    for any rotation/reflection of the same position."""
+def canonical_key_from_board_scalar(board2: np.ndarray) -> PosKey:
+    """REFERENCE (scalar) canonical key. Kept verbatim as the correctness oracle
+    for the vectorized fast path below (a wrong key silently corrupts value
+    targets, so the property test pins the two together byte-for-byte). The
+    canonical key is the LEXICOGRAPHIC min of the packed value over all 8 D4
+    orientations -> identical for any rotation/reflection of the same position."""
     best: PosKey | None = None
     for s in range(8):
         t = _sym(board2, s)
         key = _pack_trits(t[0], t[1])
+        if best is None or key < best:
+            best = key
+    return best  # type: ignore[return-value]
+
+
+# ----- Vectorized fast path (bead derby-eda) -----
+# Cell i is the i-th base-3 digit (cell 0 = least significant). Flat gather
+# indices for each of the 8 D4 orientations, built to match ``_sym`` EXACTLY:
+# applying an orientation to a flat trit vector is then one fancy-index
+# ``trits[_SYM_GATHER[s]]`` — no per-orientation rot90/flip array churn.
+_POW3_OBJ = np.array(_POW3, dtype=object)  # (81,) Python-int powers of 3
+
+
+def _build_sym_gather() -> np.ndarray:
+    base = np.arange(_N_CELLS, dtype=np.int64).reshape(BOARD_SIZE, BOARD_SIZE)
+    gathers = []
+    for s in range(8):
+        rot = s % 4
+        flip = s // 4
+        idx = np.rot90(base, rot)  # rot90 default axes = last two; matches _sym
+        if flip:
+            idx = np.flip(idx, axis=-1)
+        gathers.append(idx.reshape(-1))
+    return np.stack(gathers)  # (8, 81) int64
+
+
+_SYM_GATHER = _build_sym_gather()
+
+
+def _split_val(val: int) -> PosKey:
+    """Split a 129-bit big-int into the (hi, lo, top) PosKey, matching _pack_trits."""
+    lo = val & 0xFFFFFFFFFFFFFFFF
+    hi = (val >> 64) & 0xFFFFFFFFFFFFFFFF
+    top = (val >> 128) & 0xFFFF
+    return (hi, lo, top)
+
+
+def canonical_key_from_board(board2: np.ndarray) -> PosKey:
+    """Canonical D4-invariant key for a (2, N, N) occupancy array where
+    board2[0] = side-to-move stones, board2[1] = opponent stones. The key is the
+    minimum, over all 8 D4 orientations, of the packed PosKey tuple ``(hi, lo,
+    top)`` -> identical for any rotation/reflection of the same position.
+
+    NOTE ON KEY SEMANTICS: the canonical key is the tuple-lexicographic min of
+    ``(hi, lo, top)`` (compares the bits-64..127 word FIRST, then bits 0..63,
+    then bits 128+). That is NOT the same as the numeric min of the 129-bit
+    packed value, but it is the EXISTING, on-disk key definition (the scalar
+    reference ``canonical_key_from_board_scalar``), so we replicate it EXACTLY —
+    changing it would silently invalidate every live side-car. As long as the
+    map (orientation -> key) is a deterministic permutation-invariant function,
+    any consistent tie-rule yields a valid D4-invariant canonical key.
+
+    VECTORIZED (bead derby-eda): one gather (``_SYM_GATHER``) builds the 8
+    orientations of the flat trit vector, then a single object-dtype matrix-dot
+    packs all 8 exact base-3 big-ints at once (numpy big-int arithmetic; no
+    per-cell Python loop — that was the hot spot, 8x81 Python ops/position). We
+    then take the tuple-min of the 8 ``(hi, lo, top)`` triples. Byte-identical to
+    the scalar reference (pinned by a property test over random boards AND all
+    their D4 symmetries)."""
+    mine = (board2[0].reshape(-1) != 0)
+    opp = (board2[1].reshape(-1) != 0)
+    trits = (mine.astype(np.int8) + 2 * opp.astype(np.int8))  # (81,) in {0,1,2}
+    oriented = trits[_SYM_GATHER]  # (8, 81) int8: one row per D4 orientation
+    # Pack all 8 orientations' exact big-int values in one object-dtype matvec
+    # (oriented @ pow3): each entry = sum_i trit[i]*3**i, identical to _pack_trits.
+    vals = oriented.astype(object) @ _POW3_OBJ  # (8,) Python ints
+    best: PosKey | None = None
+    for v in vals:
+        key = _split_val(int(v))
         if best is None or key < best:
             best = key
     return best  # type: ignore[return-value]
