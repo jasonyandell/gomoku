@@ -36,10 +36,40 @@ verdict-driven swaps.
 
 Set a recurring cron (`CronCreate`) whose prompt is the derby-runner check. Pick an
 off-minute cadence (e.g. `3,13,23,33,43,53 * * * *`) to dodge the :00/:30 fleet marks.
-Each tick does HEALTH → SCOREBOARD → SWAP-IF-WARRANTED → report. The cron prompt should
-restate the whole procedure (so a post-compact session can run it cold) + the rules:
-own-the-GPU, beads-are-code-only, never PushNotification unless the derby is dead AND
-unrecoverable, next check ~10 min.
+Each tick does SCAN → HEALTH → SCOREBOARD → SWAP-IF-WARRANTED → report. The cron prompt
+should restate the whole procedure (so a post-compact session can run it cold) + the
+rules: own-the-GPU, beads-are-code-only, never PushNotification unless the derby is dead
+AND unrecoverable, next check ~10 min.
+
+### 0. SCAN FOR NEW RESEARCH (the loop self-feeds — added 2026-05-27)
+
+Other sessions land cells in `run_sweep.CELLS` "available for the derby" and close
+`derby-idea` beads (new levers, or fixes to a crippled one). **The loop pulls these in
+itself** — don't wait to be told "check main." Each tick, before health:
+```bash
+cd ~/code/gomoku && git fetch origin -q
+git log --oneline HEAD..origin/main | head        # new commits landed?
+```
+- **New commits on origin/main** → integrate with **`git merge --no-ff origin/main`**
+  (NEVER rebase). Other sessions add cells in their own region of `run_sweep.CELLS` and
+  don't touch the board, so the merge is almost always clean & additive; if the board
+  json or a cell conflicts, resolve by **keeping both** (additive). Commit the merge.
+- **Find raceable cells** = a `derby-x-*` / `derby-*` cell in `run_sweep.CELLS` that is
+  NOT on the current board:
+  ```bash
+  python -c "import sys;sys.path.insert(0,'scripts');import run_sweep,json; \
+  board={x['cell'] for x in json.load(open('scripts/derby_vN_board.json'))['ideas']}; \
+  print('OFF-BOARD CELLS:',[c for c in run_sweep.CELLS if c.startswith('derby') and c not in board])"
+  bd list --label derby-idea 2>/dev/null | tail -20   # recently closed = a fix/lever landed
+  ```
+- **A new/fixed cell is a swap candidate** — race it by judgement (swap out a
+  plateaued/characterized lane, §3). A cell that was a *fix* to a previously-crippled
+  lane (e.g. derby-eda fixed derby-x-crossgame's O(N) ingest) → **re-race it FRESH**:
+  archive the old `sweep_runs/<cell>/` (stale checkpoint + an incompatible store) so it
+  starts seed-0 with the fixed code, then verify the fix held under live GPU load (the
+  symptom that triggered the bead — here, epoch wall stays flat as the store grows).
+- This is read-mostly (fetch + log + grep); only the `merge` writes, and only when
+  something landed. It costs ~1s/tick and keeps the board fed without a human nudge.
 
 ### 1. HEALTH (assert exactly ONE derby PID)
 
