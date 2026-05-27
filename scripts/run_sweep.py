@@ -848,6 +848,37 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-wdl' = the WDL (win/draw/loss) value-representation lever (bead derby-cgf).
+    # VERBATIM clone of derby-v7-mate-discount (the reigning base recipe: gumbel-root
+    # + vcf-teacher + value-discount 0.98 + global-pool + the 0.4/0.1 league mix +
+    # sgd-steps-per-epoch 64) with ONE lever added: --value-head wdl. The net emits
+    # 3 logits over {win,draw,loss} trained with cross-entropy; the scalar consumers
+    # (MCTS leaf eval, anchor ladder) see the DERIVED v=P(win)-P(loss), so the C MCTS
+    # hot path and self-play generation are byte-identical. The value-discount and
+    # VCF-stamp targets are re-expressed natively in WDL inside the trainer (the
+    # scalar z is mapped to (relu(z), 1-|z|, relu(-z))), so this stays ONE lever:
+    # the value REPRESENTATION. --value-head wdl rides on BOTH train + worker args
+    # for cell symmetry (the worker flag is a consistency assert; the model's value
+    # head comes from the checkpoint config). The matched control is the existing
+    # scalar champion. Lane-isolated outputs under sweep_runs/derby-x-wdl/.
+    "derby-x-wdl": Cell("derby-x-wdl", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98", "--value-head", "wdl"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--value-head", "wdl"]),
     # 'x-crossgame' = the cross-game value sidecar (Derby 'position-stats',
     # bead derby-eft). VERBATIM clone of derby-v7-mate-discount (the reigning
     # base recipe: gumbel-root + vcf-teacher + value-discount 0.98 + global-pool
