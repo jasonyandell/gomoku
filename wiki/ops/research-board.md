@@ -141,6 +141,39 @@ runners-up ← soft-policy; SE ← Mish; the WDL follow-on family (draw-contempt
 ← WDL. Researcher monitors only — the derby-runner owns the GPU swaps. North
 star = **Δelo/wall**.
 
+### Round-4 — DEFENSE axis: maps to EXISTING `derby-1xf` (no duplicate filed)
+
+The gomocup-AZ survey's deepest pull is the wiki's **central failure mode**: the net learns
+attack, not defense. None of the four v8 cells (value-rep / policy-signal / search / activation)
+target it. The natural lever — a **defensive threat-block teacher** (mirror the VCF mate-teacher:
+when the *opponent* has a proven forced win, relabel) — turns out to **already be filed as
+`derby-1xf`** (P1, BLOCKED, the "novel half" of the loss-tail epic `derby-7ic`). Dedup discipline
+caught it; no duplicate filed. A code-grounded validation pass adds three things the bead
+under-specs, recorded here for whoever builds it:
+
+1. **gomocup-AZ confirmation:** this IS the canonical strong-engine approach — AlphaGomoku/Rapfi
+   run *two-sided* threat-space search (attack AND defense). Our teacher is one-sided (offense only).
+   So `derby-1xf` is well-motivated by the external engines, not just our loss-tail theory.
+2. **The Δelo/wall gen-cost GATE the bead under-specs (load-bearing):** naive value-only defense =
+   a *second* full solve per position (opponent's perspective) ≈ ~2× the current VCF-teacher solver
+   cost on the gen hot path — a real Δelo/hr risk. Cheapest sound formulation: **(a) skip the
+   defensive solve when our offensive solve already fired** (we have a proven win → `z`=+1 already,
+   no need to check the opponent), and **(b) gate it behind a near-free danger pre-scan**
+   (`vcf._has_immediate_five` / a `baselines` window-count threat scan) so quiet positions cost ZERO
+   solver calls. Reuse `solve_vcf` with **swapped planes** (`board = stack([planes[HISTORY_PLY],
+   planes[0]])`, vcf.py:343-347) — no new solver code for value mode. **Measure the current
+   VCF-teacher cost first** (the `vcf_solve_s`/`vcf_calls` profile counters in `_apply_vcf_teacher`
+   exist but are unlogged — close that gap before racing).
+3. **value-only first, policy-stamp deferred (the bead already lands here):** defense is genuinely
+   non-unique (multiple blocks / non-block refutations), so a one-hot *policy* stamp is ill-defined;
+   the *value* relabel (`z=-1` on a proven opponent win) is unambiguous and shippable. Correctness =
+   the same 400-fuzz-vs-referee gate as VCF (a false positive poisons value the wrong way).
+   **Correlated with VCF (same solver/seam) → test STACKED on the champion, not standalone**; depends
+   on the color-split eval (`derby-gi7`) to measure the white-side loss-rate target.
+
+This is the highest-value *future* lever (it hits the core problem) but it's BLOCKED upstream and
+correlated with the offense teacher — so it's a post-v8/v9 candidate, not a board-crowder now.
+
 ### Toward v9 — the gomocup-AZ STACKING thesis (planned ahead, gated on v8 verdicts)
 
 The derby's winning pattern is **stacking orthogonal winners** (v5 stacked global-pool on vcf;
