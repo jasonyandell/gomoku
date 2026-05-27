@@ -82,6 +82,22 @@ RESEARCH_BOARD_REL = "wiki/ops/research-board.md"
 ELO_KEY = "eval/model_elo"
 EPOCH_KEY = "eval_worker/epoch_evaluated"
 
+# Authoritative-readout fix (derby-i5j). The wandb dashboard is fed by the trainer
+# tailing the in-cell eval_results.jsonl; for a big net the CPU eval_worker can't
+# keep pace, so that stream FREEZES (large stuck at elo 788 @ e45 while the trainer
+# is at e242+) — a "mirage". The per-chunk truth lives in derby_state.json. We log
+# THAT authoritative model_elo straight into the SAME (resumed) wandb run under a
+# dedicated namespace so the dashboard reflects derby_state, not the lagging stream.
+WANDB_PROJECT_DEFAULT = "gomoku"  # run_sweep cells log here (run_sweep.eval_cmd/trainer)
+DERBY_ELO_WANDB_KEY = "derby/model_elo"       # authoritative per-chunk elo
+DERBY_EPOCH_WANDB_KEY = "derby/epoch_evaluated"
+DERBY_PEAK_WANDB_KEY = "derby/peak_elo"
+DERBY_EVAL_LAG_WANDB_KEY = "derby/eval_lag_epochs"  # trainer_epoch - eval_epoch
+# Warn (log + metric) when the eval_worker stream trails the trainer by more than
+# this many epochs — a frozen/lagging readout becomes VISIBLE instead of a silent
+# mirage. Threshold is deliberately generous (one slice of a big net is ~25-30 ep).
+EVAL_LAG_WARN_EPOCHS = 60
+
 
 # ---------------------------------------------------------------------------
 # Small utilities
@@ -414,6 +430,113 @@ def extract_wandb_run_id(board: dict, idea_name: str) -> Optional[str]:
         return str(rid) if rid else None
     except Exception:
         return None
+
+
+def read_trainer_epoch(board: dict, idea_name: str) -> Optional[int]:
+    """Best-effort: the TRUE trainer epoch from latest.pt's metadata (read-only).
+
+    The eval_worker writes the epoch it *evaluated* into eval_results.jsonl; the
+    trainer's true epoch lives in latest.pt. Their gap is the eval lag. Reading is
+    a pure torch.load (no mutation) so it never disturbs the live cell's checkpoint.
+    """
+    latest = idea_checkpoint_dir(board, idea_name) / "latest.pt"
+    if not latest.exists():
+        return None
+    try:
+        import torch  # local import; heavy
+        payload = torch.load(latest, map_location="cpu", weights_only=False)
+        ep = payload.get("epoch") if isinstance(payload, dict) else None
+        return int(ep) if ep is not None else None
+    except Exception:
+        return None
+
+
+def compute_eval_lag(trainer_epoch: Optional[int],
+                     eval_epoch: Optional[int]) -> Optional[int]:
+    """Epochs the eval stream trails the trainer by (>=0), or None if unknown.
+
+    Pure/stateless so it can be unit-tested without wandb or any GPU. Negative
+    diffs (eval ahead, e.g. stale latest.pt) clamp to 0 — only LAG is a problem.
+    """
+    if trainer_epoch is None or eval_epoch is None:
+        return None
+    return max(0, int(trainer_epoch) - int(eval_epoch))
+
+
+def log_authoritative_elo_to_wandb(
+    board: dict,
+    idea_name: str,
+    *,
+    model_elo: float,
+    eval_epoch: Optional[int],
+    peak_elo: Optional[float],
+    wandb_run_id: Optional[str],
+    trainer_epoch: Optional[int] = None,
+    milestones: Optional[Path] = None,
+) -> bool:
+    """Log the derby's AUTHORITATIVE per-chunk model_elo into the SAME (resumed)
+    wandb run, so the dashboard reflects derby_state.json instead of the lagging
+    in-cell eval_results.jsonl stream (derby-i5j fix (b)).
+
+    Why this is safe re: the single-writer rule: by the time the derby records a
+    chunk's elo, that chunk's run_sweep subprocess (the only other writer of this
+    run id) has ALREADY EXITED — v2 caps + tears down the bundle before --final-eval
+    / pipeline eval lands. So there is no concurrent writer at this instant; we
+    resume="allow" the same run, log under a `derby/*` namespace (distinct from the
+    trainer's `eval/*` keys so neither clobbers the other), and finish() promptly.
+
+    Also emits the eval-lag warning (fix (c)) when the eval epoch trails the trainer
+    epoch past EVAL_LAG_WARN_EPOCHS — turning a frozen readout into a visible signal.
+
+    Best-effort: any failure (no run id, wandb missing, no key) is logged and
+    swallowed — a readout hiccup must NEVER kill the race. Returns True iff a wandb
+    log call was made.
+    """
+    g = board.get("global", {})
+    # When to log: either the board opts in via global.wandb (v1 trainer path), OR
+    # a wandb_run_id exists (v2: the run_sweep CELLS own wandb — global.wandb is None
+    # but the embedded run id proves there's a real resumed run to write into). The
+    # lag WARNING still fires either way (it needs no wandb), so compute lag first.
+    lag = compute_eval_lag(trainer_epoch, eval_epoch)
+    if lag is not None and lag >= EVAL_LAG_WARN_EPOCHS:
+        msg = (f"EVAL-LAG {idea_name} eval stream trails trainer by {lag} epochs "
+               f"(eval@{eval_epoch} trainer@{trainer_epoch}); wandb eval/* readout is "
+               f"a MIRAGE — derby/model_elo={model_elo:.0f} is authoritative")
+        derby_print(f"[derby/elo] WARNING: {msg}")
+        if milestones is not None:
+            log_line(milestones, f"WARN {msg}")
+    if not wandb_run_id:
+        return False
+    # Escape hatch: a board may set global.derby_wandb_elo=false to disable the
+    # authoritative-elo wandb push (the lag warning above still fires). Default on.
+    if not g.get("derby_wandb_elo", True):
+        return False
+    project = g.get("wandb_project") or WANDB_PROJECT_DEFAULT
+    payload = {
+        DERBY_ELO_WANDB_KEY: float(model_elo),
+        DERBY_PEAK_WANDB_KEY: float(peak_elo) if peak_elo is not None else float(model_elo),
+    }
+    if eval_epoch is not None:
+        payload[DERBY_EPOCH_WANDB_KEY] = int(eval_epoch)
+    if lag is not None:
+        payload[DERBY_EVAL_LAG_WANDB_KEY] = int(lag)
+    try:
+        import wandb  # local import; heavy + optional
+        run = wandb.init(
+            project=project,
+            id=wandb_run_id,
+            resume="allow",
+        )
+        try:
+            run.log(payload)
+        finally:
+            run.finish()
+        derby_print(f"[derby/elo] {idea_name}: logged authoritative "
+                    f"{DERBY_ELO_WANDB_KEY}={model_elo:.0f} -> wandb run {wandb_run_id}")
+        return True
+    except Exception as e:  # wandb unavailable, network down, bad run id, etc.
+        derby_print(f"[derby/elo] {idea_name}: wandb authoritative-elo log skipped ({e})")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -928,6 +1051,19 @@ def _collect_pipeline_evals_impl(board: dict, state: dict, *, block: bool = Fals
                     st["peak_elo"] = elo_now
             derby_print(f"[derby/pipe] {e['idea']}: eval landed elo={elo_now:.0f} "
                         f"(Δ{st['last_delo']:+.0f}, lagged)")
+            # derby-i5j fix (b)+(c): surface the AUTHORITATIVE per-chunk elo into the
+            # resumed wandb run so the dashboard reflects derby_state, not the lagging
+            # in-cell eval stream; warn if that stream trails the trainer.
+            st["wandb_run_id"] = st.get("wandb_run_id") or extract_wandb_run_id(board, e["idea"])
+            log_authoritative_elo_to_wandb(
+                board, e["idea"],
+                model_elo=elo_now,
+                eval_epoch=epoch_eval,
+                peak_elo=st.get("peak_elo"),
+                wandb_run_id=st.get("wandb_run_id"),
+                trainer_epoch=read_trainer_epoch(board, e["idea"]),
+                milestones=milestones,
+            )
         else:
             derby_print(f"[derby/pipe] {e['idea']}: bg eval produced no elo line; skipped")
         shutil.rmtree(e["dir"], ignore_errors=True)
@@ -1069,6 +1205,19 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
     state["total_chunks_run"] += 1
     state["updated"] = now_iso()
     atomic_write_json(state_p, state)
+
+    # derby-i5j fix (b)+(c): log the AUTHORITATIVE per-chunk elo into the resumed
+    # wandb run (dashboard reflects derby_state, not the lagging eval stream), and
+    # warn if that stream trails the trainer epoch.
+    log_authoritative_elo_to_wandb(
+        board, idea_name,
+        model_elo=elo_now,
+        eval_epoch=epoch_eval,
+        peak_elo=st.get("peak_elo"),
+        wandb_run_id=st.get("wandb_run_id"),
+        trainer_epoch=read_trainer_epoch(board, idea_name),
+        milestones=milestones,
+    )
 
     derby_print(
         f"[derby/v2] {idea_name} wall-slice done ({dt:.0f}s, "
