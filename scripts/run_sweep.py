@@ -848,6 +848,37 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-crossgame' = the cross-game value sidecar (Derby 'position-stats',
+    # bead derby-eft). VERBATIM clone of derby-v7-mate-discount (the reigning
+    # base recipe: gumbel-root + vcf-teacher + value-discount 0.98 + global-pool
+    # + the 0.4/0.1 league mix + sgd-steps-per-epoch 64) with ONE lever added:
+    # the trainer aggregates the (value-discounted) returns of ALL games through
+    # each canonical position into a lane-isolated single-writer store, then
+    # relabels the sampled z with a confidence-weighted, visit-gated blend.
+    # NOTE the flags live in extra_train_args, NOT extra_worker_args: the store
+    # is TRAINER-OWNED (single writer; self-play workers are unchanged), and the
+    # selfplay_worker arg parser would hard-error on these flags. The store path
+    # is lane-isolated so it cannot touch any other contestant -> a clean A/B.
+    "derby-x-crossgame": Cell("derby-x-crossgame", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--cross-game-value",
+                                  "--cross-game-store",
+                                  "sweep_runs/derby-x-crossgame/position_stats.pkl"]),
     "derby-v7-adjudicate": Cell("derby-v7-adjudicate", sgd_per_game=1.0,  # + v6 #2
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=100,

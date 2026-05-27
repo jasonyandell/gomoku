@@ -410,6 +410,30 @@ def parse_args() -> argparse.Namespace:
                         "stronger net.")
     p.add_argument("--buffer-recency-window", type=int, default=200_000,
                    help="Size of the 'recent' slice for --buffer-recency-frac.")
+    p.add_argument("--cross-game-value", action="store_true", default=False,
+                   help="Derby 'position-stats' cross-game value sidecar. OFF "
+                        "(default) = byte-identical baseline (aux-head discipline). "
+                        "ON: the TRAINER aggregates the (value-discounted) returns "
+                        "of ALL games through each canonical position into a single-"
+                        "writer store, then relabels the sampled z target with a "
+                        "confidence-weighted, visit-gated blend(z_game, aggregate). "
+                        "De-noises credit assignment without any extra GPU work.")
+    p.add_argument("--cross-game-store", type=str, default=None,
+                   help="Side-car path for the --cross-game-value store (e.g. "
+                        "latest.position_stats.pkl). NOT embedded in latest.pt. On "
+                        "resume it is loaded if present, else rebuilt from the "
+                        "buffer already embedded in latest.pt. Default: "
+                        "<checkpoint-dir>/latest.position_stats.pkl.")
+    p.add_argument("--cross-game-recency-decay", type=float, default=0.999,
+                   help="Per-ingest multiplicative decay on the cross-game counts "
+                        "(poor-man's reanalyze; fights off-policy bias). 1.0 = no decay.")
+    p.add_argument("--cross-game-min-visits", type=float, default=8.0,
+                   help="Cross-game visit gate: positions seen fewer times fall "
+                        "back to the single-game z (note D4 augment => ~8 visits "
+                        "per game through a position).")
+    p.add_argument("--cross-game-max-blend", type=float, default=0.5,
+                   help="Cap on the cross-game aggregate's weight in the z blend "
+                        "(the remaining (1-w) always stays single-game z).")
     p.add_argument("--training-steps", type=int, default=400,
                    help="SGD steps per epoch. Static unless --sgd-per-game is set.")
     p.add_argument("--sgd-per-game", type=float, default=None,
@@ -697,6 +721,28 @@ def main() -> None:
     if ownership_on:
         print(f"aux ownership head ENABLED (weight={ownership_weight})")
 
+    # Cross-game value sidecar ('position-stats'). The single boolean flag gates
+    # the buffer key column, the trainer-owned aggregate store, the ingest
+    # aggregation, and the relabel-on-sample blend. OFF (default) => nothing is
+    # constructed or called and the path is byte-identical to the baseline.
+    cross_game_on = bool(args.cross_game_value)
+    position_stats = None
+    cross_game_store_path = None
+    if cross_game_on:
+        from gomoku.position_stats import PositionStats
+        position_stats = PositionStats(
+            recency_decay=float(args.cross_game_recency_decay),
+            min_visits=float(args.cross_game_min_visits),
+            max_blend=float(args.cross_game_max_blend),
+        )
+        cross_game_store_path = args.cross_game_store or os.path.join(
+            args.checkpoint_dir, "latest.position_stats.pkl"
+        )
+        print(f"cross-game value sidecar ENABLED (store={cross_game_store_path}, "
+              f"recency_decay={position_stats.recency_decay}, "
+              f"min_visits={position_stats.min_visits}, "
+              f"max_blend={position_stats.max_blend})")
+
     # Build / load model
     start_epoch = 0
     total_games = 0
@@ -784,7 +830,8 @@ def main() -> None:
 
     buffer = ReplayBuffer(args.replay_buffer_size, device=device,
                           aux_opponent_reply=aux_on,
-                          aux_ownership=ownership_on)
+                          aux_ownership=ownership_on,
+                          cross_game_value=cross_game_on)
     buffer.configure_curator(args.buffer_recency_frac, args.buffer_recency_window)
     if args.buffer_recency_frac > 0.0:
         print(f"buffer curator: recency_frac={args.buffer_recency_frac} "
@@ -795,6 +842,28 @@ def main() -> None:
         if payload_buf is not None:
             buffer.load_state_dict(payload_buf)
             print(f"replay buffer restored: {buffer.size} examples")
+
+    # Cross-game sidecar resume: load the side-car if it exists, else rebuild
+    # the aggregate from the buffer already embedded in latest.pt (no GPU).
+    if cross_game_on and position_stats is not None:
+        from gomoku.position_stats import PositionStats
+        if cross_game_store_path and os.path.exists(cross_game_store_path):
+            position_stats = PositionStats.load(cross_game_store_path)
+            print(f"cross-game store loaded: {len(position_stats)} positions "
+                  f"from {cross_game_store_path}")
+        elif buffer.size > 0:
+            # No side-car (fresh enable on an existing run, or a lost file):
+            # recompute the per-row keys from the restored buffer planes and
+            # rebuild the aggregate from the buffer's stored z values.
+            buffer.rebuild_pos_keys()
+            keys = buffer.pos_key[:buffer.size]
+            zs = buffer.z[:buffer.size].detach().cpu().numpy()
+            position_stats.add_many(
+                (tuple(int(x) for x in keys[r]) for r in range(buffer.size)),
+                zs,
+            )
+            print(f"cross-game store rebuilt from buffer: {len(position_stats)} "
+                  f"positions from {buffer.size} examples")
 
     # wandb setup
     run = None
@@ -1393,6 +1462,12 @@ def main() -> None:
             os.replace(latest_tmp, latest)
         except OSError:
             pass
+        # Cross-game store side-car: atomic, NOT embedded in latest.pt.
+        if cross_game_on and position_stats is not None and cross_game_store_path:
+            try:
+                position_stats.save(cross_game_store_path)
+            except OSError:
+                pass
         _publish_worker_weights(epoch=epoch_num)
 
     # TRAINER MODE running totals (only meaningful when --sgd-steps-per-epoch>0).
@@ -1509,6 +1584,18 @@ def main() -> None:
             for r in records:
                 buffer.add(r.examples)
 
+        # Cross-game value: aggregate THIS cycle's examples into the trainer-owned
+        # store. Recency-decay the whole store once per cycle (fades old/weak-net
+        # games), then add each example's (already value-discounted) z under its
+        # canonical key. Each D4-augmented copy of a position shares a key and z
+        # (8 visits, identical z) — the MEAN is unbiased, the gate accounts for 8×.
+        if cross_game_on and position_stats is not None and records:
+            from gomoku.position_stats import canonical_key_from_planes
+            position_stats.decay()
+            for r in records:
+                for e in r.examples:
+                    position_stats.add(canonical_key_from_planes(e.planes), e.z)
+
         plies_mean = float(np.mean([r.plies for r in records])) if records else 0.0
         # Plies-distribution percentiles for the new records — quick check on
         # game-length shape going INTO the buffer this cycle.
@@ -1586,11 +1673,12 @@ def main() -> None:
             for i in range(steps_this_cycle):
                 microbatch_steps_this_cycle += 1
                 aux_pi = aux_mask = ownership = ownership_mask = None
-                if aux_on or ownership_on:
+                if aux_on or ownership_on or cross_game_on:
                     sampled = buffer.sample(
                         args.batch_size,
                         return_aux=aux_on,
                         return_ownership=ownership_on,
+                        return_keys=cross_game_on,
                     )
                     planes, pi, z, side, ply = sampled[:5]
                     extra = list(sampled[5:])
@@ -1598,6 +1686,21 @@ def main() -> None:
                         aux_pi, aux_mask = extra.pop(0), extra.pop(0)
                     if ownership_on:
                         ownership, ownership_mask = extra.pop(0), extra.pop(0)
+                    if cross_game_on and position_stats is not None:
+                        pos_keys = extra.pop(0)
+                        if pos_keys is not None:
+                            # Relabel the value target with the confidence-weighted,
+                            # visit-gated cross-game blend (CPU dict lookup). Rows
+                            # below the gate / unseen are returned unchanged.
+                            keys_list = [
+                                (int(pos_keys[r, 0]), int(pos_keys[r, 1]),
+                                 int(pos_keys[r, 2]))
+                                for r in range(pos_keys.shape[0])
+                            ]
+                            z_np = position_stats.relabel_z(
+                                keys_list, z.detach().cpu().numpy()
+                            )
+                            z = torch.from_numpy(z_np).to(z.device)
                 else:
                     planes, pi, z, side, ply = buffer.sample(args.batch_size)
                 is_first_in_window = (i % accum_n == 0)
@@ -1848,6 +1951,14 @@ def main() -> None:
                     os.replace(latest_tmp, latest)
                 except OSError:
                     pass
+                # Cross-game store side-car, written on the same cadence as the
+                # buffer-bearing latest.pt (atomic, NOT embedded in latest.pt).
+                if (cross_game_on and position_stats is not None
+                        and cross_game_store_path):
+                    try:
+                        position_stats.save(cross_game_store_path)
+                    except OSError:
+                        pass
             # Publish a lean weights-only file for any worker processes
             # (self-play workers AND the eval_worker).
             _publish_worker_weights(epoch=epoch + 1)
