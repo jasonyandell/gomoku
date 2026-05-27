@@ -166,6 +166,16 @@ def main() -> None:
             log[f"eval/{key_}_wins"] = res.wins
             log[f"eval/{key_}_losses"] = res.losses
             log[f"eval/{key_}_draws"] = res.draws
+            # Per-color split (model's perspective): black_* = games the model
+            # played black, white_* = games it played white. Aggregate fields
+            # above are unchanged; these are additive so loss-tail analysis can
+            # see whether losses cluster on white (second player).
+            log[f"eval/{key_}_black_w"] = res.black_w
+            log[f"eval/{key_}_black_l"] = res.black_l
+            log[f"eval/{key_}_black_d"] = res.black_d
+            log[f"eval/{key_}_white_w"] = res.white_w
+            log[f"eval/{key_}_white_l"] = res.white_l
+            log[f"eval/{key_}_white_d"] = res.white_d
             log[f"time/eval_{key_}_s"] = dt
             anchor_key = baseline_spec_to_anchor_key(spec)
             anchor_elo = ANCHOR_ELOS.get(anchor_key) if anchor_key else None

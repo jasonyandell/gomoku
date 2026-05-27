@@ -30,6 +30,19 @@ class MatchResult:
     wins: int
     losses: int
     draws: int
+    # Per-color breakdown from the model's (player A's) perspective. A game is
+    # counted under "black" if the model played black that game, else "white".
+    # These are split tallies of the same outcomes the aggregates count, so by
+    # construction black_w + white_w == wins (likewise losses/draws). They
+    # default to 0 so existing MatchResult(...) call sites stay valid and the
+    # aggregate fields remain the canonical strength signal; the split lets the
+    # loss-tail analysis see whether losses cluster on white (second player).
+    black_w: int = 0
+    black_l: int = 0
+    black_d: int = 0
+    white_w: int = 0
+    white_l: int = 0
+    white_d: int = 0
 
     @property
     def win_rate(self) -> float:
@@ -63,6 +76,54 @@ def mcts_picker(
     return pick
 
 
+def _match_result_from_outcomes(
+    outcomes: list[tuple[bool, str]], n_games: int
+) -> MatchResult:
+    """Aggregate per-game (a_is_black, outcome) pairs into a MatchResult.
+
+    `outcome` is "win"/"loss"/"draw" from the model's (player A's) perspective;
+    `a_is_black` is True when the model played black that game. Produces both the
+    aggregate W/L/D and the per-color split, with the invariant that
+    black_<x> + white_<x> == aggregate_<x> for each of win/loss/draw.
+    """
+    wins = losses = draws = 0
+    black_w = black_l = black_d = 0
+    white_w = white_l = white_d = 0
+    for a_is_black, outcome in outcomes:
+        if outcome == "win":
+            wins += 1
+            if a_is_black:
+                black_w += 1
+            else:
+                white_w += 1
+        elif outcome == "loss":
+            losses += 1
+            if a_is_black:
+                black_l += 1
+            else:
+                white_l += 1
+        elif outcome == "draw":
+            draws += 1
+            if a_is_black:
+                black_d += 1
+            else:
+                white_d += 1
+        else:  # pragma: no cover - defensive
+            raise ValueError(f"unknown outcome {outcome!r}")
+    return MatchResult(
+        n_games=n_games,
+        wins=wins,
+        losses=losses,
+        draws=draws,
+        black_w=black_w,
+        black_l=black_l,
+        black_d=black_d,
+        white_w=white_w,
+        white_l=white_l,
+        white_d=white_d,
+    )
+
+
 def play_match_pickers(
     picker_a: Picker,
     picker_b: Picker,
@@ -72,10 +133,12 @@ def play_match_pickers(
 ) -> MatchResult:
     """Play A vs B, alternating colors. Returns result from A's perspective.
 
-    Draws count as half-wins in `win_rate`.
+    Draws count as half-wins in `win_rate`. The result also carries a per-color
+    split (see `MatchResult`) so analyses can see whether losses cluster on the
+    color the model played.
     """
     rng = np.random.default_rng(seed)
-    wins = losses = draws = 0
+    outcomes: list[tuple[bool, str]] = []
     for g_idx in range(n_games):
         a_is_black = (g_idx % 2 == 0)
         a_to_move = a_is_black
@@ -96,15 +159,12 @@ def play_match_pickers(
             ply += 1
 
         if winner_side is None:
-            draws += 1
+            outcomes.append((a_is_black, "draw"))
         else:
             a_side = 0 if a_is_black else 1
-            if winner_side == a_side:
-                wins += 1
-            else:
-                losses += 1
+            outcomes.append((a_is_black, "win" if winner_side == a_side else "loss"))
 
-    return MatchResult(n_games=n_games, wins=wins, losses=losses, draws=draws)
+    return _match_result_from_outcomes(outcomes, n_games)
 
 
 # ---------------- Multi-process parallel match ----------------
@@ -213,10 +273,14 @@ def play_match_parallel(
     ctx = mp.get_context("spawn")
     with ctx.Pool(n_workers, initializer=_pool_init, initargs=init_args) as pool:
         outcomes = pool.map(_pool_play_one, game_args)
-    wins = sum(1 for o in outcomes if o == "win")
-    losses = sum(1 for o in outcomes if o == "loss")
-    draws = sum(1 for o in outcomes if o == "draw")
-    return MatchResult(n_games=n_games, wins=wins, losses=losses, draws=draws)
+    # Re-derive each game's model color from its index (same rule the worker
+    # used: a_is_black = g_idx % 2 == 0). pool.map preserves input order, so
+    # outcomes[i] corresponds to game_args[i].
+    color_outcomes = [
+        ((g_idx % 2 == 0), outcome)
+        for (g_idx, _seed), outcome in zip(game_args, outcomes)
+    ]
+    return _match_result_from_outcomes(color_outcomes, n_games)
 
 
 def play_vs_random(
