@@ -60,6 +60,7 @@ from gomoku.mcts import make_torch_evaluator
 from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import (
     configure_vcf_teacher,
+    configure_vct_teacher,
     configure_value_discount,
     generate_games,
     generate_games_vs_baseline,
@@ -150,6 +151,27 @@ def parse_args() -> argparse.Namespace:
                         "recorded targets with the solver's proven winning move "
                         "+ value on forced-win positions. Default OFF = "
                         "byte-identical self-play.")
+    p.add_argument("--vct-teacher", action="store_true", default=False,
+                   help="Enable the exact VCT (Victory-by-Continuous-Threes) "
+                        "teacher: the strict SUPERSET of --vcf-teacher (proves "
+                        "every VCF win PLUS wins needing forcing threes -> more "
+                        "positions get exact mate labels). When set it REPLACES "
+                        "--vcf-teacher on the offensive seam (the deeper solver "
+                        "supersedes the shallower). Same target rewrite as "
+                        "--vcf-teacher: one-hot proven winning move + mate-distance-"
+                        "discounted value. Caps stay at vcf.DEFAULT_VCT_MAX_* (the "
+                        "threes tree fans out, so bounded depth/nodes are the gen-"
+                        "cost guard). Default OFF = byte-identical self-play "
+                        "(solver never runs).")
+    p.add_argument("--vct-max-depth", type=int, default=None,
+                   help="VCT teacher solver depth cap. Default None = "
+                        "vcf.DEFAULT_VCT_MAX_DEPTH (7, deliberately conservative — "
+                        "the continuous-threes tree fans out on the defender side). "
+                        "Only matters with --vct-teacher.")
+    p.add_argument("--vct-max-nodes", type=int, default=None,
+                   help="VCT teacher solver global node budget. Default None = "
+                        "vcf.DEFAULT_VCT_MAX_NODES (20k). Raise alongside "
+                        "--vct-max-depth so a deeper search isn't node-capped early.")
     p.add_argument("--defense-teacher", action="store_true", default=False,
                    help="Enable the exact DEFENSIVE teacher (value-only): mirror "
                         "of --vcf-teacher. When the OPPONENT has a proven forced "
@@ -664,6 +686,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             gumbel_c_visit=args.gumbel_c_visit,
             gumbel_c_scale=args.gumbel_c_scale,
             vcf_teacher=args.vcf_teacher,
+            vct_teacher=args.vct_teacher,
             defense_teacher=args.defense_teacher,
             record_aux=getattr(args, "record_aux", False),
             record_ownership=getattr(args, "record_ownership", False),
@@ -684,6 +707,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
         random_opening_moves=args.random_opening_moves,
         forced_playout_k=args.forced_playout_k,
         vcf_teacher=args.vcf_teacher,
+        vct_teacher=args.vct_teacher,
         defense_teacher=args.defense_teacher,
     )
 
@@ -781,6 +805,7 @@ def main() -> None:
     # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
+    configure_vct_teacher(args.vct_max_depth, args.vct_max_nodes)
     configure_value_discount(args.value_discount)
     device = pick_device(args.device)
     print(f"[{args.worker_id}] device={device}", flush=True)

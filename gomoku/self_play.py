@@ -57,6 +57,28 @@ def configure_vcf_teacher(max_depth: int | None = None,
         _VCF_MAX_NODES = int(max_nodes)
 
 
+# Per-process VCT solver budget for the teacher (Derby 'x-vct' lever, bead
+# derby-rxf). VCT (Victory-by-Continuous-Threes) is a strict SUPERSET of VCF:
+# it proves every VCF forced win plus wins that need forcing threes. Its tree
+# fans out on the defender side, so its caps default LOWER than VCF's (see
+# vcf.DEFAULT_VCT_MAX_* — depth 7, nodes 20k) and are the hard safety valve
+# that keeps a single gen-hot-path solve cheap. We deliberately do NOT uncap.
+_VCT_MAX_DEPTH = vcf.DEFAULT_VCT_MAX_DEPTH
+_VCT_MAX_NODES = vcf.DEFAULT_VCT_MAX_NODES
+
+
+def configure_vct_teacher(max_depth: int | None = None,
+                          max_nodes: int | None = None) -> None:
+    """Set the process-wide VCT teacher solver budget (depth / node cap). None
+    leaves a field at its current value. Call once before generation. Mirrors
+    :func:`configure_vcf_teacher`."""
+    global _VCT_MAX_DEPTH, _VCT_MAX_NODES
+    if max_depth is not None:
+        _VCT_MAX_DEPTH = int(max_depth)
+    if max_nodes is not None:
+        _VCT_MAX_NODES = int(max_nodes)
+
+
 # Value-discount (Derby v6 'mate-discounted-value'): scale ordinary outcome value
 # targets by gamma^(plies_to_end) so positions near a decisive end get crisp ±1 and
 # far-from-end positions get hedged targets — generalizing the VCF mate-distance
@@ -129,6 +151,56 @@ def _apply_vcf_teacher(
     if value < VCF_VALUE_FLOOR:
         value = VCF_VALUE_FLOOR
     _profile_add(profile, "vcf_fired", 1.0)
+    return new_pi, float(value), True
+
+
+def _apply_vct_teacher(
+    planes: np.ndarray,
+    pi: np.ndarray,
+    z: float,
+    *,
+    side: int,
+    profile: ProfileStats | None = None,
+    max_depth: int | None = None,
+    max_nodes: int | None = None,
+) -> tuple[np.ndarray, float, bool]:
+    """Opt-in EXACT teacher: the VCT (Victory-by-Continuous-Threes) mirror of
+    :func:`_apply_vcf_teacher`. VCT is a strict SUPERSET of VCF — it proves every
+    forced win VCF proves, PLUS wins that need forcing threes — so it stamps more
+    positions with exact mate labels. Everything else is identical to the VCF
+    teacher: a one-hot policy on the proven winning move, and a mate-distance-
+    discounted +1.0 value (floor ``VCF_VALUE_FLOOR``). The solver
+    (:func:`vcf.solve_vct_from_planes`) returns the SAME ``VCFResult`` shape, so
+    the result-handling is byte-for-byte the VCF logic.
+
+    Returns ``(new_pi, new_z, fired)``; unchanged inputs with ``fired=False`` when
+    no win is proved. Only ever called when ``--vct-teacher`` is set; the
+    default-off path never enters here, keeping self-play byte-identical.
+
+    Caps: the VCT search fans out on the defender side, so it respects the
+    (conservative) per-process VCT budget (``vcf.DEFAULT_VCT_MAX_DEPTH`` / nodes);
+    we do NOT uncap it on the gen hot path.
+    """
+    if max_depth is None:
+        max_depth = _VCT_MAX_DEPTH
+    if max_nodes is None:
+        max_nodes = _VCT_MAX_NODES
+    with _profile_timer(profile, "vct_solve_s"):
+        res = vcf.solve_vct_from_planes(
+            planes, history_ply=HISTORY_PLY, max_depth=max_depth, max_nodes=max_nodes
+        )
+    _profile_add(profile, "vct_calls", 1.0)
+    if not res.has_forced_win or res.winning_move is None:
+        return pi, z, False
+
+    new_pi = np.zeros_like(pi)
+    new_pi[res.winning_move] = 1.0
+
+    dist = res.mate_distance if res.mate_distance is not None else 1
+    value = VCF_VALUE_DISCOUNT ** max(0, dist - 1)
+    if value < VCF_VALUE_FLOOR:
+        value = VCF_VALUE_FLOOR
+    _profile_add(profile, "vct_fired", 1.0)
     return new_pi, float(value), True
 
 
@@ -504,6 +576,7 @@ def _generate_games_native_gumbel(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    vct_teacher: bool = False,
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
@@ -673,7 +746,12 @@ def _generate_games_native_gumbel(
                 z = _discount_z(z, len(traj) - 1 - ply_idx)
                 ply_at_capture = n_initial + ply_idx
                 vcf_fired = False
-                if vcf_teacher:
+                if vct_teacher:
+                    # VCT is a strict superset of VCF; the cell uses it INSTEAD of
+                    # --vcf-teacher, so the deeper solver replaces the shallower.
+                    pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
+                                                          profile=profile)
+                elif vcf_teacher:
                     pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                           profile=profile)
                 if defense_teacher:
@@ -715,6 +793,7 @@ def _generate_games_gumbel(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    vct_teacher: bool = False,
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
@@ -844,7 +923,12 @@ def _generate_games_gumbel(
             z = _discount_z(z, len(traj) - 1 - ply_idx)
             ply_at_capture = n_initial + ply_idx
             vcf_fired = False
-            if vcf_teacher:
+            if vct_teacher:
+                # VCT is a strict superset of VCF; the cell uses it INSTEAD of
+                # --vcf-teacher, so the deeper solver replaces the shallower.
+                pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
+                                                      profile=profile)
+            elif vcf_teacher:
                 pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                       profile=profile)
             if defense_teacher:
@@ -887,6 +971,7 @@ def _generate_games_native(
     forced_playout_k: float = 0.0,
     profile: ProfileStats | None = None,
     vcf_teacher: bool = False,
+    vct_teacher: bool = False,
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
@@ -1093,7 +1178,12 @@ def _generate_games_native(
                 z = _discount_z(z, len(traj) - 1 - ply_idx)
                 ply_at_capture = n_initial + ply_idx
                 vcf_fired = False
-                if vcf_teacher:
+                if vct_teacher:
+                    # VCT is a strict superset of VCF; the cell uses it INSTEAD of
+                    # --vcf-teacher, so the deeper solver replaces the shallower.
+                    pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
+                                                          profile=profile)
+                elif vcf_teacher:
                     pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                           profile=profile)
                 if defense_teacher:
@@ -1141,6 +1231,7 @@ def generate_games(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    vct_teacher: bool = False,
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
@@ -1229,6 +1320,7 @@ def generate_games(
                 gumbel_c_visit=gumbel_c_visit,
                 gumbel_c_scale=gumbel_c_scale,
                 vcf_teacher=vcf_teacher,
+                vct_teacher=vct_teacher,
                 defense_teacher=defense_teacher,
                 record_aux=record_aux,
                 record_ownership=record_ownership,
@@ -1254,6 +1346,7 @@ def generate_games(
             gumbel_c_visit=gumbel_c_visit,
             gumbel_c_scale=gumbel_c_scale,
             vcf_teacher=vcf_teacher,
+            vct_teacher=vct_teacher,
             defense_teacher=defense_teacher,
             record_aux=record_aux,
             record_ownership=record_ownership,
@@ -1281,6 +1374,7 @@ def generate_games(
             forced_playout_k=forced_playout_k,
             profile=profile,
             vcf_teacher=vcf_teacher,
+            vct_teacher=vct_teacher,
             defense_teacher=defense_teacher,
             record_aux=record_aux,
             record_ownership=record_ownership,
@@ -1389,7 +1483,12 @@ def generate_games(
             z = _discount_z(z, len(traj) - 1 - ply_idx)
             ply_at_capture = n_initial + ply_idx
             vcf_fired = False
-            if vcf_teacher:
+            if vct_teacher:
+                # VCT is a strict superset of VCF; the cell uses it INSTEAD of
+                # --vcf-teacher, so the deeper solver replaces the shallower.
+                pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
+                                                      profile=profile)
+            elif vcf_teacher:
                 pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                       profile=profile)
             if defense_teacher:
@@ -1425,6 +1524,7 @@ def generate_games_vs_baseline(
     random_opening_moves: int = 0,
     forced_playout_k: float = 0.0,
     vcf_teacher: bool = False,
+    vct_teacher: bool = False,
     defense_teacher: bool = False,
 ) -> list[GameRecord]:
     """Generate games where the model plays a fixed opponent picker.
@@ -1539,7 +1639,11 @@ def generate_games_vs_baseline(
             # the example was recorded), so z is directly outcome_for_model.
             z = outcome_for_model
             vcf_fired = False
-            if vcf_teacher:
+            if vct_teacher:
+                # VCT is a strict superset of VCF; the cell uses it INSTEAD of
+                # --vcf-teacher, so the deeper solver replaces the shallower.
+                pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=side)
+            elif vcf_teacher:
                 pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=side)
             if defense_teacher:
                 z, _ = _apply_defense_teacher(
