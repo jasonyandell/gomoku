@@ -857,10 +857,14 @@ CELLS: dict[str, Cell] = {
     # MORE positions with exact mate labels (winning move + mate-discounted value).
     # The flag REPLACES (does not augment) --vcf-teacher on the offensive seam — the
     # deeper solver supersedes the shallower; running both would be redundant work.
-    # Gen-cost: the continuous-threes tree fans out on the defender side, so the solve
-    # stays bounded by vcf.DEFAULT_VCT_MAX_DEPTH (7) / DEFAULT_VCT_MAX_NODES (20k) — we
-    # deliberately do NOT uncap on the gen hot path. Lane-isolated outputs under
-    # sweep_runs/derby-x-vct/.
+    # Gen-cost: the continuous-threes tree fans out on the defender side, so the per-move
+    # solve MUST be aggressively bounded on the generation hot path. Derby v8 raced this
+    # cell with the loose library defaults (depth 7 / nodes 20k) and got ZERO games /
+    # buf=0 in ~50s — the solve never returned, fully starving self-play (bead derby-b6r).
+    # Fix: pin an AGGRESSIVE per-move cap (--vct-max-depth 4 / --vct-max-nodes 800) so a
+    # wide-open position bails to no-forced-win/hit_cap almost instantly and generation
+    # runs at ~normal rate, while short tactical wins (open-four mate, double-three fork)
+    # are still proven within the cap. Lane-isolated outputs under sweep_runs/derby-x-vct/.
     "derby-x-vct": Cell("derby-x-vct", sgd_per_game=1.0,
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=100,
@@ -876,6 +880,7 @@ CELLS: dict[str, Cell] = {
                 epochs=1_000_000, random_opening_moves=0,
                 global_pool=True,
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vct-teacher",
+                                   "--vct-max-depth", "4", "--vct-max-nodes", "800",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # 'x-defense' = the exact DEFENSIVE VCF teacher (bead derby-1xf). VERBATIM clone

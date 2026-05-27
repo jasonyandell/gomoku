@@ -25,7 +25,12 @@ import numpy as np
 
 from gomoku import state_ops, vcf
 from gomoku.game import HISTORY_PLY, N_INPUT_PLANES
-from gomoku.self_play import VCF_VALUE_FLOOR, _apply_vct_teacher
+from gomoku.self_play import (
+    VCF_VALUE_FLOOR,
+    _VCT_MAX_DEPTH,
+    _VCT_MAX_NODES,
+    _apply_vct_teacher,
+)
 from gomoku.vcf import _empties_from_plane, _five_completions, solve_vct
 
 N = state_ops.BOARD_SIZE
@@ -185,7 +190,11 @@ def test_no_false_positive_random_positions():
             # Policy is a one-hot on the solver's proven move; value is a win vertex.
             assert int(np.count_nonzero(new_pi)) == 1
             assert new_z >= VCF_VALUE_FLOOR
-            res = vcf.solve_vct_from_planes(planes)
+            # Re-solve with the SAME caps the teacher used (its aggressive
+            # per-move budget, _VCT_MAX_DEPTH/_NODES — NOT the looser library
+            # defaults), so the one-hot move matches the solver the teacher ran.
+            res = vcf.solve_vct_from_planes(
+                planes, max_depth=_VCT_MAX_DEPTH, max_nodes=_VCT_MAX_NODES)
             assert int(np.argmax(new_pi)) == res.winning_move
             verdict = _referee_win(board[0].copy(), board[1].copy())
             # None == referee declined the deep line (out of budget); only an
