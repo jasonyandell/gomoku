@@ -92,8 +92,9 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   0.0 = byte-identical). Under 60-70% draws the sharp target concentrates mass on 1-2 defensive
   moves and the net loses the search's runner-up structure; the soft target re-injects it (KataGo
   added it for exactly this under-taught-drawish reason). ~6 lines in `train.py:compute_loss`,
-  orthogonal to value-discount (value head) + VCF (target). **BUILT in ~6 min (commit 7450019,
-  CLOSED); cell live, waiting as a swap-pool candidate (board full).**
+  orthogonal to value-discount (value head) + VCF (target). **BUILT in ~6 min (commit 7450019);
+  SWAPPED IN + RACING (commit 210b105, the runner retired result-locked `vdisc-099` for it).
+  Just started — too young to read.**
 - **Queued runners-up — HELD on sequencing discipline:** `derby-x-surprise-weight` (per-sample
   loss weight `1 + λ·KL(search_pi ‖ net_prior)`) and `derby-x-playout-weight` (SH visit-confidence
   weight) are both *policy-signal-enrichment* levers **correlated with soft-policy** — file them
@@ -107,7 +108,8 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (verified): our native-C MCTS engine does NOT compute the forward — it does tree ops and calls
   back to a PyTorch `evaluate_planes` evaluator (`_mcts_native.c` has no conv/relu). So an
   activation swap needs NO native-C kernel* (correcting the initial worry). Fresh-start (ReLU-
-  trained weights misbehave under Mish), judge on climb-rate. Code-heavy bead, `open` → factory.
+  trained weights misbehave under Mish), judge on climb-rate. **BUILT (commit 793a86a, derby-sib
+  CLOSED, +mish test); cell live, QUEUED for swap-in when a lane frees.**
 - **SE (squeeze-excitation) blocks — DEPRIORITIZED, not filed:** the best *structural* uncorrelated
   lever (AlphaGomoku defaults to SE inside ConvNext; KataGo has none; it's a per-channel
   multiplicative *gate*, distinct from our global-pool's additive *bias*). But on our ~0.8M-param
@@ -127,16 +129,16 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (D4 = the full gomoku symmetry group, we're already complete); a score/margin head (degenerate
   for win/draw/loss).
 
-**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 4: MONITORING / hold-for-results):**
-FOUR researcher contestants registered across FOUR distinct axes — `derby-x-wdl` (value-rep) +
-`derby-x-gumbel-m8` (search-breadth) **racing** (both beat-heuristic, the two steepest Δelo/hr on
-the board: wdl peak 1444 then mid-swing, gumbel-m8 1281 @ Δelo/hr 4977); `derby-x-soft-policy`
-(policy-signal) + `derby-x-mish` (activation) **built/filed + waiting** to swap in (board full at
-4). The pipeline is now well-stocked across axes, so the loop has shifted from *opening axes* to
-**monitoring + sequencing**: it promotes nothing new until a result lands or a lane frees. The
-sequenced backlog (all PENDING their trigger result): policy-signal runners-up on soft-policy;
-SE on Mish; the WDL follow-on family (draw-contempt + per-action-Q head) on WDL. Researcher
-monitors only — the derby-runner owns the GPU swaps. North
+**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 5: STEADY-STATE monitoring):**
+FOUR researcher contestants built across FOUR distinct axes; THREE now **racing** — `derby-x-wdl`
+(value-rep, peak 1444), `derby-x-gumbel-m8` (search, peak 1309), `derby-x-soft-policy` (policy-
+signal, just swapped in for the retired `vdisc-099`) — plus champion `mate-discount` (1718). The
+two fresh value/search cells hold the **steepest Δelo/hr on the board** (the fresh-start climb-rate
+signal). `derby-x-mish` (activation) BUILT + QUEUED for the next free lane. The loop is now in
+**steady state: propose at the rate the board frees lanes**, not faster — it promotes nothing new
+until a verdict lands. The sequenced backlog (all PENDING their trigger result): policy-signal
+runners-up ← soft-policy; SE ← Mish; the WDL follow-on family (draw-contempt + per-action-Q head)
+← WDL. Researcher monitors only — the derby-runner owns the GPU swaps. North
 star = **Δelo/wall**.
 
 ## Rules
