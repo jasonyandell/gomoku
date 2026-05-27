@@ -252,8 +252,12 @@ key beads are being de-staled + shipped:
   live — that's the GPU runner's verification, then `derby-x-vct` races.
 - *(My parallel board-fill gate `feat/vct-gencost-gate` was HALTED as redundant once the node-bound
   merged — kept only as a conditional QUALITY follow-on if the aggressive cap proves to weaken VCT's
-  deep-win detection too much. Honest lesson stands: a deeper exact solver is only a teacher lever if its
-  per-position cost is bounded — the offensive analogue of the in-search-VCF kill.)
+  deep-win detection too much. **Its profiling is preserved as ready-to-use evidence:** empirical
+  threshold = **32 stones** (VCT/VCF cost ratio 24st→32×, 28st→13×, 32st→2.3×, 45+st→1×), and the
+  gated cost re-measured at **1.12× the VCF baseline** over a realistic full-game distribution — so if
+  the node-bound underperforms, the board-fill gate at 32 stones is a drop-in quality refinement.
+  Honest lesson stands: a deeper exact solver is only a teacher lever if its per-position cost is
+  bounded — the offensive analogue of the in-search-VCF kill.)
 
 ### Toward v9 — the gomocup-AZ STACKING thesis (planned ahead, gated on v8 verdicts)
 
