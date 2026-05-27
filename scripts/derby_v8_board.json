@@ -32,10 +32,10 @@
       "lever": "value-discount 0.98 + buffer-recency-frac 0.5 (the combo) - RESUMED at peak 1634 to keep a full board of strong contenders while crossgame's O(N) sidecar ingest is fixed (bead derby-eda). Open Q: does the combo catch mate-discount at full maturity?"
     },
     {
-      "name": "crossgame",
-      "cell": "derby-x-crossgame",
-      "cell_name": "derby-x-crossgame",
-      "lever": "CROSS-GAME VALUE SIDECAR on champion base - RE-RACE #3 to CONFIRM derby-4bq fix (dbf5864): opening-ply cap bounds the store + save() no longer folds scale O(N)/epoch (the O(store) save was the live-load runaway). FRESH seed-0. Verify epoch wall stays flat under live flooding -> then close bead derby-eda. Swapped out vdisc-099 (0.99, lagging ~1395; ckpt kept)."
+      "name": "vdisc-099",
+      "cell": "derby-x-vdisc-099",
+      "cell_name": "derby-x-vdisc-099",
+      "lever": "value-discount 0.99 (milder) - RESUMED ~1395. Reverted from crossgame: derby-4bq bounded the store but per-epoch ingest is still O(new) -> ~30s/epoch under flooding (bead derby-eda REOPENED, premature close corrected)."
     }
   ]
 }
