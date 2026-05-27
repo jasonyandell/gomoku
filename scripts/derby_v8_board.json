@@ -14,10 +14,10 @@
   },
   "ideas": [
     {
-      "name": "control",
-      "cell": "derby-v7-control",
-      "cell_name": "derby-v7-control",
-      "lever": "BAR - vcf + global-pooling (v5 H2H champion base)."
+      "name": "vdisc-097",
+      "cell": "derby-x-vdisc-097",
+      "cell_name": "derby-x-vdisc-097",
+      "lever": "SHARPER value-discount 0.97 (vs mate-discount's 0.98) - probe the optimum direction of the v8 key lever. Replaces 'control' (baseline result locked: anchored 1476, H2H -81; peak.pt kept as RR anchor)."
     },
     {
       "name": "mate-discount",
