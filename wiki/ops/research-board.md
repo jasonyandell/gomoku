@@ -70,6 +70,20 @@ and races it. (Full model: `wiki/topics/research-loop.md`; memory
   vcf + global-pool + value-discount 0.98 (scalar), now anchored ~1811 and still
   climbing.** Next: stack the keeper — WDL + recency (config-only) racing as
   `derby-x-wdl-recency`.
+- **v8 RR5 — POST-SURVEY verdict (215 chunks, `round_robin_215chunks.json`):**
+  **mate-discount +154 🥇** (champion pulling AWAY — was +71/+80 in RR3/RR4, now +154 as
+  it matures) · **wdl +56 🥈** (plain WDL still the lone #2) · wdl-recency −36 · wdl-max
+  −41 · **defense −133**. **TWO conclusions: (1) stacking on WDL HURTS — wdl-recency and
+  wdl-max (WDL+recency / WDL+deepVCF+recency) are both WORSE than plain WDL; the
+  "aggressive combination" hypothesis is refuted (wdl-max's anchored 1649 was a mirage,
+  H2H −41). (2) the scalar value-discount CHAMPION is decisively best and widening its
+  lead — of the ENTIRE gomocup-AZ survey (WDL, gumbel-m, soft-policy, Mish, dirichlet,
+  defense-teacher, +the perf-blocked crossgame/VCT), NOTHING beats it.** v8 research
+  CONCLUSION: champion recipe `vcf + global-pool + value-discount 0.98 (scalar)` is the
+  winner; WDL is the only additive lever but stacking degrades it and it trails the
+  champion by ~100 elo. Decision point (Jason): v9 needs a NEW axis (bigger net / longer
+  train / 15×15), not more single-lever sweeps; or wait for bounded crossgame/VCT
+  (beads `derby-eda`/`derby-b6r`) to re-race the exact-solver family fairly.
   → confirm ONE `delo_derby` PID → `nohup bash scripts/derby_watchdog.sh
   scripts/derby_v8_board.json >/dev/null 2>&1 &`. A derby-runner **cron** (~30 min)
   drives swap/restock; the watchdog (startup-grace) keeps it alive.
