@@ -72,6 +72,13 @@ git log --oneline HEAD..origin/main | head        # new commits landed?
   an early small-`new` reading can look flat and fool you into closing the bead too soon
   (it did, 2026-05-27: crossgame read 5s @epoch27/new=32, then settled ~30s @epoch55/
   new=848 once flooding kicked in). Only close the bead once it holds under flooding.
+- **A code-heavy lever (esp. a per-move solver: VCF/VCT/defense-teacher) has TWO
+  failure modes — check BOTH:** (1) slow TRAINING epochs (epoch wall grows — crossgame's
+  O(store) sidecar), and (2) **generation STARVATION** — `buf=0 / games=0 / pl=nan` while
+  the self-play workers are alive but stuck in an unbounded per-move solve (2026-05-27:
+  `derby-x-vct` produced ZERO games in ~50s — VCT search ≫ VCF, no `--max-depth/-nodes`
+  bound). So on a new solver lane's first peek, confirm **buf is FILLING** (not just that
+  epoch wall is flat). If buf stays 0 → pull it, bead the fix (bound the solve), restore.
 - This is read-mostly (fetch + log + grep); only the `merge` writes, and only when
   something landed. It costs ~1s/tick and keeps the board fed without a human nudge.
 
