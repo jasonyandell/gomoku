@@ -90,3 +90,12 @@ On-demand: spawn a `general-purpose` agent with the researcher brief (reads stan
 arm it as a cron (same pattern as the scoreboard cron) at a modest cadence (~3–4h).
 It is **session-armed**; re-arm for each long push. It never implements — the gate is
 Jason, the build is the orchestrator.
+
+## See also
+
+This page is the *governance* (who proposes, who gates, the status lifecycle). The
+*mechanics of intake* — how a gated idea becomes a derby lane (config-only cell-clone vs
+code-heavy `derby-idea` bead, cell hygiene, the bead format) — are in
+[derby-registration.md](derby-registration.md), operationalized by the
+`gomoku-derby-register` skill. The loop that races the result is the `gomoku-derby-runner`
+skill.
