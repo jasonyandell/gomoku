@@ -17,6 +17,7 @@ class ReplayBuffer:
         *,
         aux_opponent_reply: bool = False,
         aux_ownership: bool = False,
+        cross_game_value: bool = False,
     ):
         self.capacity = capacity
         self.device = torch.device(device)
@@ -65,6 +66,17 @@ class ReplayBuffer:
         else:
             self.ownership = None
             self.ownership_mask = None
+        # Cross-game value sidecar (Derby 'position-stats'). LAZY-ALLOCATED like
+        # the aux tensors: off (default) => NEVER allocated, so the off-case
+        # buffer RAM/schema is byte-identical. When on, each row carries its
+        # canonical D4-invariant position key as a 3-column uint64 array
+        # (hi, lo, top) computed ONCE at ingest. Kept on the CPU as numpy (the
+        # relabel-on-sample read path is a CPU dict lookup) — ~36MB at 1.5M rows.
+        self.cross_game_enabled = bool(cross_game_value)
+        if self.cross_game_enabled:
+            self.pos_key = np.zeros((capacity, 3), dtype=np.uint64)
+        else:
+            self.pos_key = None
         self.current_weight_version: int = 0
         self.head = 0
         self.size = 0
@@ -134,6 +146,16 @@ class ReplayBuffer:
                     own_mask_np[j] = True
             own_t = torch.from_numpy(own_np)
             own_mask_t = torch.from_numpy(own_mask_np)
+        if self.cross_game_enabled:
+            # Compute each example's canonical D4-invariant key ONCE, here at
+            # ingest, from the row's current-frame occupancy.
+            from gomoku.position_stats import canonical_key_from_planes
+            keys_np = np.zeros((n, 3), dtype=np.uint64)
+            for j, e in enumerate(examples):
+                hi, lo, top = canonical_key_from_planes(e.planes)
+                keys_np[j, 0] = np.uint64(hi)
+                keys_np[j, 1] = np.uint64(lo)
+                keys_np[j, 2] = np.uint64(top)
         ver = int(self.current_weight_version)
         i = 0
         while i < n:
@@ -145,6 +167,8 @@ class ReplayBuffer:
             self.weight_version[self.head:end] = ver
             self.side[self.head:end].copy_(side[i:i + chunk].to(self.device))
             self.ply[self.head:end].copy_(ply[i:i + chunk].to(self.device))
+            if self.cross_game_enabled:
+                self.pos_key[self.head:end] = keys_np[i:i + chunk]
             if self.aux_enabled:
                 self.aux_pi[self.head:end].copy_(aux_pi_t[i:i + chunk].to(self.device))
                 self.aux_mask[self.head:end].copy_(aux_mask_t[i:i + chunk].to(self.device))
@@ -161,12 +185,13 @@ class ReplayBuffer:
         *,
         return_aux: bool = False,
         return_ownership: bool = False,
+        return_keys: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         if self.size == 0:
             raise ValueError("empty replay buffer")
         idx = self._sample_indices(batch_size)
         base = (self.planes[idx], self.pi[idx], self.z[idx], self.side[idx], self.ply[idx])
-        if not return_aux and not return_ownership:
+        if not return_aux and not return_ownership and not return_keys:
             # Default 5-tuple — byte-identical to the pre-aux signature so every
             # existing caller is untouched.
             return base
@@ -198,7 +223,33 @@ class ReplayBuffer:
                     (batch_size,), dtype=torch.bool, device=self.device
                 )
                 out = out + (zero_own, false_mask)
+        # Cross-game keys path: append the sampled rows' canonical (B, 3) uint64
+        # key array (numpy, CPU — the relabel read path is a CPU dict lookup).
+        # When the lever is off, append None so the caller can no-op cleanly.
+        if return_keys:
+            if self.cross_game_enabled:
+                idx_cpu = idx.detach().cpu().numpy()
+                out = out + (self.pos_key[idx_cpu],)
+            else:
+                out = out + (None,)
         return out
+
+    def rebuild_pos_keys(self) -> None:
+        """(Re)compute the canonical key column for ALL live rows from their
+        stored planes. Used on resume when the buffer was restored from a
+        latest.pt that predates this lever (no key column embedded) — the keys
+        are deterministically recomputable, so the side-car aggregate can be
+        rebuilt without any GPU work (~2 min for a 1.5M buffer). No-op when the
+        lever is off."""
+        if not self.cross_game_enabled or self.size == 0:
+            return
+        from gomoku.position_stats import canonical_key_from_planes
+        planes_cpu = self.planes[:self.size].detach().cpu().numpy()
+        for r in range(self.size):
+            hi, lo, top = canonical_key_from_planes(planes_cpu[r])
+            self.pos_key[r, 0] = np.uint64(hi)
+            self.pos_key[r, 1] = np.uint64(lo)
+            self.pos_key[r, 2] = np.uint64(top)
 
     def shape_stats(self, stone_buckets: tuple[int, ...] = (0, 5, 10, 15, 20, 30, 40, 60, 81)
                     ) -> dict[str, float]:
