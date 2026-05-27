@@ -14,10 +14,10 @@
   },
   "ideas": [
     {
-      "name": "vdisc-097",
-      "cell": "derby-x-vdisc-097",
-      "cell_name": "derby-x-vdisc-097",
-      "lever": "SHARPER value-discount 0.97 (vs mate-discount's 0.98) - probe the optimum direction of the v8 key lever. Replaces 'control' (baseline result locked: anchored 1476, H2H -81; peak.pt kept as RR anchor)."
+      "name": "gumbel-m8",
+      "cell": "derby-x-gumbel-m8",
+      "cell_name": "derby-x-gumbel-m8",
+      "lever": "Gumbel-m 16->8 (researcher pass 87a46d75; config-only, registered for the runner) - focus 100 sims on fewer root candidates -> sharper completed-Q targets. Replaces vdisc-097 (0.97, plateaued csnp6; value-discount now known ROBUST 0.97/0.98/0.99 = 1665/1699/1682; peak.pt kept)."
     },
     {
       "name": "mate-discount",
