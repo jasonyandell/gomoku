@@ -350,31 +350,40 @@ verified H2H winners.
 `.beads/issues.jsonl` on `main`, which blocks a `feat→main` merge with "local changes would be
 overwritten" — always `git commit -- .beads/issues.jsonl` FIRST, then merge.)*
 
-## v9 PROPOSAL — SCALE-UP (researcher proposes; Jason's call to launch; 2026-05-27)
+## v9 DIRECTION — SCALE-UP to 100% (Jason-GATED, 2026-05-27): bigger models, KEEP the evals, target 100%
 
-The v8 arc concluded that **nothing in the gomocup-AZ survey beats the scalar value-discount champion
-*at the current scale*** — and that scale is the load-bearing caveat. The derby races at `small`
-(`n_filters=64, n_blocks=4`, ~0.8M params); presets `medium` (96×6) and `large` (128×10) exist, and
-**AlphaGomoku (Gomocup #2) runs ~128 filters × 8 blocks** — so our net is **2–4× smaller than the strong
-engines**. Two evidence-grounded reasons this is the next axis:
+**Goal (Jason):** do our best **at 9×9** — work out the process + recipes so the eventual 15×15 is an
+experiment worth doing, not a wall-clock-burner. Stay at 9×9 until the recipe is *right*.
 
-1. **The champion has saturated the small net.** Anchored elo pins ~1700–1811, and the color-split
-   shows it beats *every* in-repo baseline with **no white-loss tail** (perfect/drawn white vs
-   heuristic/lookahead). At `small` there is no headroom left to measure — the ladder is maxed.
-2. **The "levers don't help / stacking hurts" verdict may be a small-net CAPACITY artifact, not a
-   property of the levers.** WDL/global-pool/aux/recency all add representational load; a 64×4 net is
-   capacity-bottlenecked, so they compete for scarce capacity and wash out or hurt. At 128×8 (ample
-   capacity) they may finally **compound** — i.e. the v8 survey deserves a re-run at scale before WDL et
-   al. are written off. (Hypothesis, not certainty — but the cheapest way to find out.)
+**CORRECTION to the v8 "evals saturated" framing (Jason, and he's right):** the evals are NOT saturated —
+**anchored *elo* is** (it scores a draw 0.5, so a model that *draws* the hard games maxes elo without
+*winning* them). The true objective is **100% across all three in-repo evals**, defined as **"always wins
+as BLACK and never loses as WHITE."** By that bar the champion is NOT done:
+- vs heuristic ✅ (B 10-0-0 / W 10-0-0) · vs lookahead2 ✅ (B 10-0-0 / W 10-0-0)
+- **vs lookahead4 ✗ — B 4-0-6 (four wins, SIX DRAWS) / W 2-0-8.** White already meets "never lose"; the
+  *entire* remaining gap is **converting the lookahead4 black-DRAWS into wins.**
 
-**Proposed v9:** scale the net up (`small`→`medium`/`large`, toward AlphaGomoku's 128×8) **at 9×9 first**
-(fast iteration), with **Rapfi as the primary yardstick** (the in-repo baselines are saturated, so future
-Δelo/wall must be measured against the external engine, per-color via the now-shipped color-split). Race
-a small scale-ladder (champion recipe at small / medium / large) + **re-test the top gomocup-AZ levers
-(WDL, global-pool) on the larger net** to see if capacity unlocks them. **15×15** (the real Gomocup board)
-is the eventual target but a bigger, slower jump — do it *after* the 9×9 scale-up characterizes the recipe.
-Open question for Jason: is the goal "strongest 9×9 player" (scale at 9×9) or "Gomocup-ready" (jump to
-15×15 sooner)? That's the fork only you can call.
+**Why this re-opens the research (the load-bearing insight):** anchored elo is *why* v8 read as "nothing
+moves the needle" — it saturates the instant a recipe can draw the hard games, so every near-ceiling recipe
+looks tied. The ruler is too short, not the recipes equivalent. **The derby's success metric should track
+distance-to-100% — specifically lookahead4 black-win-rate + white-non-loss (from the shipped color-split
+eval) — not anchored elo.** That makes the research productive again.
+
+**v9 plan (gated):**
+1. **Bigger models** — scale `small` (64×4, ~0.8M) → `medium` (96×6) / `large` (128×10), toward
+   AlphaGomoku's ~128×8. The small net very plausibly lacks the capacity to convert lookahead4 draws→wins,
+   and it's likely *why* WDL/global-pool washed out (no spare capacity) — so **re-test the top gomocup-AZ
+   levers (WDL, global-pool) at scale** (the v8 "stacking hurts" may be a small-net capacity artifact).
+2. **KEEP the in-repo evals** (heuristic, lookahead2, lookahead4) — do NOT bail to Rapfi yet. Target =
+   **100% (win-all-black, lose-none-white) across all three.** Rapfi becomes the *next* yardstick only once
+   the in-repo 100% is hit (guards against over-fitting the fixed bots; until then the in-repo target has
+   real, unmet headroom).
+3. **Raise eval games-per-baseline** (esp. vs lookahead4) so "100% / never-loses" is statistically real,
+   not a lucky 0-loss-in-10.
+4. Target is **well-posed + reachable**: 9×9 freestyle is a first-player (black) win with strong play, and
+   the second player can always draw — so "win-all-black, never-lose-white" is achievable, not asymptotic.
+
+15×15 stays the *eventual* target, attempted only after the 9×9 recipe hits (or near-hits) 100%.
 
 ## Rules
 
