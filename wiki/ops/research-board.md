@@ -419,16 +419,20 @@ eval) — not anchored elo.** That makes the research productive again.
 
 15×15 stays the *eventual* target, attempted only after the 9×9 recipe hits (or near-hits) 100%.
 
-**REGISTERED (intake for the gated v9):**
-- **Scale-ladder cells `derby-v9-medium` (96×6) + `derby-v9-large` (128×10)** — config-only, verbatim
-  champion recipe + only the net `size`. The on-board small champion (`mate-discount`, 64×4) is the
-  baseline rung; the runner swaps these in (retire the RR5 duds `wdl-max`/`wdl-recency` to free lanes).
-  Fresh-start (bigger net ≠ small-ckpt shape); judge by lookahead4 black-win-rate.
-- **Metric-change bead (P1, `derby-idea`/v9):** rank + allocate by **distance-to-100%** (lookahead4
-  black-win-rate + white-non-loss, from the shipped color-split fields), NOT saturated anchored elo +
-  raise eval games-per-baseline. **This is the key enabler** — without it the scale-ladder gets judged by
-  the same blind ruler that made v8 read "saturated." Runner/orchestrator domain (touches the derby's
-  GPU-scoring loop).
+**🏁 LAUNCHED (2026-05-27, commit `3e02298`):** the derby transitioned off v8 to a dedicated
+**`scripts/derby_v9_board.json`** — the live `delo_derby` PID now races the **net-capacity scale-ladder**:
+`derby-v9-small` (64×4, fresh baseline rung the runner added) / `derby-v9-medium` (96×6) / `derby-v9-large`
+(128×10) — champion recipe (vcf + global-pool + value-discount 0.98 + gumbel-m16 + sgd-64), only the net
+`size` differs, all fresh-start for a clean A/B/C. **The v9 question is live:** does a bigger net convert
+the lookahead4 BLACK-DRAWS into WINS (the binding gap to 100%)? Judge by **lookahead4 black-win-rate**, not
+anchored elo.
+- **Still pending (the key enabler):** the metric-change bead — rank/allocate by **distance-to-100%**
+  (lookahead4 black-win + white-non-loss from the shipped color-split), NOT saturated anchored elo, + raise
+  eval games-per-baseline. Without it the v9 ladder risks being judged by the same blind ruler that made v8
+  read "saturated." Runner/orchestrator domain.
+- **Follow-on (gated on the scale result):** if a bigger net helps, RE-TEST WDL / global-pool *at that
+  scale* (the v8 "levers wash out" may be a small-net capacity artifact). Don't pre-register before the
+  scale signal.
 
 ## Rules
 
