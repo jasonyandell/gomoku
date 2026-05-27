@@ -32,10 +32,10 @@
       "lever": "value-discount 0.98 + buffer-recency-frac 0.5 (the combo) - RESUMED at peak 1634 to keep a full board of strong contenders while crossgame's O(N) sidecar ingest is fixed (bead derby-eda). Open Q: does the combo catch mate-discount at full maturity?"
     },
     {
-      "name": "vdisc-099",
-      "cell": "derby-x-vdisc-099",
-      "cell_name": "derby-x-vdisc-099",
-      "lever": "MILDER value-discount 0.99 - brackets the optimum (with vdisc-097's 0.97 = a 0.97/0.98/0.99 gradient). Replaces 'buffer-comp' (pure recency, plateaued csnp8; result locked +82 H2H, peak.pt kept as anchor)."
+      "name": "crossgame",
+      "cell": "derby-x-crossgame",
+      "cell_name": "derby-x-crossgame",
+      "lever": "CROSS-GAME VALUE SIDECAR on champion base (vcf+gp+value-discount 0.98) - RE-RACE after bead derby-eda fixed the O(store-size) ingest (lazy O(1) scale + bounded compaction; per-cycle wall now flat). FRESH seed-0 (old broken-regime run archived). Clean A/B vs mate-discount. Replaces vdisc-099 (0.99 milder, lagging at 1395; peak.pt kept)."
     }
   ]
 }
