@@ -471,6 +471,16 @@ anchored elo.
     which `large` hasn't reached. Also: **no lane is near 100%** (even mature small wins only 25% as black
     vs lookahead2) — the target is a long climb — and a lookahead2(25%)-vs-lookahead4(60%) black-win
     INVERSION persists even at pooled-60-games, reconfirming the eval-games increase is needed.
+  - 🚧 **ROOT BLOCKER for reading v9 — the color-split eval LAGS training (the reporter exposed it):**
+    `derby-v9-large` has only **5 color-split evals, all at elo 339-788, while training has reached ~1455**
+    (peak). The full vs-baselines color-split eval runs FAR more sparsely than training — the recent
+    `derby-i5j` change put the *frequent* elo readout on per-chunk wandb, but the color-split (the only
+    source of the 100% metric) didn't follow. So `large`'s real 100%-distance at its current strength is
+    simply **unmeasured**, and no amount of pooling fixes a lane with zero recent color-split rows.
+    **So `derby-7ku` is really THREE things:** (1) rank by distance-to-100%, (2) raise games-per-color
+    (~50-100), AND (3) **run the color-split eval at CURRENT strength / often enough** (a current-checkpoint
+    color-split on each matured lane). Until (3), the scale verdict is unreadable regardless of maturity.
+    [GPU/eval = runner's; researcher can't run it.]
 - **Still pending (the key enabler):** the metric-change bead — rank/allocate by **distance-to-100%**
   (lookahead4 black-win + white-non-loss from the shipped color-split), NOT saturated anchored elo, + raise
   eval games-per-baseline. Without it the v9 ladder risks being judged by the same blind ruler that made v8
