@@ -289,3 +289,168 @@ def test_rebuild_store_from_buffer_matches_streaming_aggregate():
     assert len(rebuilt) == len(stream)
     for k in stream.store:
         assert np.allclose(rebuilt.store[k], stream.store[k])
+
+
+# ---------- bead derby-eda: per-ingest cost is O(new positions), store bounded ----------
+
+def test_decay_is_o1_not_full_store_traversal():
+    """REGRESSION GUARD (bead derby-eda). The old code multiplied EVERY entry by
+    recency_decay each ingest (O(store-size)) — the epoch wall grew 14s->128s as
+    the store hit 14MB. The fix uses a single lazy global ``scale``. Assert
+    decay() touches NO per-entry array: snapshot the raw arrays' object identity
+    + contents before/after decay over a large store; they must be untouched
+    (only the scalar ``scale`` changes)."""
+    ps = PositionStats(recency_decay=0.99, min_visits=1.0, max_blend=0.5,
+                       compact_every=0)  # disable compaction for this probe
+    n = 5000
+    for i in range(n):
+        ps.add((i, 0, 0), 1.0)
+    before_scale = ps.scale
+    snap = {k: (id(v), v.copy()) for k, v in ps.store.items()}
+    ps.decay()
+    # scale changed by exactly recency_decay; raw entries are byte-identical.
+    assert ps.scale == before_scale * 0.99
+    for k, v in ps.store.items():
+        sid, sval = snap[k]
+        assert id(v) == sid                       # same array object, not rewritten
+        assert np.array_equal(v, sval)            # contents untouched -> no O(N) work
+
+
+def test_ingest_plus_decay_time_flat_as_store_grows():
+    """REGRESSION GUARD (bead derby-eda). Per-cycle (decay + add N new) wall must
+    stay ~FLAT as the store grows. The old O(store-size) decay made later cycles
+    materially slower; the lazy-scale fix makes per-cycle cost O(new positions).
+    Assert the LAST batch of cycles isn't materially slower than the FIRST,
+    despite the store being orders of magnitude larger."""
+    import time
+    ps = PositionStats(recency_decay=0.999, min_visits=8.0, max_blend=0.5,
+                       compact_every=0)  # isolate decay+add cost (no periodic prune)
+    new_per_cycle = 200
+    n_cycles = 400
+
+    def run_window(start_cycle):
+        zs = [0.5] * new_per_cycle
+        t0 = time.perf_counter()
+        for c in range(start_cycle, start_cycle + 50):
+            ps.decay()
+            base = c * new_per_cycle
+            ps.add_many(((base + j, 0, 0) for j in range(new_per_cycle)), zs)
+        return time.perf_counter() - t0
+
+    first = run_window(0)
+    # advance to cycle ~350 so the store is ~70k entries vs ~10k for the first
+    for c in range(50, 350):
+        ps.decay()
+        base = c * new_per_cycle
+        ps.add_many(((base + j, 0, 0) for j in range(new_per_cycle)), [0.5] * new_per_cycle)
+    big_store = len(ps.store)
+    last = run_window(350)
+
+    assert big_store > 60000, f"store didn't grow enough to be a real test ({big_store})"
+    # Flat: the late window must not be much slower than the early one. The old
+    # O(N) decay would make `last` scale with store size (~7x here); allow 2.5x
+    # slack for timer noise on a loaded machine while still catching O(N) regress.
+    assert last < first * 2.5, (
+        f"per-cycle cost grew with store size (O(N) regression): "
+        f"first={first*1e3:.1f}ms last={last*1e3:.1f}ms store={big_store}"
+    )
+
+
+def test_lazy_scale_aggregate_matches_eager_decay():
+    """Aggregate (visits + mean) under the lazy global scale must match an
+    independent EAGER per-entry decay reference over many mixed cycles."""
+    rng = np.random.default_rng(0)
+    decay = 0.97
+    lazy = PositionStats(recency_decay=decay, min_visits=1.0, max_blend=0.5,
+                         compact_every=0)
+    # Eager reference: dict key -> [visits, sum] decayed entry-by-entry.
+    eager: dict = {}
+    keys_pool = [(k, 0, 0) for k in range(40)]
+    for _ in range(120):
+        lazy.decay()
+        for v in eager.values():            # eager: multiply every entry
+            v[0] *= decay
+            v[1] *= decay
+        m = rng.integers(1, 8)
+        for _ in range(int(m)):
+            k = keys_pool[int(rng.integers(0, len(keys_pool)))]
+            z = float(rng.choice([-1.0, 0.0, 1.0, 0.5]))
+            lazy.add(k, z)
+            if k in eager:
+                eager[k][0] += 1.0
+                eager[k][1] += z
+            else:
+                eager[k] = [1.0, z]
+    for k, ev in eager.items():
+        lv, lm = lazy.aggregate(k)
+        e_visits = ev[0]
+        e_mean = ev[1] / ev[0] if ev[0] != 0 else 0.0
+        assert abs(lv - e_visits) < 1e-6, f"{k}: visits {lv} vs {e_visits}"
+        assert abs(lm - e_mean) < 1e-9, f"{k}: mean {lm} vs {e_mean}"
+
+
+def test_renormalize_preserves_effective_values():
+    """When the global scale underflows it is folded into the raw counts (O(N)
+    once) and reset to 1.0 — effective visits + mean must be preserved exactly."""
+    # tiny decay forces an underflow renorm within a handful of cycles
+    ps = PositionStats(recency_decay=0.001, min_visits=1.0, max_blend=0.5,
+                       compact_every=0)
+    k = (3, 1, 4)
+    ps.add(k, 0.5)
+    ps.add(k, -0.5)
+    v0, m0 = ps.aggregate(k)
+    # several decays: 0.001**3 = 1e-9 < 1e-6 floor -> a renorm fires
+    for _ in range(3):
+        ps.decay()
+    assert ps.scale == 1.0, "scale should have been renormalized to 1.0"
+    v1, m1 = ps.aggregate(k)
+    # effective visits decayed by 0.001**3; mean unchanged (scale-invariant)
+    assert abs(v1 - v0 * (0.001 ** 3)) < 1e-12
+    assert abs(m1 - m0) < 1e-12
+
+
+def test_compaction_bounds_the_store():
+    """Periodic compaction prunes cold entries so the store can't grow unbounded
+    (the 14MB blow-up in Derby v8). A churn of one-off cold keys plus a few hot
+    keys must leave the store small after compaction, keeping the hot keys."""
+    ps = PositionStats(recency_decay=0.95, min_visits=1.0, max_blend=0.5,
+                       compact_every=4, compact_min_visits=1.0)
+    hot = [(900 + i, 0, 0) for i in range(3)]
+    cold_seq = 0
+    for cycle in range(40):
+        ps.decay()
+        # hot keys get many visits each cycle (stay above the floor)
+        for k in hot:
+            for _ in range(50):
+                ps.add(k, 1.0)
+        # a flood of unique cold keys, one visit each (will decay below the floor)
+        for _ in range(100):
+            ps.add((cold_seq, 7, 7), 0.0)
+            cold_seq += 1
+    # without compaction this would be ~4000 keys; bounded well below that.
+    assert len(ps.store) < 500, f"store not bounded: {len(ps.store)}"
+    # hot keys survive (effective visits well above the floor).
+    for k in hot:
+        v, _ = ps.aggregate(k)
+        assert v >= ps.compact_min_visits
+
+
+def test_save_folds_scale_and_roundtrips_decayed_state():
+    """save() folds the lazy scale into raw counts (scale->1.0) so the side-car
+    is canonical; load() restores aggregates that match the live store exactly."""
+    ps = PositionStats(recency_decay=0.9, min_visits=2.0, max_blend=0.5,
+                       compact_every=0)
+    k = (11, 22, 33)
+    for _ in range(5):
+        ps.decay()
+        ps.add(k, 0.25)
+    live_v, live_m = ps.aggregate(k)
+    import tempfile, os as _os
+    with tempfile.TemporaryDirectory() as d:
+        path = _os.path.join(d, "s.pkl")
+        ps.save(path)
+        ps2 = PositionStats.load(path)
+    assert ps2.scale == 1.0
+    r_v, r_m = ps2.aggregate(k)
+    assert abs(r_v - live_v) < 1e-9
+    assert abs(r_m - live_m) < 1e-9

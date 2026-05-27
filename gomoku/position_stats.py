@@ -22,9 +22,18 @@ ARCHITECTURE (trainer-owned, single-writer — no multi-process locking):
     Monte-Carlo value). The 8 D4 augmentations of one position share a key and a
     ``z``, so they contribute 8 visits with identical ``z`` — the MEAN is
     unbiased; the visit GATE accounts for the uniform 8× via its threshold.
-  - Recency-decay: before each ingest the whole store is multiplied by
-    ``recency_decay`` (a poor-man's reanalyze with no GPU) so old/weak-net games
-    fade and the aggregate tracks the current policy.
+  - Recency-decay: a LAZY GLOBAL SCALE. Instead of multiplying every entry by
+    ``recency_decay`` each ingest (an O(store-size) traversal that made the
+    Derby-v8 epoch wall grow 14s->128s as the store hit 14MB — bead derby-eda),
+    we keep one ``scale`` float and multiply IT by ``recency_decay`` per cycle
+    (O(1)). Entries store RAW visits/sum_value; the effective (decayed) values
+    are ``raw * scale``. New contributions this cycle are stored as
+    ``contribution / scale`` so older entries decay correctly RELATIVE to newer
+    ones. The blend ratio ``sum_value/visits`` is scale-invariant; the visit
+    GATE compares against the EFFECTIVE decayed visits (``raw_visits * scale``).
+    When ``scale`` underflows it is folded back into the store in one O(N) pass
+    and reset to 1.0 (amortized negligible). The store is BOUNDED by periodic
+    compaction that prunes cold entries (effective visits below a floor).
   - Relabel on sample: the buffer stores each row's canonical key as a column
     (computed once at ingest). The read path is an O(1) dict lookup; the value
     target becomes a confidence-weighted blend(z_game, aggregate) gated by visit
@@ -112,57 +121,102 @@ def canonical_key_from_planes(planes: np.ndarray) -> PosKey:
     return canonical_key_from_board(board2)
 
 
+# When the lazy global scale drops below this, fold it into the store (one O(N)
+# pass) and reset to 1.0. Far above float64 underflow; amortized negligible.
+_SCALE_RENORM_FLOOR = 1e-6
+
+
 @dataclass
 class PositionStats:
     """Trainer-owned single-writer cross-game value store.
 
-    store: PosKey -> [visits(float), sum_value(float)]. Floats because the
-    recency decay multiplies the counts. The aggregate value of a position is
-    sum_value / visits.
+    store: PosKey -> [raw_visits(float), raw_sum_value(float)]. The EFFECTIVE
+    (recency-decayed) values are ``raw * scale`` where ``scale`` is a single
+    lazy global float (see module docstring). The aggregate value of a position
+    is ``raw_sum_value / raw_visits`` — scale-invariant, so the mean is
+    unaffected; the visit gate uses the effective ``raw_visits * scale``.
     """
 
-    recency_decay: float = 0.999      # multiply all counts by this each ingest
-    min_visits: float = 8.0           # below this, fall back to single-game z
+    recency_decay: float = 0.999      # multiply the GLOBAL scale by this each ingest
+    min_visits: float = 8.0           # below this (EFFECTIVE), fall back to single-game z
     max_blend: float = 0.5            # cap on the aggregate's weight in the blend
+    compact_every: int = 64           # ingest cycles between bound-the-store compactions
+    compact_min_visits: float = 1.0   # prune entries with effective visits below this
 
     def __post_init__(self) -> None:
-        # key -> np.array([visits, sum_value], float64)
+        # key -> np.array([raw_visits, raw_sum_value], float64)
         self.store: dict[PosKey, np.ndarray] = {}
+        # Lazy global recency-decay scale: effective visits/sum = raw * scale.
+        self.scale: float = 1.0
+        # Ingest-cycle counter for periodic compaction.
+        self._cycles: int = 0
 
     # ---- ingest (writer) ----
     def decay(self) -> None:
-        """Recency-decay the whole store (call once per ingest cycle before
-        adding the new games). A no-op when recency_decay >= 1.0."""
-        if self.recency_decay >= 1.0:
+        """Recency-decay (call once per ingest cycle before adding the new
+        games). O(1): multiply the GLOBAL scale, not every entry. A no-op when
+        recency_decay >= 1.0. Also drives periodic compaction so the store stays
+        bounded (cold entries pruned), and renormalizes on scale underflow."""
+        self._cycles += 1
+        if self.recency_decay < 1.0:
+            self.scale *= self.recency_decay
+            if self.scale < _SCALE_RENORM_FLOOR:
+                self._renormalize()
+        if self.compact_every > 0 and self._cycles % self.compact_every == 0:
+            self.compact()
+
+    def _renormalize(self) -> None:
+        """Fold the global scale into the raw counts in one O(N) pass and reset
+        scale=1.0. Effective values (raw*scale) are preserved exactly."""
+        s = self.scale
+        if s == 1.0:
             return
-        d = self.recency_decay
         for v in self.store.values():
-            v *= d
+            v *= s
+        self.scale = 1.0
 
     def add(self, key: PosKey, z: float) -> None:
-        """Add one contribution: a single example's already-discounted return."""
+        """Add one contribution (a single example's already-discounted return).
+
+        Stored as ``contribution / scale`` so this NEW entry decays correctly
+        relative to OLDER (already smaller-scale) entries: its effective weight
+        this cycle is ``(1/scale) * scale == 1`` while older entries that were
+        added at scale=1 have effective weight ``scale < 1``."""
+        inv = 1.0 / self.scale
         cur = self.store.get(key)
         if cur is None:
-            self.store[key] = np.array([1.0, float(z)], dtype=np.float64)
+            self.store[key] = np.array([inv, float(z) * inv], dtype=np.float64)
         else:
-            cur[0] += 1.0
-            cur[1] += float(z)
+            cur[0] += inv
+            cur[1] += float(z) * inv
 
     def add_many(self, keys, zs) -> None:
         """Vectorized-ish batch add for an ingest cycle (after decay())."""
         for key, z in zip(keys, zs):
             self.add(key, float(z))
 
+    # ---- bound the store ----
+    def compact(self) -> None:
+        """Prune cold entries (effective visits below ``compact_min_visits``) so
+        the store can't grow unbounded. O(N) but only every ``compact_every``
+        cycles — amortized O(1) per cycle, vastly cheaper than the old O(N)
+        per-cycle full-store decay this replaces (bead derby-eda)."""
+        if self.compact_min_visits <= 0.0:
+            return
+        thresh = self.compact_min_visits / self.scale  # compare raw to effective floor
+        self.store = {k: v for k, v in self.store.items() if v[0] >= thresh}
+
     # ---- read (relabel on sample) ----
     def aggregate(self, key: PosKey) -> tuple[float, float]:
-        """Return (visits, mean_value) for a key; (0.0, 0.0) if unseen."""
+        """Return (effective_visits, mean_value) for a key; (0.0, 0.0) if unseen.
+        Effective visits = raw_visits * scale; the mean is scale-invariant."""
         cur = self.store.get(key)
         if cur is None:
             return 0.0, 0.0
-        visits = float(cur[0])
-        if visits <= 0.0:
+        raw_visits = float(cur[0])
+        if raw_visits <= 0.0:
             return 0.0, 0.0
-        return visits, float(cur[1]) / visits
+        return raw_visits * self.scale, float(cur[1]) / raw_visits
 
     def blend(self, key: PosKey, z_game: float) -> float:
         """Confidence-weighted blend of the single-game z and the cross-game
@@ -191,11 +245,17 @@ class PositionStats:
 
     # ---- persistence (side-car, NOT embedded in latest.pt) ----
     def save(self, path: str) -> None:
+        # Fold scale into the raw counts before persisting so the side-car is
+        # scale-1.0 canonical (a loaded store needs no scale-history context).
+        self._renormalize()
         payload = {
             "store": {k: v.tolist() for k, v in self.store.items()},
             "recency_decay": self.recency_decay,
             "min_visits": self.min_visits,
             "max_blend": self.max_blend,
+            "compact_every": self.compact_every,
+            "compact_min_visits": self.compact_min_visits,
+            "scale": self.scale,
         }
         tmp = str(path) + ".tmp"
         with open(tmp, "wb") as f:
@@ -211,11 +271,15 @@ class PositionStats:
             recency_decay=float(payload.get("recency_decay", 0.999)),
             min_visits=float(payload.get("min_visits", 8.0)),
             max_blend=float(payload.get("max_blend", 0.5)),
+            compact_every=int(payload.get("compact_every", 64)),
+            compact_min_visits=float(payload.get("compact_min_visits", 1.0)),
         )
         ps.store = {
             tuple(k): np.array(v, dtype=np.float64)
             for k, v in payload["store"].items()
         }
+        # Older side-cars have no "scale" (counts already effective) -> 1.0.
+        ps.scale = float(payload.get("scale", 1.0))
         return ps
 
     def __len__(self) -> int:
