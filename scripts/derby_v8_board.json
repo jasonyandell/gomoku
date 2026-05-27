@@ -14,10 +14,10 @@
   },
   "ideas": [
     {
-      "name": "gumbel-m8",
-      "cell": "derby-x-gumbel-m8",
-      "cell_name": "derby-x-gumbel-m8",
-      "lever": "Gumbel-m 16->8 (researcher pass 87a46d75; config-only, registered for the runner) - focus 100 sims on fewer root candidates -> sharper completed-Q targets. Replaces vdisc-097 (0.97, plateaued csnp6; value-discount now known ROBUST 0.97/0.98/0.99 = 1665/1699/1682; peak.pt kept)."
+      "name": "dir15",
+      "cell": "derby-x-dir15",
+      "cell_name": "derby-x-dir15",
+      "lever": "dirichlet_eps 0.25->0.15 (less root noise; never-swept exploration knob) on champion base. FRESH seed-0. Replaces gumbel-m8 (RR4 dud -48, plateaued; peak.pt kept)."
     },
     {
       "name": "mate-discount",

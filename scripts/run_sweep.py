@@ -1157,6 +1157,28 @@ CELLS: dict[str, Cell] = {
                                    "--value-discount", "0.98", "--value-head", "wdl"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--value-head", "wdl",
                                   "--buffer-recency-frac", "0.5"]),
+
+    # 'dir15' = champion base with LESS root Dirichlet noise (eps 0.25 -> 0.15). The
+    # exploration-noise knob was frozen at the v3 default and NEVER swept (like
+    # gumbel-m was). Tests whether a sharper/more-exploitative root helps the mature
+    # recipe. Config-only. Replaces gumbel-m8 (RR4 dud -48, plateaued).
+    "derby-x-dir15": Cell("derby-x-dir15", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.15,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
 }
 
 
