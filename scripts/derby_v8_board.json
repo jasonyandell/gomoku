@@ -14,10 +14,10 @@
   },
   "ideas": [
     {
-      "name": "dir15",
-      "cell": "derby-x-dir15",
-      "cell_name": "derby-x-dir15",
-      "lever": "dirichlet_eps 0.25->0.15 (less root noise; never-swept exploration knob) on champion base. FRESH seed-0. Replaces gumbel-m8 (RR4 dud -48, plateaued; peak.pt kept)."
+      "name": "defense",
+      "cell": "derby-x-defense",
+      "cell_name": "derby-x-defense",
+      "lever": "--defense-teacher (builder d322133, bead derby-1xf): value-only DEFENSIVE exact-solver teacher - the complement to VCF (teaches forced defenses/unavoidable losses). Novel lever on champion base. FRESH seed-0. Replaces dir15 (dirichlet 0.15 knob, low-value, ~flat at 1385; peak.pt kept)."
     },
     {
       "name": "mate-discount",
