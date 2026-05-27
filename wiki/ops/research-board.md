@@ -279,9 +279,19 @@ key beads are being de-staled + shipped:
   each blocked per move → generation fully starved). Pulled it, filed bug `derby-b6r`. Confirms the
   in-search-VCF failure mode (exact-solve-on-the-gen-hot-path tanks Δelo/hr).
 - ✅ **FIXED (`derby-b6r`, merged `a94b156`/`e8cee60`, branch `feat/vct-teacher-bound`):** aggressive
-  per-move node/time bound so the VCT solve returns 'unknown' fast and self-play proceeds. **derby-b6r
-  stays IN_PROGRESS until the runner's required 2-chunk GPU smoke** (buf grows, epoch ~3s) confirms it
-  live — that's the GPU runner's verification, then `derby-x-vct` races.
+  per-move teacher cap (`_VCT_TEACHER_MAX_DEPTH=4`/`_VCT_TEACHER_MAX_NODES=800`; cell carries
+  `--vct-max-depth 4 --vct-max-nodes 800`). CPU-proven: the wide-open position that took 5722 nodes/14.6s
+  at 7/20k now bails in 131 nodes/320ms (~45×); short VCT wins still proven; byte-identical-off; 49 tests pass.
+- ▶ **NEXT RUNNER ACTION to close `derby-b6r` (the only thing left — a GPU step, can't be done by the
+  researcher):** the code is done + CPU-proven; the bead reserves closure for a live 2-chunk derby smoke
+  (CPU tests can't reproduce live flooding). **Swap the bounded `derby-x-vct` onto the board and race ~2
+  chunks; confirm buf > 0 (not gen-starved) + the epoch wall.** Free a lane by **retiring an RR5 dud**:
+  `wdl-recency` (H2H −36) or `wdl-max` (H2H −41) are refuted stacks — they only *look* alive on anchored
+  elo (`wdl-max` anchored 1649) but lost H2H, so the anchored-elo swap heuristic is keeping dead lanes
+  fed. Retire one → swap in `derby-x-vct` → racing it IS the b6r smoke. **If the smoke shows buf fills
+  but the epoch is still slow** (the 320ms/move worst case × open-board moves may keep epoch >> 3s), the
+  ready follow-on is the **board-fill gate below** (threshold 32 stones, ~1.12× VCF) — or an even tighter
+  node cap.
 - *(My parallel board-fill gate `feat/vct-gencost-gate` was HALTED as redundant once the node-bound
   merged — kept only as a conditional QUALITY follow-on if the aggressive cap proves to weaken VCT's
   deep-win detection too much. **Its profiling is preserved as ready-to-use evidence:** empirical
