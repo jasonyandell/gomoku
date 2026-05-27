@@ -40,6 +40,28 @@ def value_loss(v: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
     return F.mse_loss(v, z)
 
 
+def wdl_target_from_z(z: torch.Tensor) -> torch.Tensor:
+    """Map a scalar value target z in [-1, 1] to a (B, 3) {win, draw, loss}
+    soft target: (relu(z), 1 - |z|, relu(-z)).
+
+    This is the EXACT WDL generalization of every scalar target the self-play
+    target builder produces, so the WDL path stays the SAME ONE lever (the value
+    REPRESENTATION) rather than introducing new discount/VCF semantics:
+
+      * undiscounted outcome z in {+1,0,-1} -> one-hot {(1,0,0),(0,1,0),(0,0,1)};
+      * value-discount z = gamma^plies * sign -> gamma^plies toward the sign
+        vertex + (1 - gamma^plies) on the draw vertex, i.e.
+        gamma^plies*onehot(sign) + (1-gamma^plies)*(0,1,0);
+      * VCF stamp z = f (f >= 0.90) -> f*(1,0,0) + (1-f)*(0,1,0);
+      * cross-game-relabeled z in [-1, 1] -> the same interpolation.
+
+    Rows sum to 1 for any z in [-1, 1] (|z| <= 1)."""
+    w = z.clamp(min=0.0)
+    l = (-z).clamp(min=0.0)
+    d = 1.0 - z.abs()
+    return torch.stack([w, d, l], dim=-1)
+
+
 def train_step(
     model,
     optimizer,
@@ -86,12 +108,24 @@ def train_step(
     use_ownership = (
         ownership_weight > 0.0 and ownership is not None and ownership_mask is not None
     )
+    # WDL value-representation lever (bead derby-cgf): when the model carries a
+    # WDL value head, request the (B, 3) {win,draw,loss} logits and train them
+    # with cross-entropy against the WDL target derived from the scalar z. The
+    # default scalar head leaves use_wdl=False and the MSE+tanh path below is
+    # byte-identical to the pre-WDL trainer.
+    use_wdl = getattr(getattr(model, "cfg", None), "value_head", "scalar") == "wdl"
     aux_logits = None
     own_logits = None
-    if use_aux or use_ownership:
-        outputs = model(planes, return_aux=use_aux, return_ownership=use_ownership)
-        # forward() returns (p, v, [aux], [ownership]) in that fixed order;
-        # unpack positionally per the flags requested above.
+    value_logits = None
+    if use_aux or use_ownership or use_wdl:
+        outputs = model(
+            planes,
+            return_aux=use_aux,
+            return_ownership=use_ownership,
+            return_value_logits=use_wdl,
+        )
+        # forward() returns (p, v, [aux], [ownership], [value_logits]) in that
+        # fixed order; unpack positionally per the flags requested above.
         logits, v = outputs[0], outputs[1]
         idx_extra = 2
         if use_aux:
@@ -99,6 +133,9 @@ def train_step(
             idx_extra += 1
         if use_ownership:
             own_logits = outputs[idx_extra]
+            idx_extra += 1
+        if use_wdl:
+            value_logits = outputs[idx_extra]
             idx_extra += 1
     else:
         # Byte-identical default call (no kwargs) so mock/legacy models whose
@@ -108,7 +145,16 @@ def train_step(
     # Per-sample policy CE so we can split by side/ply without a second pass.
     per_policy_ce = -(pi * logp).sum(dim=-1)
     pl = per_policy_ce.mean()
-    per_value_se = (v - z) ** 2
+    if use_wdl:
+        # WDL cross-entropy over {win, draw, loss}. The soft target is the exact
+        # WDL generalization of the scalar z (see wdl_target_from_z). per_value_se
+        # holds the per-sample CE so the side/ply diagnostics below still work
+        # (logged as value_mse/* for continuity — it is the value loss either way).
+        wdl_logp = F.log_softmax(value_logits, dim=-1)
+        wdl_target = wdl_target_from_z(z)
+        per_value_se = -(wdl_target * wdl_logp).sum(dim=-1)
+    else:
+        per_value_se = (v - z) ** 2
     vl = per_value_se.mean()
     loss = pl + value_weight * vl
     aux_l_val = float("nan")
@@ -353,6 +399,13 @@ def parse_args() -> argparse.Namespace:
                         "in the residual tower. Bare --global-pool applies it to the "
                         "latter half of blocks; --global-pool K applies it to the "
                         "trailing K blocks. Omitted = OFF (byte-identical current arch).")
+    p.add_argument("--value-head", type=str, default="scalar", choices=["scalar", "wdl"],
+                   help="Derby 'x-wdl' value-representation lever (bead derby-cgf): "
+                        "'scalar' (default) = the tanh scalar head, byte-identical to "
+                        "before this flag existed; 'wdl' = a categorical {win,draw,loss} "
+                        "head trained with cross-entropy (the scalar v=P(win)-P(loss) is "
+                        "derived for MCTS/eval). The value-discount + VCF-stamp targets "
+                        "are re-expressed natively in WDL; this is the ONLY lever.")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--games-per-epoch", type=int, default=64)
     p.add_argument("--n-simulations", type=int, default=100)
@@ -780,10 +833,12 @@ def main() -> None:
             aux_opponent_reply=aux_on,
             aux_ownership=ownership_on,
             global_pool=gp_arg,
+            value_head=args.value_head,
         ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         payload = {}
-        print(f"fresh {args.size} model: {n_params(model):,} params")
+        print(f"fresh {args.size} model: {n_params(model):,} params"
+              + (f" (value_head={args.value_head})" if args.value_head != "scalar" else ""))
 
     # WL2 lever #1: EMA self-play weights. Build a slowly-tracking copy that
     # workers see, while `model` continues to train normally. On resume,

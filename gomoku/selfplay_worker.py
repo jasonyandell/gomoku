@@ -165,6 +165,14 @@ def parse_args() -> argparse.Namespace:
                         "None/1.0 = flat ±1 (byte-identical). Generalizes the VCF "
                         "mate-distance discount to all outcomes; applied before the "
                         "VCF teacher so forced wins still overwrite with their value.")
+    p.add_argument("--value-head", type=str, default="scalar", choices=["scalar", "wdl"],
+                   help="Derby 'x-wdl' value-representation lever (bead derby-cgf). "
+                        "Accepted for cell symmetry with --value-head on the trainer; "
+                        "self-play targets are the SAME scalar z either way (the WDL "
+                        "re-expression lives in the trainer), and the model's value "
+                        "representation comes from the loaded checkpoint config, so "
+                        "this flag is a no-op for generation other than a consistency "
+                        "assertion against the loaded weights. Keeping it ONE lever.")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -765,6 +773,17 @@ def main() -> None:
         )
 
     model, weights_mtime, model_version = _load_model(args.weights_path, device)
+    # Consistency check for the WDL value-representation lever (bead derby-cgf):
+    # the model's value head comes from the checkpoint config; warn if --value-head
+    # disagrees with the loaded weights so a misconfigured cell is visible in logs.
+    loaded_vh = getattr(getattr(model, "cfg", None), "value_head", "scalar")
+    if args.value_head != loaded_vh:
+        print(
+            f"[{args.worker_id}] note: --value-head={args.value_head} but loaded "
+            f"checkpoint value_head={loaded_vh}; generation uses the checkpoint's "
+            f"derived scalar value either way",
+            flush=True,
+        )
     model = _maybe_half(model, args.fp16_eval, args.worker_id)
     model = _maybe_compile(model, args.compile, args.worker_id)
     evaluator = _build_evaluator(args, model, device)

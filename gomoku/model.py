@@ -55,6 +55,21 @@ class ModelConfig:
     # it cannot cheaply represent board-global facts ("is there a live-four
     # ANYWHERE?"); global pooling injects that context directly.
     global_pool: bool | int = False
+    # Derby 'x-wdl' value-representation lever (bead derby-cgf). Selects how the
+    # value head represents the position value:
+    #   "scalar" (default) = today's path EXACTLY: value_fc2 -> Linear(hidden,1)
+    #     -> tanh, forward() returns a scalar v in [-1,1]. BYTE-IDENTICAL: the WDL
+    #     FC is NOT constructed, so the state_dict keys / param count / inference
+    #     graph are unchanged from a model without this field.
+    #   "wdl" = a categorical {win,draw,loss} head: value_wdl_fc -> Linear(hidden,3)
+    #     emits 3 logits; the scalar value consumers see the DERIVED scalar
+    #     v = P(win) - P(loss) (softmax over the 3 logits), so MCTS leaf eval and
+    #     the anchor-ladder eval are untouched. The 3 logits are exposed only when
+    #     the trainer asks (forward(return_value_logits=True)) for the WDL
+    #     cross-entropy loss; self-play/eval never request them (zero extra cost).
+    # Mirrors the aux-head gating discipline: a single config field selects which
+    # head module is constructed; the unselected one is never created.
+    value_head: str = "scalar"
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -165,11 +180,20 @@ class GomokuNet(nn.Module):
         self.policy_bn = nn.BatchNorm2d(cfg.policy_filters)
         self.policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, N_ACTIONS)
 
-        # Value head: 1x1 conv -> flatten -> linear -> linear(1) -> tanh
+        # Value head: 1x1 conv -> flatten -> linear -> head-specific final FC.
+        # The shared trunk (conv/bn/fc1) is identical for both representations;
+        # only the final FC differs and exactly ONE of the two is constructed,
+        # so the scalar default's state_dict / param count are byte-identical to
+        # a model predating the value_head field.
         self.value_conv = nn.Conv2d(c, cfg.value_filters, 1, bias=False)
         self.value_bn = nn.BatchNorm2d(cfg.value_filters)
         self.value_fc1 = nn.Linear(cfg.value_filters * spatial * spatial, cfg.value_hidden)
-        self.value_fc2 = nn.Linear(cfg.value_hidden, 1)
+        if cfg.value_head == "wdl":
+            # 3 logits over {win, draw, loss}; softmax in forward().
+            self.value_wdl_fc = nn.Linear(cfg.value_hidden, 3)
+        else:
+            # scalar tanh head — the exact pre-WDL module/key.
+            self.value_fc2 = nn.Linear(cfg.value_hidden, 1)
 
         # V3 auxiliary opponent-reply policy head — a structural clone of the
         # policy head off the SAME shared tower output `h`. Constructed ONLY
@@ -203,23 +227,31 @@ class GomokuNet(nn.Module):
         *,
         return_aux: bool = False,
         return_ownership: bool = False,
+        return_value_logits: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         """Forward pass. Returns (policy, value) by default.
 
-        The two auxiliary heads are independent and gated separately:
+        `value` is ALWAYS the scalar in [-1, 1] that the rest of the codebase
+        (MCTS leaf backup, anchor-ladder eval) consumes:
+          * scalar head: tanh(value_fc2) — today's path, byte-identical.
+          * wdl head: P(win) - P(loss) derived from softmax over the 3 logits.
+        So every scalar consumer is untouched regardless of representation.
+
+        The auxiliary heads / value logits are independent and gated separately:
           * return_aux=True (requires cfg.aux_opponent_reply) appends the
             opponent-reply logits;
           * return_ownership=True (requires cfg.aux_ownership) appends the
-            per-cell ownership logits.
-        The output tuple is always ordered (policy, value, [aux_policy],
-        [ownership]) with each optional tensor present iff its flag is set:
-          neither -> (p, v)                       [byte-identical default]
+            per-cell ownership logits;
+          * return_value_logits=True (requires cfg.value_head=="wdl") appends the
+            raw (B, 3) {win,draw,loss} logits for the WDL cross-entropy loss.
+        The output tuple is ordered (policy, value, [aux_policy], [ownership],
+        [value_logits]) with each optional tensor present iff its flag is set:
+          none -> (p, v)                          [byte-identical default]
           aux only -> (p, v, aux_policy)          [unchanged 3-tuple contract]
-          ownership only -> (p, v, ownership)
-          both -> (p, v, aux_policy, ownership)
         Only the trainer passes these flags; self-play and eval call forward(x)
-        and never run either aux head (zero aux FLOPs in the generation-bound
-        path). Requesting a head that was not constructed raises."""
+        and never run either aux head or request WDL logits (zero extra FLOPs in
+        the generation-bound path). Requesting a head/logits that were not
+        constructed raises."""
         h = self.tower(self.stem(x))
 
         p = F.relu(self.policy_bn(self.policy_conv(h)))
@@ -227,7 +259,13 @@ class GomokuNet(nn.Module):
 
         v = F.relu(self.value_bn(self.value_conv(h)))
         v = F.relu(self.value_fc1(v.flatten(1)))
-        v = torch.tanh(self.value_fc2(v)).squeeze(-1)
+        value_logits = None
+        if self.cfg.value_head == "wdl":
+            value_logits = self.value_wdl_fc(v)            # (B, 3) = {win, draw, loss}
+            wdl = F.softmax(value_logits, dim=-1)
+            v = (wdl[:, 0] - wdl[:, 2])                    # derived scalar P(win)-P(loss)
+        else:
+            v = torch.tanh(self.value_fc2(v)).squeeze(-1)
 
         out: tuple[torch.Tensor, ...] = (p, v)
         if return_aux:
@@ -248,6 +286,13 @@ class GomokuNet(nn.Module):
             o = F.relu(self.ownership_bn(self.ownership_conv(h)))
             o = self.ownership_fc(o.flatten(1))
             out = out + (o,)
+        if return_value_logits:
+            if self.cfg.value_head != "wdl":
+                raise RuntimeError(
+                    "forward(return_value_logits=True) requires cfg.value_head=='wdl' "
+                    "(the WDL value FC was not constructed)"
+                )
+            out = out + (value_logits,)
         return out
 
 
@@ -258,6 +303,7 @@ def build_model(
     aux_opponent_reply: bool = False,
     aux_ownership: bool = False,
     global_pool: bool | int | None = None,
+    value_head: str | None = None,
 ) -> GomokuNet:
     if size not in SIZE_PRESETS:
         raise ValueError(f"unknown size {size!r}; options: {list(SIZE_PRESETS)}")
@@ -273,6 +319,12 @@ def build_model(
         overrides["aux_ownership"] = True
     if global_pool is not None:
         overrides["global_pool"] = global_pool
+    # Only override value_head when an explicit non-default is requested, so the
+    # scalar default build path stays byte-identical to a pre-WDL model.
+    if value_head is not None and value_head != "scalar":
+        if value_head != "wdl":
+            raise ValueError(f"unknown value_head {value_head!r}; options: scalar, wdl")
+        overrides["value_head"] = value_head
     if overrides:
         from dataclasses import replace
         cfg = replace(cfg, **overrides)
