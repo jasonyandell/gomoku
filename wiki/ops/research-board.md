@@ -437,6 +437,14 @@ anchored elo.
     ripened and passed small exactly as predicted; had it been retired on the 5-chunk read it'd have been a
     mistake. **Early positive sign that scale helps** (anchored ordering flipped medium > small) — but the
     real verdict is still the mature lookahead4-black-win-rate (does the bigger net WIN the games small DRAWS?).
+  - ⚠️ **EVAL IS TOO NOISY TO READ THE 100% TARGET (20 chunks, direct color-split read):** at 10 games/color
+    the lookahead4-black-win signal is noise-dominated — e.g. `derby-v9-small` showed L4-black **9-0-1** yet
+    heuristic-black **2-0-8** (internally contradictory: can't be near-perfect vs lookahead4 and weak vs the
+    *easier* heuristic — that's small-sample noise), and the three lanes are at mismatched maturities (`large`
+    still at elo ~788, loses everything = warm-up). **So the metric bead's "raise eval games-per-baseline" is
+    ESSENTIAL, not optional** — without ~50-100 games/color, "always-wins-black / never-loses-white" can't be
+    distinguished from a lucky 10-game sample. The scale verdict needs mature, comparable-strength, larger-
+    sample reads; the current evals can't support it.
 - **Still pending (the key enabler):** the metric-change bead — rank/allocate by **distance-to-100%**
   (lookahead4 black-win + white-non-loss from the shipped color-split), NOT saturated anchored elo, + raise
   eval games-per-baseline. Without it the v9 ladder risks being judged by the same blind ruler that made v8
