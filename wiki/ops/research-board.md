@@ -350,6 +350,32 @@ verified H2H winners.
 `.beads/issues.jsonl` on `main`, which blocks a `feat→main` merge with "local changes would be
 overwritten" — always `git commit -- .beads/issues.jsonl` FIRST, then merge.)*
 
+## v9 PROPOSAL — SCALE-UP (researcher proposes; Jason's call to launch; 2026-05-27)
+
+The v8 arc concluded that **nothing in the gomocup-AZ survey beats the scalar value-discount champion
+*at the current scale*** — and that scale is the load-bearing caveat. The derby races at `small`
+(`n_filters=64, n_blocks=4`, ~0.8M params); presets `medium` (96×6) and `large` (128×10) exist, and
+**AlphaGomoku (Gomocup #2) runs ~128 filters × 8 blocks** — so our net is **2–4× smaller than the strong
+engines**. Two evidence-grounded reasons this is the next axis:
+
+1. **The champion has saturated the small net.** Anchored elo pins ~1700–1811, and the color-split
+   shows it beats *every* in-repo baseline with **no white-loss tail** (perfect/drawn white vs
+   heuristic/lookahead). At `small` there is no headroom left to measure — the ladder is maxed.
+2. **The "levers don't help / stacking hurts" verdict may be a small-net CAPACITY artifact, not a
+   property of the levers.** WDL/global-pool/aux/recency all add representational load; a 64×4 net is
+   capacity-bottlenecked, so they compete for scarce capacity and wash out or hurt. At 128×8 (ample
+   capacity) they may finally **compound** — i.e. the v8 survey deserves a re-run at scale before WDL et
+   al. are written off. (Hypothesis, not certainty — but the cheapest way to find out.)
+
+**Proposed v9:** scale the net up (`small`→`medium`/`large`, toward AlphaGomoku's 128×8) **at 9×9 first**
+(fast iteration), with **Rapfi as the primary yardstick** (the in-repo baselines are saturated, so future
+Δelo/wall must be measured against the external engine, per-color via the now-shipped color-split). Race
+a small scale-ladder (champion recipe at small / medium / large) + **re-test the top gomocup-AZ levers
+(WDL, global-pool) on the larger net** to see if capacity unlocks them. **15×15** (the real Gomocup board)
+is the eventual target but a bigger, slower jump — do it *after* the 9×9 scale-up characterizes the recipe.
+Open question for Jason: is the goal "strongest 9×9 player" (scale at 9×9) or "Gomocup-ready" (jump to
+15×15 sooner)? That's the fork only you can call.
+
 ## Rules
 
 - **Race to 140 epochs.** 140 is the milestone because that's roughly where a
