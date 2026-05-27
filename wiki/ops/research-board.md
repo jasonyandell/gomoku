@@ -75,8 +75,8 @@ Six candidates were **red-teamed** (background reviewer) against the v1→v8 ver
 
 | # | candidate | red-team verdict | why | status |
 |---|---|---|---|---|
-| 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **BUILT + RACING** as `derby-x-wdl` (bead `derby-cgf` gated→built→raced by the factory in <20 min, commit 8100f87; scalar default byte-identical, 16 new tests). WDL ckpt can't warm-start a scalar champion → **FRESH-start lane** (judge on climb-RATE). 2026-05-27 06:48Z: elo **751 @ 5.2 min, Δelo/hr 4185 = steepest on the board.** |
-| — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | **RACING** as `derby-x-gumbel-m8` (swapped in, retired vdisc-097, commit 1068fb2). Too young to read (eval pipeline lags). |
+| 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **BUILT + RACING** as `derby-x-wdl` (bead `derby-cgf` gated→built→raced by the factory in <20 min, commit 8100f87; scalar default byte-identical, 16 new tests). WDL ckpt can't warm-start a scalar champion → **FRESH-start lane** (judge on climb-RATE). Climb: 751 @ 5min → **1444 @ 15.7min, Δelo/hr 4032, beat-heuristic ✓** (07:09Z). Strong fresh-start trajectory. |
+| — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | **RACING** as `derby-x-gumbel-m8` (swapped in, retired vdisc-097, commit 1068fb2). **1281 @ 16.2min, Δelo/hr 4977 = steepest on the board, beat-heuristic ✓** (07:09Z). |
 | 2 | draw-contempt (`drawValue`) | **KILL standalone** | a knob *on* the WDL head (follow-on sweep, not its own cell); also conflicts with the White "force-the-draw" objective (`derby-7ic`) → needs color-split eval, don't run blind | folded into the WDL line (future cell) |
 | 3 | LCB root move selection | **KILL** | written against visit-count selection; production is **Gumbel SH argmax over completed-Q** (`self_play.py:548`); no per-node variance accumulator (scalar `W` only); redundant with Gumbel's `sigma(q_hat)`; C-hot-path cost | rejected — recorded so it's not re-proposed |
 | 4 | variance/uncertainty-scaled PUCT | **KILL** | no variance state + wrong engine (SH governs the root, not per-node cPUCT); closest analog v3 `forced` landed mid-tier *below* Gumbel; high C build cost, low expected Δelo | rejected |
@@ -92,11 +92,13 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   0.0 = byte-identical). Under 60-70% draws the sharp target concentrates mass on 1-2 defensive
   moves and the net loses the search's runner-up structure; the soft target re-injects it (KataGo
   added it for exactly this under-taught-drawish reason). ~6 lines in `train.py:compute_loss`,
-  orthogonal to value-discount (value head) + VCF (target). Code-heavy bead, `open` → factory.
-- **Queued runners-up (file as a lane frees):** `derby-x-surprise-weight` — per-sample loss
-  weight `1 + λ·KL(search_pi ‖ net_prior)` (teach harder where search disagreed; we already
-  compute `policy_kl` per batch); `derby-x-playout-weight` — weight by SH visit-confidence
-  (touches the record payload, so weaker on the no-slow-gen constraint).
+  orthogonal to value-discount (value head) + VCF (target). **BUILT in ~6 min (commit 7450019,
+  CLOSED); cell live, waiting as a swap-pool candidate (board full).**
+- **Queued runners-up — HELD on sequencing discipline:** `derby-x-surprise-weight` (per-sample
+  loss weight `1 + λ·KL(search_pi ‖ net_prior)`) and `derby-x-playout-weight` (SH visit-confidence
+  weight) are both *policy-signal-enrichment* levers **correlated with soft-policy** — file them
+  only after soft-policy's result is known (if soft-policy wins, they're well-motivated; if it
+  loses, they're likely weak too). Don't fire correlated bets blind.
 - **Multi-knob future study (NOT derby-shaped):** our optimizer is bare `AdamW(lr)` with no
   scheduler/warmup/grad-clip; both upstreams use SGD-momentum + LR warmup/decay + clip — real
   headroom but violates one-lever-per-cell, so it's a deliberate later study, not a single cell.
@@ -105,12 +107,15 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (D4 = the full gomoku symmetry group, we're already complete); a score/margin head (degenerate
   for win/draw/loss).
 
-**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min):** BOTH researcher cells are
-live and racing on the v8 board (`derby-x-wdl` fresh-start, steepest Δelo/hr; `derby-x-gumbel-m8`
-maturing). The board is full (4 lanes), so rather than crowd it the loop **registered the next
-candidate as a bead** (`derby-79l` soft-policy, `open` → factory) — the runner swaps the built
-cell in when `derby-x-wdl`/`derby-x-gumbel-m8` are characterized or a lane frees. Researcher
-monitors only — the derby-runner owns the GPU swaps. North star = **Δelo/wall**.
+**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 2):** THREE researcher
+contestants now built — `derby-x-wdl` + `derby-x-gumbel-m8` **racing** (both beat-heuristic,
+the two steepest Δelo/hr on the board), `derby-x-soft-policy` **built + waiting** as a swap-pool
+candidate (board full at 4 lanes). The factory turns a bead → built cell in ~6-20 min. The loop
+**promoted nothing live this tick by design** (sequencing discipline — the cheap policy-signal
+runners-up are correlated with the unraced soft-policy). Instead it is advancing research on an
+**orthogonal axis (network architecture: SE/bottleneck blocks)** to have an uncorrelated candidate
+ready when a lane frees. Researcher monitors only — the derby-runner owns the GPU swaps. North
+star = **Δelo/wall**.
 
 ## Rules
 
