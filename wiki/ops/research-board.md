@@ -82,8 +82,8 @@ Six candidates were **red-teamed** (background reviewer) against the v1→v8 ver
 
 | # | candidate | red-team verdict | why | status |
 |---|---|---|---|---|
-| 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **BUILT + RACING** as `derby-x-wdl` (bead `derby-cgf` gated→built→raced by the factory in <20 min, commit 8100f87; scalar default byte-identical, 16 new tests). WDL ckpt can't warm-start a scalar champion → **FRESH-start lane** (judge on climb-RATE). Climb: 751 @ 5min → **1444 @ 15.7min, Δelo/hr 4032, beat-heuristic ✓** (07:09Z). Strong fresh-start trajectory. |
-| — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | **RACING** as `derby-x-gumbel-m8` (swapped in, retired vdisc-097, commit 1068fb2). **1281 @ 16.2min, Δelo/hr 4977 = steepest on the board, beat-heuristic ✓** (07:09Z). |
+| 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **BUILT + RACING** as `derby-x-wdl` (bead `derby-cgf` gated→built→raced by the factory in <20 min, commit 8100f87; scalar default byte-identical, 16 new tests). WDL ckpt can't warm-start a scalar champion → **FRESH-start lane** (judge on climb-RATE). Climb: 751→1567 peak. **✅ RR3 VERDICT (158ch, 72d0373): wdl +35 H2H — the STRONGEST NEW lever, still maturing (#1 bet VALIDATED). The drawish-fit hypothesis confirmed in head-to-head play; only the warm champion (+71) is ahead, and wdl is undervalued by the fresh-start lag → the one to keep watching.** |
+| — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | RACING as `derby-x-gumbel-m8` (peak 1634). **RR3 VERDICT: −10 H2H = NEUTRAL, no clear win** — m=16 was already fine; the search-breadth tweak is a wash. Kept (maturing) but not a winner. |
 | 2 | draw-contempt (`drawValue`) | **KILL standalone** | a knob *on* the WDL head (follow-on sweep, not its own cell); also conflicts with the White "force-the-draw" objective (`derby-7ic`) → needs color-split eval, don't run blind | **WDL-sequenced follow-on family** (only if `derby-x-wdl` clears the field): draw-contempt (`--draw-value`); **per-action (Q) WDL head** (AlphaGomoku `actionValues` — a WDL Q per move as a selection prior, the last un-triaged AlphaGomoku value-axis lever; Class-C new head). Both wait on the WDL verdict. |
 | 3 | LCB root move selection | **KILL** | written against visit-count selection; production is **Gumbel SH argmax over completed-Q** (`self_play.py:548`); no per-node variance accumulator (scalar `W` only); redundant with Gumbel's `sigma(q_hat)`; C-hot-path cost | rejected — recorded so it's not re-proposed |
 | 4 | variance/uncertainty-scaled PUCT | **KILL** | no variance state + wrong engine (SH governs the root, not per-node cPUCT); closest analog v3 `forced` landed mid-tier *below* Gumbel; high C build cost, low expected Δelo | rejected |
@@ -99,14 +99,16 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   0.0 = byte-identical). Under 60-70% draws the sharp target concentrates mass on 1-2 defensive
   moves and the net loses the search's runner-up structure; the soft target re-injects it (KataGo
   added it for exactly this under-taught-drawish reason). ~6 lines in `train.py:compute_loss`,
-  orthogonal to value-discount (value head) + VCF (target). **BUILT in ~6 min (commit 7450019);
-  SWAPPED IN + RACING (commit 210b105, the runner retired result-locked `vdisc-099` for it).
-  Just started — too young to read.**
-- **Queued runners-up — HELD on sequencing discipline:** `derby-x-surprise-weight` (per-sample
-  loss weight `1 + λ·KL(search_pi ‖ net_prior)`) and `derby-x-playout-weight` (SH visit-confidence
-  weight) are both *policy-signal-enrichment* levers **correlated with soft-policy** — file them
-  only after soft-policy's result is known (if soft-policy wins, they're well-motivated; if it
-  loses, they're likely weak too). Don't fire correlated bets blind.
+  orthogonal to value-discount (value head) + VCF (target). BUILT (7450019), RACED (210b105).
+  **❌ RR3 VERDICT (158ch): soft-policy −110 H2H = CLEAR DUD, plateaued → retired for `derby-x-mish`.
+  The policy-signal axis FAILED.** Climbed fast early (steepest fresh Δelo/hr) but couldn't beat
+  the field at maturity — the fresh-start-climb-rate-is-not-a-verdict lesson, exactly why we wait
+  for H2H.
+- **Queued runners-up — DROPPED (sequencing discipline VINDICATED):** `derby-x-surprise-weight`
+  (per-sample `1 + λ·KL(search_pi ‖ net_prior)`) and `derby-x-playout-weight` (SH visit-confidence)
+  were *policy-signal-enrichment* levers correlated with soft-policy — **HELD pending its verdict,
+  now DROPPED** since soft-policy was a −110 dud (the whole axis failed). Never filed → never flooded
+  the board with correlated losers. This is the payoff of not firing correlated bets blind.
 **Round-3 — ARCHITECTURE axis (deep source read of AlphaGomoku/KataGo net code, 2026-05-27):**
 
 - **REGISTERED `derby-sib` → cell `derby-x-mish`** (the arch pick): swap ReLU→**Mish** activation
@@ -115,8 +117,9 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (verified): our native-C MCTS engine does NOT compute the forward — it does tree ops and calls
   back to a PyTorch `evaluate_planes` evaluator (`_mcts_native.c` has no conv/relu). So an
   activation swap needs NO native-C kernel* (correcting the initial worry). Fresh-start (ReLU-
-  trained weights misbehave under Mish), judge on climb-rate. **BUILT (commit 793a86a, derby-sib
-  CLOSED, +mish test); cell live, QUEUED for swap-in when a lane frees.**
+  trained weights misbehave under Mish), judge on climb-rate. **BUILT (commit 793a86a); SWAPPED IN
+  + RACING (commit 72d0373, replaced the −110 dud soft-policy). 926 @ 10.6min, Δelo/hr 6124 fresh —
+  too young to read; verdict pending.**
 - **SE (squeeze-excitation) blocks — DEPRIORITIZED, not filed:** the best *structural* uncorrelated
   lever (AlphaGomoku defaults to SE inside ConvNext; KataGo has none; it's a per-channel
   multiplicative *gate*, distinct from our global-pool's additive *bias*). But on our ~0.8M-param
@@ -136,16 +139,16 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (D4 = the full gomoku symmetry group, we're already complete); a score/margin head (degenerate
   for win/draw/loss).
 
-**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 5: STEADY-STATE monitoring):**
-FOUR researcher contestants built across FOUR distinct axes; THREE now **racing** — `derby-x-wdl`
-(value-rep, peak 1444), `derby-x-gumbel-m8` (search, peak 1309), `derby-x-soft-policy` (policy-
-signal, just swapped in for the retired `vdisc-099`) — plus champion `mate-discount` (1718). The
-two fresh value/search cells hold the **steepest Δelo/hr on the board** (the fresh-start climb-rate
-signal). `derby-x-mish` (activation) BUILT + QUEUED for the next free lane. The loop is now in
-**steady state: propose at the rate the board frees lanes**, not faster — it promotes nothing new
-until a verdict lands. The sequenced backlog (all PENDING their trigger result): policy-signal
-runners-up ← soft-policy; SE ← Mish; the WDL follow-on family (draw-contempt + per-action-Q head)
-← WDL. Researcher monitors only — the derby-runner owns the GPU swaps. North
+**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 14: FIRST VERDICT landed):**
+The RR3 H2H (158ch) is the loop's first real result on the gomocup-AZ levers, and it's clean:
+**WDL (value-rep) is the validated winner (+35, strongest new lever, maturing); soft-policy
+(policy-signal) is a −110 dud (retired); gumbel-m8 (search) is neutral (−10); Mish (activation)
+just swapped in, TBD.** Board now: `gumbel-m8`, `mate-discount` (champion +71), `wdl`, `mish`.
+**Sequencing discipline paid off:** the soft-policy follow-ons (surprise-weight, playout-weight)
+were HELD pending this verdict and are now DROPPED — never filed, never flooded the board with
+correlated losers. **Forward:** carry WDL as the validated lever (it's already `champion + WDL`,
+maturing toward the champion); watch Mish for a `WDL + Mish` stack; the defense axis (`derby-1xf`)
+is the big future swing. Researcher monitors only — the derby-runner owns the GPU swaps. North
 star = **Δelo/wall**.
 
 ### Round-4 — DEFENSE axis: maps to EXISTING `derby-1xf` (no duplicate filed)
@@ -194,16 +197,25 @@ chosen on **four orthogonal axes** so they can compound rather than overlap:
 | search breadth | `derby-x-gumbel-m8` | Gumbel-SH root width |
 | activation | `derby-x-mish` | tower nonlinearity |
 
-**v9 thesis:** whichever cells **beat the champion head-to-head** (round-robin over the
-`_peaks`, since anchored elo saturates ~1700 — the runner's call once the fresh lanes mature),
-stack incrementally onto the champion lineage, ONE added lever per cell (like v5→v6), exploiting
-the orthogonality. A clean full stack would be `champion + WDL + soft-policy (+ Mish / + gumbel-m)`
-— but build it stepwise so each delta is attributable, and watch for the one real interaction
-risk: WDL changes the value target's *representation* while soft-policy enriches the *policy*
-target, so they're on different heads (clean to stack); Mish (activation) and gumbel-m (search)
-are independent of both. **Do NOT pre-stack before the single-lever verdicts** — the v4 lesson
-(anchored leads were undertraining artifacts; H2H reshuffled the order) means a lever that looks
-strong on a fresh-start climb can still lose H2H. Stack only verified H2H winners.
+**v9 thesis:** whichever cells **beat the champion head-to-head** stack incrementally onto the
+champion lineage, ONE added lever per cell (like v5→v6), exploiting the orthogonality. **Do NOT
+pre-stack before the single-lever verdicts** — the v4 lesson (anchored leads were undertraining
+artifacts; H2H reshuffled the order).
+
+**UPDATED after RR3 (158ch) — the axes have spoken (interim, fresh lanes still maturing):**
+- ✅ **value-rep (WDL) = the WINNER** (+35 H2H, strongest new lever, still maturing). `derby-x-wdl`
+  IS already `champion + WDL` — so the first v9 stack is *on the board* and just needs to mature
+  past the champion (+71). This is the lineage candidate to carry forward.
+- ❌ **policy-signal (soft-policy) = OUT** (−110 dud). Its follow-ons dropped. Do not stack.
+- ⚪ **search-breadth (gumbel-m8) = neutral** (−10) — not a stack ingredient.
+- ⏳ **activation (Mish) = TBD** (just swapped in). If Mish beats the champion H2H, `WDL + Mish`
+  is the clean next stack (both are independent of each other — value head vs nonlinearity).
+- 🔬 **defense axis (`derby-1xf`)** remains the highest-value *future* lever (hits the core
+  problem) but is blocked + correlated with VCF.
+
+So the narrowed v9 lead = **carry WDL forward** (the one validated new lever), watch Mish for a
+`WDL + Mish` stack, and treat defense (`derby-1xf`) as the big swing once unblocked. Stack only
+verified H2H winners.
 
 *(Loop operational gotcha, for future researcher-loop sessions: `bd create`/`bd update` stage
 `.beads/issues.jsonl` on `main`, which blocks a `feat→main` merge with "local changes would be
