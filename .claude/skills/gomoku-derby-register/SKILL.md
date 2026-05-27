@@ -17,6 +17,15 @@ The intake playbook: turn an idea into a derby contestant **correctly**, so the 
 ## The operating model (Jason's, non-negotiable)
 - **The derby owns the GPU; registration does not.** You only land a cell or file a bead. Two GPU executors collide.
 - **"You can't pick wrong as long as you keep things moving."** Everything gets raced eventually. A clean one-lever cell is never a wrong proposal.
+- **SUBMIT research; do NOT make RANKING decisions (Jason, 2026-05-27).** The researcher's job is to
+  submit *contestants* (cells), surveys, and read-only measurement tools — and then **let the ranking
+  handle it from there.** How the derby SCORES / ALLOCATES / RANKS lanes (the success metric, `pick_priority`,
+  eval game-counts, what counts as "best") is the **ranking owner's** (the derby-runner's) domain, NOT the
+  researcher's. If a metric looks wrong (e.g. anchored elo saturates while the real goal is unmet), submit
+  the **observation + a read-only tool** (e.g. `scripts/report_100pct.py`) and let the ranking owner decide
+  — do **NOT** file a bead that rewires the success metric / `pick_priority` / scoring. (Anti-pattern that
+  triggered this rule: a "rank by distance-to-100% instead of anchored elo" bead — a ranking decision dressed
+  as research. Closed; re-filed as a pure signal-submission.)
 
 ## THE FORK — config-only vs code-heavy
 
@@ -87,6 +96,7 @@ The runner swaps the cell into a lane when one **plateaus / result-locks**, then
 - ❌ Multi-lever cells. ❌ GPU steps inside a `derby-idea` bead.
 - ❌ Over-bead a config-only lever (skip the bead — the runner just adds the cell).
 - ❌ Re-register a lever the research board already ruled dead.
+- ❌ **File a bead that changes the RANKING** — the success metric, `pick_priority`, scoring, or eval-weighting/allocation. That's the ranking owner's (derby-runner's) call. Submit a read-only tool + the observation and let the ranking handle it.
 - ❌ `bd create` from a sibling worktree, or assign the bead — both make it invisible to the bead-runner (per-checkout store + no remote; assigned drops out of `bd ready`). Create from `/Users/jason/code/gomoku`, leave it `open`+UNASSIGNED.
 
 ## Worked examples
