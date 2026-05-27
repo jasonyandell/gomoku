@@ -176,16 +176,17 @@ vcf-deep (v5 deeper exact-mate solver +44). A clean 2×2 over {recency, vcf-deep
 
 | cell | = WDL + … | status |
 |---|---|---|
-| `derby-x-wdl` | (alone) | racing |
-| `derby-x-wdl-recency` | + recency | racing |
-| **`derby-x-wdl-deep`** | + vcf-deep | **REGISTERED (config-only)** → runner swaps in |
-| **`derby-x-wdl-max`** | + recency + vcf-deep (maximal) | **REGISTERED (config-only)** → runner swaps in |
+| `derby-x-wdl` | (alone) | ✅ raced — result-locked at peak 1567 (+35 H2H job done), retired; now carried in the stacks |
+| `derby-x-wdl-recency` | + recency | 🏁 RACING |
+| `derby-x-wdl-max` | + recency + vcf-deep (maximal) | 🏁 RACING (runner swapped it in, commit 20e2924 — picked the maximal stack) |
+| **`derby-x-wdl-deep`** | + vcf-deep | queued (available; runner swaps in at next free lane) |
 
 All config-only (every lever is now an existing flag — no bead). **adjudicate (`--max-plies 45`)
 deliberately EXCLUDED** — it won v6 standalone but REGRESSED when stacked in v8, so it's not a
-"best we found" ingredient. The runner retires duds (e.g. `gumbel-m8` −48) to swap these in; a
-round-robin over {wdl, wdl-recency, wdl-deep, wdl-max, champion} then tells which combination is
-the best player. Researcher registers + monitors; the derby-runner owns the GPU swaps.
+"best we found" ingredient. **Phase is LIVE:** the two recency stacks (`wdl-recency`, `wdl-max`)
+are racing; a round-robin over {wdl-recency, wdl-deep, wdl-max, champion} then tells which
+combination is the best player (and whether recency/vcf-deep COMPOUND on WDL or overlap).
+Researcher registers + monitors; the derby-runner owns the GPU swaps.
 
 ### Round-4 — DEFENSE axis: maps to EXISTING `derby-1xf` (no duplicate filed)
 
