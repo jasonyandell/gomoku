@@ -38,6 +38,19 @@ and races it. (Full model: `wiki/topics/research-loop.md`; memory
   (max-plies 45 actively harmful — swap vindicated). Takeaway: value-discount and
   recency are each real wins on the vcf+gp base; truncation hurts; the combo needs an
   equal-footing rematch before calling it.
+- **v8 RR2 VERDICT (73 chunks, `round_robin_73chunks.json`):** the top THREE
+  tightened into a cluster — **mate-discount +93** (0.98 value-discount, still #1) ·
+  **disc-recency +82** (the combo — matured from +16 @52ch to +82, confirming it's
+  competitive) · **buffer-comp +82** (recency). control −97; **vdisc-097 −160** (0.97).
+  - **Sharper value-discount (0.97) is WORSE** than 0.98 by this peak — the discount
+    optimum is at/above 0.98, not below. (Caveat below: vdisc-097's RR peak was its
+    under-trained 1555; it later climbed to 1620, so −160 is partly stale.)
+  - **METHOD CAVEAT — fresh-start H2H lag (recurring, now seen twice):** a lane that
+    starts fresh seed-0 (`disc-recency`, `vdisc-097`) is *systematically undervalued*
+    by round-robin until it matures — its saved `peak.pt` lags its live trajectory.
+    disc-recency: +16→+82 across 21 chunks; vdisc-097: anchored 1555→1620 *after* its
+    −160 RR. **Rule: never retire a still-climbing fresh lane on an H2H verdict; judge
+    fresh lanes on climb-RATE, warm-resumed lanes on peak H2H.**
 - **Resume:** `python scripts/delo_derby.py --board scripts/derby_v8_board.json --resume`
   → confirm ONE `delo_derby` PID → `nohup bash scripts/derby_watchdog.sh
   scripts/derby_v8_board.json >/dev/null 2>&1 &`. A derby-runner **cron** (~30 min)
