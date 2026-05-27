@@ -3513,3 +3513,31 @@ and experiment-ledger "LF1".
 on NaN/crash/plies-collapse/completion; cleans up orphaned workers at e1000
 or on early exit. TQ verdict on adopting the recipe into the production
 lineage stays Jason's call.
+
+## 2026-05-27 — Cross-game value sidecar: the live-flooding perf trap
+
+New lever (bead `derby-eft`, cell `derby-x-crossgame`): **cross-game value
+aggregation** — blend single-game `z` with a cross-game discounted-MC aggregate to
+de-noise value targets (the opening-convergence / "mushy value" problem). It took
+**three principled fixes that each passed CPU tests and still failed the derby
+runner's LIVE re-race**, because per-epoch ingest cost scales with self-play
+**inflow** and the CPU tests didn't replicate flooding:
+
+- `derby-eft` (impl) → recency-decay was O(store)/cycle.
+- `derby-eda` → lazy O(1) decay `scale`, but `save()→_renormalize()` re-introduced an
+  O(store) per-epoch fold; store grew unbounded (116k→234k, 14MB); epoch wall
+  14s→128s.
+- `derby-4bq` → capped store to opening plies (`ply<10`) + decoupled renormalize from
+  save; bounded the store, but the per-position 8-symmetry pure-Python canonical
+  keygen still runs on EVERY ingested position *before* the ply filter → flat ~10×
+  tax under flooding. Runner reverted again (`c575b2f`), reopened `derby-eda`,
+  hardened its skill to verify re-races at full load (epoch 50+, `7ec7637`).
+- Round 4 (in flight): ply-gate the keygen + vectorize `canonical_key` (property-test
+  byte-identical) + flood-scale regression test. CPU tests are necessary but NOT
+  sufficient — the runner's full-load live re-race is the real gate; if round 4
+  misses, the lever is shelved pending design attention.
+
+Synthesis + the durable lesson: `wiki/topics/cross-game-value-sidecar.md`. Lesson:
+training-loop ingest perf must be validated under live flooding, not a CPU sim —
+sibling of the perf-bench lesson (`wiki/topics/perf-bench-vs-real-training-cost.md`).
+(Captured by the bead-runner session, 2026-05-27.)
