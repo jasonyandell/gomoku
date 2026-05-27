@@ -38,6 +38,14 @@ Don't trust the worker's report alone. Independently: `bd show <id>` is CLOSED (
 ## Wait efficiently (don't burn model time)
 Do NOT poll on a model timer. Run a **60s background bash watcher** (`bead_watch.sh`, launched with `run_in_background`) that computes a **my-lane signature** — `bd ready` id-set + the statuses of beads you're tracking + `derby_alive` (0/1) — and **exits (re-invoking you) only on an actionable change**, plus a heartbeat. Deliberately keep global `closed`/`total` counts OUT of the signature (the orchestrator churns them with its own beads → false wakes). Relaunch the watcher on every wake. The harness re-invokes you on worker completion separately. (This replaced an hourly ScheduleWakeup loop — same coverage, ~zero idle model cost.)
 
+## Look for modified issues (see the other end's reply)
+The researcher/orchestrator does not message you — when it disagrees with a decline or answers your feedback, it **replies by MODIFYING the bead** (re-arguing the description / adding notes). `bd` does not notify on a modification, so **you are blind to that reply unless you watch for it.**
+- The watcher carries a **`reframe` cksum** over `bd show` of the beads you've declined / are tracking; when one is **modified, you've got a reply — read it.** (Extend the watcher's id list as you decline more.)
+- **Re-evaluate against the SAME bar you declined on. The standard does not bend because a bead was re-argued.** If it still fails the same bar, re-affirm the decline in one line (so the loop terminates, no ping-pong) and keep its routing. Dispatch ONLY if the modification genuinely makes it a clean code-only unit by the existing rule — re-argument alone is not that.
+- **Name the exact bar precisely when you decline** — `gpu` (needs a GPU run to build), `needs-live-validation` (hot-path; the runner's live re-race is the gate), or `decision-loop-ownership` (changes the derby's ranking/priority/allocation decision — the runner's regardless of buildability). A vague reason gets the wrong rebuttal. Tag the bead `runner-domain` so it routes to the derby-runner and leaves your dispatch pool.
+
+Worked example: `derby-7ku` (rank-by-distance-to-100%) was reframed "CODE-ONLY, mergeable" to rebut a decline that vaguely cited "the GPU-scoring loop." But the real bar was **decision-loop ownership** — it changes `pick_priority`'s ranking key, which buildability doesn't clear. Re-evaluated on the modification -> still runner-domain -> re-affirmed + `runner-domain` label, **not advanced.**
+
 ## Don'ts
 - ❌ Run the GPU (`delo_derby.py`/`run_sweep.py`/training/eval/self-play). You dispatch code; the derby runner owns the GPU.
 - ❌ Un-defer a deferred bead, or dispatch an orchestrator-assigned / epic / GPU-infra / human-gated bead.
@@ -56,3 +64,7 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 - **A fix that enables a decisive "no" is a win.** `derby-b6r` made the VCT teacher *raceable*; the runner then cleanly rejected the lever (H2H −69). The loop learned something true — that's success, not waste.
 - **Workers now take ~1h** (worktree `uv pip install -e .` + contended `run_sweep.py` CELLS merges). That's normal as long as edits advance. Liveness-check via worktree file mtimes + `git -C <wt> log/status` + `ps` (not the JSONL transcript); only nudge (SendMessage) if it's edit-less AND process-less after ~1h.
 - **The watcher signature must be my-lane-only.** A first cut keyed on global `closed` count woke the runner for every orchestrator bead close (derby-1xf). Dropped global counts → wakes only on `bd ready` changes, tracked-bead status, derby up/down.
+
+### 2026-05-27 - blind to the researcher's reply (the real comms gap)
+- Declined `derby-7ku` (runner-domain) - correctly. The researcher REPLIED by editing the bead to rebut, and I never saw it: `bd` doesn't notify on modification and the watcher only keyed on the ready-set + statuses. Surfaced only when Jason asked "what does beads tell you about 7ku." The decline was right and STAYED right - the gap was pure VISIBILITY, not routing or advancement.
+- Fix: the watcher carries a `reframe` cksum over `bd show` of declined/tracked beads, so a modification (a reply) now wakes me. Re-evaluate against the SAME bar; the standard doesn't bend. Name the exact bar on decline so replies target the real thing (or the other end learns it's fundamentally not ours).
