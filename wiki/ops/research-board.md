@@ -51,7 +51,14 @@ and races it. (Full model: `wiki/topics/research-loop.md`; memory
     disc-recency: +16→+82 across 21 chunks; vdisc-097: anchored 1555→1620 *after* its
     −160 RR. **Rule: never retire a still-climbing fresh lane on an H2H verdict; judge
     fresh lanes on climb-RATE, warm-resumed lanes on peak H2H.**
-- **Resume:** `python scripts/delo_derby.py --board scripts/derby_v8_board.json --resume`
+- **v8 RR3 — gomocup-survey levers (158 chunks, `round_robin_158chunks.json`):**
+  **mate-discount +71 🥇** (champion still #1 — base recipe at maturity is hard to beat) ·
+  **wdl +35 🥈** (WDL {w/d/l} value head — the strongest NEW lever, still maturing so
+  possibly undervalued; the one to keep watching) · vdisc-099 +15 (0.99 anchor) ·
+  gumbel-m8 −10 (m=16→8: neutral, no clear win) · **soft-policy −110** (soft-policy aux
+  weight 0.15: clear dud, plateaued — retired for `derby-x-mish`). Interim (fresh lanes
+  still maturing), but the ranking is clean: WDL is the promising survivor; soft-policy
+  and gumbel-m8 don't beat the champion.
   → confirm ONE `delo_derby` PID → `nohup bash scripts/derby_watchdog.sh
   scripts/derby_v8_board.json >/dev/null 2>&1 &`. A derby-runner **cron** (~30 min)
   drives swap/restock; the watchdog (startup-grace) keeps it alive.
