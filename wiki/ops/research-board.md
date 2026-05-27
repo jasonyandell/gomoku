@@ -218,8 +218,23 @@ under-specs, recorded here for whoever builds it:
    **Correlated with VCF (same solver/seam) → test STACKED on the champion, not standalone**; depends
    on the color-split eval (`derby-gi7`) to measure the white-side loss-rate target.
 
-This is the highest-value *future* lever (it hits the core problem) but it's BLOCKED upstream and
-correlated with the offense teacher — so it's a post-v8/v9 candidate, not a board-crowder now.
+**SHIPPING NOW (2026-05-27, Jason: "investigate blocked beads… review for staleness and ship it
+— I set those to blocked because they were half-formed, not bad"):** the loss-tail epic's two
+key beads are being de-staled + shipped:
+- ✅ **`derby-gi7` (color-split eval) SHIPPED** — per-color (black/white) W/D/L in `eval_results.jsonl`,
+  backward-compatible, 4 new tests + 16 eval tests green, CPU-only (merged `dc552c1`, branch
+  `feat/color-split-eval`, closed). This is the epic's *acceptance instrument* (measures white-side
+  loss-rate) → it **unblocked `derby-1xf`**.
+- 🔨 **`derby-1xf` (defensive teacher) BUILDING** — claimed (in_progress); a code-only worktree
+  subagent is building the value-only defensive teacher (relabel z=−1 when the OPPONENT has a proven
+  VCF win, via swapped-plane `solve_vcf` reuse) with the **gen-cost gate** (skip-when-offense-fired +
+  cheap danger pre-scan → quiet positions cost ZERO solver calls) and the **400-fuzz zero-false-
+  positive correctness gate** (mirror `tests/test_vcf.py`), byte-identical when off. Deliverable: cell
+  `derby-x-defense` (champion + `--defense-teacher`). Policy/refutation mode deferred (defense is
+  non-unique). The runner races it once landed; the color-split eval now measures its white-side win.
+
+This is the highest-value lever (it hits the wiki's *core* problem — defense), now unblocked and in
+build. `derby-58f` (VCT teacher, P3) stays blocked on its own correctness gate (`derby-y8r`).
 
 ### Toward v9 — the gomocup-AZ STACKING thesis (planned ahead, gated on v8 verdicts)
 
