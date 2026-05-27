@@ -848,6 +848,48 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # === v9 SCALE-LADDER (2026-05-27, Jason-gated: "go larger models, keep the evals,
+    # target 100% = win-all-black/never-lose-white across heuristic+lookahead2+lookahead4").
+    # The v8 champion saturated ANCHORED elo (~1700) but NOT the 100% target — it's 4-0-6
+    # (six DRAWS) as black vs lookahead4. Hypothesis: the small net (64x4) lacks capacity to
+    # convert those draws to wins. These clone the champion recipe VERBATIM and change ONLY
+    # the net size (config-only: size preset in model.py SIZES). small(64x4)=champion baseline,
+    # medium(96x6), large(128x10, ~= AlphaGomoku's 128x8). Judge by lookahead4 black-win-rate
+    # (the binding gap), NOT anchored elo (saturated). Fresh-start (bigger net != small ckpt shape).
+    "derby-v9-medium": Cell("derby-v9-medium", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="medium", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "derby-v9-large": Cell("derby-v9-large", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # 'x-vct' = extend the exact OFFENSIVE teacher from VCF to VCT (bead derby-6us /
     # derby-rxf). VERBATIM clone of derby-v7-mate-discount (the reigning champion:
     # gumbel-root + value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1

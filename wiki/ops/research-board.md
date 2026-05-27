@@ -385,6 +385,17 @@ eval) — not anchored elo.** That makes the research productive again.
 
 15×15 stays the *eventual* target, attempted only after the 9×9 recipe hits (or near-hits) 100%.
 
+**REGISTERED (intake for the gated v9):**
+- **Scale-ladder cells `derby-v9-medium` (96×6) + `derby-v9-large` (128×10)** — config-only, verbatim
+  champion recipe + only the net `size`. The on-board small champion (`mate-discount`, 64×4) is the
+  baseline rung; the runner swaps these in (retire the RR5 duds `wdl-max`/`wdl-recency` to free lanes).
+  Fresh-start (bigger net ≠ small-ckpt shape); judge by lookahead4 black-win-rate.
+- **Metric-change bead (P1, `derby-idea`/v9):** rank + allocate by **distance-to-100%** (lookahead4
+  black-win-rate + white-non-loss, from the shipped color-split fields), NOT saturated anchored elo +
+  raise eval games-per-baseline. **This is the key enabler** — without it the scale-ladder gets judged by
+  the same blind ruler that made v8 read "saturated." Runner/orchestrator domain (touches the derby's
+  GPU-scoring loop).
+
 ## Rules
 
 - **Race to 140 epochs.** 140 is the milestone because that's roughly where a
