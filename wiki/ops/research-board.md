@@ -162,7 +162,15 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (D4 = the full gomoku symmetry group, we're already complete); a score/margin head (degenerate
   for win/draw/loss).
 
-**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 18: v8 gomocup-AZ survey CONCLUDED):**
+**Loop status (2026-05-27, cron `4e4dcc03` — tick 31: v8 RESEARCH ARC CONCLUDED).** Full arc: gomocup-AZ
+single-lever survey → aggressive WDL-stacking → blocked-bead loss-tail epic. **Final verdict (RR5 @215):
+the scalar vcf+global-pool+value-discount champion (`mate-discount`, +154 and widening) beats everything
+the survey produced** — WDL is the lone positive new lever (+56) but never the champion, and stacking
+recency/vcf-deep on WDL HURTS (−36/−41). Plus the blocked-bead loss-tail epic shipped (gi7 + 1xf defense
+arm racing; VCT attack arm bounded, awaiting the runner's GPU smoke). **The deliverable research is done;
+the next axis (v9: bigger net / longer / 15×15) is a Jason call, not a within-v8 lever.** Detail of the
+single-lever survey conclusion (RR3/RR4) follows; aggressive-combo + blocked-bead sections above.
+
 Two H2H verdicts (RR3 @158, RR4 @174) closed the single-lever survey cleanly:
 
 | lever (axis) | H2H verdict | outcome |
@@ -190,17 +198,20 @@ vcf-deep (v5 deeper exact-mate solver +44). A clean 2×2 over {recency, vcf-deep
 
 | cell | = WDL + … | status |
 |---|---|---|
-| `derby-x-wdl` | (alone) | ✅ raced — result-locked at peak 1567 (+35 H2H job done), retired; now carried in the stacks |
-| `derby-x-wdl-recency` | + recency | 🏁 RACING |
-| `derby-x-wdl-max` | + recency + vcf-deep (maximal) | 🏁 RACING (runner swapped it in, commit 20e2924 — picked the maximal stack) |
-| **`derby-x-wdl-deep`** | + vcf-deep | queued (available; runner swaps in at next free lane) |
+| `derby-x-wdl` | (alone) | best new lever — **RR5 H2H +56** (lone #2, improved from +35) |
+| `derby-x-wdl-recency` | + recency | **RR5 H2H −36** — below plain WDL ⇒ recency does NOT compound on WDL |
+| `derby-x-wdl-max` | + recency + vcf-deep (maximal) | **RR5 H2H −41** — below plain WDL (anchored 1649 was a mirage) |
+| `derby-x-wdl-deep` | + vcf-deep | (never needed a lane — the stacking hypothesis was refuted first) |
 
-All config-only (every lever is now an existing flag — no bead). **adjudicate (`--max-plies 45`)
-deliberately EXCLUDED** — it won v6 standalone but REGRESSED when stacked in v8, so it's not a
-"best we found" ingredient. **Phase is LIVE:** the two recency stacks (`wdl-recency`, `wdl-max`)
-are racing; a round-robin over {wdl-recency, wdl-deep, wdl-max, champion} then tells which
-combination is the best player (and whether recency/vcf-deep COMPOUND on WDL or overlap).
-Researcher registers + monitors; the derby-runner owns the GPU swaps.
+**❌ AGGRESSIVE-COMBO VERDICT (RR5, 215 chunks, `round_robin_215chunks.json`, commit `a3bad90`):
+stacking on WDL HURTS — refuted.** Both stacks (`wdl-recency` −36, `wdl-max` −41) land *below* plain
+WDL (+56); the maximal stack's anchored 1649 was a mirage (H2H −41 — the v4/v5 anchored-vs-H2H lesson,
+again). And **`mate-discount` (the scalar vcf+global-pool+value-discount champion) is +154 and
+WIDENING** — decisively best. **Bottom line: NOTHING in the entire gomocup-AZ survey, even aggressively
+combined, beats the scalar value-discount champion.** WDL is a real positive lever (+56) but second to
+the champion; the levers do not compound. (adjudicate was excluded — v8-regressed.) **v8 research is
+CONCLUDED.** The next axis (v9: bigger net / longer training / 15×15) is a **Jason decision**, not a
+within-v8 lever.
 
 ### Round-4 — DEFENSE axis: maps to EXISTING `derby-1xf` (no duplicate filed)
 
