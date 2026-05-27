@@ -65,6 +65,24 @@ Shaped so a code-only session can land the cell with **no GPU run**:
 - **acceptance** = `py_compile scripts/run_sweep.py`; `'derby-x-<slug>' in run_sweep.CELLS`;
   flag-off byte-identical; new tests green; **no GPU run in the bead.**
 
+### Where the bead must live — the per-checkout store gotcha
+
+The bead is picked up by the **bead-runner**, a session that polls `bd ready` every ~60s
+from the **main checkout `/Users/jason/code/gomoku`** and dispatches clean CODE-ONLY beads
+to isolated worktree workers. But `bd` here is **embedded Dolt, per-checkout** — the DB
+lives at `/Users/jason/code/gomoku/.beads/embeddeddolt/` with **no remote configured**, so
+each checkout is its own island. Therefore:
+
+- **Create the bead from `/Users/jason/code/gomoku`** (`cd ~/code/gomoku && bd create …`) —
+  that is the one store the bead-runner polls.
+- **Never `bd create` from a sibling worktree** (`gomoku-<slug>`, `gomoku-gpu-broker`, …):
+  those carry only a **stale `.beads/issues.jsonl` snapshot** and no live DB, and with no
+  remote the bead is **invisible to the bead-runner** (this is why broker subtasks got
+  "lost").
+- **Leave it `open` + unblocked + UNASSIGNED** — the runner claims unassigned *ready* beads;
+  an assigned bead (even assigned to the runner) drops out of `bd ready`. Don't set
+  `assignee=orchestrator`.
+
 ## After registration — what the runner does (set expectations)
 
 The runner swaps the cell into a lane when one **plateaus / result-locks**, then judges it

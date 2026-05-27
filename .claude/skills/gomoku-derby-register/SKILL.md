@@ -54,6 +54,7 @@ Then it's "available" — the runner swaps it into a freed lane by judgement.
 ## Path B — code-heavy (the `derby-idea` bead)
 The bead must be shaped so a code-only session can land the cell with **no GPU run** (per `gomoku-derby-runner` SKILL.md):
 ```bash
+cd ~/code/gomoku                          # MUST be the main checkout — see store gotcha below
 SID="claude-session:$CLAUDE_CODE_SESSION_ID"
 # write the CODE-ONLY recipe to a file; it MUST end with:
 #   "lands cell derby-x-<slug> in run_sweep.CELLS; NO GPU run."
@@ -70,6 +71,14 @@ bd create \
 ```
 The bead description should spell out: the lever + WHY, the implementation sketch, the **exact one-lever cell delta** off the champion, lane-isolated paths, performance/disk if relevant, and what's explicitly out of scope (e.g. a GPU Phase-2).
 
+### Where Path B beads must live — reaching the bead-runner
+The bead is worked by the **bead-runner**: a separate session that polls `bd ready` every **~60s** from the **main checkout `/Users/jason/code/gomoku`**, auto-claims clean CODE-ONLY beads, and dispatches each to an isolated worktree worker (posts `◐ IN PROGRESS` → `✅` in `#gomoku-beads`; lands the cell via worktree → `git merge --no-ff` → push). So the bead only gets picked up if it lands in the store the runner polls:
+- **`bd` here is embedded Dolt, per-checkout** — the DB lives at `/Users/jason/code/gomoku/.beads/embeddeddolt/`, with **no remote configured**. Each checkout is its own island.
+- **Create the bead from `/Users/jason/code/gomoku`** (`cd ~/code/gomoku && bd create …`). That is the one store the bead-runner polls.
+- **Never `bd create` from a sibling worktree** (`gomoku-<slug>`, `gomoku-gpu-broker`, …): those carry only a **stale `.beads/issues.jsonl` snapshot** and no live DB, and with no remote a bead created there is **invisible to the bead-runner** — this is why broker subtasks got "lost."
+- **Leave it `open` + unblocked + UNASSIGNED.** The runner claims unassigned **ready** beads; an assigned bead (even assigned to the runner) drops out of `bd ready`. Don't set `assignee=orchestrator`.
+- Keep `--labels="derby-idea,proposed"` and the `(CODE-ONLY, no GPU)` title — the runner's high-confidence grab signal. Pickup latency is ~60s.
+
 ## After registration — what the runner does (set expectations)
 The runner swaps the cell into a lane when one **plateaus / result-locks**, then judges it by the fresh-start rule: **climb-RATE while it's a young seed-0 lane, H2H peak only once matured** (the fresh-start H2H lag — never retire a climbing fresh lane on an early H2H number). So register and be patient; a fresh lane looks underwhelming in round-robin before it ripens.
 
@@ -78,6 +87,7 @@ The runner swaps the cell into a lane when one **plateaus / result-locks**, then
 - ❌ Multi-lever cells. ❌ GPU steps inside a `derby-idea` bead.
 - ❌ Over-bead a config-only lever (skip the bead — the runner just adds the cell).
 - ❌ Re-register a lever the research board already ruled dead.
+- ❌ `bd create` from a sibling worktree, or assign the bead — both make it invisible to the bead-runner (per-checkout store + no remote; assigned drops out of `bd ready`). Create from `/Users/jason/code/gomoku`, leave it `open`+UNASSIGNED.
 
 ## Worked examples
 - **Config-only:** `derby-x-vdisc-097` = clone `derby-v7-mate-discount`, change `--value-discount 0.98 → 0.97`. No bead; runner swapped it in to probe the discount optimum.
