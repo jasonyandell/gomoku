@@ -26,10 +26,10 @@
       "lever": "+ --value-discount 0.98 (v6 H2H winner) on the global-pool base."
     },
     {
-      "name": "wdl",
-      "cell": "derby-x-wdl",
-      "cell_name": "derby-x-wdl",
-      "lever": "WDL (win/draw/loss) value head (bead derby-cgf, researcher #1 Delta-elo/wall bet) - categorical {W,D,L} adds info capacity for our ~60-70% draw data; forward derives scalar v=P(win)-P(loss) so MCTS/anchor untouched, stays ONE lever (WDL loss = native re-expression of value-discount+VCF). FRESH seed-0 (WDL ckpt != scalar). Clean A/B vs mate-discount. Replaces disc-recency (combo characterized +82 H2H; ckpt kept)."
+      "name": "wdl-max",
+      "cell": "derby-x-wdl-max",
+      "cell_name": "derby-x-wdl-max",
+      "lever": "AGGRESSIVE COMBO (builder 84d4438): WDL head + deeper VCF (--vcf-max-depth 32) + recency 0.5 - stack ALL validated winners. FRESH seed-0. vs wdl-recency on board isolates the deep-VCF contribution. Replaces base wdl (+35 H2H LOCKED/replicated; peak.pt kept as keeper anchor)."
     },
     {
       "name": "wdl-recency",
