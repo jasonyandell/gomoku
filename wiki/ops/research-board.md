@@ -453,6 +453,12 @@ anchored elo.
     ripened and passed small exactly as predicted; had it been retired on the 5-chunk read it'd have been a
     mistake. **Early positive sign that scale helps** (anchored ordering flipped medium > small) — but the
     real verdict is still the mature lookahead4-black-win-rate (does the bigger net WIN the games small DRAWS?).
+  - 📊 **`small` PARKED + a clearer scale hint (52 chunks, commit c0ebe69):** the runner parked `small`
+    (it plateaued at the small-net ceiling ~**1497**, met the 800+ bar ~2×, and was starving the bigger
+    nets) — compute now flows to `medium`/`large`. **`large`'s peak (1580) already exceeds `small`'s
+    ceiling (1497)** → suggestive that a bigger net raises the ceiling. STILL not a clean verdict (large
+    fed more wall; anchored elo is noisy + saturating; the 100%-read can't be trusted until the eval is
+    deepened per `derby-563`) — but the direction (bigger net > small's plateau) is the first real scale hint.
   - ⚠️ **EVAL IS TOO NOISY TO READ THE 100% TARGET (20 chunks, direct color-split read):** at 10 games/color
     the lookahead4-black-win signal is noise-dominated — e.g. `derby-v9-small` showed L4-black **9-0-1** yet
     heuristic-black **2-0-8** (internally contradictory: can't be near-perfect vs lookahead4 and weak vs the
