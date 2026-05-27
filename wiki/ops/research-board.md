@@ -21,8 +21,23 @@ and races it. (Full model: `wiki/topics/research-loop.md`; memory
 
 - **Live board:** `scripts/derby_v8_board.json` (base `sweep_runs/derby_v8`), 4
   contestants on the **vcf + global-pool** base: `control`, `mate-discount`
-  (`--value-discount 0.98`), `stack` (+`--max-plies 45`), `buffer-comp`
-  (`--buffer-recency-frac 0.5`). Pipelined eval on; cap = 4h backstop (not a hard 1h kill).
+  (`--value-discount 0.98`), `disc-recency` (`--value-discount 0.98` +
+  `--buffer-recency-frac 0.5`), `buffer-comp` (`--buffer-recency-frac 0.5`).
+  Pipelined eval on; cap = 4h backstop (not a hard 1h kill).
+  - **SWAP (2026-05-27, commit `fa61aac`):** dropped `stack` (+`--max-plies 45`) —
+    it regressed below its 1531 peak while its no-truncation twin mate-discount
+    climbed to 1699; the 45-ply cap clips the 50–80-ply defensive games strong
+    models play. Replaced with `disc-recency` to test whether the two *climbing*
+    levers (value-discount + recency) compound.
+- **v8 INTERIM H2H VERDICT (52 chunks ≈ 5h, `round_robin_52chunks.json`, 24g/pair):**
+  mean-centered ratings — **mate-discount +115 🥇** (value-discount confirmed the
+  key lever) · **buffer-comp +90 🥈** (recency curator is a genuine additive win over
+  control) · disc-recency +16 (beats control, but **stacking value-discount+recency
+  did NOT exceed either alone** — caveat: fresh seed-0 start, fewer chunks, so the
+  combo is handicapped, not cleanly refuted) · control −81 (baseline) · **stack −139**
+  (max-plies 45 actively harmful — swap vindicated). Takeaway: value-discount and
+  recency are each real wins on the vcf+gp base; truncation hurts; the combo needs an
+  equal-footing rematch before calling it.
 - **Resume:** `python scripts/delo_derby.py --board scripts/derby_v8_board.json --resume`
   → confirm ONE `delo_derby` PID → `nohup bash scripts/derby_watchdog.sh
   scripts/derby_v8_board.json >/dev/null 2>&1 &`. A derby-runner **cron** (~30 min)
