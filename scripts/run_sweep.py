@@ -904,6 +904,42 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "8", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-mish' = the Mish activation-function lever (bead derby-sib). VERBATIM clone
+    # of derby-v7-mate-discount (the reigning base recipe: gumbel-root + vcf-teacher +
+    # value-discount 0.98 + global-pool + the 0.4/0.1 league mix + sgd-steps-per-epoch
+    # 64) with ONE lever added: --activation mish. Every residual-tower nonlinearity
+    # (stem + ResBlock/GlobalPoolResBlock) becomes nn.Mish (smooth self-gated
+    # x*tanh(softplus(x)), KataGo's newer default) instead of nn.ReLU. ZERO added
+    # params / IDENTICAL state_dict keys (Mish is parameter-free), so the lever is a
+    # genuinely orthogonal ARCHITECTURE axis vs the value-rep (x-wdl), search-breadth
+    # (x-gumbel-m8), and policy-signal (x-soft-policy) cells. It lives ENTIRELY in
+    # model.py: the native-C MCTS engine does tree ops and calls BACK into the PyTorch
+    # evaluator for the forward, so the generation hot path (_mcts_native.c) is
+    # byte-identical -- no C kernel change. --activation mish rides on BOTH train +
+    # worker args for cell symmetry (the worker flag is a consistency assert; the
+    # model's activation comes from the checkpoint config). FRESH-START lane: Mish
+    # keeps identical tensor SHAPES (a checkpoint loads) but ReLU-trained weights
+    # behave differently in a Mish tower, so it must NOT warm-start the ReLU champion
+    # -- the runner launches it fresh and judges on climb-RATE like the other new-lever
+    # lanes. Lane-isolated outputs under sweep_runs/derby-x-mish/.
+    "derby-x-mish": Cell("derby-x-mish", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98", "--activation", "mish"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--activation", "mish"]),
     # 'x-wdl' = the WDL (win/draw/loss) value-representation lever (bead derby-cgf).
     # VERBATIM clone of derby-v7-mate-discount (the reigning base recipe: gumbel-root
     # + vcf-teacher + value-discount 0.98 + global-pool + the 0.4/0.1 league mix +
