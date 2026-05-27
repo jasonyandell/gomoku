@@ -132,6 +132,80 @@ def _apply_vcf_teacher(
     return new_pi, float(value), True
 
 
+def _apply_defense_teacher(
+    planes: np.ndarray,
+    z: float,
+    *,
+    vcf_already_fired: bool,
+    profile: ProfileStats | None = None,
+    max_depth: int | None = None,
+    max_nodes: int | None = None,
+) -> tuple[float, bool]:
+    """Opt-in EXACT *defensive* teacher (VALUE-ONLY): the mirror of
+    :func:`_apply_vcf_teacher`. Where the offensive teacher proves a forced WIN
+    for the side to move, this proves a forced win for the OPPONENT against the
+    side to move — i.e. the recorded position is already lost — and relabels the
+    value target ``z = -1.0`` (teaches "you should have defended earlier").
+
+    Returns ``(new_z, fired)``. The POLICY target is never touched: defense is
+    non-unique (many moves may equally delay the loss), so there is no single
+    correct policy label — only the value is sound to stamp. (Policy/refutation
+    mode is explicitly out of scope for this teacher.)
+
+    Detection: solve the SAME position with the two planes SWAPPED so the
+    OPPONENT becomes the attacker (plane 0) and the side-to-move becomes the
+    defender (plane 1). A proven VCF win for that swapped attacker is a proven
+    forced loss for the recorded side-to-move. We reuse :func:`vcf.solve_vcf`
+    verbatim on the swapped board (mirroring the plane reconstruction in
+    :func:`vcf.solve_vcf_from_planes`).
+
+    GEN-COST GATE (two cheap guards before the expensive solve, so quiet
+    positions cost ZERO solver recursion and we never double the gen cost):
+      (a) If the offensive VCF teacher already fired here, the side to move has a
+          PROVEN win, so it cannot also be in a proven loss — skip entirely.
+      (b) Cheap danger pre-scan: only solve if the OPPONENT has at least one
+          four-making move (:func:`vcf.has_four_threat` on the swapped board). A
+          VCF line always opens with a four, so no four-threat => no opponent
+          forced win => no solve needed. Sound (only ever skips work).
+
+    Only ever called when ``--defense-teacher`` is set; the default-off path
+    never enters here, so self-play stays byte-identical.
+    """
+    if vcf_already_fired:
+        return z, False
+    if max_depth is None:
+        max_depth = _VCF_MAX_DEPTH
+    if max_nodes is None:
+        max_nodes = _VCF_MAX_NODES
+
+    planes = np.asarray(planes)
+    # Swap: opponent (plane HISTORY_PLY) becomes attacker, side-to-move (plane 0)
+    # becomes defender. Mirrors vcf.solve_vcf_from_planes' reconstruction, swapped.
+    opp = planes[HISTORY_PLY].astype(bool)
+    me = planes[0].astype(bool)
+    swapped_board = np.stack([opp, me], axis=0)
+
+    _profile_add(profile, "defense_calls", 1.0)
+    # (b) Cheap danger pre-scan: skip the solve unless the opponent has a four.
+    with _profile_timer(profile, "defense_prescan_s"):
+        danger = vcf.has_four_threat(swapped_board)
+    if not danger:
+        return z, False
+
+    with _profile_timer(profile, "defense_solve_s"):
+        res = vcf.solve_vcf(swapped_board, max_depth=max_depth, max_nodes=max_nodes)
+    _profile_add(profile, "defense_solves", 1.0)
+    if not res.has_forced_win:
+        return z, False
+
+    # The opponent has a proven forced win against the side to move: this
+    # recorded position is lost. Value target = -1.0 (loss vertex). The recorded
+    # z is from the recorded side's perspective, matching the side-to-move of the
+    # un-swapped position, so a proven OPPONENT win maps directly to z = -1.0.
+    _profile_add(profile, "defense_fired", 1.0)
+    return -1.0, True
+
+
 def _profile_add(profile: ProfileStats | None, key: str, value: float) -> None:
     if profile is not None:
         profile[key] = float(profile.get(key, 0.0)) + float(value)
@@ -430,6 +504,7 @@ def _generate_games_native_gumbel(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
 ) -> list[GameRecord]:
@@ -597,9 +672,13 @@ def _generate_games_native_gumbel(
                 z = outcome_for_black if side == 0 else -outcome_for_black
                 z = _discount_z(z, len(traj) - 1 - ply_idx)
                 ply_at_capture = n_initial + ply_idx
+                vcf_fired = False
                 if vcf_teacher:
-                    pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                                  profile=profile)
+                    pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                                          profile=profile)
+                if defense_teacher:
+                    z, _ = _apply_defense_teacher(
+                        planes, z, vcf_already_fired=vcf_fired, profile=profile)
                 aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
                 examples.extend(_build_examples(
                     planes, pi, z, side, ply_at_capture, aux_pi,
@@ -636,6 +715,7 @@ def _generate_games_gumbel(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
 ) -> list[GameRecord]:
@@ -763,9 +843,13 @@ def _generate_games_gumbel(
             z = outcome_for_black if side == 0 else -outcome_for_black
             z = _discount_z(z, len(traj) - 1 - ply_idx)
             ply_at_capture = n_initial + ply_idx
+            vcf_fired = False
             if vcf_teacher:
-                pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                              profile=profile)
+                pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                                      profile=profile)
+            if defense_teacher:
+                z, _ = _apply_defense_teacher(
+                    planes, z, vcf_already_fired=vcf_fired, profile=profile)
             aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
             examples.extend(_build_examples(
                 planes, pi, z, side, ply_at_capture, aux_pi,
@@ -803,6 +887,7 @@ def _generate_games_native(
     forced_playout_k: float = 0.0,
     profile: ProfileStats | None = None,
     vcf_teacher: bool = False,
+    defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
 ) -> list[GameRecord]:
@@ -1007,9 +1092,13 @@ def _generate_games_native(
                 z = outcome_for_black if side == 0 else -outcome_for_black
                 z = _discount_z(z, len(traj) - 1 - ply_idx)
                 ply_at_capture = n_initial + ply_idx
+                vcf_fired = False
                 if vcf_teacher:
-                    pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                                  profile=profile)
+                    pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                                          profile=profile)
+                if defense_teacher:
+                    z, _ = _apply_defense_teacher(
+                        planes, z, vcf_already_fired=vcf_fired, profile=profile)
                 aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
                 examples.extend(_build_examples(
                     planes, pi, z, side, ply_at_capture, aux_pi,
@@ -1052,6 +1141,7 @@ def generate_games(
     gumbel_c_visit: float = 50.0,
     gumbel_c_scale: float = 1.0,
     vcf_teacher: bool = False,
+    defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
 ) -> list[GameRecord]:
@@ -1101,6 +1191,16 @@ def generate_games(
     mate-distance-discounted +1.0. Applied uniformly across all paths (native,
     native-Gumbel, Python-Gumbel, Python fallback) at the record-build seam, so
     the control flag composes with gumbel_root / PCR / forced-playouts.
+
+    `defense_teacher` (Derby 'x-defense' lever) enables the EXACT *defensive*
+    teacher — the value-only mirror of `vcf_teacher`. Default OFF == byte-
+    identical (solver never called). When ON, for each recorded position where
+    the OPPONENT has a proven forced VCF win against the side to move, the value
+    target is relabeled to -1.0 (the position is lost; the policy target is left
+    untouched because defense is non-unique). Gen-cost-gated: it is skipped when
+    the offensive teacher already fired here, and runs a cheap opponent-four-
+    threat pre-scan before the (expensive) swapped-plane solve, so quiet
+    positions cost zero solver calls. Applied at the same record-build seam.
     """
     rng = rng or np.random.default_rng()
     if gumbel_root:
@@ -1129,6 +1229,7 @@ def generate_games(
                 gumbel_c_visit=gumbel_c_visit,
                 gumbel_c_scale=gumbel_c_scale,
                 vcf_teacher=vcf_teacher,
+                defense_teacher=defense_teacher,
                 record_aux=record_aux,
                 record_ownership=record_ownership,
             )
@@ -1153,6 +1254,7 @@ def generate_games(
             gumbel_c_visit=gumbel_c_visit,
             gumbel_c_scale=gumbel_c_scale,
             vcf_teacher=vcf_teacher,
+            defense_teacher=defense_teacher,
             record_aux=record_aux,
             record_ownership=record_ownership,
         )
@@ -1179,6 +1281,7 @@ def generate_games(
             forced_playout_k=forced_playout_k,
             profile=profile,
             vcf_teacher=vcf_teacher,
+            defense_teacher=defense_teacher,
             record_aux=record_aux,
             record_ownership=record_ownership,
         )
@@ -1285,9 +1388,13 @@ def generate_games(
             z = outcome_for_black if side == 0 else -outcome_for_black
             z = _discount_z(z, len(traj) - 1 - ply_idx)
             ply_at_capture = n_initial + ply_idx
+            vcf_fired = False
             if vcf_teacher:
-                pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                              profile=profile)
+                pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                                      profile=profile)
+            if defense_teacher:
+                z, _ = _apply_defense_teacher(
+                    planes, z, vcf_already_fired=vcf_fired, profile=profile)
             aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
             examples.extend(_build_examples(
                 planes, pi, z, side, ply_at_capture, aux_pi,
@@ -1318,6 +1425,7 @@ def generate_games_vs_baseline(
     random_opening_moves: int = 0,
     forced_playout_k: float = 0.0,
     vcf_teacher: bool = False,
+    defense_teacher: bool = False,
 ) -> list[GameRecord]:
     """Generate games where the model plays a fixed opponent picker.
 
@@ -1430,8 +1538,12 @@ def generate_games_vs_baseline(
             # planes are canonical (plane 0 = side-to-move = model at the moment
             # the example was recorded), so z is directly outcome_for_model.
             z = outcome_for_model
+            vcf_fired = False
             if vcf_teacher:
-                pi, z, _ = _apply_vcf_teacher(planes, pi, z, side=side)
+                pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=side)
+            if defense_teacher:
+                z, _ = _apply_defense_teacher(
+                    planes, z, vcf_already_fired=vcf_fired)
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
                     examples.append(SelfPlayExample(

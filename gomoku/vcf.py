@@ -157,6 +157,52 @@ def _has_immediate_five(stones: np.ndarray, empty: np.ndarray) -> bool:
     return len(_five_completions(stones, empty)) > 0
 
 
+def has_four_threat(board: np.ndarray) -> bool:
+    """Cheap, SOUND necessary-condition pre-scan for a VCF win by plane 0.
+
+    A continuous-four win ALWAYS opens with a four: the attacker's very first
+    move must either make five outright or create a five-completion (a four). If
+    plane 0 (the attacker) has no move that yields any five-completion, no VCF
+    win can exist, so a caller may safely skip the (expensive) full solve.
+
+    This is a single, non-recursive pass over the near-stone candidate cells
+    using the same collinear-completion prune the solver uses (one place at a
+    cell, count completions through it, undo), so it is far cheaper than
+    `solve_vcf` (which would enumerate the same fours AND recurse). It is the
+    DANGER pre-scan for the defensive teacher: gate the swapped-plane solve on
+    this so a QUIET position (the side-to-move's opponent has no four-making
+    move at all) costs ZERO solver recursion.
+
+    SOUNDNESS: returns False only when plane 0 has no four-making move. Since
+    every VCF line opens with a four, a False here is a guaranteed
+    `has_forced_win=False` from the full solver, so gating on it only ever skips
+    provably-losing-free work — it never suppresses a win the solver would have
+    proved, and (critically) never invents one. Never mutates ``board``.
+    """
+    board = np.ascontiguousarray(board, dtype=bool)
+    attacker = board[0].copy()
+    defender = board[1].copy()
+    empty_plane = ~(attacker | defender)
+    empty_idx = _empties_from_plane(empty_plane)
+    if len(empty_idx) == 0:
+        return False
+    # Immediate five (attacker already has an open four) is a four threat.
+    if _five_completions(attacker, empty_plane):
+        return True
+    occupied = attacker | defender
+    candidates = _candidate_cells_from_planes(attacker, defender, empty_idx)
+    for m in candidates:
+        mr, mc = int(m) // BOARD_SIZE, int(m) % BOARD_SIZE
+        attacker[mr, mc] = True
+        occupied[mr, mc] = True
+        comps = _completions_through(attacker, int(m), occupied)
+        attacker[mr, mc] = False
+        occupied[mr, mc] = False
+        if comps:
+            return True
+    return False
+
+
 def solve_vcf(
     board: np.ndarray,
     *,
