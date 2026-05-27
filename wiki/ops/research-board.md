@@ -236,11 +236,21 @@ key beads are being de-staled + shipped:
   re-race (the ingest-perf-flooding lesson).
 
 **Loss-tail epic `derby-7ic` — DEFENSE arm DELIVERED** (gi7 + 1xf shipped; the wiki's *central* problem
-— never-lose-as-white — now has both its measurement instrument and its exact-relabel teacher). The
-**ATTACK arm** (`derby-58f` VCT teacher — extend the exact teacher from forced-fours to forced-threes;
-its `solve_vct` solver is already BUILT, `derby-1p5`/`3a6c6d9`) is the **next ship**: wire `--vct-teacher`
-(mirror `--vcf-teacher`) + its 400-fuzz gate (`derby-y8r`) + race cell — the same de-risked pattern as
-the defense teacher. Queued for the next loop tick.
+— never-lose-as-white — now has both its measurement instrument and its exact-relabel teacher).
+
+**ATTACK arm (`derby-58f` VCT teacher) — code MERGED, race-readiness GATED on a gen-cost fix:**
+- ✅ Wired `--vct-teacher` (`derby-rxf`, closed) using the already-built `solve_vct`; mirror of the VCF
+  teacher, VCT replaces VCF (superset: +23 threes-only wins over VCF's 16, verified). **400-fuzz =
+  ZERO false positives** (`derby-y8r`, closed). Byte-identical-off. Merged `896ced4`.
+- ⚠️ **BUT `derby-x-vct` is NOT race-ready:** VCT solve is **~530ms mean (up to ~19s) on open/sparse
+  boards** (vs the VCF teacher's sub-ms), called per recorded position → would tank Δelo/hr on early-game
+  positions (the in-search-VCF failure mode). **DO NOT race `derby-x-vct` until gated.**
+- 🔨 **Gen-cost gate in flight (`feat/vct-gencost-gate`):** a **board-fill gate** — run full VCT only when
+  the board is dense enough that the solve is cheap (~2ms at 45-60 stones), fall back to sub-ms VCF on
+  sparse boards (which have no forced wins to find anyway). Bounds the gen-cost to ~VCF baseline while
+  keeping VCT's mid/endgame label value. Once merged + re-measured near baseline, `derby-x-vct` is
+  race-ready. (Honest lesson: a deeper exact solver is only a *teacher* lever if its per-position cost is
+  gated — the offensive analogue of the in-search-VCF kill.)
 
 ### Toward v9 — the gomocup-AZ STACKING thesis (planned ahead, gated on v8 verdicts)
 
