@@ -173,6 +173,14 @@ def parse_args() -> argparse.Namespace:
                         "representation comes from the loaded checkpoint config, so "
                         "this flag is a no-op for generation other than a consistency "
                         "assertion against the loaded weights. Keeping it ONE lever.")
+    p.add_argument("--activation", type=str, default="relu", choices=["relu", "mish"],
+                   help="Derby 'x-mish' activation-function lever (bead derby-sib). "
+                        "Accepted for cell symmetry with --activation on the trainer; "
+                        "the model's tower activation comes from the loaded checkpoint "
+                        "config, so this flag is a no-op for generation other than a "
+                        "consistency assertion against the loaded weights. The native-C "
+                        "MCTS calls back into the PyTorch model for the forward, so the "
+                        "activation lives entirely in model.py. Keeping it ONE lever.")
     p.add_argument("--max-plies", type=int, default=None,
                    help="Optional bounded-worker cap for profiling/smoke runs. "
                         "Default None preserves full-game production behavior.")
@@ -782,6 +790,17 @@ def main() -> None:
             f"[{args.worker_id}] note: --value-head={args.value_head} but loaded "
             f"checkpoint value_head={loaded_vh}; generation uses the checkpoint's "
             f"derived scalar value either way",
+            flush=True,
+        )
+    # Consistency check for the activation lever (bead derby-sib): the model's
+    # tower activation comes from the checkpoint config; warn if --activation
+    # disagrees so a misconfigured cell is visible in logs.
+    loaded_act = getattr(getattr(model, "cfg", None), "activation", "relu")
+    if args.activation != loaded_act:
+        print(
+            f"[{args.worker_id}] note: --activation={args.activation} but loaded "
+            f"checkpoint activation={loaded_act}; generation uses the checkpoint's "
+            f"tower activation either way",
             flush=True,
         )
     model = _maybe_half(model, args.fp16_eval, args.worker_id)

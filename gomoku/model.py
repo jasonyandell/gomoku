@@ -70,6 +70,20 @@ class ModelConfig:
     # Mirrors the aux-head gating discipline: a single config field selects which
     # head module is constructed; the unselected one is never created.
     value_head: str = "scalar"
+    # Derby 'x-mish' activation-function lever (bead derby-sib). Selects the
+    # nonlinearity used for EVERY residual-tower (stem + ResBlock /
+    # GlobalPoolResBlock) nonlinearity:
+    #   "relu" (default) = today's path EXACTLY: nn.ReLU, byte-identical to a
+    #     model predating this field (ReLU has no params, so no state_dict key /
+    #     param-count change, and the forward graph is the same math as the old
+    #     F.relu calls).
+    #   "mish" = nn.Mish, the smooth self-gated nonlinearity Mish(x) =
+    #     x*tanh(softplus(x)) (KataGo's newer default). ZERO added params and the
+    #     SAME state_dict keys as relu (Mish is parameter-free), so a checkpoint
+    #     of matching shape loads either way; only the activation math changes.
+    # The value/policy HEAD nonlinearities are deliberately untouched (they stay
+    # F.relu) so this lever is exactly "the tower activation" — one axis.
+    activation: str = "relu"
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -80,18 +94,39 @@ SIZE_PRESETS: dict[str, ModelConfig] = {
 }
 
 
+def make_activation(name: str) -> nn.Module:
+    """Activation factory for the residual tower (bead derby-sib).
+
+    Returns a FRESH (parameter-free) activation module per call:
+      "relu" -> nn.ReLU(inplace=True)  (today's exact tower nonlinearity)
+      "mish" -> nn.Mish()              (smooth self-gated x*tanh(softplus(x)))
+    Both are parameter-free, so swapping the activation never changes the
+    state_dict keys or the parameter count. The "relu" path is byte-identical
+    to the old F.relu(inplace) calls it replaces.
+    """
+    if name == "relu":
+        return nn.ReLU(inplace=True)
+    if name == "mish":
+        return nn.Mish()
+    raise ValueError(f"unknown activation {name!r}; options: relu, mish")
+
+
 class ResBlock(nn.Module):
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, activation: str = "relu"):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(channels)
         self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(channels)
+        # Two tower nonlinearities, each a parameter-free activation module so
+        # the relu default is byte-identical to the old F.relu calls.
+        self.act1 = make_activation(activation)
+        self.act2 = make_activation(activation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = F.relu(self.bn1(self.conv1(x)))
+        h = self.act1(self.bn1(self.conv1(x)))
         h = self.bn2(self.conv2(h))
-        return F.relu(x + h)
+        return self.act2(x + h)
 
 
 class GlobalPoolResBlock(nn.Module):
@@ -115,7 +150,7 @@ class GlobalPoolResBlock(nn.Module):
     applies. The pool_fc has no BatchNorm and is untouched by fusion.
     """
 
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, activation: str = "relu"):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(channels)
@@ -123,15 +158,19 @@ class GlobalPoolResBlock(nn.Module):
         self.pool_fc = nn.Linear(2 * channels, channels)
         self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(channels)
+        # Two tower nonlinearities, parameter-free activation modules (relu
+        # default byte-identical to the old F.relu calls).
+        self.act1 = make_activation(activation)
+        self.act2 = make_activation(activation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = F.relu(self.bn1(self.conv1(x)))
+        h = self.act1(self.bn1(self.conv1(x)))
         mean = h.mean(dim=(2, 3))                 # (B, C)
         mx = h.amax(dim=(2, 3))                    # (B, C)
         bias = self.pool_fc(torch.cat([mean, mx], dim=1))  # (B, C)
         h = h + bias[:, :, None, None]             # broadcast over H, W
         h = self.bn2(self.conv2(h))
-        return F.relu(x + h)
+        return self.act2(x + h)
 
 
 def _global_pool_block_flags(cfg: ModelConfig) -> list[bool]:
@@ -166,11 +205,11 @@ class GomokuNet(nn.Module):
         self.stem = nn.Sequential(
             nn.Conv2d(cfg.n_input_planes, c, kernel, padding=cfg.stem_padding, bias=False),
             nn.BatchNorm2d(c),
-            nn.ReLU(inplace=True),
+            make_activation(cfg.activation),
         )
         gp_flags = _global_pool_block_flags(cfg)
         self.tower = nn.Sequential(*[
-            GlobalPoolResBlock(c) if use_gp else ResBlock(c)
+            GlobalPoolResBlock(c, cfg.activation) if use_gp else ResBlock(c, cfg.activation)
             for use_gp in gp_flags
         ])
 
@@ -304,6 +343,7 @@ def build_model(
     aux_ownership: bool = False,
     global_pool: bool | int | None = None,
     value_head: str | None = None,
+    activation: str | None = None,
 ) -> GomokuNet:
     if size not in SIZE_PRESETS:
         raise ValueError(f"unknown size {size!r}; options: {list(SIZE_PRESETS)}")
@@ -325,6 +365,12 @@ def build_model(
         if value_head != "wdl":
             raise ValueError(f"unknown value_head {value_head!r}; options: scalar, wdl")
         overrides["value_head"] = value_head
+    # Only override activation when an explicit non-default is requested, so the
+    # relu default build path stays byte-identical to a pre-activation-field model.
+    if activation is not None and activation != "relu":
+        if activation != "mish":
+            raise ValueError(f"unknown activation {activation!r}; options: relu, mish")
+        overrides["activation"] = activation
     if overrides:
         from dataclasses import replace
         cfg = replace(cfg, **overrides)

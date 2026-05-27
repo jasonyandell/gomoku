@@ -431,6 +431,14 @@ def parse_args() -> argparse.Namespace:
                         "head trained with cross-entropy (the scalar v=P(win)-P(loss) is "
                         "derived for MCTS/eval). The value-discount + VCF-stamp targets "
                         "are re-expressed natively in WDL; this is the ONLY lever.")
+    p.add_argument("--activation", type=str, default="relu", choices=["relu", "mish"],
+                   help="Derby 'x-mish' activation-function lever (bead derby-sib): "
+                        "'relu' (default) = nn.ReLU, byte-identical to before this flag "
+                        "existed; 'mish' = nn.Mish (smooth self-gated x*tanh(softplus(x)), "
+                        "KataGo's newer default) for EVERY residual-tower nonlinearity. "
+                        "ZERO added params / identical state_dict keys; lives entirely in "
+                        "model.py (the native-C MCTS hot path calls back into PyTorch for "
+                        "the forward, so no C kernel changes). This is the ONLY lever.")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--games-per-epoch", type=int, default=64)
     p.add_argument("--n-simulations", type=int, default=100)
@@ -861,6 +869,19 @@ def main() -> None:
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         if "optimizer_state_dict" in payload:
             optimizer.load_state_dict(payload["optimizer_state_dict"])
+        # Activation lever (bead derby-sib): the tower activation comes from the
+        # checkpoint config; assert --activation agrees so a mis-launched resume
+        # (e.g. an --activation mish flag against a relu-trained checkpoint) is a
+        # hard error rather than silently training the wrong nonlinearity. Mirrors
+        # the worker's value-head consistency check.
+        loaded_act = getattr(getattr(model, "cfg", None), "activation", "relu")
+        if args.activation != loaded_act:
+            raise SystemExit(
+                f"--activation={args.activation} disagrees with the resumed "
+                f"checkpoint's activation={loaded_act}; the tower activation comes "
+                f"from the checkpoint. Re-launch with --activation {loaded_act} (or "
+                f"start a FRESH cell for the new activation — see bead derby-sib)."
+            )
         print(f"resumed from {args.resume} @ epoch {start_epoch}, total_games={total_games}")
     else:
         # --global-pool: None=off, bare flag (-1 sentinel)=latter-half (True),
@@ -874,11 +895,13 @@ def main() -> None:
             aux_ownership=ownership_on,
             global_pool=gp_arg,
             value_head=args.value_head,
+            activation=args.activation,
         ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         payload = {}
         print(f"fresh {args.size} model: {n_params(model):,} params"
-              + (f" (value_head={args.value_head})" if args.value_head != "scalar" else ""))
+              + (f" (value_head={args.value_head})" if args.value_head != "scalar" else "")
+              + (f" (activation={args.activation})" if args.activation != "relu" else ""))
 
     # WL2 lever #1: EMA self-play weights. Build a slowly-tracking copy that
     # workers see, while `model` continues to train normally. On resume,
