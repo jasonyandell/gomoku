@@ -1614,12 +1614,26 @@ def main() -> None:
             position_stats.decay()
             for r in records:
                 for e in r.examples:
-                    # OPENING-ONLY cap (bead derby-4bq): add() skips positions
-                    # with ply >= max_ply, so the store stays bounded to the
+                    # OPENING-ONLY cap (bead derby-4bq): only ply<max_ply
+                    # positions are aggregated, so the store stays bounded to the
                     # finite set of distinct openings (no O(N)-save runaway).
+                    #
+                    # PLY-GATE THE KEYGEN (bead derby-eda): the canonical keygen
+                    # is the dominant per-epoch cost under flooding (≈98% of the
+                    # ingest wall — pure-Python D4 trit-pack, ~hundreds of ops/
+                    # position). Under self-play the OVERWHELMING majority of
+                    # examples are ply>=max_ply mid/late singletons that add()
+                    # would discard anyway, so paying the keygen for them was
+                    # pure waste that scaled with INFLOW. Apply the cheap int ply
+                    # check FIRST; compute the expensive key ONLY for positions
+                    # that will actually be stored. Byte-identical result: the
+                    # same positions are aggregated under the same keys — we just
+                    # skip the keygen for positions add() was going to drop.
+                    ply = getattr(e, "ply", 0)
+                    if not position_stats._ply_in_cap(ply):
+                        continue
                     position_stats.add(
-                        canonical_key_from_planes(e.planes), e.z,
-                        ply=getattr(e, "ply", 0),
+                        canonical_key_from_planes(e.planes), e.z, ply=ply,
                     )
 
         plies_mean = float(np.mean([r.plies for r in records])) if records else 0.0
