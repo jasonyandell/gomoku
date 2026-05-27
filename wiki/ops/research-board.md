@@ -83,20 +83,34 @@ Six candidates were **red-teamed** (background reviewer) against the v1→v8 ver
 | 5 | moves-left head | **KILL** | throughput goal already WON by adjudicate (`--max-plies 45`, +44 H2H v6); value-target half duplicated by the champion `--value-discount`; novel residue (search tie-break) is small + C-hot-path | rejected (revisit only if a delta-vs-value-discount is articulated) |
 | 6 | in-search VCF proven-score backup | **KILL** | not a dup of `derby-58f` (different axis) but contradicts the explicit `derby-7ic` design ("RELABEL via teacher, NOT runtime alpha-beta"); a VCF solve per node on the generation hot path is the worst possible thing for Δelo/**hour** | rejected (a root-only cheap variant could be reconsidered later) |
 
-**Queued next candidates (training-side, cheap, do NOT tax the gen hot path — being
-spec'd by the research loop):** per-sample / uncertainty target loss weighting (down-weight
-low-visit positions, or weight by the Gumbel-SH completed-Q dispersion — KataGo); policy-
-surprise target weighting (weight a position by KL(search_policy ‖ nn_prior) — teach harder
-where search disagreed with the net). Both are derby-idea beads (new flag), filed as a lane
-frees. **Correctly absent (do not propose):** a score/margin head — degenerate for
-win/draw/loss gomoku.
+**Round-2 candidates — from a deep read of actual KataGo + AlphaGomoku source (2026-05-27,
+training-side, ZERO generation cost so Δelo/hr is protected):**
+
+- **REGISTERED `derby-79l` → cell `derby-x-soft-policy`** (the pick): KataGo's **soft-policy
+  auxiliary target** — a second policy-loss term against a 4th-root temperature-flattened copy
+  of the *already-recorded* completed-Q `pi`, scaled by `--soft-policy-weight 0.15` (default
+  0.0 = byte-identical). Under 60-70% draws the sharp target concentrates mass on 1-2 defensive
+  moves and the net loses the search's runner-up structure; the soft target re-injects it (KataGo
+  added it for exactly this under-taught-drawish reason). ~6 lines in `train.py:compute_loss`,
+  orthogonal to value-discount (value head) + VCF (target). Code-heavy bead, `open` → factory.
+- **Queued runners-up (file as a lane frees):** `derby-x-surprise-weight` — per-sample loss
+  weight `1 + λ·KL(search_pi ‖ net_prior)` (teach harder where search disagreed; we already
+  compute `policy_kl` per batch); `derby-x-playout-weight` — weight by SH visit-confidence
+  (touches the record payload, so weaker on the no-slow-gen constraint).
+- **Multi-knob future study (NOT derby-shaped):** our optimizer is bare `AdamW(lr)` with no
+  scheduler/warmup/grad-clip; both upstreams use SGD-momentum + LR warmup/decay + clip — real
+  headroom but violates one-lever-per-cell, so it's a deliberate later study, not a single cell.
+- **Confirmed dead-on-arrival (do NOT file):** soft *value* / TD-value / learned shortterm-
+  value-error head (needs recorded bootstrap targets = pipeline change); extra symmetry aug
+  (D4 = the full gomoku symmetry group, we're already complete); a score/margin head (degenerate
+  for win/draw/loss).
 
 **Loop status (2026-05-27, research cron `4e4dcc03`, 20-min):** BOTH researcher cells are
 live and racing on the v8 board (`derby-x-wdl` fresh-start, steepest Δelo/hr; `derby-x-gumbel-m8`
-maturing). The board is full (4 lanes), so the loop is **queuing** the next training-side
-candidate rather than crowding it; it swaps in when `derby-x-wdl`/`derby-x-gumbel-m8` are
-characterized or a lane frees. Researcher monitors only — the derby-runner owns the GPU swaps.
-North star = **Δelo/wall**.
+maturing). The board is full (4 lanes), so rather than crowd it the loop **registered the next
+candidate as a bead** (`derby-79l` soft-policy, `open` → factory) — the runner swaps the built
+cell in when `derby-x-wdl`/`derby-x-gumbel-m8` are characterized or a lane frees. Researcher
+monitors only — the derby-runner owns the GPU swaps. North star = **Δelo/wall**.
 
 ## Rules
 
