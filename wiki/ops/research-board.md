@@ -259,13 +259,25 @@ key beads are being de-staled + shipped:
   Merged `22d8a82` (branch `feat/defense-teacher`), closed. Policy/refutation mode deferred (defense
   non-unique). ⚠ Live gen-cost under flooding to be confirmed by the runner's full-load epoch-50+
   re-race (the ingest-perf-flooding lesson).
-  - **COLOR-SPLIT FIRST READ (the shipped `gi7` instrument working + confirming the premise):** on
-    `derby-x-defense` vs heuristic — **black 10-0-0, white 3-7-0** (7 losses as WHITE, 0 as black).
-    The loss-tail hypothesis (losses cluster on white / second-player defense gap) is now **quantified**,
-    not just theorized — exactly what the color-split eval was built to surface. (RR5 aggregate H2H put
-    defense at −133, but the aggregate is dragged by the white losses while black is perfect; the
-    teacher's *efficacy* = does its white-loss-rate beat the champion's white-loss-rate over maturity —
-    the runner's color-split comparison, pending. The instrument is now in place to make that call.)
+  - **COLOR-SPLIT VERDICT (the shipped `gi7` instrument, used as intended — and it reframes the epic):**
+    | vs | defense lane (elo 1356, fresh) | champion (elo 1665, mature) |
+    |---|---|---|
+    | heuristic | B 10-0-0 / **W 3-7-0** | B 10-0-0 / **W 10-0-0** |
+    | lookahead2 | B 10-0-0 / W 0-0-10 | B 10-0-0 / **W 10-0-0** |
+    | lookahead4 | B 3-1-6 / W 2-1-7 | B 4-0-6 / **W 2-0-8 (0 losses)** |
+
+    **The MATURE champion has essentially NO white-side loss tail vs the in-repo baselines** (perfect
+    white vs heuristic/lookahead2, zero white losses vs lookahead4). The defense lane's white losses are
+    mostly its **~300-elo strength gap** (fresh vs mature), not a structural defense-blindness the
+    champion shares. **So the loss-tail premise — "losses cluster on white" — largely does NOT hold for
+    the mature value-discount champion vs these baselines**: it already defends white cleanly. This
+    *vindicates retiring the defense lane* (RR5 −133 + no white-tail-to-fix) AND says the defense teacher
+    targets a problem the champion has mostly solved. CAVEAT: the comparison is at different maturities,
+    and the in-repo baselines may be too weak to expose a *residual* white tail in the mature champion —
+    so the defense teacher's value, if any, would only show vs a STRONGER opponent. **Conditional
+    follow-on: a Rapfi color-split eval** (champion vs Rapfi, per-color) — if even the champion leaks
+    white losses vs Rapfi, the defense teacher earns a re-race; if not, the loss-tail epic is effectively
+    closed by value-discount and the defense teacher is a solution without a problem (vs available opponents).
 
 **Loss-tail epic `derby-7ic` — DEFENSE arm DELIVERED** (gi7 + 1xf shipped; the wiki's *central* problem
 — never-lose-as-white — now has both its measurement instrument and its exact-relabel teacher).
