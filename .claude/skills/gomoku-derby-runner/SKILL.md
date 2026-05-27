@@ -67,7 +67,11 @@ git log --oneline HEAD..origin/main | head        # new commits landed?
   lane (e.g. derby-eda fixed derby-x-crossgame's O(N) ingest) → **re-race it FRESH**:
   archive the old `sweep_runs/<cell>/` (stale checkpoint + an incompatible store) so it
   starts seed-0 with the fixed code, then verify the fix held under live GPU load (the
-  symptom that triggered the bead — here, epoch wall stays flat as the store grows).
+  symptom that triggered the bead — here, epoch wall stays flat). **Verify at FULL load,
+  not early:** wait until the buffer is full and gen floods (epoch ~50+, `new` large) —
+  an early small-`new` reading can look flat and fool you into closing the bead too soon
+  (it did, 2026-05-27: crossgame read 5s @epoch27/new=32, then settled ~30s @epoch55/
+  new=848 once flooding kicked in). Only close the bead once it holds under flooding.
 - This is read-mostly (fetch + log + grep); only the `merge` writes, and only when
   something landed. It costs ~1s/tick and keeps the board fed without a human nudge.
 
