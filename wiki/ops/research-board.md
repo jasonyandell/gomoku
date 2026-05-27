@@ -481,10 +481,14 @@ anchored elo.
     (~50-100), AND (3) **run the color-split eval at CURRENT strength / often enough** (a current-checkpoint
     color-split on each matured lane). Until (3), the scale verdict is unreadable regardless of maturity.
     [GPU/eval = runner's; researcher can't run it.]
-- **Still pending (the key enabler):** the metric-change bead — rank/allocate by **distance-to-100%**
-  (lookahead4 black-win + white-non-loss from the shipped color-split), NOT saturated anchored elo, + raise
-  eval games-per-baseline. Without it the v9 ladder risks being judged by the same blind ruler that made v8
-  read "saturated." Runner/orchestrator domain.
+- **The 100%-metric — a RESEARCHER SUBMISSION, not a researcher ranking decision (corrected 2026-05-27):**
+  the researcher SUBMITS the read-only tool `scripts/report_100pct.py` (computes distance-to-100% from the
+  shipped color-split) + the evidence (anchored elo saturates; eval noisy at 10 games/color + lags training)
+  — and lets the **ranking owner (derby-runner) decide** whether/how to weight it + the eval games/cadence.
+  Filed as the SUBMISSION bead **`derby-563`** (`for-ranking-owner`, not `derby-idea`). The earlier bead
+  `derby-7ku` ("rank/allocate by distance-to-100%") was **closed as WRONG SCOPE** — it made a *ranking
+  decision*, which is the ranking owner's call, not the researcher's. (Rule now in the `gomoku-derby-register`
+  skill: submit research + read-only tools; never file a bead that rewires the success metric / `pick_priority`.)
 - **Follow-on (gated on the scale result):** if a bigger net helps, RE-TEST WDL / global-pool *at that
   scale* (the v8 "levers wash out" may be a small-net capacity artifact). Don't pre-register before the
   scale signal.
