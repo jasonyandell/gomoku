@@ -426,6 +426,12 @@ eval) — not anchored elo.** That makes the research productive again.
 `size` differs, all fresh-start for a clean A/B/C. **The v9 question is live:** does a bigger net convert
 the lookahead4 BLACK-DRAWS into WINS (the binding gap to 100%)? Judge by **lookahead4 black-win-rate**, not
 anchored elo.
+- ⚠️ **READ AT MATURITY, not early (a premature-retirement guard for the runner):** bigger nets WARM UP
+  SLOWER — more params to fit — so the scale-ladder's early standings show **small AHEAD** and medium/large
+  trailing (5-chunk read 2026-05-27: small 893 / medium 751 / large 603). That is *expected warm-up lag*,
+  NOT "scale doesn't help." Any capacity advantage of medium/large appears only once small plateaus and the
+  bigger nets are still climbing. **Do NOT retire medium/large on early elo** (the net-scaling analogue of
+  the fresh-start-H2H-lag rule). The verdict is the mature lookahead4-black-win-rate, after many chunks.
 - **Still pending (the key enabler):** the metric-change bead — rank/allocate by **distance-to-100%**
   (lookahead4 black-win + white-non-loss from the shipped color-split), NOT saturated anchored elo, + raise
   eval games-per-baseline. Without it the v9 ladder risks being judged by the same blind ruler that made v8
