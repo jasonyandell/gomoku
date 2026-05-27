@@ -434,6 +434,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cross-game-max-blend", type=float, default=0.5,
                    help="Cap on the cross-game aggregate's weight in the z blend "
                         "(the remaining (1-w) always stays single-game z).")
+    p.add_argument("--cross-game-max-ply", type=int, default=10,
+                   help="OPENING-ONLY cap (bead derby-4bq): only positions with "
+                        "ply < this are aggregated into the cross-game store. The "
+                        "opening is the most-transited region (richest cross-game "
+                        "counts -> where the aggregate is meaningful); mid/late "
+                        "positions are near-unique singletons that bloat the store "
+                        "and made save() O(store-size) per epoch (convex runaway). "
+                        "Capping bounds the store to the finite set of distinct "
+                        "openings (cheap save forever) and focuses the de-noised "
+                        "value signal on opening convergence. Positions outside the "
+                        "cap fall back to single-game z on relabel. <=0 disables.")
     p.add_argument("--training-steps", type=int, default=400,
                    help="SGD steps per epoch. Static unless --sgd-per-game is set.")
     p.add_argument("--sgd-per-game", type=float, default=None,
@@ -734,6 +745,7 @@ def main() -> None:
             recency_decay=float(args.cross_game_recency_decay),
             min_visits=float(args.cross_game_min_visits),
             max_blend=float(args.cross_game_max_blend),
+            max_ply=int(args.cross_game_max_ply),
         )
         cross_game_store_path = args.cross_game_store or os.path.join(
             args.checkpoint_dir, "latest.position_stats.pkl"
@@ -741,7 +753,8 @@ def main() -> None:
         print(f"cross-game value sidecar ENABLED (store={cross_game_store_path}, "
               f"recency_decay={position_stats.recency_decay}, "
               f"min_visits={position_stats.min_visits}, "
-              f"max_blend={position_stats.max_blend})")
+              f"max_blend={position_stats.max_blend}, "
+              f"max_ply={position_stats.max_ply})")
 
     # Build / load model
     start_epoch = 0
@@ -858,12 +871,19 @@ def main() -> None:
             buffer.rebuild_pos_keys()
             keys = buffer.pos_key[:buffer.size]
             zs = buffer.z[:buffer.size].detach().cpu().numpy()
+            # OPENING-ONLY cap (bead derby-4bq): pass the per-row ply so the
+            # rebuild re-ingests ONLY ply<max_ply positions — the rebuilt store
+            # matches what a live capped ingest would have produced (no late
+            # singletons leaking back in on resume).
+            plies = buffer.ply[:buffer.size].detach().cpu().numpy()
             position_stats.add_many(
                 (tuple(int(x) for x in keys[r]) for r in range(buffer.size)),
                 zs,
+                plies=plies,
             )
             print(f"cross-game store rebuilt from buffer: {len(position_stats)} "
-                  f"positions from {buffer.size} examples")
+                  f"positions from {buffer.size} examples (cap ply<"
+                  f"{position_stats.max_ply})")
 
     # wandb setup
     run = None
@@ -1594,7 +1614,13 @@ def main() -> None:
             position_stats.decay()
             for r in records:
                 for e in r.examples:
-                    position_stats.add(canonical_key_from_planes(e.planes), e.z)
+                    # OPENING-ONLY cap (bead derby-4bq): add() skips positions
+                    # with ply >= max_ply, so the store stays bounded to the
+                    # finite set of distinct openings (no O(N)-save runaway).
+                    position_stats.add(
+                        canonical_key_from_planes(e.planes), e.z,
+                        ply=getattr(e, "ply", 0),
+                    )
 
         plies_mean = float(np.mean([r.plies for r in records])) if records else 0.0
         # Plies-distribution percentiles for the new records — quick check on

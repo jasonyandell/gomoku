@@ -32,8 +32,13 @@ ARCHITECTURE (trainer-owned, single-writer — no multi-process locking):
     ones. The blend ratio ``sum_value/visits`` is scale-invariant; the visit
     GATE compares against the EFFECTIVE decayed visits (``raw_visits * scale``).
     When ``scale`` underflows it is folded back into the store in one O(N) pass
-    and reset to 1.0 (amortized negligible). The store is BOUNDED by periodic
-    compaction that prunes cold entries (effective visits below a floor).
+    and reset to 1.0 (amortized negligible) — this is the ONLY place a full-store
+    fold happens; ``save()`` persists raw counts + the live ``scale`` verbatim
+    (bead derby-4bq), so per-epoch save is never O(store-size). The store is
+    BOUNDED two ways: (1) the OPENING-ONLY cap (``max_ply``) — only ply<max_ply
+    positions are aggregated, so the store can hold at most the finite set of
+    distinct openings; and (2) periodic compaction that prunes cold entries
+    (effective visits below a floor).
   - Relabel on sample: the buffer stores each row's canonical key as a column
     (computed once at ingest). The read path is an O(1) dict lookup; the value
     target becomes a confidence-weighted blend(z_game, aggregate) gated by visit
@@ -142,6 +147,17 @@ class PositionStats:
     max_blend: float = 0.5            # cap on the aggregate's weight in the blend
     compact_every: int = 64           # ingest cycles between bound-the-store compactions
     compact_min_visits: float = 1.0   # prune entries with effective visits below this
+    # OPENING-ONLY CAP (bead derby-4bq). Only positions with ply < max_ply are
+    # aggregated into the store. The opening is the most-transited region of the
+    # tree -> by far the richest cross-game transposition counts -> the only place
+    # the aggregate is statistically meaningful. Mid/late-game positions are
+    # near-unique singletons: they bloated the store to 200k+ entries and made
+    # save()->_renormalize() O(N) per epoch (convex epoch-wall runaway). Capping
+    # bounds the store to the small, finite set of distinct openings so save()
+    # stays cheap forever, AND concentrates the de-noised value signal exactly on
+    # openings (the original motivation: opening convergence). <=0 disables the
+    # cap (unbounded, the pre-derby-4bq behaviour — used only by generic tests).
+    max_ply: int = 10
 
     def __post_init__(self) -> None:
         # key -> np.array([raw_visits, raw_sum_value], float64)
@@ -175,13 +191,27 @@ class PositionStats:
             v *= s
         self.scale = 1.0
 
-    def add(self, key: PosKey, z: float) -> None:
+    def _ply_in_cap(self, ply) -> bool:
+        """OPENING-ONLY CAP gate (bead derby-4bq). True if a position at the
+        given ply should be aggregated. ``ply=None`` (caller didn't supply it)
+        and a non-positive ``max_ply`` both mean "no cap" -> always accept."""
+        if ply is None or self.max_ply <= 0:
+            return True
+        return int(ply) < self.max_ply
+
+    def add(self, key: PosKey, z: float, ply=None) -> None:
         """Add one contribution (a single example's already-discounted return).
+
+        OPENING-ONLY: when ``ply`` is supplied and the cap is active, positions
+        with ply >= max_ply are SKIPPED (mid/late-game singletons that bloat the
+        store; bead derby-4bq). ``ply=None`` keeps the old unconditional behaviour.
 
         Stored as ``contribution / scale`` so this NEW entry decays correctly
         relative to OLDER (already smaller-scale) entries: its effective weight
         this cycle is ``(1/scale) * scale == 1`` while older entries that were
         added at scale=1 have effective weight ``scale < 1``."""
+        if not self._ply_in_cap(ply):
+            return
         inv = 1.0 / self.scale
         cur = self.store.get(key)
         if cur is None:
@@ -190,10 +220,18 @@ class PositionStats:
             cur[0] += inv
             cur[1] += float(z) * inv
 
-    def add_many(self, keys, zs) -> None:
-        """Vectorized-ish batch add for an ingest cycle (after decay())."""
-        for key, z in zip(keys, zs):
-            self.add(key, float(z))
+    def add_many(self, keys, zs, plies=None) -> None:
+        """Vectorized-ish batch add for an ingest cycle (after decay()).
+
+        ``plies`` (optional, parallel to keys/zs) applies the OPENING-ONLY cap:
+        only positions with ply < max_ply are aggregated. ``plies=None`` keeps
+        the old unconditional behaviour."""
+        if plies is None:
+            for key, z in zip(keys, zs):
+                self.add(key, float(z))
+        else:
+            for key, z, ply in zip(keys, zs, plies):
+                self.add(key, float(z), ply=ply)
 
     # ---- bound the store ----
     def compact(self) -> None:
@@ -245,9 +283,16 @@ class PositionStats:
 
     # ---- persistence (side-car, NOT embedded in latest.pt) ----
     def save(self, path: str) -> None:
-        # Fold scale into the raw counts before persisting so the side-car is
-        # scale-1.0 canonical (a loaded store needs no scale-history context).
-        self._renormalize()
+        # SAVE IS O(new), NOT O(store-size) (bead derby-4bq). We persist the raw
+        # counts AND the current lazy ``scale`` verbatim — load() reconstructs the
+        # effective values as ``raw * scale`` exactly. The previous unconditional
+        # ``self._renormalize()`` folded the scale over EVERY entry on EVERY save
+        # (an O(store-size) traversal per epoch); as the store grew the per-epoch
+        # save grew with it -> convex epoch-wall runaway. Renormalization now fires
+        # ONLY on scale underflow inside decay() (as derby-eda intended), so save()
+        # never does a full-store fold. ``{k: v.tolist()}`` is still O(store-size)
+        # by necessity (we must serialize every entry), but the OPENING-ONLY cap
+        # keeps the store bounded to a few k entries, so that is cheap forever.
         payload = {
             "store": {k: v.tolist() for k, v in self.store.items()},
             "recency_decay": self.recency_decay,
@@ -255,6 +300,7 @@ class PositionStats:
             "max_blend": self.max_blend,
             "compact_every": self.compact_every,
             "compact_min_visits": self.compact_min_visits,
+            "max_ply": self.max_ply,
             "scale": self.scale,
         }
         tmp = str(path) + ".tmp"
@@ -273,6 +319,7 @@ class PositionStats:
             max_blend=float(payload.get("max_blend", 0.5)),
             compact_every=int(payload.get("compact_every", 64)),
             compact_min_visits=float(payload.get("compact_min_visits", 1.0)),
+            max_ply=int(payload.get("max_ply", 10)),
         )
         ps.store = {
             tuple(k): np.array(v, dtype=np.float64)

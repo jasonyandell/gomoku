@@ -878,7 +878,14 @@ CELLS: dict[str, Cell] = {
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--cross-game-value",
                                   "--cross-game-store",
-                                  "sweep_runs/derby-x-crossgame/position_stats.pkl"]),
+                                  "sweep_runs/derby-x-crossgame/position_stats.pkl",
+                                  # bead derby-4bq: OPENING-ONLY cap. Only ply<10
+                                  # positions are aggregated -> the store can't
+                                  # blow past the finite set of distinct openings,
+                                  # so save() stays cheap forever (kills the convex
+                                  # ~1s->~48s/epoch runaway) and the de-noised value
+                                  # signal lands exactly on opening convergence.
+                                  "--cross-game-max-ply", "10"]),
     "derby-v7-adjudicate": Cell("derby-v7-adjudicate", sgd_per_game=1.0,  # + v6 #2
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=100,

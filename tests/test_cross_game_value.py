@@ -435,9 +435,12 @@ def test_compaction_bounds_the_store():
         assert v >= ps.compact_min_visits
 
 
-def test_save_folds_scale_and_roundtrips_decayed_state():
-    """save() folds the lazy scale into raw counts (scale->1.0) so the side-car
-    is canonical; load() restores aggregates that match the live store exactly."""
+def test_save_roundtrips_decayed_state_without_renorm():
+    """bead derby-4bq: save() NO LONGER folds the scale (that was the O(N)-per-
+    epoch traversal behind the convex runaway). It persists raw counts + the live
+    ``scale`` verbatim; load() restores aggregates that match the live store
+    exactly. The roundtrip aggregate (visits + mean) is the invariant — the
+    on-disk scale is now the live scale, not 1.0."""
     ps = PositionStats(recency_decay=0.9, min_visits=2.0, max_blend=0.5,
                        compact_every=0)
     k = (11, 22, 33)
@@ -445,12 +448,260 @@ def test_save_folds_scale_and_roundtrips_decayed_state():
         ps.decay()
         ps.add(k, 0.25)
     live_v, live_m = ps.aggregate(k)
+    live_scale = ps.scale
     import tempfile, os as _os
     with tempfile.TemporaryDirectory() as d:
         path = _os.path.join(d, "s.pkl")
         ps.save(path)
         ps2 = PositionStats.load(path)
-    assert ps2.scale == 1.0
+    # save() preserved the live scale verbatim (no full-store fold).
+    assert abs(ps2.scale - live_scale) < 1e-15
     r_v, r_m = ps2.aggregate(k)
     assert abs(r_v - live_v) < 1e-9
     assert abs(r_m - live_m) < 1e-9
+
+
+# ---------- bead derby-4bq: opening-only cap (store plateaus, save flat) ----------
+
+def test_add_skips_positions_at_or_beyond_cap():
+    """Only ply < max_ply positions are aggregated; ply >= cap are skipped."""
+    ps = PositionStats(recency_decay=1.0, min_visits=1.0, max_blend=0.5, max_ply=5)
+    for ply in range(12):
+        ps.add((ply, 0, 0), 1.0, ply=ply)
+    # keys 0..4 stored; 5..11 skipped.
+    assert len(ps) == 5
+    for ply in range(5):
+        assert (ply, 0, 0) in ps.store
+    for ply in range(5, 12):
+        assert (ply, 0, 0) not in ps.store
+
+
+def test_add_many_respects_cap_via_plies():
+    """add_many with a parallel plies array applies the opening-only cap."""
+    ps = PositionStats(recency_decay=1.0, min_visits=1.0, max_blend=0.5, max_ply=3)
+    keys = [(i, 0, 0) for i in range(10)]
+    zs = [0.5] * 10
+    plies = list(range(10))
+    ps.add_many(keys, zs, plies=plies)
+    assert len(ps) == 3
+    assert set(ps.store.keys()) == {(0, 0, 0), (1, 0, 0), (2, 0, 0)}
+
+
+def test_cap_disabled_when_non_positive():
+    """max_ply<=0 disables the cap (unbounded, pre-derby-4bq behaviour)."""
+    ps = PositionStats(recency_decay=1.0, min_visits=1.0, max_blend=0.5, max_ply=0)
+    for ply in range(50):
+        ps.add((ply, 0, 0), 1.0, ply=ply)
+    assert len(ps) == 50
+
+
+def test_ply_none_is_uncapped_backcompat():
+    """add()/add_many() without a ply keep the old unconditional behaviour
+    (generic aggregate-math tests still pass regardless of max_ply)."""
+    ps = PositionStats(recency_decay=1.0, min_visits=1.0, max_blend=0.5, max_ply=3)
+    for i in range(20):
+        ps.add((i, 0, 0), 1.0)          # no ply -> always stored
+    assert len(ps) == 20
+
+
+def test_store_plateaus_as_games_accumulate():
+    """ACCEPTANCE (bead derby-4bq): with the opening-only cap, the store SATURATES
+    at the finite set of distinct openings as games keep arriving, instead of
+    growing to 200k+. Simulate many 'games': each game shares a small opening
+    prefix (drawn from a bounded opening alphabet) then diverges into UNIQUE
+    mid/late positions (the singletons that used to bloat the store). The store
+    size must plateau, and every stored key must be an opening key."""
+    rng = np.random.default_rng(0)
+    cap = 10
+    n_openings = 60          # bounded set of distinct opening keys (ply<cap)
+    opening_keys = [(1000 + i, 0, 0) for i in range(n_openings)]
+    ps = PositionStats(recency_decay=1.0, min_visits=1.0, max_blend=0.5,
+                       max_ply=cap, compact_every=0)
+    unique_late = 0  # monotonically increasing unique late-position id
+
+    sizes = []
+    for game in range(4000):
+        game_plies = int(rng.integers(15, 33))  # plies stay 15-32, like the live lane
+        for ply in range(game_plies):
+            if ply < cap:
+                key = opening_keys[int(rng.integers(0, n_openings))]
+            else:
+                key = (-1, unique_late, 0)  # a brand-new singleton every time
+                unique_late += 1
+            ps.add(key, 0.5, ply=ply)
+        if game % 200 == 199:
+            sizes.append(len(ps))
+
+    # Tens of thousands of unique late singletons were ingested but NONE stored.
+    assert unique_late > 40_000, f"test didn't generate enough late churn ({unique_late})"
+    # Store is bounded by the opening alphabet, not the game count.
+    assert len(ps) <= n_openings, f"store exceeded opening alphabet: {len(ps)}"
+    # PLATEAU: size is flat across the back half (no growth with games).
+    assert sizes[-1] == sizes[len(sizes) // 2], (
+        f"store still growing late in the run: {sizes}"
+    )
+    # Sanity: every stored key is an opening key (no late singletons leaked).
+    assert set(ps.store.keys()).issubset(set(opening_keys))
+
+
+def test_save_cost_flat_as_games_accumulate():
+    """ACCEPTANCE (bead derby-4bq): per-epoch save() cost stays FLAT as games
+    accumulate — the convex ~1s->~48s runaway is gone. Old code: save()->
+    _renormalize() folded the scale over EVERY entry, and the store grew
+    unbounded, so save cost grew with games. With the cap the store is bounded,
+    and save() no longer renormalizes, so the LAST save is not materially slower
+    than the FIRST despite far more games having streamed through."""
+    import time
+    cap = 10
+    n_openings = 60
+    opening_keys = [(2000 + i, 0, 0) for i in range(n_openings)]
+    ps = PositionStats(recency_decay=0.999, min_visits=1.0, max_blend=0.5,
+                       max_ply=cap, compact_every=0)
+    rng = np.random.default_rng(1)
+    unique_late = 0
+    import tempfile, os as _os
+
+    def stream_games(n):
+        nonlocal unique_late
+        for _ in range(n):
+            ps.decay()
+            gp = int(rng.integers(15, 33))
+            for ply in range(gp):
+                if ply < cap:
+                    key = opening_keys[int(rng.integers(0, n_openings))]
+                else:
+                    key = (-1, unique_late, 0)
+                    unique_late += 1
+                ps.add(key, 0.5, ply=ply)
+
+    with tempfile.TemporaryDirectory() as d:
+        path = _os.path.join(d, "s.pkl")
+        # FIRST: a few games in, time a save.
+        stream_games(50)
+        t0 = time.perf_counter()
+        for _ in range(20):
+            ps.save(path)
+        first = time.perf_counter() - t0
+        early_size = len(ps)
+        # Stream FAR more games (the singletons that used to bloat the store).
+        stream_games(3000)
+        late_size = len(ps)
+        # LAST: time a save after thousands more games.
+        t1 = time.perf_counter()
+        for _ in range(20):
+            ps.save(path)
+        last = time.perf_counter() - t1
+
+    # The store did NOT grow with games (bounded by the opening alphabet).
+    assert late_size <= n_openings and late_size == early_size, (
+        f"store grew with games: {early_size} -> {late_size}"
+    )
+    # Save cost is flat (well within timer noise); old O(N)+unbounded would balloon.
+    assert last < first * 2.5 + 5e-3, (
+        f"save cost grew with games (runaway not fixed): "
+        f"first={first*1e3:.2f}ms last={last*1e3:.2f}ms size={late_size}"
+    )
+
+
+def test_save_does_not_renormalize_store():
+    """bead derby-4bq secondary fix: save() must NOT fold the scale (the O(N)
+    per-epoch traversal). After a save the live scale and raw entries are
+    UNTOUCHED — only on scale UNDERFLOW (inside decay) does a renorm fire."""
+    ps = PositionStats(recency_decay=0.99, min_visits=1.0, max_blend=0.5,
+                       max_ply=0, compact_every=0)  # cap off so we keep many keys
+    for i in range(2000):
+        ps.add((i, 0, 0), 1.0)
+    for _ in range(10):
+        ps.decay()
+    scale_before = ps.scale
+    assert scale_before != 1.0
+    snap = {k: v.copy() for k, v in ps.store.items()}
+    import tempfile, os as _os
+    with tempfile.TemporaryDirectory() as d:
+        ps.save(_os.path.join(d, "s.pkl"))
+    # save() left the lazy scale and every raw entry exactly as they were.
+    assert ps.scale == scale_before, "save() renormalized (folded the scale)"
+    for k, v in ps.store.items():
+        assert np.array_equal(v, snap[k]), "save() rewrote a raw entry"
+
+
+def test_relabel_blends_openings_falls_back_for_late():
+    """ACCEPTANCE (bead derby-4bq): only OPENING positions (in the capped store)
+    get the cross-game blend; non-opening positions whose key isn't in the store
+    fall back to single-game z. Relabel correctness for openings is unchanged."""
+    cap = 10
+    ps = PositionStats(recency_decay=1.0, min_visits=8.0, max_blend=0.5, max_ply=cap)
+    opening = (5, 0, 0)
+    # Heavily transit an opening so it clears the visit gate with mean +1.
+    for _ in range(8192):
+        ps.add(opening, 1.0, ply=3)
+    # A late position offered at ply >= cap is NOT stored at all.
+    late = (9, 9, 9)
+    for _ in range(8192):
+        ps.add(late, 1.0, ply=cap + 5)
+    assert opening in ps.store and late not in ps.store
+
+    z_batch = np.array([-1.0, -1.0], dtype=np.float32)
+    out = ps.relabel_z([opening, late], z_batch)
+    # Opening: blended toward the +1 aggregate (moved up from -1).
+    assert -1.0 < out[0] < 0.0
+    # Late: unseen key -> single-game z untouched.
+    assert out[1] == -1.0
+
+
+def test_resume_rebuild_respects_cap():
+    """ACCEPTANCE (bead derby-4bq): rebuild-from-buffer re-ingests ONLY ply<cap
+    positions. Build a buffer whose rows carry plies spanning the cap; rebuild a
+    store with add_many(plies=...) and assert it contains exactly the opening
+    keys (the buffer's ply column drives the gate, mirroring train.py resume)."""
+    cap = 6
+    b = ReplayBuffer(256, device="cpu", cross_game_value=True)
+    games = [
+        [40, 30, 50, 31, 60, 41, 42, 43, 44],   # 9 plies, spans the cap
+        [40, 30, 41, 31, 42, 32, 33, 34],        # shares opening 40,30
+    ]
+    for g in games:
+        exs = []
+        s = GameState.initial()
+        for ply, a in enumerate(g):
+            exs.append(SelfPlayExample(planes=s.to_planes().astype(np.float32),
+                                       pi=_example(s.to_planes(), 0.0).pi,
+                                       z=0.5, side=ply % 2, ply=ply))
+            s = s.apply(a)
+        b.add(exs)
+    b.rebuild_pos_keys()
+
+    keys = b.pos_key[:b.size]
+    zs = b.z[:b.size].numpy()
+    plies = b.ply[:b.size].numpy()
+    ps = PositionStats(recency_decay=1.0, min_visits=1.0, max_blend=0.5, max_ply=cap)
+    ps.add_many(
+        (tuple(int(x) for x in keys[r]) for r in range(b.size)),
+        zs,
+        plies=plies,
+    )
+    # The rebuilt store equals exactly the distinct ply<cap canonical keys.
+    expected = set()
+    for g in games:
+        s = GameState.initial()
+        for ply, a in enumerate(g):
+            if ply < cap:
+                expected.add(canonical_key_from_planes(s.to_planes()))
+            s = s.apply(a)
+    assert set(ps.store.keys()) == expected
+    # And NONE of the ply>=cap positions leaked in.
+    for g in games:
+        s = GameState.initial()
+        for ply, a in enumerate(g):
+            if ply >= cap:
+                k = canonical_key_from_planes(s.to_planes())
+                # Only assert absent if this key never also appeared at ply<cap.
+                appears_early = False
+                s2 = GameState.initial()
+                for p2, a2 in enumerate(g):
+                    if p2 < cap and canonical_key_from_planes(s2.to_planes()) == k:
+                        appears_early = True
+                    s2 = s2.apply(a2)
+                if not appears_early:
+                    assert k not in ps.store
+            s = s.apply(a)
