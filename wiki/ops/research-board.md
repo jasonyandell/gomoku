@@ -84,6 +84,15 @@ and races it. (Full model: `wiki/topics/research-loop.md`; memory
   champion by ~100 elo. Decision point (Jason): v9 needs a NEW axis (bigger net / longer
   train / 15×15), not more single-lever sweeps; or wait for bounded crossgame/VCT
   (beads `derby-eda`/`derby-b6r`) to re-race the exact-solver family fairly.
+- **v8 RR6 — VCT re-raced after the bound fix (245 chunks, `round_robin_vct245.json`):**
+  mate-discount **+44 🥇** · vdisc-099 +25 · wdl +0 · **vct −69**. The now-bounded VCT
+  (continuous-THREATS) teacher is ~110 elo BELOW the VCF champion — the "stronger" exact
+  solver does NOT help (the aggressive depth-4/800 bound caps its extra power, and/or
+  shallow non-forced-threat teaching adds noise). VCT rejected. (Caveat: vct csnp=3,
+  semi-mature, so −69 may be mildly undervalued — but the gap is decisive.) **With VCT
+  tested, the exact-solver family verdict is complete: VCF (champion) is the sweet spot;
+  VCT over-reaches, crossgame (`derby-eda`) still perf-blocked. NOTHING in v8 beats the
+  champion** — confirmed across the full survey + the two unblocked solvers.
   → confirm ONE `delo_derby` PID → `nohup bash scripts/derby_watchdog.sh
   scripts/derby_v8_board.json >/dev/null 2>&1 &`. A derby-runner **cron** (~30 min)
   drives swap/restock; the watchdog (startup-grace) keeps it alive.
