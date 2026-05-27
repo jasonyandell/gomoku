@@ -77,7 +77,7 @@ Six candidates were **red-teamed** (background reviewer) against the v1→v8 ver
 |---|---|---|---|---|
 | 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **BUILT + RACING** as `derby-x-wdl` (bead `derby-cgf` gated→built→raced by the factory in <20 min, commit 8100f87; scalar default byte-identical, 16 new tests). WDL ckpt can't warm-start a scalar champion → **FRESH-start lane** (judge on climb-RATE). Climb: 751 @ 5min → **1444 @ 15.7min, Δelo/hr 4032, beat-heuristic ✓** (07:09Z). Strong fresh-start trajectory. |
 | — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | **RACING** as `derby-x-gumbel-m8` (swapped in, retired vdisc-097, commit 1068fb2). **1281 @ 16.2min, Δelo/hr 4977 = steepest on the board, beat-heuristic ✓** (07:09Z). |
-| 2 | draw-contempt (`drawValue`) | **KILL standalone** | a knob *on* the WDL head (follow-on sweep, not its own cell); also conflicts with the White "force-the-draw" objective (`derby-7ic`) → needs color-split eval, don't run blind | folded into the WDL line (future cell) |
+| 2 | draw-contempt (`drawValue`) | **KILL standalone** | a knob *on* the WDL head (follow-on sweep, not its own cell); also conflicts with the White "force-the-draw" objective (`derby-7ic`) → needs color-split eval, don't run blind | **WDL-sequenced follow-on family** (only if `derby-x-wdl` clears the field): draw-contempt (`--draw-value`); **per-action (Q) WDL head** (AlphaGomoku `actionValues` — a WDL Q per move as a selection prior, the last un-triaged AlphaGomoku value-axis lever; Class-C new head). Both wait on the WDL verdict. |
 | 3 | LCB root move selection | **KILL** | written against visit-count selection; production is **Gumbel SH argmax over completed-Q** (`self_play.py:548`); no per-node variance accumulator (scalar `W` only); redundant with Gumbel's `sigma(q_hat)`; C-hot-path cost | rejected — recorded so it's not re-proposed |
 | 4 | variance/uncertainty-scaled PUCT | **KILL** | no variance state + wrong engine (SH governs the root, not per-node cPUCT); closest analog v3 `forced` landed mid-tier *below* Gumbel; high C build cost, low expected Δelo | rejected |
 | 5 | moves-left head | **KILL** | throughput goal already WON by adjudicate (`--max-plies 45`, +44 H2H v6); value-target half duplicated by the champion `--value-discount`; novel residue (search tie-break) is small + C-hot-path | rejected (revisit only if a delta-vs-value-discount is articulated) |
@@ -127,17 +127,16 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   (D4 = the full gomoku symmetry group, we're already complete); a score/margin head (degenerate
   for win/draw/loss).
 
-**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 3):** FOUR researcher
-contestants registered across FOUR distinct axes — `derby-x-wdl` (value-rep) + `derby-x-gumbel-m8`
-(search-breadth) **racing** (both beat-heuristic, the two steepest Δelo/hr on the board);
-`derby-x-soft-policy` (policy-signal) **built + waiting**; `derby-x-mish` (activation, `derby-sib`)
-just filed → factory. The factory turns a bead → built cell in ~6-20 min; the runner swaps waiting
-cells in by judgement as lanes free. This tick **explored the architecture axis** and, per good
-EV discipline, filed the ONE cheap clean lever (Mish, param-free, model.py-only) while
-**deprioritizing SE** (fresh-start + latency-uncertain on our tiny net) and ruling
-nested-bottleneck/ConvNext DOA — recorded so they're not re-chased. The correlated policy-signal
-runners-up stay HELD on soft-policy's result. Researcher monitors only — the derby-runner owns the
-GPU swaps. North
+**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min — tick 4: MONITORING / hold-for-results):**
+FOUR researcher contestants registered across FOUR distinct axes — `derby-x-wdl` (value-rep) +
+`derby-x-gumbel-m8` (search-breadth) **racing** (both beat-heuristic, the two steepest Δelo/hr on
+the board: wdl peak 1444 then mid-swing, gumbel-m8 1281 @ Δelo/hr 4977); `derby-x-soft-policy`
+(policy-signal) + `derby-x-mish` (activation) **built/filed + waiting** to swap in (board full at
+4). The pipeline is now well-stocked across axes, so the loop has shifted from *opening axes* to
+**monitoring + sequencing**: it promotes nothing new until a result lands or a lane frees. The
+sequenced backlog (all PENDING their trigger result): policy-signal runners-up on soft-policy;
+SE on Mish; the WDL follow-on family (draw-contempt + per-action-Q head) on WDL. Researcher
+monitors only — the derby-runner owns the GPU swaps. North
 star = **Δelo/wall**.
 
 ## Rules
