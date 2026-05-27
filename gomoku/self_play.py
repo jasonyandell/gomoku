@@ -57,14 +57,28 @@ def configure_vcf_teacher(max_depth: int | None = None,
         _VCF_MAX_NODES = int(max_nodes)
 
 
-# Per-process VCT solver budget for the teacher (Derby 'x-vct' lever, bead
-# derby-rxf). VCT (Victory-by-Continuous-Threes) is a strict SUPERSET of VCF:
-# it proves every VCF forced win plus wins that need forcing threes. Its tree
-# fans out on the defender side, so its caps default LOWER than VCF's (see
-# vcf.DEFAULT_VCT_MAX_* — depth 7, nodes 20k) and are the hard safety valve
-# that keeps a single gen-hot-path solve cheap. We deliberately do NOT uncap.
-_VCT_MAX_DEPTH = vcf.DEFAULT_VCT_MAX_DEPTH
-_VCT_MAX_NODES = vcf.DEFAULT_VCT_MAX_NODES
+# Per-process VCT solver budget for the TEACHER hot path (Derby 'x-vct' lever,
+# beads derby-rxf / derby-b6r). VCT (Victory-by-Continuous-Threes) is a strict
+# SUPERSET of VCF: it proves every VCF forced win plus wins that need forcing
+# threes. Its tree fans out on the defender side, so an unbounded (or generously
+# bounded) per-move solve is ruinous on the SELF-PLAY GENERATION hot path: bead
+# derby-b6r raced derby-x-vct in Derby v8 with the library defaults (depth 7,
+# nodes 20k) and got ZERO games / buf=0 in ~50s — the per-move solve never
+# returned in time, fully starving generation (trainer spun at pl=nan).
+#
+# So the teacher defaults are DECOUPLED from the general-purpose solver library
+# defaults (vcf.DEFAULT_VCT_MAX_* — depth 7 / nodes 20k, which stay as-is for
+# direct solve_vct callers and tests) and set AGGRESSIVELY here: a wide-open
+# position must bail to "no forced win / hit_cap" almost instantly so self-play
+# never blocks. These find short tactical wins (open-four mate at dist 1, the
+# double-three fork at dist 2) while bailing fast on explosive trees. A worker
+# may override per-process via configure_vct_teacher() (the --vct-max-depth /
+# --vct-max-nodes flags). On cap-hit the solver returns has_forced_win=False
+# with hit_cap=True (never a false positive), so generation always proceeds.
+_VCT_TEACHER_MAX_DEPTH = 4
+_VCT_TEACHER_MAX_NODES = 800
+_VCT_MAX_DEPTH = _VCT_TEACHER_MAX_DEPTH
+_VCT_MAX_NODES = _VCT_TEACHER_MAX_NODES
 
 
 def configure_vct_teacher(max_depth: int | None = None,
@@ -177,9 +191,12 @@ def _apply_vct_teacher(
     no win is proved. Only ever called when ``--vct-teacher`` is set; the
     default-off path never enters here, keeping self-play byte-identical.
 
-    Caps: the VCT search fans out on the defender side, so it respects the
-    (conservative) per-process VCT budget (``vcf.DEFAULT_VCT_MAX_DEPTH`` / nodes);
-    we do NOT uncap it on the gen hot path.
+    Caps: the VCT search fans out on the defender side, so on the GENERATION hot
+    path it respects an AGGRESSIVE per-process budget (``_VCT_TEACHER_MAX_DEPTH``
+    / ``_VCT_TEACHER_MAX_NODES``, decoupled from and far tighter than the
+    general-purpose ``vcf.DEFAULT_VCT_MAX_*``) so a wide-open position bails to
+    ``hit_cap=True`` / no-forced-win almost instantly and never blocks self-play
+    (bead derby-b6r). Override per-process via :func:`configure_vct_teacher`.
     """
     if max_depth is None:
         max_depth = _VCT_MAX_DEPTH

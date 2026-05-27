@@ -159,19 +159,25 @@ def parse_args() -> argparse.Namespace:
                         "--vcf-teacher on the offensive seam (the deeper solver "
                         "supersedes the shallower). Same target rewrite as "
                         "--vcf-teacher: one-hot proven winning move + mate-distance-"
-                        "discounted value. Caps stay at vcf.DEFAULT_VCT_MAX_* (the "
-                        "threes tree fans out, so bounded depth/nodes are the gen-"
-                        "cost guard). Default OFF = byte-identical self-play "
-                        "(solver never runs).")
+                        "discounted value. The per-move solve is AGGRESSIVELY bounded "
+                        "(self_play._VCT_TEACHER_MAX_DEPTH/_NODES = 4/800; override "
+                        "with --vct-max-depth/--vct-max-nodes) — the threes tree fans "
+                        "out, so a tight depth/node cap is the gen-cost guard that "
+                        "keeps generation from starving (bead derby-b6r). Default OFF "
+                        "= byte-identical self-play (solver never runs).")
     p.add_argument("--vct-max-depth", type=int, default=None,
-                   help="VCT teacher solver depth cap. Default None = "
-                        "vcf.DEFAULT_VCT_MAX_DEPTH (7, deliberately conservative — "
-                        "the continuous-threes tree fans out on the defender side). "
-                        "Only matters with --vct-teacher.")
+                   help="VCT teacher per-move solver depth cap. Default None = "
+                        "self_play._VCT_TEACHER_MAX_DEPTH (4 — AGGRESSIVE: the "
+                        "continuous-threes tree fans out on the defender side, so "
+                        "the gen-hot-path solve must bail fast or it starves "
+                        "self-play, bead derby-b6r). Only matters with --vct-teacher.")
     p.add_argument("--vct-max-nodes", type=int, default=None,
-                   help="VCT teacher solver global node budget. Default None = "
-                        "vcf.DEFAULT_VCT_MAX_NODES (20k). Raise alongside "
-                        "--vct-max-depth so a deeper search isn't node-capped early.")
+                   help="VCT teacher per-move solver global node budget. Default "
+                        "None = self_play._VCT_TEACHER_MAX_NODES (800 — AGGRESSIVE; "
+                        "NOT the 20k general-purpose vcf.DEFAULT_VCT_MAX_NODES, "
+                        "which starved generation in Derby v8). On cap-hit the "
+                        "solver returns no-forced-win quickly so self-play proceeds. "
+                        "Raise alongside --vct-max-depth at your own gen-cost risk.")
     p.add_argument("--defense-teacher", action="store_true", default=False,
                    help="Enable the exact DEFENSIVE teacher (value-only): mirror "
                         "of --vcf-teacher. When the OPPONENT has a proven forced "
