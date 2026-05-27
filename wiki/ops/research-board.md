@@ -141,6 +141,34 @@ runners-up ← soft-policy; SE ← Mish; the WDL follow-on family (draw-contempt
 ← WDL. Researcher monitors only — the derby-runner owns the GPU swaps. North
 star = **Δelo/wall**.
 
+### Toward v9 — the gomocup-AZ STACKING thesis (planned ahead, gated on v8 verdicts)
+
+The derby's winning pattern is **stacking orthogonal winners** (v5 stacked global-pool on vcf;
+v6 added value-discount → the current champion). The four gomocup-AZ cells were deliberately
+chosen on **four orthogonal axes** so they can compound rather than overlap:
+
+| axis | cell | touches |
+|---|---|---|
+| value representation | `derby-x-wdl` | value head (3-way W/D/L) |
+| policy signal | `derby-x-soft-policy` | policy-loss aux term |
+| search breadth | `derby-x-gumbel-m8` | Gumbel-SH root width |
+| activation | `derby-x-mish` | tower nonlinearity |
+
+**v9 thesis:** whichever cells **beat the champion head-to-head** (round-robin over the
+`_peaks`, since anchored elo saturates ~1700 — the runner's call once the fresh lanes mature),
+stack incrementally onto the champion lineage, ONE added lever per cell (like v5→v6), exploiting
+the orthogonality. A clean full stack would be `champion + WDL + soft-policy (+ Mish / + gumbel-m)`
+— but build it stepwise so each delta is attributable, and watch for the one real interaction
+risk: WDL changes the value target's *representation* while soft-policy enriches the *policy*
+target, so they're on different heads (clean to stack); Mish (activation) and gumbel-m (search)
+are independent of both. **Do NOT pre-stack before the single-lever verdicts** — the v4 lesson
+(anchored leads were undertraining artifacts; H2H reshuffled the order) means a lever that looks
+strong on a fresh-start climb can still lose H2H. Stack only verified H2H winners.
+
+*(Loop operational gotcha, for future researcher-loop sessions: `bd create`/`bd update` stage
+`.beads/issues.jsonl` on `main`, which blocks a `feat→main` merge with "local changes would be
+overwritten" — always `git commit -- .beads/issues.jsonl` FIRST, then merge.)*
+
 ## Rules
 
 - **Race to 140 epochs.** 140 is the milestone because that's roughly where a
