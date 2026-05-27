@@ -75,22 +75,28 @@ Six candidates were **red-teamed** (background reviewer) against the v1→v8 ver
 
 | # | candidate | red-team verdict | why | status |
 |---|---|---|---|---|
-| 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **registered `derby-cgf`** (code-heavy bead; Class-C arch fork; WDL-native value-discount + VCF-stamp semantics specified to keep it one-lever) |
-| — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | **registered cell `derby-x-gumbel-m8`** (config-only, no bead — runner swaps in) |
+| 1 | **WDL (win/draw/loss) value head** | **PASS — #1 Δelo/wall bet** | only lever adding new *info capacity* (decisive-vs-drawn) vs our ~60-70%-draw data; purely TRAINING-side so it does NOT tax the Gumbel-SH generation hot path; aux-head precedent proves byte-identical-off is feasible | **BUILT + RACING** as `derby-x-wdl` (bead `derby-cgf` gated→built→raced by the factory in <20 min, commit 8100f87; scalar default byte-identical, 16 new tests). WDL ckpt can't warm-start a scalar champion → **FRESH-start lane** (judge on climb-RATE). 2026-05-27 06:48Z: elo **751 @ 5.2 min, Δelo/hr 4185 = steepest on the board.** |
+| — | Gumbel-`m` sweep (m=16→8) | red-team MISSED-idea: live flag frozen at v3 default, **never swept**, config-only/byte-identical | focus n=100 sims on fewer root candidates → sharper completed-Q targets | **RACING** as `derby-x-gumbel-m8` (swapped in, retired vdisc-097, commit 1068fb2). Too young to read (eval pipeline lags). |
 | 2 | draw-contempt (`drawValue`) | **KILL standalone** | a knob *on* the WDL head (follow-on sweep, not its own cell); also conflicts with the White "force-the-draw" objective (`derby-7ic`) → needs color-split eval, don't run blind | folded into the WDL line (future cell) |
 | 3 | LCB root move selection | **KILL** | written against visit-count selection; production is **Gumbel SH argmax over completed-Q** (`self_play.py:548`); no per-node variance accumulator (scalar `W` only); redundant with Gumbel's `sigma(q_hat)`; C-hot-path cost | rejected — recorded so it's not re-proposed |
 | 4 | variance/uncertainty-scaled PUCT | **KILL** | no variance state + wrong engine (SH governs the root, not per-node cPUCT); closest analog v3 `forced` landed mid-tier *below* Gumbel; high C build cost, low expected Δelo | rejected |
 | 5 | moves-left head | **KILL** | throughput goal already WON by adjudicate (`--max-plies 45`, +44 H2H v6); value-target half duplicated by the champion `--value-discount`; novel residue (search tie-break) is small + C-hot-path | rejected (revisit only if a delta-vs-value-discount is articulated) |
 | 6 | in-search VCF proven-score backup | **KILL** | not a dup of `derby-58f` (different axis) but contradicts the explicit `derby-7ic` design ("RELABEL via teacher, NOT runtime alpha-beta"); a VCF solve per node on the generation hot path is the worst possible thing for Δelo/**hour** | rejected (a root-only cheap variant could be reconsidered later) |
 
-**Also surfaced by the red-team (future, training-side, cheap):** per-sample / uncertainty
-target loss weighting (down-weight low-visit positions — KataGo); policy-surprise target
-weighting (weight targets by how far search moved the prior). **Correctly absent (do not
-propose):** a score/margin head — degenerate for win/draw/loss gomoku.
+**Queued next candidates (training-side, cheap, do NOT tax the gen hot path — being
+spec'd by the research loop):** per-sample / uncertainty target loss weighting (down-weight
+low-visit positions, or weight by the Gumbel-SH completed-Q dispersion — KataGo); policy-
+surprise target weighting (weight a position by KL(search_policy ‖ nn_prior) — teach harder
+where search disagreed with the net). Both are derby-idea beads (new flag), filed as a lane
+frees. **Correctly absent (do not propose):** a score/margin head — degenerate for
+win/draw/loss gomoku.
 
-**Loop discipline:** `derby-cgf` (WDL) is held for the gate/factory (Class-C); the runner
-swaps `derby-x-gumbel-m8` in when a lane frees. Promote new candidates over the research
-loop, keeping this table + the survey source page current. North star = **Δelo/wall**.
+**Loop status (2026-05-27, research cron `4e4dcc03`, 20-min):** BOTH researcher cells are
+live and racing on the v8 board (`derby-x-wdl` fresh-start, steepest Δelo/hr; `derby-x-gumbel-m8`
+maturing). The board is full (4 lanes), so the loop is **queuing** the next training-side
+candidate rather than crowding it; it swaps in when `derby-x-wdl`/`derby-x-gumbel-m8` are
+characterized or a lane frees. Researcher monitors only — the derby-runner owns the GPU swaps.
+North star = **Δelo/wall**.
 
 ## Rules
 
