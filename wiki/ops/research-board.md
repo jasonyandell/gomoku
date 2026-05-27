@@ -168,6 +168,25 @@ the WDL-native follow-ons (draw-contempt, per-action-Q) stay gated (White-object
 Class-C); the **defense teacher `derby-1xf`** is the highest-value future swing (blocked upstream).
 Researcher monitors only — the derby-runner owns the GPU swaps. North star = **Δelo/wall**.
 
+**AGGRESSIVE COMBINATION phase (tick 19, 2026-05-27, Jason: "try aggressive moves that combine
+the best we found so far into new runs").** v4-style multi-lever stacks (deliberately dropping
+one-lever-per-cell, as v4 did). Base = champion (vcf+global-pool+value-discount) + the survey
+keeper WDL; stacked with the OTHER validated winners — buffer-recency (v8 buffer-comp +90) and
+vcf-deep (v5 deeper exact-mate solver +44). A clean 2×2 over {recency, vcf-deep} on the WDL base:
+
+| cell | = WDL + … | status |
+|---|---|---|
+| `derby-x-wdl` | (alone) | racing |
+| `derby-x-wdl-recency` | + recency | racing |
+| **`derby-x-wdl-deep`** | + vcf-deep | **REGISTERED (config-only)** → runner swaps in |
+| **`derby-x-wdl-max`** | + recency + vcf-deep (maximal) | **REGISTERED (config-only)** → runner swaps in |
+
+All config-only (every lever is now an existing flag — no bead). **adjudicate (`--max-plies 45`)
+deliberately EXCLUDED** — it won v6 standalone but REGRESSED when stacked in v8, so it's not a
+"best we found" ingredient. The runner retires duds (e.g. `gumbel-m8` −48) to swap these in; a
+round-robin over {wdl, wdl-recency, wdl-deep, wdl-max, champion} then tells which combination is
+the best player. Researcher registers + monitors; the derby-runner owns the GPU swaps.
+
 ### Round-4 — DEFENSE axis: maps to EXISTING `derby-1xf` (no duplicate filed)
 
 The gomocup-AZ survey's deepest pull is the wiki's **central failure mode**: the net learns
