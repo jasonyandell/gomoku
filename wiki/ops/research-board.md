@@ -225,16 +225,22 @@ key beads are being de-staled + shipped:
   backward-compatible, 4 new tests + 16 eval tests green, CPU-only (merged `dc552c1`, branch
   `feat/color-split-eval`, closed). This is the epic's *acceptance instrument* (measures white-side
   loss-rate) → it **unblocked `derby-1xf`**.
-- 🔨 **`derby-1xf` (defensive teacher) BUILDING** — claimed (in_progress); a code-only worktree
-  subagent is building the value-only defensive teacher (relabel z=−1 when the OPPONENT has a proven
-  VCF win, via swapped-plane `solve_vcf` reuse) with the **gen-cost gate** (skip-when-offense-fired +
-  cheap danger pre-scan → quiet positions cost ZERO solver calls) and the **400-fuzz zero-false-
-  positive correctness gate** (mirror `tests/test_vcf.py`), byte-identical when off. Deliverable: cell
-  `derby-x-defense` (champion + `--defense-teacher`). Policy/refutation mode deferred (defense is
-  non-unique). The runner races it once landed; the color-split eval now measures its white-side win.
+- ✅ **`derby-1xf` (defensive teacher) SHIPPED** — value-only `--defense-teacher`: relabel z=−1 when the
+  OPPONENT has a proven VCF win (swapped-plane `solve_vcf` reuse, no new solver). **Gen-cost gate**
+  (skip-when-offense-fired + cheap `has_four_threat` pre-scan → quiet positions cost ZERO solver
+  recursion) and **400-fuzz vs independent referee = ZERO false positives** (6 real lines verified,
+  non-vacuous — the gate that matters, since a false positive poisons value targets). Byte-identical
+  when off (verified: monkeypatch→call_count 0). Cell **`derby-x-defense`** (champion + `--defense-teacher`).
+  Merged `22d8a82` (branch `feat/defense-teacher`), closed. Policy/refutation mode deferred (defense
+  non-unique). ⚠ Live gen-cost under flooding to be confirmed by the runner's full-load epoch-50+
+  re-race (the ingest-perf-flooding lesson).
 
-This is the highest-value lever (it hits the wiki's *core* problem — defense), now unblocked and in
-build. `derby-58f` (VCT teacher, P3) stays blocked on its own correctness gate (`derby-y8r`).
+**Loss-tail epic `derby-7ic` — DEFENSE arm DELIVERED** (gi7 + 1xf shipped; the wiki's *central* problem
+— never-lose-as-white — now has both its measurement instrument and its exact-relabel teacher). The
+**ATTACK arm** (`derby-58f` VCT teacher — extend the exact teacher from forced-fours to forced-threes;
+its `solve_vct` solver is already BUILT, `derby-1p5`/`3a6c6d9`) is the **next ship**: wire `--vct-teacher`
+(mirror `--vcf-teacher`) + its 400-fuzz gate (`derby-y8r`) + race cell — the same de-risked pattern as
+the defense teacher. Queued for the next loop tick.
 
 ### Toward v9 — the gomocup-AZ STACKING thesis (planned ahead, gated on v8 verdicts)
 
