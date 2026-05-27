@@ -209,6 +209,35 @@ its saved `peak.pt` lags its live trajectory. In v8: `disc-recency` went +16 (@5
 **Rule: judge fresh lanes on climb-RATE; judge warm-resumed lanes on peak H2H; never
 retire a climbing fresh lane on an H2H number.**
 
+**⚠ THE ANCHORED-vs-H2H DIVERGENCE (the other load-bearing trap, seen 3× in v8):** a
+high anchored `peak_elo` does NOT mean a lane is good — anchored elo (vs the fixed
+baselines) and head-to-head rank can flatly disagree. v8: `mish` climbed to anchored
+1634 but was **−89 H2H (last)**; `wdl-max` hit anchored 1682 but **−41 H2H**; `vct`
+climbed steadily on anchored but **−69 H2H**. So a fast/high anchored climb in the
+scoreboard is NOT a result — **the round-robin is the only truth.** Don't let an
+impressive `peak_elo` talk you into promoting/keeping a lane; conversely don't trust a
+lane just because it tops the anchored board. Always confirm with H2H before concluding.
+A corollary: even the CHAMPION's anchored elo isn't hard-capped at the ~1700 "saturation"
+lore — mate-discount pushed 1699→1811 with more training; "saturated" ≠ done.
+
+## When research is exhausted — HOLD, don't churn (added 2026-05-27)
+
+Eventually a board's question gets *answered*: the champion beats every lever, the
+researcher's queue is drained, the remaining beads are perf-blocked. When that happens
+and the board is healthy, **holding is the correct move** — keep the champion training
+(it's the deliverable and often still improving), let the SCAN auto-pull anything new,
+and report tight "steady" ticks. Do NOT:
+- invent marginal config knobs just to look busy (a 4th value-discount point, another
+  dirichlet value) — that's "more single-lever sweeps," the exhausted path;
+- churn confirmed duds in/out for the sake of motion (the priority engine already
+  deprioritizes them; the GPU mostly feeds the champion anyway).
+Instead, **surface the strategic inflection to the user**: "v8's question is answered,
+champion wins, the next step needs a NEW axis (bigger net / longer train / 15×15) — your
+call." A genuine inflection is the user's decision, not a thing to guess at by spinning
+knobs. "Keep things moving" is satisfied by the derby running + you monitoring — not
+every tick needs a swap. (This is distinct from a lane plateauing mid-run, where you DO
+swap in the next queued idea.)
+
 ## Reporting (the classifier reads only your message text)
 
 Each tick: a one-line health (`derby=1 watchdog=1`), a compact scoreboard table sorted by
