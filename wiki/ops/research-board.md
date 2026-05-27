@@ -432,6 +432,11 @@ anchored elo.
   NOT "scale doesn't help." Any capacity advantage of medium/large appears only once small plateaus and the
   bigger nets are still climbing. **Do NOT retire medium/large on early elo** (the net-scaling analogue of
   the fresh-start-H2H-lag rule). The verdict is the mature lookahead4-black-win-rate, after many chunks.
+  - ✅ **GUARD VINDICATED + first scale signal (13 chunks, 2026-05-27 20:09Z):** the crossover happened —
+    **`medium` 1318 OVERTOOK `small` 1253**, `large` 1187 climbing behind. The slow-warming bigger net
+    ripened and passed small exactly as predicted; had it been retired on the 5-chunk read it'd have been a
+    mistake. **Early positive sign that scale helps** (anchored ordering flipped medium > small) — but the
+    real verdict is still the mature lookahead4-black-win-rate (does the bigger net WIN the games small DRAWS?).
 - **Still pending (the key enabler):** the metric-change bead — rank/allocate by **distance-to-100%**
   (lookahead4 black-win + white-non-loss from the shipped color-split), NOT saturated anchored elo, + raise
   eval games-per-baseline. Without it the v9 ladder risks being judged by the same blind ruler that made v8
