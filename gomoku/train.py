@@ -82,6 +82,7 @@ def train_step(
     ownership: torch.Tensor | None = None,
     ownership_mask: torch.Tensor | None = None,
     ownership_weight: float = 0.0,
+    soft_policy_weight: float = 0.0,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
@@ -100,7 +101,16 @@ def train_step(
     added as ownership_weight * own_mse. The two aux heads are independent.
 
     With BOTH weights == 0.0 (default) the forward, loss, and SGD graph are
-    byte-identical to the pre-aux path — neither aux head is even run."""
+    byte-identical to the pre-aux path — neither aux head is even run.
+
+    Soft-policy auxiliary target (bead derby-79l, KataGo's exact transform):
+    when soft_policy_weight > 0 a SECOND policy-loss term scores the SAME policy
+    logits against a temperature-flattened (4th-root) copy of the recorded
+    policy target `pi`, scaled by soft_policy_weight. No new head; the same
+    logits are trained against both the sharp target (weight 1.0) and the soft
+    target. ZERO generation cost — `pi` is already recorded; the soft target is
+    a pure trainer transform. soft_policy_weight == 0.0 (default) => the guarded
+    branch never executes and `pl` is byte-identical to the pre-lever path."""
     model.train()
     if zero_grad:
         optimizer.zero_grad(set_to_none=True)
@@ -145,6 +155,19 @@ def train_step(
     # Per-sample policy CE so we can split by side/ply without a second pass.
     per_policy_ce = -(pi * logp).sum(dim=-1)
     pl = per_policy_ce.mean()
+    # Soft-policy auxiliary target (bead derby-79l). When OFF (weight == 0.0,
+    # default) the branch never runs and `pl` is byte-identical to the pre-lever
+    # path. When ON, the same logits are also trained against a 4th-root
+    # temperature-flattened copy of the already-masked recorded target `pi`
+    # (KataGo's exact transform), re-injecting the runner-up structure the sharp
+    # completed-Q target drops under our 60-70% draw regime.
+    soft_ce_val = float("nan")
+    if soft_policy_weight > 0.0:
+        soft = (pi + 1e-7).pow(0.25)
+        soft = soft / soft.sum(dim=-1, keepdim=True)
+        per_soft_ce = -(soft * logp).sum(dim=-1)
+        soft_ce_val = float(per_soft_ce.mean().detach())
+        pl = pl + soft_policy_weight * per_soft_ce.mean()
     if use_wdl:
         # WDL cross-entropy over {win, draw, loss}. The soft target is the exact
         # WDL generalization of the scalar z (see wdl_target_from_z). per_value_se
@@ -211,6 +234,8 @@ def train_step(
         "train/policy_net_entropy": float(net_entropy),
         "train/policy_kl": float(policy_kl),
     }
+    if soft_policy_weight > 0.0:
+        out["loss/soft_policy"] = soft_ce_val
     if use_aux:
         out["loss/aux_policy"] = aux_l_val
         out["train/aux_mask_frac"] = float(aux_mask.bool().float().mean())
@@ -559,6 +584,21 @@ def parse_args() -> argparse.Namespace:
                         "Independent of --aux-opponent-reply-weight: either, "
                         "both, or neither head may be enabled. Suggested starting "
                         "value 0.15.")
+    p.add_argument("--soft-policy-weight", type=float, default=0.0,
+                   help="KataGo-style soft-policy auxiliary target (bead "
+                        "derby-79l). 0.0 (default) = OFF = byte-identical to "
+                        "today (the guarded branch never executes; the loss and "
+                        "SGD graph are unchanged). When > 0, the SAME policy "
+                        "logits are trained against a SECOND target: a 4th-root "
+                        "temperature-flattened, renormalized copy of the recorded "
+                        "policy target `pi` (KataGo's exact transform), scaled by "
+                        "this weight and added to the policy loss; loss/soft_policy "
+                        "is logged. NO new head and ZERO generation cost — `pi` is "
+                        "already recorded, so this is a pure trainer transform "
+                        "(gen hot path untouched). Re-injects the runner-up "
+                        "structure the sharp completed-Q target drops under our "
+                        "60-70%% draw regime. Suggested starting value 0.15; keep "
+                        "the 0.25 exponent fixed (one lever).")
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
@@ -1815,6 +1855,7 @@ def main() -> None:
                     ownership=ownership,
                     ownership_mask=ownership_mask,
                     ownership_weight=ownership_weight,
+                    soft_policy_weight=args.soft_policy_weight,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)

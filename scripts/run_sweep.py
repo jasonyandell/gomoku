@@ -848,6 +848,37 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-soft-policy' = the KataGo soft-policy auxiliary target (bead derby-79l).
+    # VERBATIM clone of derby-v7-mate-discount (the reigning champion: gumbel-root
+    # + vcf-teacher + value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1
+    # league mix + sgd-steps-per-epoch 64) with ONE lever added: --soft-policy-weight
+    # 0.15 on the TRAIN side only (worker args UNCHANGED). The same policy logits are
+    # trained against a SECOND target -- a 4th-root temperature-flattened copy of the
+    # already-recorded policy target `pi` (KataGo's exact transform) -- re-injecting
+    # the runner-up structure the sharp completed-Q target drops under our 60-70% draw
+    # regime. NO new head; the soft target is a pure TRAINER transform of an already-
+    # recorded vector, so generation cost is ZERO and the gen hot path (_mcts_native.c,
+    # selfplay_worker.py) is byte-identical. 0.15 = conservative start (KataGo's scale
+    # is ~O(0.1)) so the sharp target still dominates. The matched control is the
+    # scalar champion. Lane-isolated outputs under sweep_runs/derby-x-soft-policy/.
+    "derby-x-soft-policy": Cell("derby-x-soft-policy", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--soft-policy-weight", "0.15"]),
     # 'x-gumbel-m8' = Gumbel-m sweep (gomocup-AZ survey 2026-05-27). VERBATIM clone
     # of derby-v7-mate-discount (the reigning champion: gumbel-root + vcf-teacher +
     # value-discount 0.98 + global-pool) with ONE lever: --gumbel-m 16 -> 8. The
