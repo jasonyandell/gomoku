@@ -461,6 +461,16 @@ anchored elo.
     ESSENTIAL, not optional** — without ~50-100 games/color, "always-wins-black / never-loses-white" can't be
     distinguished from a lucky 10-game sample. The scale verdict needs mature, comparable-strength, larger-
     sample reads; the current evals can't support it.
+  - 🔧 **INSTRUMENT BUILT: `scripts/report_100pct.py`** (read-only, no GPU) — pools the last K color-split
+    eval rows per lane and prints per-baseline black-win% / white-loss% + an aggregate **distance-to-100%**
+    (0.0 = win-all-black/lose-none-white). It's the concrete `derby-7ku` metric the runner can adopt.
+    First pooled-6 read (2026-05-27 21:25Z): small **1.45** (elo 1243-1555) · medium **3.40** (711-1347) ·
+    large **5.64** (339-788). **CAVEAT — this tracks MATURITY, not net size:** the lanes are at wildly
+    different elos (large barely warmed, ~339-788), so the ordering just reflects who's more mature, NOT a
+    scale verdict. Reading scale needs a **same-maturity** comparison (each net at ~equal elo, e.g. ~1400),
+    which `large` hasn't reached. Also: **no lane is near 100%** (even mature small wins only 25% as black
+    vs lookahead2) — the target is a long climb — and a lookahead2(25%)-vs-lookahead4(60%) black-win
+    INVERSION persists even at pooled-60-games, reconfirming the eval-games increase is needed.
 - **Still pending (the key enabler):** the metric-change bead — rank/allocate by **distance-to-100%**
   (lookahead4 black-win + white-non-loss from the shipped color-split), NOT saturated anchored elo, + raise
   eval games-per-baseline. Without it the v9 ladder risks being judged by the same blind ruler that made v8
