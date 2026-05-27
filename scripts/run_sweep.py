@@ -848,6 +848,37 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-defense' = the exact DEFENSIVE VCF teacher (bead derby-1xf). VERBATIM clone
+    # of derby-v7-mate-discount (the reigning champion: gumbel-root + vcf-teacher +
+    # value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1 league mix +
+    # sgd-steps-per-epoch 64) with ONE lever added: --defense-teacher on the worker.
+    # It is the VALUE-ONLY mirror of --vcf-teacher: where the offensive teacher proves
+    # a forced WIN for the side to move and stamps +1, the defensive teacher proves a
+    # forced win for the OPPONENT against the side to move and relabels the value target
+    # to -1 (the position is already lost -> "you should have defended earlier"). The
+    # POLICY target is left untouched (defense is non-unique). Gen-cost-gated: it skips
+    # positions where --vcf-teacher already fired and runs a cheap opponent-four-threat
+    # pre-scan before the (swapped-plane) solve, so quiet positions cost zero solver
+    # calls. Correlated with the VCF teacher (same solver), so it is tested STACKED on
+    # the champion (which has VCF on) -- that's intended. Lane-isolated outputs under
+    # sweep_runs/derby-x-defense/.
+    "derby-x-defense": Cell("derby-x-defense", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98", "--defense-teacher"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # 'x-soft-policy' = the KataGo soft-policy auxiliary target (bead derby-79l).
     # VERBATIM clone of derby-v7-mate-discount (the reigning champion: gumbel-root
     # + vcf-teacher + value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1

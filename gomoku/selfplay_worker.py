@@ -150,6 +150,17 @@ def parse_args() -> argparse.Namespace:
                         "recorded targets with the solver's proven winning move "
                         "+ value on forced-win positions. Default OFF = "
                         "byte-identical self-play.")
+    p.add_argument("--defense-teacher", action="store_true", default=False,
+                   help="Enable the exact DEFENSIVE teacher (value-only): mirror "
+                        "of --vcf-teacher. When the OPPONENT has a proven forced "
+                        "VCF win against the side to move, relabel that recorded "
+                        "position's VALUE target to -1.0 (the position is lost; "
+                        "'you should have defended earlier'). Policy target is "
+                        "untouched (defense is non-unique). Gen-cost-gated: skips "
+                        "positions where --vcf-teacher already fired, and runs a "
+                        "cheap opponent-four-threat pre-scan before the solve so "
+                        "quiet positions cost zero solver calls. Default OFF = "
+                        "byte-identical self-play (solver never runs).")
     p.add_argument("--vcf-max-depth", type=int, default=None,
                    help="VCF teacher solver depth cap (Derby v5 'vcf-deep' lever). "
                         "Default None = vcf.DEFAULT_MAX_DEPTH (16). Higher proves "
@@ -653,6 +664,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             gumbel_c_visit=args.gumbel_c_visit,
             gumbel_c_scale=args.gumbel_c_scale,
             vcf_teacher=args.vcf_teacher,
+            defense_teacher=args.defense_teacher,
             record_aux=getattr(args, "record_aux", False),
             record_ownership=getattr(args, "record_ownership", False),
         )
@@ -672,6 +684,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
         random_opening_moves=args.random_opening_moves,
         forced_playout_k=args.forced_playout_k,
         vcf_teacher=args.vcf_teacher,
+        defense_teacher=args.defense_teacher,
     )
 
 
