@@ -33,6 +33,22 @@ model size.
 - **Launched 2026-05-27** (Jason: "fresh v9, let's see what happens"); small lane up
   first, buffer filling clean. Same operating model as v8 (derby = sole GPU executor;
   300s Δelo-rate chunks; runner swaps by judgement; verdict = head-to-head round_robin).
+- **⏳ JUDGMENT BAR (Jason, 2026-05-27): do NOT pass verdict before epoch 800+ AND a
+  real plateau.** Judge on the **ceiling**, not the early rate. medium breaking through
+  small's ceiling = capacity pays off; large failing to break through = large not worth
+  investing in until medium is maxed out. "For now, let it cook." No premature
+  round-robins, no swaps (all three are legit lanes climbing to their ceilings).
+- **INTERIM H2H (23 chunks ≈ epochs 242–461, NOT a verdict — lanes far too young):**
+  `round_robin_23chunks.json` partial — small≈medium (Δ+0.0), small≈large (Δ+14.5,
+  ±135), so **no capacity edge at equal young training**; all three −137 vs the matured
+  v8 champion = pure fresh-start lag (25–55 min vs ~22 h), not a recipe signal. The
+  derby's anchored "large 1455 > small 1318" was the **anchored-vs-H2H mirage** —
+  caught again. RR killed as premature; real verdict deferred to epoch 800+.
+- **⚠️ wandb eval/model_elo is FROZEN for the large net (~epoch 45 / 788)** — the
+  decoupled CPU eval-worker can't keep pace with the big net (small/medium track fine).
+  Bead filed. Do NOT read large's strength from wandb; use derby_state.json (per-chunk)
+  + the epoch-800 round-robin. New `scripts/wandb_workspace_v9.py` dashboard pins the 3
+  lanes with this caveat baked into the panel titles.
 
 ## Derby v8 — CONCLUDED (2026-05-26 → 2026-05-27)
 
