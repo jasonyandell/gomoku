@@ -1913,16 +1913,26 @@ def main() -> None:
             wins_key, losses_key = "selfplay/black_wins", "selfplay/white_wins"
         else:
             wins_key, losses_key = "selfplay/model_wins", "selfplay/model_losses"
+        # plies_* describe the game-length shape of games drained THIS cycle, so
+        # they are meaningful only when records is non-empty. In non-blocking
+        # trainer mode (sgd_steps_per_epoch>0, wave_mode off) a cycle can ingest
+        # zero games; the computations above then fall back to 0.0/[0], and
+        # logging those plants spurious downward spikes on the plies charts and
+        # drags any plies_mean average toward 0 (~25% of steps on a live run).
+        # Omit the keys on empty cycles so W&B renders a gap instead of a zero.
+        plies_log = {
+            "selfplay/plies_mean": plies_mean,
+            "selfplay/plies_p10": plies_p10,
+            "selfplay/plies_p50": plies_p50,
+            "selfplay/plies_p90": plies_p90,
+        } if records else {}
         log = {
             "epoch": epoch + 1,
             "total_games": total_games,
             "buffer_size": buffer.size,
             "selfplay/new_examples": n_examples_new,
             "selfplay/new_games": n_games_this_cycle,
-            "selfplay/plies_mean": plies_mean,
-            "selfplay/plies_p10": plies_p10,
-            "selfplay/plies_p50": plies_p50,
-            "selfplay/plies_p90": plies_p90,
+            **plies_log,
             wins_key: wins_pos,
             losses_key: wins_neg,
             "selfplay/draws": draws,
