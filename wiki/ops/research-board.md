@@ -7,7 +7,34 @@ A race between 8 fresh-start self-play training recipes ("ideas") to a fixed
 each idea gets a production-style title card, but the question it answers is
 *which training recipe climbs fastest*.
 
-## CURRENT (2026-05-26) — Derby v8 LIVE, beads-runner operating model
+## CURRENT (2026-05-27) — Derby v9 LIVE: the NET-CAPACITY axis
+
+**v8 is CONCLUDED — the scalar `vcf + global-pool + value-discount 0.98` champion
+("mate-discount", small 64f/4blk) decisively beat EVERY within-recipe lever** (WDL,
+soft-policy, mish, gumbel-m8, dirichlet, defense, VCT, cross-game, recency, max-plies;
+the full survey). Levers do not compound. So v9 changes the one axis left untouched:
+**net capacity.** Same champion recipe on all three lanes; the *only* difference is
+model size.
+
+- **Live board:** `scripts/derby_v9_board.json` (base `sweep_runs/derby_v9`), 3 FRESH
+  seed-0 lanes, identical champion recipe (gumbel-root + gumbel-m16 + vcf-teacher +
+  value-discount 0.98 + global-pool + 64 sgd-steps):
+  - `small` = `derby-v9-small` (64f / 4 blocks — the champion's net, fresh control).
+  - `medium` = `derby-v9-medium` (96f / 6 blocks, ~2.3× params).
+  - `large` = `derby-v9-large` (128f / 10 blocks, ~6× params).
+- **North-star = Δelo/Δt:** a bigger net is *slower per epoch* (fewer epochs per 300s
+  chunk) but may learn more per position — does the capacity win the **rate** race?
+  Judge fresh lanes on climb-rate, not early anchored elo (which saturates ~1700 and
+  diverges from H2H).
+- **Cross-gen anchor:** the matured v8 small champion (`sweep_runs/derby_v8/_peaks/mate-discount/peak.pt`,
+  anchored 1811) is preserved — the round-robin verdict also asks *"does a bigger net
+  BEAT the old matured small champion?"* not just *"which size climbs fastest from
+  scratch."*
+- **Launched 2026-05-27** (Jason: "fresh v9, let's see what happens"); small lane up
+  first, buffer filling clean. Same operating model as v8 (derby = sole GPU executor;
+  300s Δelo-rate chunks; runner swaps by judgement; verdict = head-to-head round_robin).
+
+## Derby v8 — CONCLUDED (2026-05-26 → 2026-05-27)
 
 **The lab runs as a single GPU executor (the derby) + code-only beads (other sessions).**
 The orchestrating session IS the "derby runner": it owns the GPU, runs the derby in

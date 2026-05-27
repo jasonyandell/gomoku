@@ -1,0 +1,35 @@
+{
+  "_doc": "Delo Derby v9 — the NET-CAPACITY axis (2026-05-27). v8 CONCLUDED: the scalar vcf+global-pool+value-discount-0.98 'mate-discount' champion (small, 4x64) decisively beat EVERY within-recipe lever (WDL, soft-policy, mish, gumbel-m8, defense, VCT, crossgame, recency, max-plies) — levers do not compound. So v9 changes the ONE axis left untouched: NET CAPACITY. All three lanes run the BYTE-IDENTICAL champion recipe (gumbel-root + gumbel-m16 + vcf-teacher + value-discount 0.98 + global-pool + 64 sgd-steps); the ONLY difference is model size. small=64f/4blk (the champion's net, fresh seed-0 control), medium=96f/6blk, large=128f/10blk. North-star = Δelo/Δt: a bigger net is slower per epoch (fewer epochs per 300s chunk) but may learn more per position — does the capacity win the RATE race? FRESH seed-0 all three for a clean same-start ladder. The matured v8 champion (sweep_runs/derby_v8/_peaks/mate-discount/peak.pt, anchored 1811) is preserved as a CROSS-GEN round-robin anchor: the verdict also asks 'does any bigger net BEAT the old matured small champion'. Same operating model as v8 (derby = sole GPU executor; 300s Δelo-rate chunks; runner swaps by judgement; cap_wall_secs is a backstop not a kill; verdict = head-to-head round_robin over peaks, anchored elo saturates ~1700).",
+  "global": {
+    "engine": "run_sweep_wall_slice",
+    "slice_secs": 300,
+    "cap_wall_secs": 14400,
+    "base_out_dir": "sweep_runs/derby_v9",
+    "board_md_path": "sweep_runs/derby_v9/standings.md",
+    "beat_heuristic_elo": 800,
+    "pipeline_eval": true,
+    "peak_window": 6,
+    "patience_chunks": 4,
+    "starvation_factor": 2
+  },
+  "ideas": [
+    {
+      "name": "small",
+      "cell": "derby-v9-small",
+      "cell_name": "derby-v9-small",
+      "lever": "CONTROL: champion recipe at small (64f/4blk), FRESH seed-0. The same-start baseline for the capacity ladder. (The matured v8 small champion @1811 is a separate round-robin anchor.)"
+    },
+    {
+      "name": "medium",
+      "cell": "derby-v9-medium",
+      "cell_name": "derby-v9-medium",
+      "lever": "+ net capacity: medium (96f/6blk). Same champion recipe, ~2.3x params. Does the extra capacity climb Δelo FASTER per wall-second despite slower epochs?"
+    },
+    {
+      "name": "large",
+      "cell": "derby-v9-large",
+      "cell_name": "derby-v9-large",
+      "lever": "+ net capacity: large (128f/10blk). Same champion recipe, ~6x params. The ceiling-vs-throughput bet at its most aggressive."
+    }
+  ]
+}
