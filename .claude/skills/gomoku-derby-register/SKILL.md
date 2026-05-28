@@ -35,7 +35,9 @@ Ask one question: **does the lever already exist as a flag / `Cell` field?**
 |---|---|---|
 | Lever is… | an existing flag (`--value-discount`, `--buffer-recency-frac`, `--gumbel-m`, `--dirichlet-eps`, `--max-plies`, `--global-pool`, `n_simulations`, …) | NEW code — a solver/sampler/hashing/harness or a brand-new flag |
 | Bead? | **NO.** The runner adds the cell itself. | **YES** — `open`/`derby-idea` bead; the auto-factory builds it, lands the cell. |
-| Who acts | the runner session | another (code-only) session, then the runner swaps in |
+| Who picks it up | the **derby-runner** (GPU) — its loop **step-0 scan-for-new-research** git-fetches `main` + races any off-board `derby-x-*` cell in `run_sweep.CELLS` by judgement | the **bead-runner** (code-only auto-factory) polls `bd ready`, builds → lands the cell; THEN the derby-runner races it |
+
+**Two distinct runners — don't confuse them (tested):** config-only **cells** are consumed by the **derby-runner's scan-for-new-research** (no bead, no bead-runner) — that is literally how `derby-x-gumbel-m8`/`-wdl`/`-soft-policy`/`-vct`/`-medium-signal` all got raced. Code-heavy **beads** are consumed by the **bead-runner** (it builds the cell, then the derby-runner races it). So "did you make a bead?" for a config-only cell = **no, correctly** — push the cell to `run_sweep.CELLS` on `main` and the derby-runner's scan picks it up.
 
 When unsure: if landing the cell requires editing anything under `gomoku/` (not just `run_sweep.CELLS`), it's code-heavy → Path B.
 
@@ -98,7 +100,9 @@ The runner swaps the cell into a lane when one **plateaus / result-locks**, then
 - ❌ Re-register a lever the research board already ruled dead.
 - ❌ **File a bead that changes the RANKING** — the success metric, `pick_priority`, scoring, or eval-weighting/allocation. That's the ranking owner's (derby-runner's) call. Submit a read-only tool + the observation and let the ranking handle it.
 - ❌ `bd create` from a sibling worktree, or assign the bead — both make it invisible to the bead-runner (per-checkout store + no remote; assigned drops out of `bd ready`). Create from `/Users/jason/code/gomoku`, leave it `open`+UNASSIGNED.
+- ❌ **Merge `feat→main` with `.beads/issues.jsonl` dirty (TESTED gotcha).** Any `bd create`/`bd update` (run from the main checkout) stages `.beads/issues.jsonl` on `main`, so a subsequent `git merge --no-ff feat/<slug>` ABORTS with *"Your local changes to the following files would be overwritten by merge: .beads/issues.jsonl."* **Always `git commit -q -m "beads: …" -- .beads/issues.jsonl` FIRST, then merge.** (It's beads' own export; committing it is the sanctioned close-protocol sync, not a content edit.)
 
 ## Worked examples
 - **Config-only:** `derby-x-vdisc-097` = clone `derby-v7-mate-discount`, change `--value-discount 0.98 → 0.97`. No bead; runner swapped it in to probe the discount optimum.
 - **Code-heavy:** `derby-eft` (cross-game value sidecar) → `open`/`derby-idea` bead; deliverable = land `derby-x-crossgame` (verbatim clone of `derby-v7-mate-discount` + only `--cross-game-value`/`--cross-game-store`, lane-isolated `position_stats.pkl`), CODE-ONLY, byte-identical when off. Factory builds → runner swaps in.
+- **Capacity-unlock (config-only, a tested pattern):** `derby-x-medium-signal` = clone the bigger-net cell `derby-v9-medium` (96×6) + activate an OLD lever that was *middling on its own* at the small net — the KataGo aux heads (`--record-aux --record-ownership` + `--aux-opponent-reply-weight 0.15 --aux-ownership-weight 0.15`). Hypothesis: a lever that adds representational load (extra heads) washes out at a capacity-bottlenecked small net but may **compound** where a bigger net has spare capacity. Still ONE conceptual lever vs the base, all existing flags, byte-identical-off → config-only, no bead. (Re-activating a known-middling lever at scale is fair game; re-activating a board-*dead* one is not.)
