@@ -919,6 +919,24 @@ def parse_args() -> argparse.Namespace:
                    help="Eval-time root VCF overlay depth cap (attacker plies). "
                         "0 = use vcf.DEFAULT_MAX_DEPTH (16). Only matters with "
                         "--eval-vcf-nodes > 0.")
+    p.add_argument("--fpu-reduction-c", type=float, default=0.0,
+                   help="Eval-time KataGo First-Play Urgency reduction for the "
+                        "in-trainer eval. Default 0.0 = OFF (byte-identical to "
+                        "the pre-lever path: unvisited children take Q=0). "
+                        "When >0, unvisited children inherit "
+                        "parent_V - c * sqrt(sum_visited_priors). KataGo uses "
+                        "c≈0.45 (subtree) / 0.20 (root); LCZero 0.33. EVAL-"
+                        "ONLY: self-play / generation / training MCTS are NOT "
+                        "affected.")
+    p.add_argument("--reuse-tree", action="store_true", default=False,
+                   help="Reuse the MCTS tree across plies at EVAL time (derby-jmi). "
+                        "Default OFF = byte-identical fresh-tree-per-call legacy. "
+                        "When set, the in-trainer eval picker holds one MCTSGame "
+                        "across each match and calls MCTSGame.advance_root after "
+                        "each ply pair, inheriting the previously-explored subtree. "
+                        "EVAL-ONLY: self-play / generation / training (the trainer "
+                        "step itself) are NOT affected — only the in-loop eval "
+                        "matchups vs the fast/slow baselines.")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--save-buffer-every", type=int, default=20,
                    help="Rewrite `latest.pt` (which embeds the ~1.4 GB replay "
@@ -2404,7 +2422,9 @@ def main() -> None:
                                        n_simulations=args.eval_sims,
                                        c_puct=args.c_puct,
                                        eval_vcf_nodes=args.eval_vcf_nodes,
-                                       eval_vcf_depth=args.eval_vcf_depth)
+                                       eval_vcf_depth=args.eval_vcf_depth,
+                                       fpu_reduction_c=args.fpu_reduction_c,
+                                       reuse_tree=args.reuse_tree)
 
             run_slow = bool(slow_pickers) and (eval_counter % args.eval_slow_every == 0)
             batches = [("fast", fast_pickers, args.eval_baseline_games)]
