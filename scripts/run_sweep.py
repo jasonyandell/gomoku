@@ -1416,6 +1416,46 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98", "--draw-value", "0.05"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-reanalyze' = SAMPLE-EFFICIENCY lever (bead derby-wdw; reanalyze epic
+    # 3/3, parent derby-3vs). VERBATIM clone of derby-v7-mate-discount (the
+    # reigning champion: gumbel-root + vcf-teacher + value-discount 0.98 +
+    # global-pool + gumbel-m 16 + the 0.4/0.1 league mix + sgd-steps-per-epoch
+    # 64) with ONE lever added: --reanalyze on the TRAINER (workers unchanged
+    # — selfplay_worker would hard-error on these flags). Periodically re-runs
+    # MCTS on a small slice of OLD buffer positions with the CURRENT (stronger)
+    # net and DEEPER search (sims=200 vs gen's 100), overwriting stale (pi,z)
+    # targets — bakes the deeper-search insight into what the net learns so
+    # its 100-sim prior absorbs the deeper plan (the H2 lookahead4-black ~50%
+    # draw ceiling is a search-depth-at-eval gap; reanalyze attacks it from
+    # the training side). KataGo paper §4 credits reanalyze with ~2x
+    # elo/compute. Defaults are the engine/scheduler defaults (passed
+    # explicitly so the recipe is unambiguous): conservative first A/B vs the
+    # champion — fraction 0.05, max 1024 positions/cycle, sims 200, every
+    # epoch, cooldown 3 cycles (the feedback-loop guard that prevents the net
+    # reinforcing its own biases). Lane-isolated under sweep_runs/derby-x-reanalyze/.
+    "derby-x-reanalyze": Cell("derby-x-reanalyze", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--reanalyze",
+                                  "--reanalyze-fraction", "0.05",
+                                  "--reanalyze-max-positions", "1024",
+                                  "--reanalyze-sims", "200",
+                                  "--reanalyze-every-epochs", "1",
+                                  "--reanalyze-cooldown-cycles", "3"]),
 }
 
 
