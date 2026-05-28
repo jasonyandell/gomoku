@@ -60,6 +60,7 @@ from gomoku.mcts import make_torch_evaluator
 from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import (
     configure_draw_value,
+    configure_search_contempt,
     configure_vcf_teacher,
     configure_vct_teacher,
     configure_value_discount,
@@ -214,6 +215,18 @@ def parse_args() -> argparse.Namespace:
                         "= OFF (byte-identical baseline). Sibling of --value-discount "
                         "(zero gen-hot-path cost); composes with it via the same "
                         "gamma^plies shape (-DELTA * gamma^(plies_to_end)).")
+    p.add_argument("--contempt-p", type=float, default=0.0,
+                   help="Derby 'x-search-contempt' POSITION-DISTRIBUTION lever (bead "
+                        "derby-qoq, arxiv 2504.07757). At each self-play move, with "
+                        "probability p, REPLACE the standard temperature-sampled "
+                        "(or Gumbel-SH-argmax) move pick with a contempt-perturbed "
+                        "pick that favors children with Q closest to 0 (most "
+                        "contested), so self-play oversamples hard-to-convert "
+                        "positions. The recorded training target pi is UNCHANGED "
+                        "— only the MOVE PLAYED (and thus the position "
+                        "distribution that enters the buffer) shifts. Default 0.0 "
+                        "= OFF (no roll, no W read, byte-identical baseline). "
+                        "Paper default p=0.5; cell defaults to 0.5.")
     p.add_argument("--value-head", type=str, default="scalar",
                    choices=["scalar", "wdl", "hlgauss"],
                    help="Value-representation lever (beads derby-cgf / derby-tn4). "
@@ -835,6 +848,8 @@ def main() -> None:
     configure_value_discount(args.value_discount)
     # Derby 'x-draw-contempt' (bead derby-9q4): no-op when DELTA == 0.0 (default).
     configure_draw_value(args.draw_value)
+    # Derby 'x-search-contempt' (bead derby-qoq): no-op when P == 0.0 (default).
+    configure_search_contempt(args.contempt_p)
     device = pick_device(args.device)
     print(f"[{args.worker_id}] device={device}", flush=True)
     print(f"[{args.worker_id}] weights={args.weights_path} output={args.output_dir}", flush=True)
