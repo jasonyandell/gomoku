@@ -873,6 +873,32 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-medium-signal' = CAPACITY-UNLOCK probe (2026-05-28, Jason: "activate an old lever that
+    # didn't do much on its own but might compound with medium where small didn't have the juice").
+    # = derby-v9-medium (champion recipe @ 96x6) + the v4 KataGo AUX-SUPERVISION lever (opp-reply
+    # policy head + per-cell ownership head, both @0.15). Aux heads were MIDDLING at small (v4
+    # 'signal') — they add EXTRA representational load (2 heads), so a 64x4 net starves its main
+    # heads to feed them; a 96x6 net has the spare capacity to exploit the extra signal-per-position
+    # (the scarce-near-opening-positions problem, az-at-scale-vs-laptop). Config-only (flags exist,
+    # byte-identical-off, model.py:40/47). Tests whether aux supervision COMPOUNDS at scale.
+    "derby-x-medium-signal": Cell("derby-x-medium-signal", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="medium", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98", "--record-aux", "--record-ownership"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--aux-opponent-reply-weight", "0.15", "--aux-ownership-weight", "0.15"]),
     "derby-v9-large": Cell("derby-v9-large", sgd_per_game=1.0,
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="large", stem_padding=1, n_simulations=100,

@@ -523,6 +523,16 @@ anchored elo.
 - **Follow-on (gated on the scale result):** if a bigger net helps, RE-TEST WDL / global-pool *at that
   scale* (the v8 "levers wash out" may be a small-net capacity artifact). Don't pre-register before the
   scale signal.
+- **REGISTERED — capacity-unlock probe `derby-x-medium-signal` (2026-05-28, Jason: "beef up medium —
+  activate an old lever that didn't do much on its own but might compound where small didn't have the
+  juice"):** = `derby-v9-medium` (champion @96×6) + the v4 KataGo **aux-supervision** lever (opp-reply
+  policy head + per-cell ownership head, both @0.15). Rationale: aux heads were MIDDLING at small (v4
+  `signal`) because they add 2 EXTRA prediction heads (representational load) a 64×4 net must starve its
+  main heads to feed; a 96×6 net has the spare capacity to exploit the extra signal-per-position — the
+  cleanest "compounds with more juice" bet. Config-only (flags exist, byte-identical-off), one-lever delta
+  vs `derby-v9-medium`. A SUBMISSION (contestant) — the runner swaps it in + the ranking judges. (`medium`
+  is tractable to train here, so a second medium lane is affordable.) WDL@medium is the secondary candidate
+  (but WDL already did +56 on its own, so less of a "needed more juice" fit).
 
 ## Rules
 
