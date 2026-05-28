@@ -77,6 +77,23 @@ the run record.
 >
 > Open submissions for the ranking owner (not the researcher's call to act on): `derby-563` (deepen the color-split eval game-count); decide whether raising in-loop eval sims and/or eval-VCF default redefines the "100% target" definition.
 
+> **🎯 EMPIRICAL VERIFICATION — matured champion DETERMINISTICALLY meets the 100% target on all 3 evals; H2 binding-gap was a MEASUREMENT ARTIFACT (Jason-away experiments, 2026-05-28 15:30Z; explicit "run experiments, no wrong answer" authorization).** Ran `scripts/probe_100pct.py` at 40 games/cell on `sweep_runs/derby_v8/_peaks/mate-discount/peak.pt` (the v8 matured champion at peak elo, 64×4, vcf+global-pool+value-discount-0.98+gumbel-m16 recipe) at default eval config (sims=100, c_puct=1.5, NO eval-side lever tweaks):
+> | baseline | Black W/L/D | White W/L/D | Bwin | Wloss | dist | seed |
+> |---|---|---|---|---|---|---|
+> | heuristic     | 20 / 0 / 0   | 6  / 0 / 14 | 100% | 0% | **0.000** | 0 |
+> | lookahead:2   | 20 / 0 / 0   | 20 / 0 / 0  | 100% | 0% | **0.000** | 0 |
+> | lookahead:4   | 20 / 0 / 0   | 16 / 0 / 4  | 100% | 0% | **0.000** | 0 |
+> | lookahead:4   | 20 / 0 / 0   | 16 / 0 / 4  | 100% | 0% | **0.000** | 1 (seed=0 identical) |
+>
+> **Seed=0 == seed=1 bit-for-bit** → eval is essentially deterministic at peak.pt + default config (lookahead4 tie-breaks rare; openings deterministic; net at temp=0 deterministic). So this isn't "lucky seed" — it's reproducible.
+> - **Reconciliation with the H2/51% binding-gap finding:** The "51% lookahead4-Bwin" pooled in `report_100pct.py` averaged 10g/row eval rows across the cell's training-history checkpoints (the eval_results.jsonl rows are from various epochs of training, not peak.pt alone). Per-row breakdown shows la4_BlackW BIMODAL across rows: `0, 10, 0, 5, 10, 2, 10, 10` — that's **CHECKPOINT VARIATION across epochs**, NOT per-checkpoint stochasticity. Peak.pt is on the strong side of the training-history distribution; weaker epochs scored lower. The "51% binding gap" was the wrong abstraction.
+> - **The H2 search-depth ceiling hypothesis is REFUTED for the production checkpoint at the stated 100% target.** 100 sims is enough at peak.pt. The matured champion already sweeps all 3 evals deterministically. (Caveat: 20/20 at 40g is Wilson-95%-CI `[83.9%, 100%]` — i.e., the data is consistent with true Bwin ≥84%; tightening to ≥95% would need 100g/100g.)
+> - **What the eval-side investment is actually FOR:** FPU (`derby-3w0`) + tree-reuse (`derby-jmi`) + proven-prop (`derby-b3n`) + eval-VCF overlay (`derby-ehw`) + the probe driver are **still useful infrastructure** but they solve a problem the production checkpoint doesn't have at the stated 100% target. They are correctly-built tools waiting for a harder objective.
+> - **🎯 THE NEW CEILING — lookahead:depth=6.** Smoke at 4 games: champion went 1W/1L/0D as black (a real LOSS, not just draws) + 0W/0L/2D as white. dist=0.5. **40g run pending.** Unlike la4 (where champion always wins or draws, never loses), la6 actually beats the champion sometimes. If the 40g confirms this is the real ceiling, the next research objective shifts from "close the la4-Bwin gap" (it's already closed) to **"break the la6 ceiling."** The eval-side levers (FPU/tree-reuse/proven-prop/eval-VCF) become directly relevant — they might convert la6 losses to draws and draws to wins.
+> - **v9-medium also probed (peak.pt vs heuristic, 40g):** 5W/0L/15D black = 25% Bwin (matches the in-loop pooled 29% — not an artifact, genuinely under-trained). 20W/0L/0D white. Same pattern as the matured-champion-on-la4 was thought to be: never loses, but doesn't convert all draws. v9-medium is the right POC target for the closed-self-play-loop covariate-shift theory — heuristic-mix on it would directly test the synthesis.
+> - **What about Jason's morning framing "we're not 100% on heuristic"?** It applied to the under-trained v9 lanes (small 57%, medium 25%) or to mid-training-history of the champion's cell — NOT to peak.pt. The production matured champion IS at 100% heuristic-Bwin (and has been across all in-loop eval rows: every single row shows 10/0/0). The synthesis (closed self-play loop is structurally hard) is still valid — the v9 lanes demonstrate it — but the matured champion eventually escapes it after enough training.
+> - **Action implications:** (a) the RESUME PLAYBOOK's step 1 (eval-sims × eval-VCF on champion vs la4) is **answered before it ran** — the matured champion is already there. (b) Pivot eval-side levers to the la6 objective. (c) Heuristic-mix POC on v9-medium becomes the cleanest test of the covariate-shift theory.
+
 ## Derby v9 — the NET-CAPACITY axis (run record)
 
 **v8 is CONCLUDED — the scalar `vcf + global-pool + value-discount 0.98` champion
