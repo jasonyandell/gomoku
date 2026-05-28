@@ -15,6 +15,17 @@ judgement. The load-bearing rule: **beads never run the GPU.** Two GPU executors
 so a bead is *code-only* work for another session that lands a cell "available for the
 derby" — it is not a race. This splits intake into two paths.
 
+**TWO distinct runners consume the two paths (don't conflate — tested 2026-05-27):**
+- **Config-only cell** → the **derby-runner** (GPU) picks it up via its loop **step-0
+  scan-for-new-research** (git-fetch `main` + race any off-board `derby-x-*` cell in
+  `run_sweep.CELLS`). **No bead.** This is how `derby-x-gumbel-m8`/`-wdl`/`-soft-policy`/
+  `-vct`/`-medium-signal` all got raced — none had a bead.
+- **Code-heavy bead** → the **bead-runner** (a separate code-only auto-factory session that
+  polls `bd ready` ~60s from the main checkout) builds the cell → merges → then the
+  derby-runner races it.
+So "did I make a bead?" for a config-only cell is correctly **no** — push the cell to
+`run_sweep.CELLS` on `main`; the derby-runner's scan races it. Beads are only for code-heavy.
+
 ## The fork — config-only vs code-heavy
 
 Decide with one question: **does the lever already exist as a flag / `Cell` field?**
