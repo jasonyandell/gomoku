@@ -90,6 +90,23 @@ The bead is worked by the **bead-runner**: a separate session that polls `bd rea
 - **Leave it `open` + unblocked + UNASSIGNED.** The runner claims unassigned **ready** beads; an assigned bead (even assigned to the runner) drops out of `bd ready`. Don't set `assignee=orchestrator`.
 - Keep `--labels="derby-idea,proposed"` and the `(CODE-ONLY, no GPU)` title — the runner's high-confidence grab signal. Pickup latency is ~60s.
 
+## Operability gates for long-running scripts (acceptance-criteria addendum)
+
+The principle (Jason, 2026-05-28): **perf as first-class, even above research — "more perf more research."** A script that streams + resumes + self-times is fine even if it's intrinsically long; a script that doesn't have those is a perf bug regardless of wall-time.
+
+If a Path B bead ships a SCRIPT estimated to run **>5 min wall** (probe drivers, sweep orchestrators, multi-cell tools, batch evaluators — anything with multiple cells/epochs/chunks), the bead's `--acceptance` MUST require these three operability properties. They're tablestakes — without them, a long script is a usability bug waiting to fire:
+
+1. **Streaming output** — incremental results land in the output file (or stdout) AS the work happens, not just at end. Per-cell, per-epoch, per-chunk. If the script dies at cell 15/16, the first 14 cells' results survive on disk. Implementation: open in append mode + `f.write(...); f.flush()` after each unit, or an unbuffered `print()` per-cell at the minimum. **No "compute everything → write at end" patterns.**
+2. **`--resume` support** — re-running the script with the same `--output` path **skips cells already in the output file** (idempotent). Lets the runner recover from crash, OOM, GPU contention, or a wrong-cwd misfire. Pair with `--no-resume` for explicit re-runs. The trainer does this (`--resume latest.pt`); long scripts should too.
+3. **Honest timing self-report** — script prints its OWN estimate up front (*"expect ~X min for N cells at Y sec/cell, scaling with K"*) AND prints `actual / estimate` ratio at end. When the script's estimate is off by **>2×**, that signals a perf-meta bug to investigate; the next session knows to suspect modeling error, contention, or a missed cost.
+
+**Acceptance-criteria template addendum (for any script-shipping Path B bead):**
+> `… script streams results incrementally (per-cell flush, not end-of-run); --resume <existing-output> skips already-completed cells; script header prints an estimate (X min for N cells) and end-of-run prints actual / estimate ratio; if est is off >2×, a meta-perf-bead is suggested in the script's exit message.`
+
+**Anti-pattern poster child (2026-05-28):** `probe_100pct.py` shipped via `derby-5xs` + `derby-u8d` without any of the three. The 4-hour la6 matrix run had **no per-cell visibility** (output buffered to end). The 100g re-eval ran 2+ hours with **no observable progress and no resumability** — a crash would have lost it all. The bead acceptance criteria SHOULD have required these properties; it didn't. The next iteration of this script must add them; future probe-driver beads must include them from the start.
+
+**The 5-min wall is the trigger** for adding the gate, NOT a hard limit on script duration. A 4-hour script with all three properties is fine. A 7-min script without them is a bug. Wall-time is a signal that the operational properties matter; the properties themselves are what protect the work.
+
 ## After registration — what the runner does (set expectations)
 The runner swaps the cell into a lane when one **plateaus / result-locks**, then judges it by the fresh-start rule: **climb-RATE while it's a young seed-0 lane, H2H peak only once matured** (the fresh-start H2H lag — never retire a climbing fresh lane on an early H2H number). So register and be patient; a fresh lane looks underwhelming in round-robin before it ripens.
 
@@ -101,6 +118,7 @@ The runner swaps the cell into a lane when one **plateaus / result-locks**, then
 - ❌ **File a bead that changes the RANKING** — the success metric, `pick_priority`, scoring, or eval-weighting/allocation. That's the ranking owner's (derby-runner's) call. Submit a read-only tool + the observation and let the ranking handle it.
 - ❌ `bd create` from a sibling worktree, or assign the bead — both make it invisible to the bead-runner (per-checkout store + no remote; assigned drops out of `bd ready`). Create from `/Users/jason/code/gomoku`, leave it `open`+UNASSIGNED.
 - ❌ **Merge `feat→main` with `.beads/issues.jsonl` dirty (TESTED gotcha).** Any `bd create`/`bd update` (run from the main checkout) stages `.beads/issues.jsonl` on `main`, so a subsequent `git merge --no-ff feat/<slug>` ABORTS with *"Your local changes to the following files would be overwritten by merge: .beads/issues.jsonl."* **Always `git commit -q -m "beads: …" -- .beads/issues.jsonl` FIRST, then merge.** (It's beads' own export; committing it is the sanctioned close-protocol sync, not a content edit.)
+- ❌ **Ship a Path B script-bead estimated >5 min wall without the three operability gates** (streaming output, `--resume`, honest timing self-report) in the acceptance criteria. See *Operability gates for long-running scripts* above. Anti-pattern: `derby-5xs`/`probe_100pct.py` shipped without any of them, then a 2-hour 100g re-eval became un-resumable + un-observable. Perf is first-class above research.
 
 ## Worked examples
 - **Config-only:** `derby-x-vdisc-097` = clone `derby-v7-mate-discount`, change `--value-discount 0.98 → 0.97`. No bead; runner swapped it in to probe the discount optimum.
