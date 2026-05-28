@@ -1089,3 +1089,16 @@ All navigable cross-refs in wiki/ updated to new names. Skill referred to as `go
     consolidating the macOS/zsh/proc-filter/cap-reach/buffer-lag/
     cron-expiry/multi-session-commits/deploy-trigger gotchas in one
     place.
+
+## [2026-05-27] research | gomocup-AZ technique survey source page
+
+- New source page [sources/gomocup-az-techniques-2026-05-27.md](sources/gomocup-az-techniques-2026-05-27.md)
+  filed during the post-v7 gomocup-AZ implementation arc: a frozen survey of
+  AlphaGomoku/KataGo training and search techniques considered for the lab
+  (WDL value head, LCB / variance-PUCT, moves-left, in-search-VCF, SE blocks,
+  ConvNext, threat-block defense, etc.) with red-team verdicts for each.
+- The synthesis-and-running-verdict layer lives in
+  [ops/research-board.md](ops/research-board.md) — the "Open candidates"
+  section + the v8 RR3/RR4/RR5 H2H verdicts confirmed WDL as the lone net-
+  positive lever (+35/+56) but never beating the value-discount champion.
+- Catalog row added under Core → Sources in [index.md](index.md).

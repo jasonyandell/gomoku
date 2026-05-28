@@ -70,6 +70,7 @@ read is:
 | [topics/training-run-lineage.md](topics/training-run-lineage.md) | Compact route map for the Z and WL-series run sequence. |
 | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) | Source record for the LLM wiki charter that inspired this structure. |
 | [sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md](sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md) | Transcript of Sid Bidasaria's "Stop babysitting your agents" talk (verification → multi-Claude → background loops). Locally Whisper-transcribed because the video has no captions. |
+| [sources/gomocup-az-techniques-2026-05-27.md](sources/gomocup-az-techniques-2026-05-27.md) | Frozen survey (2026-05-27) of AlphaGomoku/KataGo training/search techniques considered for the lab: WDL value head, LCB/variance-PUCT, moves-left, in-search-VCF, SE blocks, and others. The synthesis-and-verdict layer for each lever lives in [ops/research-board.md](ops/research-board.md) ("Open candidates" + the v8/v9 verdicts). |
 
 ### Training Dynamics
 
