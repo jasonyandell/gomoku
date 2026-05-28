@@ -48,6 +48,16 @@ class Node:
     # Cached terminal info on first visit
     is_terminal: bool = False
     terminal_value: float = 0.0  # from side-to-move's perspective in THIS node's state
+    # KataGo-style proven-value bookkeeping (derby-b3n). From THIS node's
+    # side-to-move perspective: +1 = proven win, -1 = proven loss, 0 = unknown.
+    # Set at terminal-init (where terminal_value -1.0 ≡ side-to-move just lost),
+    # optionally at leaf expansion via solve_vcf, and propagated upward in
+    # backup. EVAL-ONLY: gen MCTS leaves it at 0 (it stays unused).
+    proven_value: int = 0
+    # When proven_value == +1 from a leaf-VCF call, the solver also returns
+    # the first attacker move of the forcing line — store it so the picker
+    # can play it directly (we know the move without descending). -1 = unset.
+    proven_action: int = -1
 
     def total_visits(self) -> int:
         return int(self.N.sum())
@@ -58,6 +68,7 @@ def _select_action(
     c_puct_init: float,
     c_puct_base: float,
     fpu_reduction_c: float = 0.0,
+    proven_prop: bool = False,
 ) -> int:
     """PUCT selection over legal actions only.
 
@@ -74,6 +85,17 @@ def _select_action(
     KataGo-style First-Play Urgency reduction: unvisited children inherit
     ``parent_V - c * sqrt(sum_visited_priors)`` instead of Q=0. Eval-only knob;
     self-play / gen never set this (they take the c=0 branch).
+
+    ``proven_prop`` (default False = OFF, byte-identical) enables KataGo-style
+    proven-value selection overrides: an existing child with
+    ``proven_value == -1`` (the OPPONENT at that child is proven-losing, so
+    taking that action proves a win for US) gets effective Q=+inf — MCTS will
+    always pick it if available. An existing child with ``proven_value == +1``
+    (opponent proven-winning ⇒ we proven-lose down this branch) gets effective
+    Q=-inf — we never voluntarily pick it. Degenerate case (every legal child
+    is proven-loss for us): score is all -inf over legal, we fall back to the
+    legal policy-prior argmax so selection still returns SOMETHING (the
+    slowest-mate proxy). EVAL-ONLY: gen MCTS never sets ``proven_prop=True``.
     """
     total = node.total_visits()
     pb_c = float(np.log((1.0 + total + c_puct_base) / c_puct_base) + c_puct_init)
@@ -89,6 +111,25 @@ def _select_action(
     score = Q + U
     # Mask illegal moves to -inf so they're never selected.
     score = np.where(node.legal_mask, score, -np.inf)
+    if proven_prop and node.children:
+        # Override score at expanded children with a proven value. The child's
+        # proven_value is from the CHILD's side-to-move POV (the opponent of
+        # this node), so child=-1 (opp loses) ⇒ this action wins ⇒ +inf;
+        # child=+1 (opp wins) ⇒ this action loses ⇒ -inf.
+        for a, child in node.children.items():
+            pv = child.proven_value
+            if pv == -1:
+                score[a] = np.inf
+            elif pv == +1:
+                score[a] = -np.inf
+        # Degenerate: if all legal scores are -inf (every legal expanded child
+        # is proven-loss AND no unexpanded child remains), fall back to
+        # legal-policy argmax so we still return a valid action.
+        if not np.any(np.isfinite(score) & node.legal_mask) and not np.any(
+            np.isposinf(score)
+        ):
+            legal_p = np.where(node.legal_mask, node.P, -np.inf)
+            return int(np.argmax(legal_p))
     return int(np.argmax(score))
 
 
@@ -151,7 +192,15 @@ def _add_dirichlet_noise(node: Node, alpha: float, eps: float, rng: np.random.Ge
 
 
 def _init_node(node: Node) -> None:
-    """Compute terminal info and legal mask for a fresh node."""
+    """Compute terminal info and legal mask for a fresh node.
+
+    Also seeds ``proven_value`` (derby-b3n) from the terminal outcome when
+    applicable: a terminal with ``terminal_value == -1.0`` means this node's
+    side-to-move just lost (the previous mover, now plane 1, has five), so the
+    node is proven-loss for the side to move (``proven_value = -1``). Defensive
+    +1.0 case (won't arise from natural play but guarded for solver-set leaves)
+    maps to ``+1``. Draws (``0.0``) leave ``proven_value = 0``.
+    """
     done, v, legal_mask = state_ops.init_node_status(
         node.state.board,
         node.state.move_count,
@@ -160,6 +209,12 @@ def _init_node(node: Node) -> None:
     node.terminal_value = v
     if legal_mask is not None:
         node.legal_mask = legal_mask
+    if done:
+        if v <= -0.5:
+            node.proven_value = -1
+        elif v >= 0.5:
+            node.proven_value = +1
+        # else (draw): leave proven_value = 0; a draw is not a proven outcome.
 
 
 @dataclass
@@ -176,6 +231,7 @@ def _select_one(
     c_puct_base: float,
     forced_playout_k: float = 0.0,
     fpu_reduction_c: float = 0.0,
+    proven_prop: bool = False,
 ) -> _PendingLeaf:
     """Descend tree until we reach either an unexpanded node or a terminal."""
     node = root
@@ -183,13 +239,23 @@ def _select_one(
     while True:
         if node.is_terminal:
             return _PendingLeaf(leaf=node, path=path)
+        # Proven nodes act as "virtual terminals" once proven_prop is on — no
+        # point descending further into a subtree whose value is fixed.
+        if proven_prop and node.proven_value != 0:
+            return _PendingLeaf(leaf=node, path=path)
         if not node.expanded:
             return _PendingLeaf(leaf=node, path=path)
         a = -1
         if forced_playout_k > 0.0 and node is root:
             a = _select_root_action_forced(node, forced_playout_k)
         if a < 0:
-            a = _select_action(node, c_puct_init, c_puct_base, fpu_reduction_c=fpu_reduction_c)
+            a = _select_action(
+                node,
+                c_puct_init,
+                c_puct_base,
+                fpu_reduction_c=fpu_reduction_c,
+                proven_prop=proven_prop,
+            )
         if a not in node.children:
             # Lazy child creation
             child_state = node.state.apply(a)
@@ -200,14 +266,89 @@ def _select_one(
         node = node.children[a]
 
 
-def _backprop(path: list[tuple[Node, int]], leaf_value: float) -> None:
+def _maybe_propagate_proven(parent: Node) -> None:
+    """KataGo-style proven-value propagation rules (derby-b3n).
+
+    Called bottom-up after a backup step touches ``parent.children[action]``.
+    From ``parent``'s side-to-move POV:
+
+    - If ANY existing child has ``proven_value == -1`` (the opponent at that
+      child is proven-losing), playing that move proves a win for ``parent``:
+      ``parent.proven_value = +1``.
+    - Else, if every LEGAL child is expanded AND every one has
+      ``proven_value == +1`` (the opponent always wins from there), then no
+      matter what ``parent`` plays it loses: ``parent.proven_value = -1``.
+    - Otherwise leave it unknown.
+
+    Idempotent: once ``parent.proven_value != 0`` we never overwrite it (the
+    first proof is correct under MCTS's tree-search semantics).
+    """
+    if parent.proven_value != 0:
+        return
+    # Fast path: any expanded child with proven_value == -1 ⇒ parent wins.
+    for child in parent.children.values():
+        if child.proven_value == -1:
+            parent.proven_value = +1
+            return
+    # All-children-proven-+1 ⇒ parent loses. Requires every LEGAL action to
+    # have a corresponding expanded child AND each child proven_value=+1.
+    n_legal = int(parent.legal_mask.sum())
+    if n_legal == 0 or len(parent.children) < n_legal:
+        return
+    for a in np.flatnonzero(parent.legal_mask):
+        c = parent.children.get(int(a))
+        if c is None or c.proven_value != +1:
+            return
+    parent.proven_value = -1
+
+
+def _backprop(
+    path: list[tuple[Node, int]],
+    leaf_value: float,
+    *,
+    leaf_proven_value: int = 0,
+    proven_prop: bool = False,
+) -> None:
     """Backpropagate leaf_value, flipping sign at every level.
 
     leaf_value is from the LEAF state's side-to-move perspective. The parent
     along the path has the opposite side-to-move (because state.apply() flips
     planes), so its value contribution is -leaf_value, etc.
+
+    When ``proven_prop=True`` (derby-b3n) AND a node along the path becomes
+    proven (either the leaf was set to ``leaf_proven_value != 0``, or a child
+    along the walk becomes proven via the propagation rule), every step uses
+    the proven value with INFINITE confidence — the running ``v`` is replaced
+    by ``-child.proven_value`` whenever the child we just visited is proven,
+    overriding ``W/N`` along the path so future selection sees the fixed
+    value. After updating each ``parent`` we re-check whether it itself
+    becomes proven via :func:`_maybe_propagate_proven` and cascade upward.
     """
     v = leaf_value
+    # leaf_proven_value lets the caller seed a non-terminal proven outcome
+    # (e.g. solve_vcf at leaf-expansion sets +1) on a leaf that has no parent
+    # yet on the path; downstream the backup picks it up via parent.children.
+    if proven_prop:
+        # Walk bottom-up; at each level let the child's proven_value (if any)
+        # override the running value, then update parent and check propagation.
+        # Note: in path, each pair is (parent, action) where the CHILD is
+        # parent.children[action]. The leaf is implicitly the child of the
+        # deepest path entry — leaf_proven_value is its proven_value if set.
+        child_pv: int = leaf_proven_value
+        for parent, action in reversed(path):
+            v = -v
+            if child_pv != 0:
+                # Proven override: contribution is the proven value from
+                # parent's POV (negation of child's POV).
+                v = float(-child_pv)
+            parent.N[action] += 1
+            parent.W[action] += v
+            _maybe_propagate_proven(parent)
+            # If parent itself became proven, that propagates further up: the
+            # NEXT iteration's "child" is this parent.
+            child_pv = parent.proven_value
+        return
+    # Legacy (proven_prop OFF) — byte-identical to the pre-lever path.
     for parent, action in reversed(path):
         # In `parent`, we're recording the value of taking `action`.
         # The child's value is +v from the child's perspective, which is -v from parent's.
@@ -234,6 +375,8 @@ class MCTSGame:
         dirichlet_eps: float = 0.25,
         forced_playout_k: float = 0.0,
         fpu_reduction_c: float = 0.0,
+        proven_prop: bool = False,
+        proven_vcf_leaf_nodes: int = 0,
         rng: np.random.Generator | None = None,
     ):
         self.c_puct = c_puct  # acts as c_puct_init in the AGZ log schedule
@@ -245,6 +388,14 @@ class MCTSGame:
         # KataGo FPU-reduction constant. 0.0 == OFF == byte-identical legacy
         # (unvisited children take Q=0). Eval-only knob.
         self.fpu_reduction_c = fpu_reduction_c
+        # derby-b3n: KataGo proven-value propagation. False == OFF ==
+        # byte-identical legacy. Eval-only knob.
+        self.proven_prop = proven_prop
+        # derby-b3n: leaf-expansion bounded VCF. 0 == OFF == byte-identical
+        # legacy. When >0, expanded leaves run a bounded solve_vcf to
+        # potentially seed proven_value=+1 directly. Requires proven_prop=True
+        # to be useful (the proof just sits dormant otherwise). Eval-only.
+        self.proven_vcf_leaf_nodes = proven_vcf_leaf_nodes
         self.rng = rng or np.random.default_rng()
         self.root = Node(state=state)
         _init_node(self.root)
@@ -283,38 +434,86 @@ def run_batched_mcts(
             g.root.expanded = True
             if add_root_noise:
                 _add_dirichlet_noise(g.root, g.dirichlet_alpha, g.dirichlet_eps, g.rng)
+            # derby-b3n: bounded leaf-VCF at root expansion. The root IS a
+            # leaf the first time it is expanded; seed proven_value=+1 if
+            # solve_vcf proves a win for the side-to-move.
+            pp = getattr(g, "proven_prop", False)
+            vcf_n = getattr(g, "proven_vcf_leaf_nodes", 0)
+            if pp and vcf_n > 0 and g.root.proven_value == 0:
+                from gomoku.vcf import solve_vcf
+                res = solve_vcf(g.root.state.board, max_nodes=vcf_n)
+                if res.has_forced_win:
+                    g.root.proven_value = +1
+                    if res.winning_move is not None:
+                        g.root.proven_action = int(res.winning_move)
         # We do NOT backprop the root's own value; the root is not a leaf in the AlphaZero sense.
 
     for _ in range(n_simulations):
-        pending = [
-            _select_one(
+        pending: list[tuple[MCTSGame, _PendingLeaf]] = []
+        for g in games:
+            pl = _select_one(
                 g.root,
                 g.c_puct,
                 g.c_puct_base,
                 getattr(g, "forced_playout_k", 0.0),
                 getattr(g, "fpu_reduction_c", 0.0),
+                proven_prop=getattr(g, "proven_prop", False),
             )
-            for g in games
-        ]
+            pending.append((g, pl))
 
-        # Split into terminal (no eval needed) and to-evaluate.
-        to_eval: list[_PendingLeaf] = []
-        for p in pending:
+        # Split into terminal/proven (no eval needed) and to-evaluate.
+        to_eval: list[tuple[MCTSGame, _PendingLeaf]] = []
+        for g, p in pending:
+            pp = getattr(g, "proven_prop", False)
             if p.leaf.is_terminal:
-                _backprop(p.path, p.leaf.terminal_value)
+                _backprop(
+                    p.path,
+                    p.leaf.terminal_value,
+                    leaf_proven_value=p.leaf.proven_value if pp else 0,
+                    proven_prop=pp,
+                )
+            elif pp and p.leaf.proven_value != 0:
+                # Proven non-terminal leaf (e.g. from leaf-VCF). Use the
+                # proven value as the backed-up signal with infinite confidence.
+                _backprop(
+                    p.path,
+                    float(p.leaf.proven_value),
+                    leaf_proven_value=p.leaf.proven_value,
+                    proven_prop=True,
+                )
             else:
-                to_eval.append(p)
+                to_eval.append((g, p))
 
         if not to_eval:
             continue
 
-        states = [p.leaf.state for p in to_eval]
+        states = [p.leaf.state for _g, p in to_eval]
         priors, values = evaluator(states)
-        for p, prior, value in zip(to_eval, priors, values):
+        for (g, p), prior, value in zip(to_eval, priors, values):
             if not p.leaf.expanded:
                 _set_priors(p.leaf, prior)
                 p.leaf.expanded = True
-            _backprop(p.path, float(value))
+                # derby-b3n: optional bounded VCF at leaf expansion. When
+                # vcf_leaf_nodes > 0 we run solve_vcf on the side-to-move at
+                # this leaf; if it proves a win, seed proven_value=+1 directly.
+                pp = getattr(g, "proven_prop", False)
+                vcf_n = getattr(g, "proven_vcf_leaf_nodes", 0)
+                if pp and vcf_n > 0 and p.leaf.proven_value == 0:
+                    from gomoku.vcf import solve_vcf
+                    res = solve_vcf(p.leaf.state.board, max_nodes=vcf_n)
+                    if res.has_forced_win:
+                        p.leaf.proven_value = +1
+                        if res.winning_move is not None:
+                            p.leaf.proven_action = int(res.winning_move)
+            pp = getattr(g, "proven_prop", False)
+            leaf_pv = p.leaf.proven_value if pp else 0
+            # If the leaf is proven (from leaf-VCF), override the value
+            # contribution with the proven value (+1 from leaf POV) instead of
+            # the network's V — this is the "infinite confidence" override.
+            v_in = float(leaf_pv) if leaf_pv != 0 else float(value)
+            _backprop(
+                p.path, v_in, leaf_proven_value=leaf_pv, proven_prop=pp,
+            )
 
 
 # ---------------- Wave-batched MCTS (virtual loss) ----------------
