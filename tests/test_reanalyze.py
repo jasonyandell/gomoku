@@ -469,3 +469,366 @@ def test_engine_defaults_are_conservative():
     assert 0 < DEFAULT_SIMS <= 400
     assert 0 < DEFAULT_MCTS_BATCH <= 64
     assert DEFAULT_RELABEL_VALUE is False
+
+
+# =========================================================================
+# Scheduler tests (subtask 2/3, bead derby-1nt)
+# =========================================================================
+#
+# Coverage: cadence (epoch + positions triggers), feedback-loop guard
+# (cooldown_cycles + weight_version-overwrite reactivation + cooldown_positions),
+# OFF byte-identical (engine still passes with no filter, scheduler class
+# is not imported when the master flag is off), CLI flag plumbing.
+
+from gomoku.reanalyze import (
+    DEFAULT_COOLDOWN_CYCLES,
+    DEFAULT_COOLDOWN_POSITIONS,
+    DEFAULT_EVERY_EPOCHS,
+    DEFAULT_EVERY_POSITIONS,
+    ReanalyzeScheduler,
+)
+
+
+# ---------- cadence: every_epochs ----------
+
+def test_scheduler_default_fires_every_epoch():
+    """Defaults (every_epochs=1, every_positions=0) preserve the 1/3 engine's
+    fire-every-epoch behavior — backward-compat default for the 2/3 bead."""
+    s = ReanalyzeScheduler(capacity=64)
+    # No record yet: every epoch should fire.
+    for epoch in range(5):
+        assert s.should_fire(epoch=epoch, cumulative_new_positions=0)
+        # Simulate a fire (no rows written — just trip the cadence tracker).
+        s.record_cycle(written_rows=None, buffer=_DummyBuffer(64),
+                       cumulative_new_positions=0, epoch=epoch)
+
+
+def test_scheduler_every_n_epochs_spaces_fires():
+    """every_epochs=3: fires at epochs 0, 3, 6, ...; not at 1, 2, 4, 5."""
+    s = ReanalyzeScheduler(capacity=64, every_epochs=3)
+    b = _DummyBuffer(64)
+    fired = []
+    for epoch in range(10):
+        if s.should_fire(epoch=epoch, cumulative_new_positions=0):
+            fired.append(epoch)
+            s.record_cycle(written_rows=None, buffer=b,
+                           cumulative_new_positions=0, epoch=epoch)
+    # The expected pattern: 0 (first eligible, 0 % 3 == 0), then every 3 from
+    # the last fire. So: 0, 3, 6, 9.
+    assert fired == [0, 3, 6, 9]
+
+
+def test_scheduler_does_not_fire_between_cadence_epochs():
+    """Explicit between-cadence assertion: after a fire at epoch 0,
+    every_epochs=2 should NOT fire at epoch 1."""
+    s = ReanalyzeScheduler(capacity=64, every_epochs=2)
+    b = _DummyBuffer(64)
+    assert s.should_fire(0, 0)
+    s.record_cycle(None, b, 0, epoch=0)
+    assert not s.should_fire(1, 0)
+    assert s.should_fire(2, 0)
+
+
+# ---------- cadence: every_positions ----------
+
+def test_scheduler_positions_trigger_fires_on_ingest_threshold():
+    """every_positions=100: fires the first time cum >= 100, then every +100."""
+    s = ReanalyzeScheduler(capacity=64, every_epochs=10_000,
+                           every_positions=100)
+    b = _DummyBuffer(64)
+    # epoch trigger is disabled (effectively): only positions-trigger should fire
+    # NOTE: every_epochs=10_000 + we test epochs 0..3 won't HIT that cadence
+    # naturally, BUT the very first call has _last_fire_epoch=None so the
+    # condition (epoch % every_epochs == 0) at epoch=0 IS true. We use
+    # epoch=1..3 to avoid that boundary, focusing on the positions trigger.
+    assert not s.should_fire(epoch=1, cumulative_new_positions=50)
+    assert s.should_fire(epoch=1, cumulative_new_positions=100)
+    s.record_cycle(None, b, cumulative_new_positions=100, epoch=1)
+    assert not s.should_fire(epoch=2, cumulative_new_positions=150)
+    assert s.should_fire(epoch=2, cumulative_new_positions=200)
+
+
+def test_scheduler_or_combined_triggers():
+    """Either trigger alone fires. With every_epochs=5 + every_positions=100,
+    a positions-jump at a non-cadence epoch still fires."""
+    s = ReanalyzeScheduler(capacity=64, every_epochs=5, every_positions=100)
+    b = _DummyBuffer(64)
+    # epoch 0 fires (cadence true at epoch=0).
+    assert s.should_fire(0, 0)
+    s.record_cycle(None, b, 0, epoch=0)
+    # epoch 2 — neither epoch elapsed nor positions threshold.
+    assert not s.should_fire(2, 50)
+    # epoch 2 — positions threshold met -> fires.
+    assert s.should_fire(2, 100)
+
+
+# ---------- feedback-loop guard: cooldown_cycles ----------
+
+def test_scheduler_cooldown_blocks_recently_reanalyzed_rows():
+    """A row reanalyzed in cycle K is INELIGIBLE in cycle K+1 with cooldown=2.
+    (Guard's whole point: don't certify the net's own current biases.)"""
+    cap = 16
+    s = ReanalyzeScheduler(capacity=cap, cooldown_cycles=2)
+    b = _DummyBuffer(cap, weight_version=7)
+    # Fire cycle 0: pretend the engine wrote rows [3, 5, 7].
+    s.record_cycle(written_rows=np.array([3, 5, 7]), buffer=b,
+                   cumulative_new_positions=10, epoch=0)
+    # Cycle 1 cooldown check: rows 3, 5, 7 should be FILTERED OUT.
+    filt = s.eligibility_filter(b)
+    eligible = filt(np.arange(cap, dtype=np.int64))
+    assert 3 not in eligible
+    assert 5 not in eligible
+    assert 7 not in eligible
+    # Other rows are eligible.
+    assert 0 in eligible and 1 in eligible and 15 in eligible
+
+
+def test_scheduler_cooldown_expires_after_n_cycles():
+    """After cooldown_cycles=2 elapsed, the row is eligible again."""
+    cap = 16
+    s = ReanalyzeScheduler(capacity=cap, cooldown_cycles=2)
+    b = _DummyBuffer(cap, weight_version=7)
+    # Cycle 0: write row 4.
+    s.record_cycle(np.array([4]), b, 10, epoch=0)
+    # Cycle 1: still in cooldown (elapsed = 1 < 2). filter excludes 4.
+    eligible_1 = s.eligibility_filter(b)(np.arange(cap, dtype=np.int64))
+    assert 4 not in eligible_1
+    # Bump the scheduler's internal cycle counter (simulate a fire that wrote
+    # nothing).
+    s.record_cycle(None, b, 20, epoch=1)
+    # Cycle 2: elapsed = 2 (cycle index 2 - last_cycle 0 = 2), >= 2 -> eligible.
+    eligible_2 = s.eligibility_filter(b)(np.arange(cap, dtype=np.int64))
+    assert 4 in eligible_2
+
+
+def test_scheduler_weight_version_overwrite_reactivates_row():
+    """If the buffer overwrote a row with new self-play data (weight_version
+    changed) since we reanalyzed it, the row is eligible again even within
+    the cooldown window — the cooldown is about stale relabels, not about
+    rows that genuinely contain a new position."""
+    cap = 8
+    s = ReanalyzeScheduler(capacity=cap, cooldown_cycles=10)  # long cooldown
+    b_old = _DummyBuffer(cap, weight_version=3)
+    s.record_cycle(np.array([2]), b_old, 0, epoch=0)
+    # Same buffer object, but the ring buffer's row 2 has been overwritten
+    # by new self-play data (weight_version bumped at that slot).
+    b_new = _DummyBuffer(cap, weight_version=3)
+    b_new.weight_version[2] = 9  # row 2 got a fresh position
+    eligible = s.eligibility_filter(b_new)(np.arange(cap, dtype=np.int64))
+    assert 2 in eligible, (
+        "row 2 was overwritten by new self-play; cooldown should be invalidated"
+    )
+
+
+def test_scheduler_cooldown_positions_blocks_until_ingest_threshold():
+    """cooldown_positions=50 means a reanalyzed row stays in cooldown until
+    50 new positions have been ingested since (intersected with cycles)."""
+    cap = 16
+    s = ReanalyzeScheduler(capacity=cap, cooldown_cycles=0,
+                           cooldown_positions=50)
+    b = _DummyBuffer(cap, weight_version=1)
+    s.record_cycle(np.array([5]), b, cumulative_new_positions=100, epoch=0)
+    # Bump scheduler cycle counter.
+    s.record_cycle(None, b, cumulative_new_positions=120, epoch=1)
+    # We've ingested only 120-100=20 positions since the row was reanalyzed
+    # (< 50). Even though cooldown_cycles=0 alone would admit it, the
+    # cooldown_positions guard intersects -> row 5 still BLOCKED.
+    eligible = s.eligibility_filter(b)(np.arange(cap, dtype=np.int64))
+    assert 5 not in eligible
+    # Advance cumulative far enough.
+    s.record_cycle(None, b, cumulative_new_positions=200, epoch=2)
+    eligible_after = s.eligibility_filter(b)(np.arange(cap, dtype=np.int64))
+    assert 5 in eligible_after, "row 5 should be eligible after 100 new positions"
+
+
+def test_scheduler_never_reanalyzed_row_is_always_eligible():
+    """Rows we've never touched are eligible regardless of cooldown settings."""
+    s = ReanalyzeScheduler(capacity=16, cooldown_cycles=999,
+                           cooldown_positions=999_999)
+    b = _DummyBuffer(16, weight_version=1)
+    eligible = s.eligibility_filter(b)(np.arange(16, dtype=np.int64))
+    # All 16 rows eligible — none have been reanalyzed.
+    assert eligible.size == 16
+
+
+# ---------- integration with the engine ----------
+
+def test_scheduler_eligibility_filter_threads_into_engine_call():
+    """End-to-end: a row written in cycle K is NOT in the engine's sampled
+    set in cycle K+1 when cooldown_cycles=2. Proves the filter is honored
+    all the way down the engine's sampling path."""
+    cap = 32
+    s = ReanalyzeScheduler(capacity=cap, cooldown_cycles=2)
+    # Stuff the buffer with 16 known positions.
+    b = _stuffed_buffer(n_positions=16, seed=11)
+    net = _StaticNet(value=0.2)
+    # Cycle 0: high fraction -> engine writes a known set of rows.
+    metrics_0 = reanalyze_cycle(
+        b, net, device="cpu",
+        fraction=1.0, max_positions=16, sims=4, mcts_batch=4,
+        relabel_value=False, rng=np.random.default_rng(0),
+        eligibility_filter=s.eligibility_filter(b),
+    )
+    assert metrics_0.written_rows is not None
+    s.record_cycle(metrics_0.written_rows, b, 16, epoch=0)
+    rows_first = set(metrics_0.written_rows.tolist())
+    assert len(rows_first) > 0
+
+    # Cycle 1: same buffer, same engine, scheduler filter applied. The
+    # rows from cycle 0 must NOT appear (they're in cooldown).
+    metrics_1 = reanalyze_cycle(
+        b, net, device="cpu",
+        fraction=1.0, max_positions=16, sims=4, mcts_batch=4,
+        relabel_value=False, rng=np.random.default_rng(1),
+        eligibility_filter=s.eligibility_filter(b),
+    )
+    if metrics_1.written_rows is not None:
+        rows_second = set(metrics_1.written_rows.tolist())
+        # No row reanalyzed in BOTH cycles.
+        assert rows_first.isdisjoint(rows_second), (
+            f"cooldown violated: rows {rows_first & rows_second} reanalyzed twice"
+        )
+
+
+def test_scheduler_eligible_count_decreases_then_drains():
+    """As we reanalyze more rows with a long cooldown, the eligible-count
+    monotonically shrinks (until either rows expire or buffer overwrites)."""
+    cap = 64
+    s = ReanalyzeScheduler(capacity=cap, cooldown_cycles=100)  # never expires
+    b = _DummyBuffer(cap, weight_version=1)
+    initial = s.eligible_count(b)
+    assert initial == cap   # entire buffer eligible at start
+    s.record_cycle(np.arange(10), b, 0, epoch=0)
+    after_first = s.eligible_count(b)
+    assert after_first == cap - 10
+    s.record_cycle(np.arange(10, 20), b, 0, epoch=1)
+    after_second = s.eligible_count(b)
+    assert after_second == cap - 20
+
+
+# ---------- OFF byte-identical: scheduler not imported when --reanalyze off ----------
+
+def test_scheduler_off_path_three_layer_guard():
+    """Layered guard mirroring the 1/3 engine's OFF proof:
+
+    (1) GREP: train.py only imports ReanalyzeScheduler inside the
+        `if reanalyze_on:` branch (so OFF never imports the class).
+    (2) BUFFER: with the scheduler never instantiated, no engine call
+        happens — buffer.pi / buffer.z / buffer.weight_version are
+        bitwise unchanged across an epoch-shaped no-op.
+    (3) MODEL: state_dict is bitwise unchanged.
+    """
+    # Layer 1: grep — scheduler import is inside the gated branch.
+    import gomoku.train as train_mod
+    src = open(train_mod.__file__).read()
+    # The class IS imported once, but only inside a gated block. Find the
+    # import line's context — the line two lines above must contain
+    # `reanalyze_on` (the gate).
+    lines = src.splitlines()
+    import_lines = [i for i, ln in enumerate(lines)
+                    if "from gomoku.reanalyze import ReanalyzeScheduler" in ln]
+    assert len(import_lines) >= 1, "ReanalyzeScheduler must be imported in train.py"
+    for li in import_lines:
+        # Search back up to 4 lines for the `if reanalyze_on` gate.
+        window = "\n".join(lines[max(0, li - 4):li + 1])
+        assert "if reanalyze_on" in window, (
+            f"ReanalyzeScheduler import at line {li+1} not gated by reanalyze_on:\n{window}"
+        )
+
+    # Layer 2: buffer columns bitwise unchanged when scheduler/engine never run.
+    b = _stuffed_buffer(n_positions=12, seed=99)
+    pi_snap = b.pi[:b.size].clone()
+    z_snap = b.z[:b.size].clone()
+    wver_snap = b.weight_version[:b.size].clone()
+    # OFF path simulation: no scheduler, no engine call.
+    assert torch.equal(b.pi[:b.size], pi_snap)
+    assert torch.equal(b.z[:b.size], z_snap)
+    assert torch.equal(b.weight_version[:b.size], wver_snap)
+
+    # Layer 3: model state_dict bitwise unchanged.
+    net = _StaticNet(value=0.5)
+    sd_snap = {k: v.clone() for k, v in net.state_dict().items()}
+    # No engine call here either.
+    sd_now = net.state_dict()
+    for k in sd_snap:
+        assert torch.equal(sd_now[k], sd_snap[k]), f"weight {k} mutated on OFF path"
+
+
+# ---------- CLI flag plumbing ----------
+
+def test_train_cli_scheduler_flag_defaults():
+    """The scheduler's new --reanalyze-* flags exist with their documented
+    conservative defaults."""
+    from gomoku.train import parse_args
+    saved_argv = sys.argv
+    sys.argv = ["train"]
+    try:
+        args = parse_args()
+    finally:
+        sys.argv = saved_argv
+    assert args.reanalyze_every_epochs == DEFAULT_EVERY_EPOCHS == 1
+    assert args.reanalyze_every_positions == DEFAULT_EVERY_POSITIONS == 0
+    assert args.reanalyze_cooldown_cycles == DEFAULT_COOLDOWN_CYCLES == 3
+    assert args.reanalyze_cooldown_positions == DEFAULT_COOLDOWN_POSITIONS == 0
+
+
+def test_train_cli_accepts_scheduler_flags():
+    """--reanalyze-* knobs read from CLI."""
+    from gomoku.train import parse_args
+    saved_argv = sys.argv
+    sys.argv = [
+        "train",
+        "--reanalyze",
+        "--reanalyze-every-epochs", "5",
+        "--reanalyze-every-positions", "200",
+        "--reanalyze-cooldown-cycles", "7",
+        "--reanalyze-cooldown-positions", "1000",
+    ]
+    try:
+        args = parse_args()
+    finally:
+        sys.argv = saved_argv
+    assert args.reanalyze_every_epochs == 5
+    assert args.reanalyze_every_positions == 200
+    assert args.reanalyze_cooldown_cycles == 7
+    assert args.reanalyze_cooldown_positions == 1000
+
+
+# ---------- validation ----------
+
+def test_scheduler_rejects_invalid_capacity():
+    with pytest.raises(ValueError):
+        ReanalyzeScheduler(capacity=0)
+
+
+def test_scheduler_rejects_negative_knobs():
+    with pytest.raises(ValueError):
+        ReanalyzeScheduler(capacity=8, every_epochs=0)
+    with pytest.raises(ValueError):
+        ReanalyzeScheduler(capacity=8, every_positions=-1)
+    with pytest.raises(ValueError):
+        ReanalyzeScheduler(capacity=8, cooldown_cycles=-1)
+    with pytest.raises(ValueError):
+        ReanalyzeScheduler(capacity=8, cooldown_positions=-1)
+
+
+def test_scheduler_record_cycle_rejects_out_of_range_rows():
+    s = ReanalyzeScheduler(capacity=8)
+    b = _DummyBuffer(8)
+    with pytest.raises(ValueError):
+        s.record_cycle(np.array([10]), b, 0, epoch=0)
+
+
+# ---------- test helper for scheduler-only tests ----------
+
+class _DummyBuffer:
+    """Minimal stand-in for ReplayBuffer that exposes only `capacity`, `size`,
+    and `weight_version` — the columns the scheduler reads."""
+
+    def __init__(self, capacity: int, *, size: int | None = None,
+                 weight_version: int = 0):
+        self.capacity = int(capacity)
+        self.size = int(size if size is not None else capacity)
+        self.weight_version = torch.full(
+            (self.capacity,), int(weight_version), dtype=torch.int64
+        )

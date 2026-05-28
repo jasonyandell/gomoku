@@ -632,6 +632,30 @@ def parse_args() -> argparse.Namespace:
                    help="Also overwrite buffer.z with the MCTS root value "
                         "(default OFF — relabeling z is more aggressive; "
                         "scheduler subtask decides when to enable).")
+    # --- Reanalyze scheduler (subtask 2/3, bead derby-1nt) -----------------
+    # Cadence + per-row cooldown for the engine above. The master switch is
+    # still --reanalyze; these knobs are inert when it is off (the scheduler
+    # is never instantiated). Defaults reproduce the 1/3 engine's behavior:
+    # fire EVERY epoch, with a 3-cycle cooldown that lets recently-relabeled
+    # rows breathe before another sharpening pass (the feedback-loop guard).
+    p.add_argument("--reanalyze-every-epochs", type=int, default=1,
+                   help="Cadence: fire a reanalyze cycle every N epochs "
+                        "(default 1 = every epoch, preserving the 1/3 engine's "
+                        "behavior).")
+    p.add_argument("--reanalyze-every-positions", type=int, default=0,
+                   help="Cadence (opt-in): also fire after K new positions "
+                        "have been ingested since the last fire (OR-combined "
+                        "with --reanalyze-every-epochs). 0 = disabled (default).")
+    p.add_argument("--reanalyze-cooldown-cycles", type=int, default=3,
+                   help="Feedback-loop guard: refuse to reanalyze a row again "
+                        "within this many cycles (default 3). The row is also "
+                        "made eligible again if the buffer overwrites it with "
+                        "new self-play data (weight_version mismatch).")
+    p.add_argument("--reanalyze-cooldown-positions", type=int, default=0,
+                   help="Feedback-loop guard (opt-in): also require K new "
+                        "positions to have been ingested since a row was last "
+                        "reanalyzed before re-reanalyzing it (intersected with "
+                        "--reanalyze-cooldown-cycles). 0 = disabled (default).")
     p.add_argument("--cross-game-max-ply", type=int, default=10,
                    help="OPENING-ONLY cap (bead derby-4bq): only positions with "
                         "ply < this are aggregated into the cross-game store. The "
@@ -995,6 +1019,10 @@ def main() -> None:
     # buffer state byte-identical to the pre-lever path. The aux-head discipline
     # mirrors cross-game above (no allocation, no import, no call when off).
     reanalyze_on = bool(args.reanalyze)
+    # Scheduler instance (subtask 2/3, bead derby-1nt). Built ONLY in the
+    # gated branch — OFF path never imports the class or allocates the
+    # per-row cooldown tables (aux-head discipline).
+    reanalyze_scheduler = None
     if reanalyze_on:
         if args.reanalyze_fraction <= 0.0:
             raise SystemExit(
@@ -1006,6 +1034,12 @@ def main() -> None:
             f"sims={args.reanalyze_sims}, "
             f"mcts_batch={args.reanalyze_mcts_batch}, "
             f"relabel_value={args.reanalyze_relabel_value})"
+        )
+        print(
+            f"reanalyze SCHEDULER (every_epochs={args.reanalyze_every_epochs}, "
+            f"every_positions={args.reanalyze_every_positions}, "
+            f"cooldown_cycles={args.reanalyze_cooldown_cycles}, "
+            f"cooldown_positions={args.reanalyze_cooldown_positions})"
         )
 
     # Build / load model
@@ -1118,6 +1152,17 @@ def main() -> None:
     if args.buffer_recency_frac > 0.0:
         print(f"buffer curator: recency_frac={args.buffer_recency_frac} "
               f"window={args.buffer_recency_window}")
+    # Build the reanalyze scheduler now that buffer.capacity is known.
+    # OFF path never enters this branch — no import, no allocation.
+    if reanalyze_on:
+        from gomoku.reanalyze import ReanalyzeScheduler
+        reanalyze_scheduler = ReanalyzeScheduler(
+            int(buffer.capacity),
+            every_epochs=int(args.reanalyze_every_epochs),
+            every_positions=int(args.reanalyze_every_positions),
+            cooldown_cycles=int(args.reanalyze_cooldown_cycles),
+            cooldown_positions=int(args.reanalyze_cooldown_positions),
+        )
     if args.resume:
         # Optional: restore buffer if it was saved.
         payload_buf = payload.get("replay_buffer")
@@ -1912,7 +1957,20 @@ def main() -> None:
         # so the relabeled targets feed THIS epoch's training. OFF (default)
         # => never called.
         reanalyze_metrics = None
-        if reanalyze_on and buffer.size >= args.batch_size:
+        # Pre-compute the post-ingest cumulative (the var itself is updated
+        # later in the epoch log block); the scheduler needs the AS-OF-NOW
+        # value to make a cadence decision against rows we just ingested.
+        reanalyze_cum_positions = cumulative_new_positions + n_positions_this_cycle
+        # Cadence gate: ask the scheduler whether to fire THIS epoch. The
+        # buffer.size warmup gate (">= batch_size") is preserved as a hard
+        # floor — the scheduler decides cadence, the trainer decides safety.
+        reanalyze_should_fire = (
+            reanalyze_on
+            and buffer.size >= args.batch_size
+            and reanalyze_scheduler is not None
+            and reanalyze_scheduler.should_fire(epoch, reanalyze_cum_positions)
+        )
+        if reanalyze_should_fire:
             from gomoku.reanalyze import reanalyze_cycle
             reanalyze_metrics = reanalyze_cycle(
                 buffer, model, device,
@@ -1924,6 +1982,13 @@ def main() -> None:
                 c_puct=float(args.c_puct),
                 c_puct_base=float(args.c_puct_base),
                 rng=rng,
+                eligibility_filter=reanalyze_scheduler.eligibility_filter(buffer),
+            )
+            # Post-cycle update: tell the scheduler which rows we wrote so
+            # the cooldown bookkeeping reflects this cycle.
+            reanalyze_scheduler.record_cycle(
+                reanalyze_metrics.written_rows, buffer,
+                reanalyze_cum_positions, epoch=epoch,
             )
 
         plies_mean = float(np.mean([r.plies for r in records])) if records else 0.0
@@ -2137,6 +2202,14 @@ def main() -> None:
             log["reanalyze/sims_per_pos"] = reanalyze_metrics.sims_per_pos
             log["reanalyze/fraction"] = reanalyze_metrics.fraction
             log["reanalyze/relabel_value"] = 1 if reanalyze_metrics.relabel_value else 0
+            # Scheduler-side observability (bead derby-1nt): how many rows
+            # were eligible AFTER this cycle's record_cycle (i.e. how much
+            # headroom the cooldown leaves). A shrinking eligible_count
+            # toward 0 is the operator's signal that the cooldown is too
+            # tight for the current ingest rate.
+            if reanalyze_scheduler is not None:
+                log["reanalyze/cycle"] = reanalyze_scheduler.cycle
+                log["reanalyze/eligible_after"] = reanalyze_scheduler.eligible_count(buffer)
         # TRAINER MODE metrics (only when --sgd-steps-per-epoch>0; otherwise
         # NO new keys are emitted, so wave-mode / schedule cells log exactly as
         # before). These measure the whole point of the mode:
