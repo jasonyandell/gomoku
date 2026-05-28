@@ -467,6 +467,12 @@ anchored elo.
     noisy; bigger nets genuinely slow to mature; the 100% metric still blocked on `derby-563`), but I'm
     explicitly retracting "scale helps" — the evidence so far leans the other way. Watch for medium/large to
     either climb past small's ~1738 with more maturation, or confirm scale doesn't pay at 9×9.
+    - **Firming (93 chunks, 01:05Z): `medium` reached its 4h CAP (232/240 min) at peak 1356 — effectively
+      final, and clearly below `small`'s parked 1555.** So on anchored elo, the 96×6 net does NOT beat the
+      64×4 net even at-cap. `large` (128×10, 1580, not yet capped) is the last bigger-net hope but trending
+      the same way (below small's ~1738 potential). CONFOUND: the run hit a **v9 wandb crash-loop** (runner
+      hardened it, commits 0c83693/e1039da/91a7b93) which disrupted maturation. Still anchored-only + small
+      under-trained — but the scale-doesn't-pay-at-9×9 read keeps firming.
   - 🔎 **IS `small` AT STANDARD? (asked 2026-05-28) — roughly yes, within noise, but PARKED EARLY + the
     "scale hint" is fragile.** `small` is byte-identical to the v8 champion (`mate-discount`) at the small
     net. At MATCHED training (~36 evals = small's parking point): small peaked **1555**, the champion peaked
