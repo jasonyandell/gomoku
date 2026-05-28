@@ -83,6 +83,21 @@ def parse_args() -> argparse.Namespace:
                         "spawn-start pool overhead ~0.5-1s per cycle, worth it for "
                         "n_games >= ~8 or when adding higher lookahead depths.")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--eval-vcf-nodes", type=int, default=0,
+                   help="Eval-time root VCF overlay node budget. Default 0 = OFF "
+                        "(byte-identical to the pre-lever path: no solver call, "
+                        "MCTS picks unchanged). When >0, before MCTS picks a move "
+                        "the eval picker runs a bounded solve_vcf from the root; "
+                        "if a forced four-in-a-row win is proven, it plays the "
+                        "solver's move; else the MCTS choice runs as today. "
+                        "EVAL-ONLY: self-play / generation / training are NOT "
+                        "affected. Typical: 200-3200 closes the lookahead4-black "
+                        "search-depth gap. Hitting the cap returns has_forced_win="
+                        "False — the overlay never blocks indefinitely.")
+    p.add_argument("--eval-vcf-depth", type=int, default=0,
+                   help="Eval-time root VCF overlay depth cap (attacker plies). "
+                        "0 = use vcf.DEFAULT_MAX_DEPTH (16). Only matters with "
+                        "--eval-vcf-nodes > 0.")
     return p.parse_args()
 
 
@@ -130,7 +145,11 @@ def main() -> None:
     while True:
         epoch_tag = int(payload.get("epoch", 0))
         evaluator = make_torch_evaluator(model, device)
-        model_picker = mcts_picker(evaluator, n_simulations=args.sims, c_puct=args.c_puct)
+        model_picker = mcts_picker(
+            evaluator, n_simulations=args.sims, c_puct=args.c_puct,
+            eval_vcf_nodes=args.eval_vcf_nodes,
+            eval_vcf_depth=args.eval_vcf_depth,
+        )
 
         log: dict = {"eval_worker/epoch_evaluated": epoch_tag}
         t_pass_0 = time.perf_counter()
@@ -153,6 +172,8 @@ def main() -> None:
                     sims=args.sims,
                     c_puct=args.c_puct,
                     device=str(device),
+                    eval_vcf_nodes=args.eval_vcf_nodes,
+                    eval_vcf_depth=args.eval_vcf_depth,
                 )
             else:
                 res = play_match_pickers(

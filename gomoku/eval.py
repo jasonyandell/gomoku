@@ -55,16 +55,69 @@ def _random_pick(state: GameState, rng: np.random.Generator) -> int:
     return int(rng.choice(legal))
 
 
+def vcf_overlay_picker(
+    base: Picker,
+    *,
+    max_nodes: int,
+    max_depth: int = 0,
+) -> Picker:
+    """Wrap a picker with an eval-time root VCF overlay.
+
+    Before delegating to ``base``, run a bounded ``solve_vcf`` from the current
+    root. If a forced continuous-four win is proven for the side-to-move, play
+    the solver's recommended move; otherwise fall through to ``base`` unchanged.
+
+    When ``max_nodes <= 0`` the overlay is OFF — this function returns ``base``
+    UNCHANGED (same object, no wrapping), so OFF is byte-identical to the
+    pre-lever path by construction.
+
+    The solver is bounded by ``max_nodes`` (and ``max_depth`` when > 0; else
+    ``vcf.DEFAULT_MAX_DEPTH``). Hitting the cap returns ``has_forced_win=False``
+    with ``hit_cap=True`` — the overlay simply falls through to ``base``, so a
+    tight cap can never block the picker indefinitely.
+
+    This is EVAL-ONLY. The self-play / generation path uses ``--vcf-teacher`` on
+    a separate seam (see ``selfplay_worker.py``); the two never collide.
+    """
+    if max_nodes <= 0:
+        return base
+
+    # Lazy import — keeps mcts_picker callers that pass eval_vcf_nodes=0
+    # (the default) from paying the import cost.
+    from gomoku.vcf import DEFAULT_MAX_DEPTH, solve_vcf
+
+    depth = max_depth if max_depth > 0 else DEFAULT_MAX_DEPTH
+
+    def pick(state: GameState, rng: np.random.Generator) -> int:
+        # solve_vcf treats plane 0 as attacker (side-to-move) and plane 1 as
+        # defender — which is exactly GameState's canonical board layout.
+        res = solve_vcf(state.board, max_depth=depth, max_nodes=max_nodes)
+        if res.has_forced_win and res.winning_move is not None:
+            return int(res.winning_move)
+        return base(state, rng)
+
+    return pick
+
+
 def mcts_picker(
     evaluator: Evaluator,
     *,
     n_simulations: int = 100,
     c_puct: float = 1.5,
+    eval_vcf_nodes: int = 0,
+    eval_vcf_depth: int = 0,
 ) -> Picker:
     """Wrap a leaf evaluator into a one-shot picker for use in matches.
 
     Builds a fresh MCTS tree per call (no cross-move reuse — matches don't need
     it and this keeps the wrapper simple).
+
+    ``eval_vcf_nodes`` (default 0 = OFF, byte-identical to the pre-lever path)
+    enables an eval-time root VCF overlay: before MCTS picks a move, run a
+    bounded ``solve_vcf`` from the current root; if a forced four-in-a-row win
+    is proven, play that move; else fall through to the unchanged MCTS choice.
+    ``eval_vcf_depth`` (default 0 → ``vcf.DEFAULT_MAX_DEPTH``) caps depth. The
+    overlay is EVAL-ONLY — never used by self-play / generation / training.
     """
 
     def pick(state: GameState, rng: np.random.Generator) -> int:
@@ -73,7 +126,7 @@ def mcts_picker(
         pi = policy_from_visits(g.root, temperature=0.0)
         return int(np.argmax(pi))
 
-    return pick
+    return vcf_overlay_picker(pick, max_nodes=eval_vcf_nodes, max_depth=eval_vcf_depth)
 
 
 def _match_result_from_outcomes(
@@ -185,13 +238,17 @@ _WORKER_OPP_PICKER: Picker | None = None
 
 
 def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
-               device: str, opp_spec_str: str) -> None:
+               device: str, opp_spec_str: str,
+               eval_vcf_nodes: int = 0, eval_vcf_depth: int = 0) -> None:
     """Run once in each worker on Pool startup. Loads the model + opp picker.
 
     Each worker holds its own copy of the model (forked-then-loaded, so the
     parent's model isn't copied — workers re-load from disk). Acceptable
     overhead at eval-cycle granularity since the pool only spins up once
     per cycle per baseline.
+
+    ``eval_vcf_nodes`` (default 0 = OFF, byte-identical) threads the eval-time
+    root VCF overlay through to the model picker in each worker.
     """
     global _WORKER_MODEL_PICKER, _WORKER_OPP_PICKER
 
@@ -206,7 +263,8 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
         model = fuse_model_for_inference(model)
         evaluator = make_torch_evaluator(model, device)
         _WORKER_MODEL_PICKER = mcts_picker(
-            evaluator, n_simulations=sims, c_puct=c_puct
+            evaluator, n_simulations=sims, c_puct=c_puct,
+            eval_vcf_nodes=eval_vcf_nodes, eval_vcf_depth=eval_vcf_depth,
         )
     _WORKER_OPP_PICKER = build_player(parse_spec(opp_spec_str))
 
@@ -251,6 +309,8 @@ def play_match_parallel(
     sims: int = 100,
     c_puct: float = 1.5,
     device: str = "cpu",
+    eval_vcf_nodes: int = 0,
+    eval_vcf_depth: int = 0,
 ) -> MatchResult:
     """Play `n_games` of the model (loaded from `checkpoint_path`) vs the
     baseline described by `opp_spec`, in parallel via multiprocessing.Pool.
@@ -261,12 +321,16 @@ def play_match_parallel(
     in expectation, but per-game RNG is independent per worker rather than
     shared across the sequence. That's a correctness-preserving change (each
     game is independent anyway), not a bug.
+
+    ``eval_vcf_nodes`` (default 0 = OFF, byte-identical) threads the eval-time
+    root VCF overlay through into each worker's model picker.
     """
     import multiprocessing as mp
 
     if n_workers < 2:
         raise ValueError(f"play_match_parallel needs n_workers >= 2, got {n_workers}")
-    init_args = (checkpoint_path, sims, c_puct, device, opp_spec)
+    init_args = (checkpoint_path, sims, c_puct, device, opp_spec,
+                 eval_vcf_nodes, eval_vcf_depth)
     game_args = [(g_idx, seed + g_idx + 1) for g_idx in range(n_games)]
     # spawn (not fork) on macOS by default; spawn re-imports the module in
     # each worker, which is what we want for clean state.
