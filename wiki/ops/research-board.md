@@ -459,6 +459,14 @@ anchored elo.
     ceiling (1497)** → suggestive that a bigger net raises the ceiling. STILL not a clean verdict (large
     fed more wall; anchored elo is noisy + saturating; the 100%-read can't be trusted until the eval is
     deepened per `derby-563`) — but the direction (bigger net > small's plateau) is the first real scale hint.
+  - ↩️ **COURSE-CORRECTION (88 chunks, 2026-05-28 00:33Z) — the scale hint WEAKENED, now lukewarm/negative:**
+    with heavy feeding, **`medium` (96×6) peaked only 1356 at 202 min wall — BELOW `small`'s parked 1555**
+    despite ~2× the compute; `large` (128×10) is 1580 at 170 min — only marginally above small's *parked*
+    peak and still below small's *true* potential (~1738). So bigger nets are **slower and not clearly
+    exceeding small's known level** — the early anchored read is NOT pro-scale. NOT a verdict (anchored elo
+    noisy; bigger nets genuinely slow to mature; the 100% metric still blocked on `derby-563`), but I'm
+    explicitly retracting "scale helps" — the evidence so far leans the other way. Watch for medium/large to
+    either climb past small's ~1738 with more maturation, or confirm scale doesn't pay at 9×9.
   - 🔎 **IS `small` AT STANDARD? (asked 2026-05-28) — roughly yes, within noise, but PARKED EARLY + the
     "scale hint" is fragile.** `small` is byte-identical to the v8 champion (`mate-discount`) at the small
     net. At MATCHED training (~36 evals = small's parking point): small peaked **1555**, the champion peaked
