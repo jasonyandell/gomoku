@@ -602,6 +602,36 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cross-game-max-blend", type=float, default=0.5,
                    help="Cap on the cross-game aggregate's weight in the z blend "
                         "(the remaining (1-w) always stays single-game z).")
+    # --- Reanalyze engine (subtask 1/3, bead derby-fm9; parent derby-3vs) ----
+    # Re-MCTS old buffer positions with the CURRENT (stronger) net and overwrite
+    # their stored policy targets in place. OFF (default) => the engine module
+    # is never imported and the buffer is byte-identical to the pre-lever path.
+    # The scheduler (cadence + feedback-loop guard) is subtask 2/3 (derby-1nt);
+    # registering a derby cell is subtask 3/3 (derby-wdw). The flags below give
+    # the engine its bounded-cost envelope per cycle.
+    p.add_argument("--reanalyze", action="store_true", default=False,
+                   help="ENABLE reanalyze: re-MCTS a small sample of OLD buffer "
+                        "positions each epoch and overwrite their stored policy "
+                        "targets with the current net's search. OFF (default) is "
+                        "byte-identical to the pre-lever buffer/training path.")
+    p.add_argument("--reanalyze-fraction", type=float, default=0.05,
+                   help="Per-cycle fraction of buffer.size to re-MCTS (default "
+                        "0.05). Bounded above by --reanalyze-max-positions.")
+    p.add_argument("--reanalyze-max-positions", type=int, default=1024,
+                   help="Hard cap on positions re-MCTS'd per cycle (default "
+                        "1024). Stops the engine from running away if buffer "
+                        "grows or fraction is mis-set.")
+    p.add_argument("--reanalyze-sims", type=int, default=200,
+                   help="MCTS simulations per reanalyzed position (default 200, "
+                        "deliberately deeper than fresh self-play's 100).")
+    p.add_argument("--reanalyze-mcts-batch", type=int, default=32,
+                   help="Positions per MCTS batch call (default 32). Controls "
+                        "the leaf-batched evaluator's per-call width.")
+    p.add_argument("--reanalyze-relabel-value", action="store_true",
+                   default=False,
+                   help="Also overwrite buffer.z with the MCTS root value "
+                        "(default OFF — relabeling z is more aggressive; "
+                        "scheduler subtask decides when to enable).")
     p.add_argument("--cross-game-max-ply", type=int, default=10,
                    help="OPENING-ONLY cap (bead derby-4bq): only positions with "
                         "ply < this are aggregated into the cross-game store. The "
@@ -947,6 +977,24 @@ def main() -> None:
               f"min_visits={position_stats.min_visits}, "
               f"max_blend={position_stats.max_blend}, "
               f"max_ply={position_stats.max_ply})")
+
+    # Reanalyze engine (subtask 1/3, bead derby-fm9). OFF default => the engine
+    # module is not imported and the post-ingest hook below is a no-op, leaving
+    # buffer state byte-identical to the pre-lever path. The aux-head discipline
+    # mirrors cross-game above (no allocation, no import, no call when off).
+    reanalyze_on = bool(args.reanalyze)
+    if reanalyze_on:
+        if args.reanalyze_fraction <= 0.0:
+            raise SystemExit(
+                "--reanalyze set but --reanalyze-fraction <= 0 — nothing to do"
+            )
+        print(
+            f"reanalyze ENABLED (fraction={args.reanalyze_fraction}, "
+            f"max_positions={args.reanalyze_max_positions}, "
+            f"sims={args.reanalyze_sims}, "
+            f"mcts_batch={args.reanalyze_mcts_batch}, "
+            f"relabel_value={args.reanalyze_relabel_value})"
+        )
 
     # Build / load model
     start_epoch = 0
@@ -1845,6 +1893,27 @@ def main() -> None:
                         canonical_key_from_planes(e.planes), e.z, ply=ply,
                     )
 
+        # Reanalyze pass (subtask 1/3, bead derby-fm9). Single-writer mutator
+        # of buffer.pi (and optionally buffer.z) on a SAMPLED subset of OLD
+        # rows. Runs AFTER the new-records add (so freshly-added rows are
+        # eligible too) and BEFORE the SGD path that samples from `buffer`,
+        # so the relabeled targets feed THIS epoch's training. OFF (default)
+        # => never called.
+        reanalyze_metrics = None
+        if reanalyze_on and buffer.size >= args.batch_size:
+            from gomoku.reanalyze import reanalyze_cycle
+            reanalyze_metrics = reanalyze_cycle(
+                buffer, model, device,
+                fraction=float(args.reanalyze_fraction),
+                max_positions=int(args.reanalyze_max_positions),
+                sims=int(args.reanalyze_sims),
+                mcts_batch=int(args.reanalyze_mcts_batch),
+                relabel_value=bool(args.reanalyze_relabel_value),
+                c_puct=float(args.c_puct),
+                c_puct_base=float(args.c_puct_base),
+                rng=rng,
+            )
+
         plies_mean = float(np.mean([r.plies for r in records])) if records else 0.0
         # Plies-distribution percentiles for the new records — quick check on
         # game-length shape going INTO the buffer this cycle.
@@ -2046,6 +2115,16 @@ def main() -> None:
             # Computed every cycle so wandb shows shape evolution over time.
             **buffer.shape_stats(),
         }
+        # Reanalyze metrics (bead derby-fm9). Only emit when the lever is on
+        # AND a cycle actually ran this epoch — keeps OFF-path log keys
+        # byte-identical to the pre-lever baseline.
+        if reanalyze_metrics is not None:
+            log["reanalyze/sampled_n"] = reanalyze_metrics.sampled_n
+            log["reanalyze/skipped_terminal"] = reanalyze_metrics.skipped_terminal
+            log["reanalyze/mcts_batches"] = reanalyze_metrics.mcts_batches
+            log["reanalyze/sims_per_pos"] = reanalyze_metrics.sims_per_pos
+            log["reanalyze/fraction"] = reanalyze_metrics.fraction
+            log["reanalyze/relabel_value"] = 1 if reanalyze_metrics.relabel_value else 0
         # TRAINER MODE metrics (only when --sgd-steps-per-epoch>0; otherwise
         # NO new keys are emitted, so wave-mode / schedule cells log exactly as
         # before). These measure the whole point of the mode:
