@@ -1127,6 +1127,49 @@ CELLS: dict[str, Cell] = {
                                    "--value-discount", "0.98", "--value-head", "wdl"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--value-head", "wdl"]),
+    # 'x-hlgauss' = the HL-Gauss distributional value head (Derby 'x-hlgauss',
+    # bead derby-tn4). VERBATIM clone of derby-v7-mate-discount (the reigning
+    # champion: gumbel-root + vcf-teacher + value-discount 0.98 + global-pool +
+    # the 0.4/0.1 league mix + sgd-steps-per-epoch 64) with ONE lever added:
+    # --value-head hlgauss --hlgauss-bins 51 --hlgauss-sigma 0.05. The net
+    # emits 51 logits over evenly-spaced bin centers in [-1, 1], trained with
+    # cross-entropy against a Gaussian-smoothed target N(z, sigma^2); the scalar
+    # consumers (MCTS leaf eval, anchor ladder) see the DERIVED v=sum(prob*bin),
+    # so the C MCTS hot path and self-play generation are byte-identical to
+    # scalar/WDL. The value-discount + VCF-stamp + draw-contempt targets all
+    # reshape the scalar z and flow through the same target builder
+    # (hlgauss_target_from_z), so this stays ONE lever: the value REPRESENTATION,
+    # generalized from WDL's 3 bins to N=51 evenly-spaced bins for finer
+    # resolution in drawish positions (Farebrother+2024, arxiv 2403.03950).
+    # --value-head hlgauss + --hlgauss-bins/--hlgauss-sigma ride on BOTH
+    # train + worker for cell symmetry (the worker flags are consistency
+    # asserts; the model's value head + bins/sigma come from the checkpoint
+    # config). FRESH-START: an HL-Gauss checkpoint is NOT loadable by scalar/WDL
+    # builds (different FC shape) — the trainer/worker hard-error on mismatched
+    # load. Lane-isolated outputs under sweep_runs/derby-x-hlgauss/.
+    "derby-x-hlgauss": Cell("derby-x-hlgauss", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98",
+                                   "--value-head", "hlgauss",
+                                   "--hlgauss-bins", "51",
+                                   "--hlgauss-sigma", "0.05"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--value-head", "hlgauss",
+                                  "--hlgauss-bins", "51",
+                                  "--hlgauss-sigma", "0.05"]),
     # === AGGRESSIVE COMBINATION phase (2026-05-27, Jason: "combine the best we found
     # so far into new runs") — v4-style multi-lever stacks (deliberately NOT one-lever).
     # Base = the champion (vcf+global-pool+value-discount 0.98) + the v8 survey's SOLE

@@ -67,9 +67,30 @@ class ModelConfig:
     #     the anchor-ladder eval are untouched. The 3 logits are exposed only when
     #     the trainer asks (forward(return_value_logits=True)) for the WDL
     #     cross-entropy loss; self-play/eval never request them (zero extra cost).
+    #   "hlgauss" = HL-Gauss distributional value (Farebrother+2024, arxiv 2403.03950):
+    #     value_hlgauss_fc -> Linear(hidden, N) emits N logits over bin centers in
+    #     [-1, 1] (default N=51, paper-standard); trained with cross-entropy against
+    #     a Gaussian-smoothed target N(z, sigma^2) discretized onto the bin centers.
+    #     The scalar consumers see the DERIVED scalar v = sum(softmax_i * bin_center_i)
+    #     (same WDL discipline, generalized to N bins). Generalizes WDL: WDL has 3
+    #     hard-coded bins at {-1,0,+1}; HL-Gauss has N evenly-spaced bins and a
+    #     Gaussian-smoothed target, giving finer resolution in drawish positions.
+    #     The N logits are exposed only when the trainer asks
+    #     (forward(return_value_logits=True)) for the HL-Gauss cross-entropy loss;
+    #     self-play/eval never request them (zero extra cost on the gen hot path).
     # Mirrors the aux-head gating discipline: a single config field selects which
     # head module is constructed; the unselected one is never created.
     value_head: str = "scalar"
+    # HL-Gauss bin count (N) and Gaussian-smoothed-target sigma. Only used when
+    # value_head == "hlgauss"; for "scalar"/"wdl" these fields are inert and the
+    # constructed modules are byte-identical (the bin-centers buffer / N-bin FC are
+    # NOT built unless hlgauss is selected). Defaults: N=51 (Farebrother+2024's
+    # paper-standard) and sigma=0.05 (~1.25 bin widths for N=51 over [-1,1]; a
+    # sensible default that smooths each target over ~3 adjacent bins so the head
+    # has a smooth gradient at every z, without collapsing to a near-delta or
+    # spreading mass over the whole range).
+    value_hlgauss_bins: int = 51
+    value_hlgauss_sigma: float = 0.05
     # Derby 'x-mish' activation-function lever (bead derby-sib). Selects the
     # nonlinearity used for EVERY residual-tower (stem + ResBlock /
     # GlobalPoolResBlock) nonlinearity:
@@ -230,6 +251,22 @@ class GomokuNet(nn.Module):
         if cfg.value_head == "wdl":
             # 3 logits over {win, draw, loss}; softmax in forward().
             self.value_wdl_fc = nn.Linear(cfg.value_hidden, 3)
+        elif cfg.value_head == "hlgauss":
+            # N logits over evenly-spaced bin centers in [-1, 1]; softmax in
+            # forward() and the scalar value is the expectation (sum of
+            # prob_i * bin_center_i). Register bin centers as a non-trainable
+            # buffer so they ride state_dict / device moves alongside the model.
+            if cfg.value_hlgauss_bins < 2:
+                raise ValueError(
+                    f"value_hlgauss_bins must be >= 2; got {cfg.value_hlgauss_bins}"
+                )
+            if cfg.value_hlgauss_sigma <= 0.0:
+                raise ValueError(
+                    f"value_hlgauss_sigma must be > 0; got {cfg.value_hlgauss_sigma}"
+                )
+            self.value_hlgauss_fc = nn.Linear(cfg.value_hidden, cfg.value_hlgauss_bins)
+            centers = torch.linspace(-1.0, 1.0, cfg.value_hlgauss_bins)
+            self.register_buffer("value_hlgauss_bin_centers", centers, persistent=False)
         else:
             # scalar tanh head — the exact pre-WDL module/key.
             self.value_fc2 = nn.Linear(cfg.value_hidden, 1)
@@ -274,6 +311,8 @@ class GomokuNet(nn.Module):
         (MCTS leaf backup, anchor-ladder eval) consumes:
           * scalar head: tanh(value_fc2) — today's path, byte-identical.
           * wdl head: P(win) - P(loss) derived from softmax over the 3 logits.
+          * hlgauss head: sum(softmax_i * bin_center_i) derived from softmax over
+            the N logits (bin centers evenly spaced over [-1, 1]).
         So every scalar consumer is untouched regardless of representation.
 
         The auxiliary heads / value logits are independent and gated separately:
@@ -281,8 +320,9 @@ class GomokuNet(nn.Module):
             opponent-reply logits;
           * return_ownership=True (requires cfg.aux_ownership) appends the
             per-cell ownership logits;
-          * return_value_logits=True (requires cfg.value_head=="wdl") appends the
-            raw (B, 3) {win,draw,loss} logits for the WDL cross-entropy loss.
+          * return_value_logits=True (requires cfg.value_head in {"wdl","hlgauss"})
+            appends the raw (B, 3) {win,draw,loss} OR (B, N) HL-Gauss bin logits
+            for the value cross-entropy loss.
         The output tuple is ordered (policy, value, [aux_policy], [ownership],
         [value_logits]) with each optional tensor present iff its flag is set:
           none -> (p, v)                          [byte-identical default]
@@ -303,6 +343,13 @@ class GomokuNet(nn.Module):
             value_logits = self.value_wdl_fc(v)            # (B, 3) = {win, draw, loss}
             wdl = F.softmax(value_logits, dim=-1)
             v = (wdl[:, 0] - wdl[:, 2])                    # derived scalar P(win)-P(loss)
+        elif self.cfg.value_head == "hlgauss":
+            value_logits = self.value_hlgauss_fc(v)        # (B, N)
+            probs = F.softmax(value_logits, dim=-1)
+            # Derived scalar = expectation under the categorical distribution:
+            # v = sum(prob_i * bin_center_i). For a hard one-hot on a center
+            # this exactly equals the center; for symmetric mass it equals 0.
+            v = (probs * self.value_hlgauss_bin_centers).sum(dim=-1)
         else:
             v = torch.tanh(self.value_fc2(v)).squeeze(-1)
 
@@ -326,10 +373,10 @@ class GomokuNet(nn.Module):
             o = self.ownership_fc(o.flatten(1))
             out = out + (o,)
         if return_value_logits:
-            if self.cfg.value_head != "wdl":
+            if self.cfg.value_head not in ("wdl", "hlgauss"):
                 raise RuntimeError(
-                    "forward(return_value_logits=True) requires cfg.value_head=='wdl' "
-                    "(the WDL value FC was not constructed)"
+                    "forward(return_value_logits=True) requires cfg.value_head "
+                    "in {'wdl','hlgauss'} (the value-logits FC was not constructed)"
                 )
             out = out + (value_logits,)
         return out
@@ -343,6 +390,8 @@ def build_model(
     aux_ownership: bool = False,
     global_pool: bool | int | None = None,
     value_head: str | None = None,
+    value_hlgauss_bins: int | None = None,
+    value_hlgauss_sigma: float | None = None,
     activation: str | None = None,
 ) -> GomokuNet:
     if size not in SIZE_PRESETS:
@@ -362,9 +411,19 @@ def build_model(
     # Only override value_head when an explicit non-default is requested, so the
     # scalar default build path stays byte-identical to a pre-WDL model.
     if value_head is not None and value_head != "scalar":
-        if value_head != "wdl":
-            raise ValueError(f"unknown value_head {value_head!r}; options: scalar, wdl")
+        if value_head not in ("wdl", "hlgauss"):
+            raise ValueError(
+                f"unknown value_head {value_head!r}; options: scalar, wdl, hlgauss"
+            )
         overrides["value_head"] = value_head
+    # HL-Gauss-specific knobs: only override when the user supplied a value AND
+    # they differ from the ModelConfig defaults, so a scalar/wdl model never gets
+    # a non-default bins/sigma in its config (keeps the off-path config dict
+    # byte-identical for scalar/wdl checkpoints).
+    if value_hlgauss_bins is not None and value_hlgauss_bins != ModelConfig.value_hlgauss_bins:
+        overrides["value_hlgauss_bins"] = int(value_hlgauss_bins)
+    if value_hlgauss_sigma is not None and value_hlgauss_sigma != ModelConfig.value_hlgauss_sigma:
+        overrides["value_hlgauss_sigma"] = float(value_hlgauss_sigma)
     # Only override activation when an explicit non-default is requested, so the
     # relu default build path stays byte-identical to a pre-activation-field model.
     if activation is not None and activation != "relu":
@@ -440,6 +499,10 @@ def load_checkpoint(
     saved_cfg = dict(payload["model_config"])
     # Pre-AZ-recipe checkpoints predate stem_padding; default to 1 so they load.
     saved_cfg.setdefault("stem_padding", 1)
+    # Pre-HL-Gauss checkpoints predate value_hlgauss_{bins,sigma}; fall back to
+    # the ModelConfig defaults so a scalar/wdl checkpoint loads unchanged.
+    saved_cfg.setdefault("value_hlgauss_bins", ModelConfig.value_hlgauss_bins)
+    saved_cfg.setdefault("value_hlgauss_sigma", ModelConfig.value_hlgauss_sigma)
     cfg = ModelConfig(**saved_cfg)
     model = GomokuNet(cfg).to(device)
     model.load_state_dict(payload["model_state_dict"])

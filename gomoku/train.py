@@ -112,6 +112,67 @@ def value_loss(v: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
     return F.mse_loss(v, z)
 
 
+def hlgauss_target_from_z(
+    z: torch.Tensor,
+    *,
+    bins: int = 51,
+    sigma: float = 0.05,
+    low: float = -1.0,
+    high: float = 1.0,
+) -> torch.Tensor:
+    """Map a scalar value target z in [low, high] to an (..., bins) categorical
+    distribution by discretizing N(z, sigma^2) onto evenly-spaced bin centers
+    over [low, high].
+
+    HL-Gauss (Farebrother+2024, arxiv 2403.03950): probability of bin i =
+    P(z' in [c_{i-1/2}, c_{i+1/2}]) under z' ~ N(z, sigma^2), with the boundary
+    bins absorbing the tails (cdf(low_edge_of_bin_0)=0, cdf(high_edge_of_last)=1)
+    so the row always sums to 1.0 exactly regardless of how far z lies inside or
+    outside [low, high].
+
+    The same chokepoint as wdl_target_from_z: composes with --value-discount,
+    --vcf-teacher (value-stamp), and --draw-value because all three of those
+    reshape the SCALAR z BEFORE the target builder runs — HL-Gauss only Gaussian-
+    smooths whatever effective scalar z arrives.
+
+    Returns a (B, bins) tensor on the same device/dtype as z.
+    """
+    if bins < 2:
+        raise ValueError(f"hlgauss bins must be >= 2; got {bins}")
+    if sigma <= 0.0:
+        raise ValueError(f"hlgauss sigma must be > 0; got {sigma}")
+    if not (high > low):
+        raise ValueError(f"hlgauss requires high > low; got low={low}, high={high}")
+    device = z.device
+    dtype = z.dtype if z.is_floating_point() else torch.float32
+    z = z.to(dtype)
+    centers = torch.linspace(low, high, bins, device=device, dtype=dtype)
+    half_bw = (high - low) / (2.0 * (bins - 1))
+    # Bin edges sit halfway between adjacent centers; the outer two edges are
+    # the bin centers' extents (low - half_bw, high + half_bw) so the tails of
+    # N(z, sigma^2) are absorbed into bin 0 and bin N-1 (mass preserved).
+    edges = torch.empty(bins + 1, device=device, dtype=dtype)
+    edges[1:-1] = (centers[:-1] + centers[1:]) * 0.5
+    edges[0] = centers[0] - half_bw
+    edges[-1] = centers[-1] + half_bw
+    # CDF of N(z, sigma^2) at each edge: Phi((edge - z) / sigma).
+    # Use 0.5 * (1 + erf((edge - z) / (sigma * sqrt(2)))) for differentiability.
+    sqrt2 = float(2.0) ** 0.5
+    # z: (B,), edges: (N+1,) -> (B, N+1)
+    z_exp = z.unsqueeze(-1)
+    cdf = 0.5 * (1.0 + torch.erf((edges - z_exp) / (sigma * sqrt2)))
+    # Absorb tails into the boundary bins: clamp CDF at the two outer edges to
+    # exactly 0 and 1 so the row sums to 1.0 even when z is outside [low, high].
+    cdf[..., 0] = 0.0
+    cdf[..., -1] = 1.0
+    probs = cdf[..., 1:] - cdf[..., :-1]
+    # Guard against tiny negative drift from float math (erf monotonic so rare).
+    probs = probs.clamp_min(0.0)
+    # Renormalize defensively to sum=1 (a no-op when the tail-clamp held).
+    probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+    return probs
+
+
 def wdl_target_from_z(z: torch.Tensor) -> torch.Tensor:
     """Map a scalar value target z in [-1, 1] to a (B, 3) {win, draw, loss}
     soft target: (relu(z), 1 - |z|, relu(-z)).
@@ -195,16 +256,24 @@ def train_step(
     # with cross-entropy against the WDL target derived from the scalar z. The
     # default scalar head leaves use_wdl=False and the MSE+tanh path below is
     # byte-identical to the pre-WDL trainer.
-    use_wdl = getattr(getattr(model, "cfg", None), "value_head", "scalar") == "wdl"
+    # HL-Gauss value-representation lever (bead derby-tn4): same gating, but the
+    # value FC emits N bin logits over [-1, 1] (default N=51) and the target is
+    # a Gaussian-smoothed-then-discretized soft target (see hlgauss_target_from_z).
+    # Both levers go through return_value_logits=True (the forward path knows
+    # which head was constructed and emits the right tensor).
+    head_kind = getattr(getattr(model, "cfg", None), "value_head", "scalar")
+    use_wdl = head_kind == "wdl"
+    use_hlgauss = head_kind == "hlgauss"
+    use_value_logits = use_wdl or use_hlgauss
     aux_logits = None
     own_logits = None
     value_logits = None
-    if use_aux or use_ownership or use_wdl:
+    if use_aux or use_ownership or use_value_logits:
         outputs = model(
             planes,
             return_aux=use_aux,
             return_ownership=use_ownership,
-            return_value_logits=use_wdl,
+            return_value_logits=use_value_logits,
         )
         # forward() returns (p, v, [aux], [ownership], [value_logits]) in that
         # fixed order; unpack positionally per the flags requested above.
@@ -216,7 +285,7 @@ def train_step(
         if use_ownership:
             own_logits = outputs[idx_extra]
             idx_extra += 1
-        if use_wdl:
+        if use_value_logits:
             value_logits = outputs[idx_extra]
             idx_extra += 1
     else:
@@ -248,6 +317,18 @@ def train_step(
         wdl_logp = F.log_softmax(value_logits, dim=-1)
         wdl_target = wdl_target_from_z(z)
         per_value_se = -(wdl_target * wdl_logp).sum(dim=-1)
+    elif use_hlgauss:
+        # HL-Gauss cross-entropy over N evenly-spaced bins in [-1, 1]. The soft
+        # target Gaussian-smooths the scalar z onto the bin centers (sums to 1
+        # per row). The bins/sigma come from the model config so a checkpoint
+        # carries them — the target builder uses the same values the head was
+        # constructed with.
+        hl_logp = F.log_softmax(value_logits, dim=-1)
+        cfg = model.cfg
+        hl_target = hlgauss_target_from_z(
+            z, bins=cfg.value_hlgauss_bins, sigma=cfg.value_hlgauss_sigma
+        )
+        per_value_se = -(hl_target * hl_logp).sum(dim=-1)
     else:
         per_value_se = (v - z) ** 2
     vl = per_value_se.mean()
@@ -496,13 +577,32 @@ def parse_args() -> argparse.Namespace:
                         "in the residual tower. Bare --global-pool applies it to the "
                         "latter half of blocks; --global-pool K applies it to the "
                         "trailing K blocks. Omitted = OFF (byte-identical current arch).")
-    p.add_argument("--value-head", type=str, default="scalar", choices=["scalar", "wdl"],
-                   help="Derby 'x-wdl' value-representation lever (bead derby-cgf): "
+    p.add_argument("--value-head", type=str, default="scalar",
+                   choices=["scalar", "wdl", "hlgauss"],
+                   help="Value-representation lever: "
                         "'scalar' (default) = the tanh scalar head, byte-identical to "
-                        "before this flag existed; 'wdl' = a categorical {win,draw,loss} "
-                        "head trained with cross-entropy (the scalar v=P(win)-P(loss) is "
-                        "derived for MCTS/eval). The value-discount + VCF-stamp targets "
-                        "are re-expressed natively in WDL; this is the ONLY lever.")
+                        "before this flag existed; 'wdl' (bead derby-cgf) = a categorical "
+                        "{win,draw,loss} head trained with cross-entropy (the scalar "
+                        "v=P(win)-P(loss) is derived for MCTS/eval); 'hlgauss' (bead "
+                        "derby-tn4) = HL-Gauss distributional head, N evenly-spaced bins "
+                        "over [-1, 1] trained with cross-entropy against a Gaussian-"
+                        "smoothed target (the scalar v=sum(prob*bin_center) is derived "
+                        "for MCTS/eval). For hlgauss, --hlgauss-bins/--hlgauss-sigma set "
+                        "the resolution / smoothing. The value-discount + VCF-stamp + "
+                        "draw-contempt targets all reshape the scalar z and then flow "
+                        "through the same target builder.")
+    p.add_argument("--hlgauss-bins", type=int, default=None,
+                   help="HL-Gauss bin count N (default 51, the Farebrother+2024 paper "
+                        "standard). Only used when --value-head=hlgauss; ignored "
+                        "otherwise. Bin centers are evenly spaced over [-1, 1]; the "
+                        "value FC emits N logits, softmax+sum-of-bins derives the "
+                        "scalar value consumers see.")
+    p.add_argument("--hlgauss-sigma", type=float, default=None,
+                   help="Sigma of the Gaussian-smoothed HL-Gauss target (default 0.05, "
+                        "~1.25 bin widths at N=51 over [-1,1]). A larger sigma spreads "
+                        "each scalar z over more bins (smoother gradient, less "
+                        "resolution); a smaller sigma sharpens toward a one-hot. Only "
+                        "used when --value-head=hlgauss; ignored otherwise.")
     p.add_argument("--draw-value", type=float, default=0.0,
                    help="Derby 'x-draw-contempt' DECISIVENESS lever (bead derby-9q4): "
                         "training-side value-TARGET reshape; when DELTA > 0 and a game "
@@ -1067,6 +1167,34 @@ def main() -> None:
                 f"from the checkpoint. Re-launch with --activation {loaded_act} (or "
                 f"start a FRESH cell for the new activation — see bead derby-sib)."
             )
+        # Value-head lever (beads derby-cgf, derby-tn4): the value head module
+        # (scalar tanh / WDL 3-bin / HL-Gauss N-bin) comes from the checkpoint
+        # config; assert --value-head agrees so a mis-launched resume hard-errors
+        # rather than silently training the wrong representation. HL-Gauss
+        # checkpoints additionally must match bins/sigma exactly (the N-bin FC
+        # shape depends on bins; the target shape depends on sigma).
+        loaded_vh = getattr(getattr(model, "cfg", None), "value_head", "scalar")
+        if args.value_head != loaded_vh:
+            raise SystemExit(
+                f"--value-head={args.value_head} disagrees with the resumed "
+                f"checkpoint's value_head={loaded_vh}; the value representation "
+                f"comes from the checkpoint. Re-launch with --value-head "
+                f"{loaded_vh} (or start a FRESH cell for the new value head — "
+                f"see beads derby-cgf / derby-tn4)."
+            )
+        if loaded_vh == "hlgauss":
+            loaded_bins = int(getattr(model.cfg, "value_hlgauss_bins", 51))
+            loaded_sigma = float(getattr(model.cfg, "value_hlgauss_sigma", 0.05))
+            cli_bins = loaded_bins if args.hlgauss_bins is None else int(args.hlgauss_bins)
+            cli_sigma = loaded_sigma if args.hlgauss_sigma is None else float(args.hlgauss_sigma)
+            if cli_bins != loaded_bins or abs(cli_sigma - loaded_sigma) > 1e-9:
+                raise SystemExit(
+                    f"--hlgauss-bins/--hlgauss-sigma ({cli_bins}/{cli_sigma}) "
+                    f"disagree with the resumed checkpoint's HL-Gauss config "
+                    f"({loaded_bins}/{loaded_sigma}); the N-bin FC shape and "
+                    f"target sigma come from the checkpoint. Re-launch with the "
+                    f"checkpoint's values or start a FRESH cell."
+                )
         print(f"resumed from {args.resume} @ epoch {start_epoch}, total_games={total_games}")
     else:
         # --global-pool: None=off, bare flag (-1 sentinel)=latter-half (True),
@@ -1080,12 +1208,21 @@ def main() -> None:
             aux_ownership=ownership_on,
             global_pool=gp_arg,
             value_head=args.value_head,
+            value_hlgauss_bins=args.hlgauss_bins,
+            value_hlgauss_sigma=args.hlgauss_sigma,
             activation=args.activation,
         ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         payload = {}
+        hl_suffix = ""
+        if args.value_head == "hlgauss":
+            hl_suffix = (
+                f" (hlgauss bins={model.cfg.value_hlgauss_bins} "
+                f"sigma={model.cfg.value_hlgauss_sigma})"
+            )
         print(f"fresh {args.size} model: {n_params(model):,} params"
               + (f" (value_head={args.value_head})" if args.value_head != "scalar" else "")
+              + hl_suffix
               + (f" (activation={args.activation})" if args.activation != "relu" else ""))
 
     # WL2 lever #1: EMA self-play weights. Build a slowly-tracking copy that

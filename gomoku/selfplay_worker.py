@@ -214,14 +214,24 @@ def parse_args() -> argparse.Namespace:
                         "= OFF (byte-identical baseline). Sibling of --value-discount "
                         "(zero gen-hot-path cost); composes with it via the same "
                         "gamma^plies shape (-DELTA * gamma^(plies_to_end)).")
-    p.add_argument("--value-head", type=str, default="scalar", choices=["scalar", "wdl"],
-                   help="Derby 'x-wdl' value-representation lever (bead derby-cgf). "
+    p.add_argument("--value-head", type=str, default="scalar",
+                   choices=["scalar", "wdl", "hlgauss"],
+                   help="Value-representation lever (beads derby-cgf / derby-tn4). "
                         "Accepted for cell symmetry with --value-head on the trainer; "
                         "self-play targets are the SAME scalar z either way (the WDL "
-                        "re-expression lives in the trainer), and the model's value "
-                        "representation comes from the loaded checkpoint config, so "
-                        "this flag is a no-op for generation other than a consistency "
-                        "assertion against the loaded weights. Keeping it ONE lever.")
+                        "/ HL-Gauss re-expression lives in the trainer), and the "
+                        "model's value representation comes from the loaded checkpoint "
+                        "config, so this flag is a no-op for generation other than a "
+                        "consistency check against the loaded weights. Keeping it ONE "
+                        "lever.")
+    p.add_argument("--hlgauss-bins", type=int, default=None,
+                   help="HL-Gauss bin count (cell-symmetry mirror of trainer's "
+                        "--hlgauss-bins). Consistency-checked against the loaded "
+                        "checkpoint when --value-head=hlgauss.")
+    p.add_argument("--hlgauss-sigma", type=float, default=None,
+                   help="HL-Gauss target sigma (cell-symmetry mirror of trainer's "
+                        "--hlgauss-sigma). Consistency-checked against the loaded "
+                        "checkpoint when --value-head=hlgauss.")
     p.add_argument("--activation", type=str, default="relu", choices=["relu", "mish"],
                    help="Derby 'x-mish' activation-function lever (bead derby-sib). "
                         "Accepted for cell symmetry with --activation on the trainer; "
@@ -837,17 +847,42 @@ def main() -> None:
         )
 
     model, weights_mtime, model_version = _load_model(args.weights_path, device)
-    # Consistency check for the WDL value-representation lever (bead derby-cgf):
-    # the model's value head comes from the checkpoint config; warn if --value-head
-    # disagrees with the loaded weights so a misconfigured cell is visible in logs.
+    # Consistency check for the value-representation lever (beads derby-cgf,
+    # derby-tn4): the model's value head comes from the checkpoint config. For
+    # scalar/wdl mismatches we WARN (the gen path is byte-identical — the
+    # scalar consumer derives v from whichever head the checkpoint has). For
+    # HL-Gauss mismatches we HARD-ERROR: a fresh HL-Gauss checkpoint is NOT
+    # loadable into a scalar/wdl runtime (different state_dict keys / FC shape)
+    # and conversely loading a scalar/wdl checkpoint when --value-head=hlgauss
+    # was requested means the cell is misconfigured.
     loaded_vh = getattr(getattr(model, "cfg", None), "value_head", "scalar")
     if args.value_head != loaded_vh:
+        if args.value_head == "hlgauss" or loaded_vh == "hlgauss":
+            raise SystemExit(
+                f"[{args.worker_id}] --value-head={args.value_head} but loaded "
+                f"checkpoint value_head={loaded_vh}; HL-Gauss checkpoints are not "
+                f"interchangeable with scalar/wdl heads (different FC shape). "
+                f"Match the cell's --value-head to the checkpoint's, or start a "
+                f"FRESH cell for this head (see bead derby-tn4)."
+            )
         print(
             f"[{args.worker_id}] note: --value-head={args.value_head} but loaded "
             f"checkpoint value_head={loaded_vh}; generation uses the checkpoint's "
             f"derived scalar value either way",
             flush=True,
         )
+    if loaded_vh == "hlgauss":
+        loaded_bins = int(getattr(model.cfg, "value_hlgauss_bins", 51))
+        loaded_sigma = float(getattr(model.cfg, "value_hlgauss_sigma", 0.05))
+        cli_bins = loaded_bins if args.hlgauss_bins is None else int(args.hlgauss_bins)
+        cli_sigma = loaded_sigma if args.hlgauss_sigma is None else float(args.hlgauss_sigma)
+        if cli_bins != loaded_bins or abs(cli_sigma - loaded_sigma) > 1e-9:
+            raise SystemExit(
+                f"[{args.worker_id}] --hlgauss-bins/--hlgauss-sigma "
+                f"({cli_bins}/{cli_sigma}) disagree with the loaded checkpoint's "
+                f"HL-Gauss config ({loaded_bins}/{loaded_sigma}). Match the cell's "
+                f"flags to the checkpoint or start a FRESH cell (bead derby-tn4)."
+            )
     # Consistency check for the activation lever (bead derby-sib): the model's
     # tower activation comes from the checkpoint config; warn if --activation
     # disagrees so a misconfigured cell is visible in logs.
