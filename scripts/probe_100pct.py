@@ -1,56 +1,59 @@
 #!/usr/bin/env python3
-"""Eval-sims × eval-VCF sweep driver — the one-command orchestrator for the
-RESUME PLAYBOOK step 1 probe (derby-5xs).
+"""Eval-config sweep driver — the one-command orchestrator for the
+RESUME PLAYBOOK step 1 probe (derby-5xs, extended in derby-u8d).
 
 The matured v8 champion 100%s heuristic + lookahead2; the SOLE binding gap to
 the v9 "100% target" (Jason, 2026-05-27) is lookahead4-as-BLACK ~50% wins
 (rest DRAWS, not losses). The H2 finding (code-walk, 2026-05-28): the ~50%
-ceiling is SEARCH-DEPTH at eval, not structural. Two cheap eval-config levers
-attack it directly without any training change:
+ceiling is SEARCH-DEPTH at eval, not structural. Cheap eval-config levers
+attack it directly without any training change.
 
-  (a) raise eval --sims (100 -> {200, 400, 800}: more total MCTS depth)
-  (b) eval-VCF root overlay (--eval-vcf-nodes {0, 200, 800}: forced-fours found
-      deterministically; same tactical class lookahead4 defends)
+Five eval-config axes are swept here (the legacy two + three new search seams
+from derby-3w0 / derby-jmi / derby-b3n):
 
-This driver enumerates the {sims} × {eval-vcf-nodes} grid against a single
-matured checkpoint vs lookahead:depth=4 (the binding opponent), one cell at a
-time (cheapest first), reports the per-cell color-split W/L/D, and computes
-each cell's distance-to-100% via the EXISTING formula in
+  (1) ``--sims-grid``                MCTS sims at eval.
+  (2) ``--vcf-nodes-grid``           Root VCF overlay (forced-fours).
+  (3) ``--fpu-c-grid``               FPU reduction c (derby-3w0).
+  (4) ``--reuse-tree-grid``          Cross-ply tree reuse {0,1} (derby-jmi).
+  (5) ``--proven-prop-grid``         Proven-win/loss propagation {0,1}
+                                     (derby-b3n).
+      ``--proven-vcf-leaf-nodes-grid``  Bounded leaf-VCF nodes (derby-b3n,
+                                        requires proven-prop=1).
+
+Default behaviour is BACKWARD-COMPATIBLE: each new axis defaults to a single
+OFF value, so the default invocation is the same 4×3=12-cell sweep as
+derby-5xs. Specify any new --*-grid to expand the matrix.
+
+This driver enumerates the Cartesian product against a single matured
+checkpoint vs lookahead:depth=4 (the binding opponent), one cell at a time
+(cheapest first by default), reports the per-cell color-split W/L/D, and
+computes each cell's distance-to-100% via the EXISTING formula in
 scripts/report_100pct.py (imported, NOT duplicated).
+
+Cheap-first ordering (``--order cheap-first``, the default): runs the all-OFF
+baseline first, then each lever isolated at its smallest non-OFF value, then
+pair-combos, then everything together — so when an early cell hits the target
+or the matrix is plainly worse than baseline, we drop the rest without paying
+the expensive cells. ``--order full`` falls back to the legacy Cartesian
+enumeration (outer-to-inner by axis order); ``--order custom-list`` is
+reserved (currently maps to ``full``).
+
+Early-stop knobs (both default OFF):
+  - ``--early-stop-on-target DIST`` — first cell with distance ≤ DIST wins;
+    skip remaining.
+  - ``--worse-than-baseline-margin MARGIN`` — once the all-OFF baseline has
+    been measured, drop any subsequent cell whose distance is ≥
+    ``baseline + MARGIN`` (it's clearly worse, no point running its expensive
+    siblings either — we mark it ``early-stop:worse``).
 
 Output:
   - JSONL: one row per cell to ``--output`` (default
     ``probe_100pct_<timestamp>.jsonl``).
-  - stdout: a human-readable per-cell table + a final 4x3 markdown grid of
-    distances with the best cell tagged.
+  - stdout: a human-readable per-cell table + (when only 1-2 axes vary) a 2D
+    markdown grid of distances; when ≥3 axes vary, a long-form best-by-axis
+    summary instead.
 
 NO training, NO new lane, NO derby cell. Eval-only on a frozen checkpoint.
-
-Wall-time guidance (rule-of-thumb, CPU eval — the orchestrator's runtime is
-GPU-and-checkpoint dependent):
-
-  cell wall ~  n_games * sims_per_move * avg_plies * (1 / moves_per_sec)
-            +  vcf_overhead (bounded by --eval-vcf-nodes per move)
-
-Order-of-magnitude (eval_worker.py header says ~<1 min for the n=20 default
-random+heuristic+lookahead2 pass at 100 sims, CPU). Each probe cell here is
-~40 games (single baseline), so:
-
-  ~     sims=100  vcf=0    -> ~1-2 minutes  (cheapest)
-  ~     sims=800  vcf=800  -> ~10-25 minutes (most expensive)
-
-The 12-cell sweep should fit in ~1-3 hours of serial GPU time. The
-``--dry-run`` flag lists the grid without running anything.
-
-Usage:
-
-    python scripts/probe_100pct.py \\
-        --checkpoint sweep_runs/derby_v8/_peaks/champ/peak.pt \\
-        --baseline lookahead:depth=4 \\
-        --games-per-cell 40 \\
-        --sims-grid 100,200,400,800 \\
-        --vcf-nodes-grid 0,200,800 \\
-        --output probe_100pct_results.jsonl
 
 If the Δelo Derby is currently running, the driver refuses to proceed unless
 ``--i-know-derby-is-running`` is passed (same defensive pattern as
@@ -80,29 +83,188 @@ from report_100pct import score as report_100pct_score  # noqa: E402
 # Cell grid
 
 
+# Axis order is the canonical iteration / label order. Keep stable for tests.
+AXIS_NAMES = (
+    "sims",
+    "eval_vcf_nodes",
+    "fpu_reduction_c",
+    "reuse_tree",
+    "proven_prop",
+    "proven_vcf_leaf_nodes",
+)
+
+
+# Per-axis OFF value (the byte-identical legacy baseline). MUST match the
+# defaults in gomoku/eval.py:mcts_picker / play_match_pickers /
+# play_match_parallel so a default-grid invocation reproduces derby-5xs exactly.
+OFF_VALUES: dict[str, float | int] = {
+    "sims": 100,          # legacy "cheapest" sims setting (the existing default)
+    "eval_vcf_nodes": 0,
+    "fpu_reduction_c": 0.0,
+    "reuse_tree": 0,
+    "proven_prop": 0,
+    "proven_vcf_leaf_nodes": 0,
+}
+
+
 @dataclass(frozen=True)
 class Cell:
-    """A single (sims, eval_vcf_nodes) probe point."""
+    """A single eval-config probe point — one value per axis.
+
+    The two legacy axes (``sims``, ``eval_vcf_nodes``) keep their original
+    names for backward compatibility (the existing JSONL + tests assume them).
+    The three new axes are named after their CLI flag stems.
+    """
 
     sims: int
     eval_vcf_nodes: int
+    fpu_reduction_c: float = 0.0
+    reuse_tree: int = 0
+    proven_prop: int = 0
+    proven_vcf_leaf_nodes: int = 0
 
     def label(self) -> str:
-        return f"sims={self.sims},vcf={self.eval_vcf_nodes}"
+        return (
+            f"sims={self.sims},vcf={self.eval_vcf_nodes}"
+            f",fpu={self.fpu_reduction_c:g},reuse={self.reuse_tree}"
+            f",pprop={self.proven_prop},pvcf={self.proven_vcf_leaf_nodes}"
+        )
+
+    def axis_value(self, axis: str) -> float | int:
+        return getattr(self, axis)
+
+    def is_off(self, axis: str) -> bool:
+        return self.axis_value(axis) == OFF_VALUES[axis]
+
+    def num_active_levers(self) -> int:
+        """Count of axes that are NOT at their OFF value. Cheap = small count."""
+        return sum(0 if self.is_off(a) else 1 for a in AXIS_NAMES)
 
 
-def enumerate_cells(sims_grid: list[int], vcf_nodes_grid: list[int]) -> list[Cell]:
-    """Cartesian product of the two grids, cheapest first.
+def _normalize_grid(values, axis: str) -> list:
+    """Ensure OFF is present in each grid, sorted ascending.
 
-    Order: outer = sims (ascending), inner = vcf_nodes (ascending) — so the
-    fastest cell runs first and the most expensive cell last. Failing fast on
-    the cheapest cell is the right default when GPU time is finite.
+    The cheap-first ordering relies on the all-OFF baseline existing in the
+    Cartesian product. If the caller passes a grid that omits OFF we silently
+    inject it so the baseline cell is always available (cost: at most one
+    extra cell).
     """
+    out = list(dict.fromkeys(values))  # dedupe, preserve order
+    if OFF_VALUES[axis] not in out:
+        out.append(OFF_VALUES[axis])
+    # Sort ascending so iteration is predictable & smallest non-OFF comes first.
+    return sorted(out)
+
+
+def _grids_for_cells(*, sims_grid, vcf_nodes_grid, fpu_c_grid,
+                     reuse_tree_grid, proven_prop_grid,
+                     proven_vcf_leaf_nodes_grid):
+    """Build the per-axis normalized grid dict, keyed by axis name."""
+    return {
+        "sims": _normalize_grid(sims_grid, "sims"),
+        "eval_vcf_nodes": _normalize_grid(vcf_nodes_grid, "eval_vcf_nodes"),
+        "fpu_reduction_c": _normalize_grid(fpu_c_grid, "fpu_reduction_c"),
+        "reuse_tree": _normalize_grid(reuse_tree_grid, "reuse_tree"),
+        "proven_prop": _normalize_grid(proven_prop_grid, "proven_prop"),
+        "proven_vcf_leaf_nodes": _normalize_grid(
+            proven_vcf_leaf_nodes_grid, "proven_vcf_leaf_nodes"
+        ),
+    }
+
+
+def enumerate_cells(
+    sims_grid: list[int],
+    vcf_nodes_grid: list[int],
+    fpu_c_grid: list[float] | None = None,
+    reuse_tree_grid: list[int] | None = None,
+    proven_prop_grid: list[int] | None = None,
+    proven_vcf_leaf_nodes_grid: list[int] | None = None,
+) -> list[Cell]:
+    """Cartesian product of all axes in canonical (full) order.
+
+    Outer-to-inner axis order follows ``AXIS_NAMES``. Within each axis, values
+    are sorted ascending and OFF is guaranteed present (see ``_normalize_grid``).
+
+    The two legacy axes default to the caller-supplied grids (required); the
+    three new axes default to a single-OFF grid when ``None`` is passed, which
+    keeps backward-compatible behaviour for callers (and the legacy CLI default
+    produces the same 4×3=12 cells as derby-5xs).
+    """
+    grids = _grids_for_cells(
+        sims_grid=sims_grid,
+        vcf_nodes_grid=vcf_nodes_grid,
+        fpu_c_grid=fpu_c_grid if fpu_c_grid is not None else [OFF_VALUES["fpu_reduction_c"]],
+        reuse_tree_grid=reuse_tree_grid if reuse_tree_grid is not None else [OFF_VALUES["reuse_tree"]],
+        proven_prop_grid=proven_prop_grid if proven_prop_grid is not None else [OFF_VALUES["proven_prop"]],
+        proven_vcf_leaf_nodes_grid=(
+            proven_vcf_leaf_nodes_grid
+            if proven_vcf_leaf_nodes_grid is not None
+            else [OFF_VALUES["proven_vcf_leaf_nodes"]]
+        ),
+    )
     cells: list[Cell] = []
-    for sims in sorted(set(sims_grid)):
-        for vcf in sorted(set(vcf_nodes_grid)):
-            cells.append(Cell(sims=sims, eval_vcf_nodes=vcf))
+    for sims in grids["sims"]:
+        for vcf in grids["eval_vcf_nodes"]:
+            for fpu in grids["fpu_reduction_c"]:
+                for reuse in grids["reuse_tree"]:
+                    for pprop in grids["proven_prop"]:
+                        for pvcf in grids["proven_vcf_leaf_nodes"]:
+                            cells.append(Cell(
+                                sims=sims,
+                                eval_vcf_nodes=vcf,
+                                fpu_reduction_c=fpu,
+                                reuse_tree=reuse,
+                                proven_prop=pprop,
+                                proven_vcf_leaf_nodes=pvcf,
+                            ))
     return cells
+
+
+def order_cells_cheap_first(cells: list[Cell]) -> list[Cell]:
+    """Reorder cells so the cheapest configs run first.
+
+    Heuristic: rank each cell by
+
+      (num_active_levers,
+       sims, eval_vcf_nodes, fpu_reduction_c, reuse_tree,
+       proven_prop, proven_vcf_leaf_nodes)
+
+    Effect:
+      1. The all-OFF baseline (0 active levers) is first.
+      2. Single-lever cells (1 active lever) follow, sorted by axis & value
+         — each lever isolated at its smallest non-OFF value before any
+         pair-combos run.
+      3. Pair-combos, triples, etc. follow, ordered by total active-lever count.
+
+    The lexicographic secondary sort means within each "tier" the smaller-sims
+    / smaller-overlay / smaller-fpu cells run first, so the very cheapest one
+    per tier wins the slot. Early-stop on the cheap cells therefore drops the
+    most expensive siblings — the whole point.
+
+    Note: this is a stable sort, so cells that compare equal stay in their
+    enumeration order (canonical Cartesian).
+    """
+    def key(c: Cell):
+        return (
+            c.num_active_levers(),
+            c.sims,
+            c.eval_vcf_nodes,
+            c.fpu_reduction_c,
+            c.reuse_tree,
+            c.proven_prop,
+            c.proven_vcf_leaf_nodes,
+        )
+    return sorted(cells, key=key)
+
+
+def order_cells(cells: list[Cell], order: str) -> list[Cell]:
+    """Dispatch on the ``--order`` knob. Unknown values fall through to full
+    Cartesian (the canonical enumerate order)."""
+    if order == "cheap-first":
+        return order_cells_cheap_first(cells)
+    # 'full' and 'custom-list' (reserved) preserve the canonical Cartesian
+    # order, which sorts ascending on every axis (cheapest legacy cell first).
+    return list(cells)
 
 
 # ---------------------------------------------------------------------------
@@ -126,15 +288,9 @@ def cell_distance_to_100(black_w: int, black_l: int, black_d: int,
     # lookahead4). Inject this cell's counts under one of those keys and put
     # zero-game stub rows under the other two; the ``if bt and wt:`` guard in
     # ``score`` skips zero-game baselines (they don't contribute to dist).
-    # Using "lookahead4" as the key works for the default --baseline, but the
-    # caller may use heuristic/lookahead2 for sanity tests — we accept that the
-    # contribution formula ``(1-bw) + wl`` is identical regardless of which
-    # baseline key we slot into.
     from report_100pct import BASELINES
     agg = {b: {f"{c}_{o}": 0 for c in ("black", "white") for o in ("w", "l", "d")}
            for b in BASELINES}
-    # Pick a key from BASELINES so the formula's iteration includes our row.
-    # Prefer matching the actual baseline label suffix when possible.
     key = BASELINES[-1]  # default: lookahead4
     for b in BASELINES:
         if b in baseline_label or baseline_label.endswith(b):
@@ -159,8 +315,12 @@ def cell_distance_to_100(black_w: int, black_l: int, black_d: int,
 class CellResult:
     sims: int
     eval_vcf_nodes: int
-    n_games: int
-    baseline: str
+    fpu_reduction_c: float = 0.0
+    reuse_tree: int = 0
+    proven_prop: int = 0
+    proven_vcf_leaf_nodes: int = 0
+    n_games: int = 0
+    baseline: str = ""
     black_w: int = 0
     black_l: int = 0
     black_d: int = 0
@@ -175,10 +335,18 @@ class CellResult:
     white_loss_rate: float = 0.0
     wall_secs: float = 0.0
     error: str | None = None
+    # Set to "target-hit" / "worse" when this run terminates the sweep early,
+    # or "skipped:<reason>" when an early-stop dropped this cell entirely.
+    early_stop: str | None = None
 
 
 def run_cell_eval(*, checkpoint: str, baseline: str, n_games: int,
-                  sims: int, eval_vcf_nodes: int, c_puct: float = 1.5,
+                  sims: int, eval_vcf_nodes: int,
+                  fpu_reduction_c: float = 0.0,
+                  reuse_tree: int = 0,
+                  proven_prop: int = 0,
+                  proven_vcf_leaf_nodes: int = 0,
+                  c_puct: float = 1.5,
                   device: str = "cpu", seed: int = 0,
                   n_workers: int = 1) -> dict:
     """Run one cell's eval and return a dict of color-split tallies.
@@ -203,6 +371,9 @@ def run_cell_eval(*, checkpoint: str, baseline: str, n_games: int,
         raise SystemExit(f"--baseline must not be a model spec: {baseline!r}")
     opp_picker = build_player(opp_spec)
 
+    use_reuse = bool(reuse_tree)
+    use_pprop = bool(proven_prop)
+
     if n_workers > 1:
         res = play_match_parallel(
             checkpoint_path=checkpoint,
@@ -215,6 +386,10 @@ def run_cell_eval(*, checkpoint: str, baseline: str, n_games: int,
             device=device,
             eval_vcf_nodes=eval_vcf_nodes,
             eval_vcf_depth=0,
+            fpu_reduction_c=fpu_reduction_c,
+            reuse_tree=use_reuse,
+            proven_prop=use_pprop,
+            proven_vcf_leaf_nodes=proven_vcf_leaf_nodes,
         )
     else:
         model, _payload = load_checkpoint(checkpoint, device=device)
@@ -226,6 +401,10 @@ def run_cell_eval(*, checkpoint: str, baseline: str, n_games: int,
             c_puct=c_puct,
             eval_vcf_nodes=eval_vcf_nodes,
             eval_vcf_depth=0,
+            fpu_reduction_c=fpu_reduction_c,
+            reuse_tree=use_reuse,
+            proven_prop=use_pprop,
+            proven_vcf_leaf_nodes=proven_vcf_leaf_nodes,
         )
         res = play_match_pickers(model_picker, opp_picker,
                                  n_games=n_games, seed=seed)
@@ -262,20 +441,61 @@ def is_derby_running() -> bool:
         return False
 
 
+def _is_all_off(cell: Cell) -> bool:
+    return all(cell.is_off(a) for a in AXIS_NAMES)
+
+
 def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
               n_games: int, seed: int, c_puct: float, device: str,
-              n_workers: int, eval_fn=None) -> list[CellResult]:
+              n_workers: int, eval_fn=None,
+              early_stop_on_target: float | None = None,
+              worse_than_baseline_margin: float | None = None) -> list[CellResult]:
     """Iterate the cell grid serially, calling ``eval_fn`` for each cell.
 
     ``eval_fn`` defaults to ``run_cell_eval`` (the GPU-touching path); tests
-    pass a deterministic stub. The function signature is kept identical so the
-    driver doesn't need to know which one is wired in.
+    pass a deterministic stub.
+
+    Early-stop semantics
+    --------------------
+    ``early_stop_on_target`` (default ``None`` = OFF): the FIRST cell whose
+    ``distance`` is ≤ the threshold ends the sweep. That cell's
+    ``early_stop="target-hit"``; remaining cells are appended with
+    ``error=None``, ``early_stop="skipped:target-hit"`` and otherwise zeroed
+    out — so the JSONL/table still has one row per requested cell.
+
+    ``worse_than_baseline_margin`` (default ``None`` = OFF): once the all-OFF
+    baseline cell has been measured (in cheap-first order, it runs first), any
+    later cell whose distance is ≥ ``baseline_distance + margin`` gets
+    ``early_stop="worse"``. The sweep DOES continue past a "worse" cell — we
+    only mark it; combining "worse" with "skip its siblings" would be more
+    aggressive than the bead's spec demands and would risk dropping a slightly
+    worse single-lever cell that later combos with another into a winner. The
+    flag's value is purely informational on each cell so the analyst can spot
+    losing levers in the JSONL.
+
+    Both knobs are independent and may be combined.
     """
     if eval_fn is None:
         eval_fn = run_cell_eval
 
     results: list[CellResult] = []
+    target_hit = False
+    baseline_distance: float | None = None
+
     for cell in cells:
+        if target_hit:
+            results.append(CellResult(
+                sims=cell.sims,
+                eval_vcf_nodes=cell.eval_vcf_nodes,
+                fpu_reduction_c=cell.fpu_reduction_c,
+                reuse_tree=cell.reuse_tree,
+                proven_prop=cell.proven_prop,
+                proven_vcf_leaf_nodes=cell.proven_vcf_leaf_nodes,
+                n_games=n_games,
+                baseline=baseline,
+                early_stop="skipped:target-hit",
+            ))
+            continue
         t0 = time.perf_counter()
         try:
             tally = eval_fn(
@@ -284,6 +504,10 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
                 n_games=n_games,
                 sims=cell.sims,
                 eval_vcf_nodes=cell.eval_vcf_nodes,
+                fpu_reduction_c=cell.fpu_reduction_c,
+                reuse_tree=cell.reuse_tree,
+                proven_prop=cell.proven_prop,
+                proven_vcf_leaf_nodes=cell.proven_vcf_leaf_nodes,
                 c_puct=c_puct,
                 device=device,
                 seed=seed,
@@ -299,6 +523,10 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
             cr = CellResult(
                 sims=cell.sims,
                 eval_vcf_nodes=cell.eval_vcf_nodes,
+                fpu_reduction_c=cell.fpu_reduction_c,
+                reuse_tree=cell.reuse_tree,
+                proven_prop=cell.proven_prop,
+                proven_vcf_leaf_nodes=cell.proven_vcf_leaf_nodes,
                 n_games=tally["n_games"],
                 baseline=baseline,
                 wins=tally["wins"],
@@ -313,10 +541,30 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
                 white_loss_rate=wl,
                 wall_secs=time.perf_counter() - t0,
             )
+            # Record the baseline (all-OFF) distance the first time we see it.
+            # In cheap-first order it's cell 0; in full order it's also the
+            # first cell because OFF sorts to position 0 of every axis.
+            if baseline_distance is None and _is_all_off(cell):
+                baseline_distance = dist
+            # Early-stop logic.
+            if early_stop_on_target is not None and dist <= early_stop_on_target:
+                cr.early_stop = "target-hit"
+                target_hit = True
+            elif (
+                worse_than_baseline_margin is not None
+                and baseline_distance is not None
+                and not _is_all_off(cell)
+                and dist >= baseline_distance + worse_than_baseline_margin
+            ):
+                cr.early_stop = "worse"
         except Exception as e:  # pragma: no cover - defensive in driver
             cr = CellResult(
                 sims=cell.sims,
                 eval_vcf_nodes=cell.eval_vcf_nodes,
+                fpu_reduction_c=cell.fpu_reduction_c,
+                reuse_tree=cell.reuse_tree,
+                proven_prop=cell.proven_prop,
+                proven_vcf_leaf_nodes=cell.proven_vcf_leaf_nodes,
                 n_games=n_games,
                 baseline=baseline,
                 wall_secs=time.perf_counter() - t0,
@@ -333,75 +581,197 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
 def format_per_cell_table(results: list[CellResult]) -> str:
     """A per-cell row table (the long-form view)."""
     lines = []
-    header = (f"{'sims':>5s} {'vcf':>5s} {'n':>4s}  "
+    header = (f"{'sims':>5s} {'vcf':>5s} {'fpu':>5s} {'reu':>4s} "
+              f"{'pp':>3s} {'pvcf':>5s} {'n':>4s}  "
               f"{'BlackW/L/D':>14s}  {'WhiteW/L/D':>14s}  "
-              f"{'Bwin':>6s} {'Wloss':>6s}  {'dist':>6s}  {'secs':>6s}")
+              f"{'Bwin':>6s} {'Wloss':>6s}  {'dist':>6s}  {'secs':>6s}  {'stop':>10s}")
     lines.append(header)
     lines.append("-" * len(header))
     for r in results:
+        stop = r.early_stop or ""
         if r.error:
-            lines.append(f"{r.sims:>5d} {r.eval_vcf_nodes:>5d} {r.n_games:>4d}  "
-                         f"{'ERROR':>14s}  {r.error}")
+            lines.append(
+                f"{r.sims:>5d} {r.eval_vcf_nodes:>5d} "
+                f"{r.fpu_reduction_c:>5.2f} {r.reuse_tree:>4d} "
+                f"{r.proven_prop:>3d} {r.proven_vcf_leaf_nodes:>5d} "
+                f"{r.n_games:>4d}  "
+                f"{'ERROR':>14s}  {r.error}"
+            )
+            continue
+        if stop == "skipped:target-hit":
+            lines.append(
+                f"{r.sims:>5d} {r.eval_vcf_nodes:>5d} "
+                f"{r.fpu_reduction_c:>5.2f} {r.reuse_tree:>4d} "
+                f"{r.proven_prop:>3d} {r.proven_vcf_leaf_nodes:>5d} "
+                f"{r.n_games:>4d}  {'(skipped)':>14s}  "
+                f"{'':>14s}  {'':>6s} {'':>6s}  {'':>6s}  {'':>6s}  {stop:>10s}"
+            )
             continue
         lines.append(
-            f"{r.sims:>5d} {r.eval_vcf_nodes:>5d} {r.n_games:>4d}  "
+            f"{r.sims:>5d} {r.eval_vcf_nodes:>5d} "
+            f"{r.fpu_reduction_c:>5.2f} {r.reuse_tree:>4d} "
+            f"{r.proven_prop:>3d} {r.proven_vcf_leaf_nodes:>5d} "
+            f"{r.n_games:>4d}  "
             f"{r.black_w:>3d}/{r.black_l:>3d}/{r.black_d:>3d}  ".rjust(16)
             + f"{r.white_w:>3d}/{r.white_l:>3d}/{r.white_d:>3d}  ".rjust(16)
             + f"{r.black_win_rate*100:5.0f}% {r.white_loss_rate*100:5.0f}%  "
-            f"{r.distance:6.3f}  {r.wall_secs:6.1f}"
+            f"{r.distance:6.3f}  {r.wall_secs:6.1f}  {stop:>10s}"
         )
     return "\n".join(lines)
 
 
+def _varying_axes(grids: dict[str, list]) -> list[str]:
+    """Return axis names whose grid has >1 distinct value."""
+    return [a for a in AXIS_NAMES if len(set(grids[a])) > 1]
+
+
 def format_distance_grid(results: list[CellResult],
                          sims_grid: list[int],
-                         vcf_grid: list[int]) -> str:
-    """A 2D markdown table of distance-to-100% with the best cell starred.
+                         vcf_grid: list[int],
+                         *,
+                         fpu_c_grid: list[float] | None = None,
+                         reuse_tree_grid: list[int] | None = None,
+                         proven_prop_grid: list[int] | None = None,
+                         proven_vcf_leaf_nodes_grid: list[int] | None = None) -> str:
+    """A markdown distance table.
 
-    Rows = sims (ascending), Columns = vcf_nodes (ascending). Cells without a
-    successful result render as "-". The best (lowest) cell gets a "*" suffix.
+    When ≤2 axes vary, render the classic 2D markdown grid (rows = the
+    first-varying axis, columns = the second-varying axis), pivoted by
+    holding all other axes at their OFF value (a stable slice).
+
+    When ≥3 axes vary, the 2D pivot would be ambiguous, so we render a
+    long-form summary instead:
+      - top-N cells by distance,
+      - the "other axes held at: ..." line for any pivoted-out axes,
+      - per-lever best/worst summary.
+
+    The best (lowest-distance) successful cell always gets a ``*`` tag and a
+    final "best cell" line.
     """
-    sims_sorted = sorted(set(sims_grid))
-    vcf_sorted = sorted(set(vcf_grid))
-    lookup: dict[tuple[int, int], CellResult] = {
-        (r.sims, r.eval_vcf_nodes): r for r in results if r.error is None
-    }
-    # Find best cell (lowest distance).
-    successful = [r for r in results if r.error is None]
-    best_key: tuple[int, int] | None = None
-    if successful:
-        best = min(successful, key=lambda r: r.distance)
-        best_key = (best.sims, best.eval_vcf_nodes)
+    grids = _grids_for_cells(
+        sims_grid=sims_grid,
+        vcf_nodes_grid=vcf_grid,
+        fpu_c_grid=fpu_c_grid if fpu_c_grid is not None else [OFF_VALUES["fpu_reduction_c"]],
+        reuse_tree_grid=reuse_tree_grid if reuse_tree_grid is not None else [OFF_VALUES["reuse_tree"]],
+        proven_prop_grid=proven_prop_grid if proven_prop_grid is not None else [OFF_VALUES["proven_prop"]],
+        proven_vcf_leaf_nodes_grid=(
+            proven_vcf_leaf_nodes_grid
+            if proven_vcf_leaf_nodes_grid is not None
+            else [OFF_VALUES["proven_vcf_leaf_nodes"]]
+        ),
+    )
 
-    # Column headers: vcf values.
-    col_w = 10
-    lines = []
-    lines.append(f"distance-to-100% grid (lower is better; "
-                 f"0.0 = win-all-black/lose-none-white vs the baseline)")
+    successful = [r for r in results if r.error is None and r.early_stop != "skipped:target-hit"]
+    best = min(successful, key=lambda r: r.distance) if successful else None
+    best_axes = (
+        (best.sims, best.eval_vcf_nodes, best.fpu_reduction_c,
+         best.reuse_tree, best.proven_prop, best.proven_vcf_leaf_nodes)
+        if best else None
+    )
+
+    varying = _varying_axes(grids)
+    lines: list[str] = []
+    lines.append(
+        "distance-to-100% grid (lower is better; "
+        "0.0 = win-all-black/lose-none-white vs the baseline)"
+    )
     lines.append("")
-    header = f"| {'sims \\ vcf':<{col_w}} | " + " | ".join(
-        f"{v:>{col_w}d}" for v in vcf_sorted) + " |"
-    sep = "|" + "-" * (col_w + 2) + ("|" + "-" * (col_w + 2)) * len(vcf_sorted) + "|"
-    lines.append(header)
-    lines.append(sep)
-    for s in sims_sorted:
-        row_cells = [f"{s:<{col_w}d}"]
-        for v in vcf_sorted:
-            r = lookup.get((s, v))
-            if r is None:
-                cell = "-"
-            else:
-                tag = "*" if best_key == (s, v) else " "
-                cell = f"{r.distance:6.3f}{tag}"
-            row_cells.append(f"{cell:>{col_w}}")
-        lines.append("| " + " | ".join(row_cells) + " |")
-    if best_key is not None:
-        bw_best = lookup[best_key].black_win_rate
+
+    if len(varying) <= 2:
+        # Classic 2D pivot. Pick the two varying axes (or pad with the legacy
+        # sims/vcf axes for backward-compat when only the legacy axes vary).
+        if len(varying) == 0:
+            varying_to_use = ["sims", "eval_vcf_nodes"]
+        elif len(varying) == 1:
+            v = varying[0]
+            other = "sims" if v != "sims" else "eval_vcf_nodes"
+            varying_to_use = [v, other]
+        else:
+            varying_to_use = list(varying)
+        row_axis, col_axis = varying_to_use[0], varying_to_use[1]
+        row_vals = grids[row_axis]
+        col_vals = grids[col_axis]
+
+        # Slice: hold every other axis at its OFF value.
+        held = {a: OFF_VALUES[a] for a in AXIS_NAMES if a not in (row_axis, col_axis)}
+        slice_results: dict[tuple, CellResult] = {}
+        for r in successful:
+            if all(getattr(r, a) == v for a, v in held.items()):
+                slice_results[(getattr(r, row_axis), getattr(r, col_axis))] = r
+
+        col_w = 10
+        header = (f"| {row_axis + ' \\\\ ' + col_axis:<{col_w}} | "
+                  + " | ".join(_fmt_axis_value(col_axis, v, col_w) for v in col_vals)
+                  + " |")
+        sep = "|" + "-" * (col_w + 2) + ("|" + "-" * (col_w + 2)) * len(col_vals) + "|"
+        lines.append(header)
+        lines.append(sep)
+        for rv in row_vals:
+            cells_out = [_fmt_axis_value(row_axis, rv, col_w)]
+            for cv in col_vals:
+                r = slice_results.get((rv, cv))
+                if r is None:
+                    cell = "-"
+                else:
+                    is_best = (
+                        best is not None
+                        and getattr(r, "sims") == best.sims
+                        and getattr(r, "eval_vcf_nodes") == best.eval_vcf_nodes
+                        and getattr(r, "fpu_reduction_c") == best.fpu_reduction_c
+                        and getattr(r, "reuse_tree") == best.reuse_tree
+                        and getattr(r, "proven_prop") == best.proven_prop
+                        and getattr(r, "proven_vcf_leaf_nodes") == best.proven_vcf_leaf_nodes
+                    )
+                    tag = "*" if is_best else " "
+                    cell = f"{r.distance:6.3f}{tag}"
+                cells_out.append(f"{cell:>{col_w}}")
+            lines.append("| " + " | ".join(cells_out) + " |")
+        if held and any(len(set(grids[a])) > 1 for a in held):
+            held_str = ", ".join(
+                f"{a}={_axis_repr(a, held[a])}" for a in sorted(held)
+            )
+            lines.append("")
+            lines.append(f"other axes held at OFF: {held_str}")
+    else:
+        # ≥3 axes vary — long-form summary.
+        lines.append(f"(≥3 axes vary: {', '.join(varying)} — long-form view)")
         lines.append("")
-        lines.append(f"best cell: sims={best_key[0]} vcf={best_key[1]} "
-                     f"dist={lookup[best_key].distance:.3f} "
-                     f"L4-black-winrate={bw_best*100:.0f}%  (*)")
+        top_n = min(10, len(successful))
+        ranked = sorted(successful, key=lambda r: r.distance)
+        lines.append(f"top {top_n} cells by distance:")
+        for i, r in enumerate(ranked[:top_n]):
+            tag = " *" if (best is not None and r is best) else "  "
+            lines.append(
+                f"{tag}{i+1:2d}. dist={r.distance:6.3f}  "
+                f"sims={r.sims} vcf={r.eval_vcf_nodes} "
+                f"fpu={r.fpu_reduction_c:g} reuse={r.reuse_tree} "
+                f"pprop={r.proven_prop} pvcf={r.proven_vcf_leaf_nodes}  "
+                f"L4-Bwin={r.black_win_rate*100:.0f}%"
+            )
+
+    if best is not None:
+        assert best_axes is not None
+        lines.append("")
+        lines.append(
+            f"best cell: sims={best_axes[0]} vcf={best_axes[1]} "
+            f"fpu={best_axes[2]:g} reuse={best_axes[3]} "
+            f"pprop={best_axes[4]} pvcf={best_axes[5]} "
+            f"dist={best.distance:.3f} "
+            f"L4-black-winrate={best.black_win_rate*100:.0f}%  (*)"
+        )
     return "\n".join(lines)
+
+
+def _fmt_axis_value(axis: str, v, width: int) -> str:
+    if axis == "fpu_reduction_c":
+        return f"{v:>{width}.2f}"
+    return f"{v:>{width}}"
+
+
+def _axis_repr(axis: str, v) -> str:
+    if axis == "fpu_reduction_c":
+        return f"{v:g}"
+    return f"{v}"
 
 
 def write_jsonl(results: list[CellResult], path: Path, meta: dict) -> None:
@@ -421,10 +791,16 @@ def _parse_int_list(s: str) -> list[int]:
     return [int(x) for x in s.split(",") if x.strip()]
 
 
+def _parse_float_list(s: str) -> list[float]:
+    return [float(x) for x in s.split(",") if x.strip()]
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="eval-sims × eval-VCF sweep driver vs lookahead:depth=4 "
-                    "(RESUME PLAYBOOK step 1; H2 search-depth probe).",
+        description="eval-config sweep driver vs lookahead:depth=4 "
+                    "(RESUME PLAYBOOK step 1; H2 search-depth probe). "
+                    "Sweeps the full sims × vcf × fpu × reuse-tree × proven-prop "
+                    "matrix with cheap-first ordering and optional early-stop.",
     )
     p.add_argument("--checkpoint", type=str,
                    default="sweep_runs/derby_v8/_peaks/champ/peak.pt",
@@ -437,12 +813,47 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--games-per-cell", type=int, default=40,
                    help="Games per cell. H2 finding: 10 is too noisy; ~40-100 "
                         "gives ~16pp 95%% CI on each color. 40 is the floor.")
+
+    # Legacy axes (derby-5xs).
     p.add_argument("--sims-grid", type=str, default="100,200,400,800",
-                   help="Comma-separated MCTS sims values. Default 4 values "
-                        "× 3 vcf values = 12 cells.")
+                   help="Comma-separated MCTS sims values.")
     p.add_argument("--vcf-nodes-grid", type=str, default="0,200,800",
                    help="Comma-separated eval-vcf-nodes values "
                         "(0 disables the overlay).")
+
+    # New axes (derby-u8d).
+    p.add_argument("--fpu-c-grid", type=str, default="0.0",
+                   help="Comma-separated FPU-reduction c values (derby-3w0). "
+                        "Default '0.0' (single = OFF, byte-identical).")
+    p.add_argument("--reuse-tree-grid", type=str, default="0",
+                   help="Comma-separated 0/1 values for the cross-ply tree-reuse "
+                        "lever (derby-jmi). Default '0' (single = OFF, "
+                        "byte-identical).")
+    p.add_argument("--proven-prop-grid", type=str, default="0",
+                   help="Comma-separated 0/1 values for the proven-win/loss "
+                        "propagation lever (derby-b3n). Default '0' (single = "
+                        "OFF, byte-identical).")
+    p.add_argument("--proven-vcf-leaf-nodes-grid", type=str, default="0",
+                   help="Comma-separated leaf-VCF bounded-nodes values "
+                        "(derby-b3n; requires --proven-prop=1 to take effect). "
+                        "Default '0' (single = OFF, byte-identical).")
+
+    # Ordering + early-stop knobs.
+    p.add_argument("--order", type=str, default="cheap-first",
+                   choices=["cheap-first", "full", "custom-list"],
+                   help="Cell iteration order. 'cheap-first' (default) puts the "
+                        "all-OFF baseline first, then single-lever isolations, "
+                        "then pair-combos, etc. — so early-stop drops the "
+                        "expensive cells first. 'full' = canonical Cartesian "
+                        "(legacy derby-5xs order). 'custom-list' is reserved.")
+    p.add_argument("--early-stop-on-target", type=float, default=None,
+                   help="If set, stop the sweep as soon as a cell's distance "
+                        "is ≤ this threshold (e.g. 0.1).")
+    p.add_argument("--worse-than-baseline-margin", type=float, default=None,
+                   help="If set, mark any cell whose distance is ≥ "
+                        "(baseline_distance + margin) with early_stop='worse'. "
+                        "Informational only — the sweep continues. Default off.")
+
     p.add_argument("--output", type=str, default=None,
                    help="Output JSONL path. Default "
                         "probe_100pct_<UTC-timestamp>.jsonl in CWD.")
@@ -455,11 +866,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="If >1, parallelise the n_games per cell via "
                         "play_match_parallel.")
     p.add_argument("--i-know-derby-is-running", action="store_true",
-                   help="Acknowledge a live delo_derby.py and proceed anyway. "
-                        "The probe is eval-only — it does not touch the "
-                        "derby's checkpoints — but the GPU lane is "
-                        "single-tenant, so this gate prevents accidental "
-                        "contention.")
+                   help="Acknowledge a live delo_derby.py and proceed anyway.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the grid and exit without running any eval.")
     return p.parse_args(argv)
@@ -471,15 +878,28 @@ def main(argv: list[str] | None = None,
     args = parse_args(argv)
     sims_grid = _parse_int_list(args.sims_grid)
     vcf_grid = _parse_int_list(args.vcf_nodes_grid)
+    fpu_c_grid = _parse_float_list(args.fpu_c_grid)
+    reuse_tree_grid = _parse_int_list(args.reuse_tree_grid)
+    proven_prop_grid = _parse_int_list(args.proven_prop_grid)
+    proven_vcf_leaf_grid = _parse_int_list(args.proven_vcf_leaf_nodes_grid)
     if not sims_grid or not vcf_grid:
         print("error: empty --sims-grid or --vcf-nodes-grid", file=sys.stderr)
         return 2
 
-    cells = enumerate_cells(sims_grid, vcf_grid)
+    cells = enumerate_cells(
+        sims_grid=sims_grid,
+        vcf_nodes_grid=vcf_grid,
+        fpu_c_grid=fpu_c_grid,
+        reuse_tree_grid=reuse_tree_grid,
+        proven_prop_grid=proven_prop_grid,
+        proven_vcf_leaf_nodes_grid=proven_vcf_leaf_grid,
+    )
+    cells = order_cells(cells, args.order)
 
     if args.dry_run:
         print(f"[dry-run] would evaluate {len(cells)} cells against "
-              f"{args.baseline} with {args.games_per_cell} games/cell")
+              f"{args.baseline} with {args.games_per_cell} games/cell "
+              f"(order={args.order})")
         for c in cells:
             print(f"  - {c.label()}")
         return 0
@@ -502,7 +922,16 @@ def main(argv: list[str] | None = None,
     print(f"[probe] checkpoint={args.checkpoint}")
     print(f"[probe] baseline={args.baseline}  games/cell={args.games_per_cell}")
     print(f"[probe] grid: sims={sims_grid}  vcf_nodes={vcf_grid}  "
-          f"({len(cells)} cells)")
+          f"fpu_c={fpu_c_grid}  reuse_tree={reuse_tree_grid}  "
+          f"proven_prop={proven_prop_grid}  "
+          f"proven_vcf_leaf_nodes={proven_vcf_leaf_grid}  "
+          f"({len(cells)} cells, order={args.order})")
+    if args.early_stop_on_target is not None:
+        print(f"[probe] early-stop on target distance ≤ "
+              f"{args.early_stop_on_target}")
+    if args.worse_than_baseline_margin is not None:
+        print(f"[probe] mark cells worse-than-baseline by ≥ "
+              f"{args.worse_than_baseline_margin}")
     print(f"[probe] output={out_path}")
 
     results = run_probe(
@@ -515,6 +944,8 @@ def main(argv: list[str] | None = None,
         device=args.device,
         n_workers=args.n_workers,
         eval_fn=eval_fn,
+        early_stop_on_target=args.early_stop_on_target,
+        worse_than_baseline_margin=args.worse_than_baseline_margin,
     )
 
     meta = {
@@ -523,6 +954,13 @@ def main(argv: list[str] | None = None,
         "games_per_cell": args.games_per_cell,
         "sims_grid": sims_grid,
         "vcf_nodes_grid": vcf_grid,
+        "fpu_c_grid": fpu_c_grid,
+        "reuse_tree_grid": reuse_tree_grid,
+        "proven_prop_grid": proven_prop_grid,
+        "proven_vcf_leaf_nodes_grid": proven_vcf_leaf_grid,
+        "order": args.order,
+        "early_stop_on_target": args.early_stop_on_target,
+        "worse_than_baseline_margin": args.worse_than_baseline_margin,
         "seed": args.seed,
         "c_puct": args.c_puct,
         "device": args.device,
@@ -534,7 +972,13 @@ def main(argv: list[str] | None = None,
     print()
     print(format_per_cell_table(results))
     print()
-    print(format_distance_grid(results, sims_grid, vcf_grid))
+    print(format_distance_grid(
+        results, sims_grid, vcf_grid,
+        fpu_c_grid=fpu_c_grid,
+        reuse_tree_grid=reuse_tree_grid,
+        proven_prop_grid=proven_prop_grid,
+        proven_vcf_leaf_nodes_grid=proven_vcf_leaf_grid,
+    ))
     print()
     print(f"[probe] wrote {len(results)} cells to {out_path}")
     return 0
