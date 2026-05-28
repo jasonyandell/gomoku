@@ -48,3 +48,9 @@ engines/rapfi/pbrain-rapfi
 .dolt/
 *.db
 .beads-credential-key
+
+# bd auto-rewrites this on every write; tracking it forces every worker to
+# stash/restore it before `git merge --no-ff`. Untracked here per derby-58y
+# (2026-05-28); on-disk copy is kept fresh by bd's auto-export. The canonical
+# store lives in .beads/embeddeddolt/ (also untracked).
+.beads/issues.jsonl

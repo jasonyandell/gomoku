@@ -26,6 +26,26 @@ Claim + dispatch a bead **only** if ALL hold:
 2. Spawn a **background** subagent that: `python scripts/worktree_session.py add <slug>`; works in that worktree; **NO GPU/MPS** (force `device='cpu'` for any test); the worktree needs its **own `uv pip install -e .`** (the main repo's editable-install import-hook shadows worktree source); on a `run_sweep.py` CELLS merge conflict, **keep BOTH cells**; integrate `git merge --no-ff` → `git push` → remove worktree+branch (NEVER rebase/squash); stash/restore the concurrently-dirty `.beads/issues.jsonl`/wiki files for the merge but do NOT commit them.
 3. Post `◐ IN PROGRESS` to the bead's thread in #gomoku-beads (see gomoku-slack). Record the bead→worker map.
 
+## Worker discipline — never edit shared main
+Every worker MUST `cd` into its worktree before any edit. The shared main checkout (`/Users/jason/code/gomoku`) is concurrently used by the derby, the user's IDE, and other sessions — editing it in place entangles diffs and blocks `git merge --no-ff`. **Absolute paths under `/Users/jason/code/gomoku/<no-slug>` are SHARED MAIN and FORBIDDEN** for edits. The only legal write targets for a worker are paths under `/Users/jason/code/gomoku-<slug>/...` (its own worktree).
+
+Tooling — the dispatching prompt MUST remind the worker to run this as the FIRST step (right after `cd <worktree>`):
+```bash
+bash scripts/refuse_main_edits.sh   # exits 1 if $PWD == /Users/jason/code/gomoku
+```
+This is a hard tripwire — when it fires, the worker should NOT continue editing; create the worktree (`python scripts/worktree_session.py add <slug>`) and `cd` in, then re-run the precheck. Source available at `scripts/refuse_main_edits.sh`.
+
+## GH-issues flow (when migration is on)
+PAUSED as of 2026-05-28 pending Jason's flip (bd → GH issues); these enablers (derby-58y) land first, then the flip. When the flip is on:
+- Intake produces **GH issues** instead of beads (`derby-idea` label etc. mirrored to GH labels).
+- Replace `python scripts/worktree_session.py add <slug>` with:
+  ```bash
+  python scripts/gh_worktree.py N
+  ```
+  It fetches the title via `gh issue view N --json number,title`, derives a kebab-slug, calls `worktree_session.py add <slug>`, and drops the issue number in `<worktree>/.gh_issue` (so the worker can `cat .gh_issue` and reference it).
+- The worker's merge commit message **MUST include `Closes #N`** — on merge to main, GH then auto-closes the issue (verified working in the migration test-run, issue #1).
+- Until the flip: keep using `bd ready` / `bd update --claim` / `bd close`. The helper is built and ready; it just isn't on the dispatch path yet.
+
 ## DECLINE what isn't yours (release, don't sit on it)
 If a ready bead touches the **derby's GPU-scoring / priority / allocation loop** (`delo_derby.py` decision logic), is GPU-scheduler/daemon infra, an epic, or human-gated (a "GATED on Jason" cutover) — it is **runner/orchestrator domain**. Do NOT dispatch it; if you claimed it to inspect, **release it back to `open`/unassigned with a note** (`bd update <id> --status=open`, clear assignee, `--notes`). The signal is in the bead ("Runner/orchestrator domain", "touches the GPU-scoring loop"). Contrast: *additive reporting* in `delo_derby.py` (e.g. logging an extra wandb series) IS code-only and dispatchable.
 
@@ -68,3 +88,8 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 ### 2026-05-27 - blind to the researcher's reply (the real comms gap)
 - Declined `derby-7ku` (runner-domain) - correctly. The researcher REPLIED by editing the bead to rebut, and I never saw it: `bd` doesn't notify on modification and the watcher only keyed on the ready-set + statuses. Surfaced only when Jason asked "what does beads tell you about 7ku." The decline was right and STAYED right - the gap was pure VISIBILITY, not routing or advancement.
 - Fix: the watcher carries a `reframe` cksum over `bd show` of declined/tracked beads, so a modification (a reply) now wakes me. Re-evaluate against the SAME bar; the standard doesn't bend. Name the exact bar on decline so replies target the real thing (or the other end learns it's fundamentally not ours).
+
+### 2026-05-28 — first edits hit shared main by absolute-path habit (issue #1 / derby-58y)
+- The GH-migration test-run worker's FIRST edits landed in `/Users/jason/code/gomoku/...` (the shared main checkout) instead of `/Users/jason/code/gomoku-<slug>/...`, via an absolute-path habit. Caught + reverted manually, but it nearly entangled the derby's working tree. Symptom: model writes absolute paths from memory ("I know it's at `/Users/jason/code/gomoku/scripts/foo.py`") and skips `cd` into the worktree.
+- Fix: added `scripts/refuse_main_edits.sh` — a precheck that exits 1 LOUDLY when `$PWD` resolves to the shared main checkout. The dispatch prompt template MUST tell the worker to run it as the FIRST step after creating the worktree. See the new "Worker discipline — never edit shared main" section above.
+- Standing rule (for the prompt, not just the runner): every edit target a worker writes must be under `/Users/jason/code/gomoku-<slug>/...`, never under `/Users/jason/code/gomoku/<no-slug>`. The precheck is the tripwire; the rule is the contract.
