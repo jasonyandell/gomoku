@@ -7,7 +7,23 @@ A race between 8 fresh-start self-play training recipes ("ideas") to a fixed
 each idea gets a production-style title card, but the question it answers is
 *which training recipe climbs fastest*.
 
-## CURRENT (2026-05-27) — Derby v9 LIVE: the NET-CAPACITY axis
+## CURRENT (2026-05-27) — Derby v9 CONCLUDED: NET CAPACITY DOESN'T PAY at 9×9
+
+**VERDICT (round-robin H2H at plateau, `round_robin_v9verdict.json`, 24g/pair):
+capacity does NOT pay off.** Mean-centered ratings — **champion8 +151** (the matured v8
+small champion) · **small +16** (v9 64f/4blk) · **medium −28** (v9 96f/6blk) · **large
+−139** (v9 128f/10blk). The headline pair: **small vs medium = Δ0.0 (7-10-7, dead even)**
+— the 2.3× net is statistically identical to the champion-size net at comparable maturity
+(small @epoch 1581/peak1497, medium @epoch 1117/peak1356, both 800+ & plateaued). So
+**bigger net buys nothing at 9×9** — confirms the v8 lesson (the small net is hard to
+beat; capacity isn't the bottleneck). large ranks lowest BUT is **under-trained** (demoted
+@epoch 628, fresh-start-lag undervalued — not a clean read; its ceiling is unproven).
+The matured v8 champion still beats all v9 lanes, but it had ~2–3× more training (epoch
+2848 vs medium 1117). **Next axis is NOT net size** — it's Jason's call (longer train to
+fully mature a lane / 15×15 / a different recipe lever). Operational notes below stand as
+the run record.
+
+## Derby v9 — the NET-CAPACITY axis (run record)
 
 **v8 is CONCLUDED — the scalar `vcf + global-pool + value-discount 0.98` champion
 ("mate-discount", small 64f/4blk) decisively beat EVERY within-recipe lever** (WDL,
