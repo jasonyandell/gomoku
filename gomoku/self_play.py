@@ -116,6 +116,28 @@ _VALUE_DISCOUNT = 1.0
 _DRAW_VALUE = 0.0
 
 
+# Search-contempt (Derby 'x-search-contempt', bead derby-qoq) — a SELF-PLAY
+# POSITION-DISTRIBUTION lever, NOT a target reshape. With probability
+# `_CONTEMPT_P` per move, REPLACE the temperature-sampled visit-policy move
+# selection with a contempt-perturbed pick: weight legal-visited children by
+# `softmax(-|child_Q| / max(tau, eps))` so moves that lead to the MOST CONTESTED
+# child position (Q closest to 0) are preferred. The result is a self-play
+# trajectory that oversamples hard-to-convert positions — exactly the regime
+# where the v8 champion's lookahead4-as-black 100%-target gap clusters (draws,
+# not losses). Source: Singh & Eindhoven 2025, arxiv 2504.07757 (Odds Chess).
+#
+# Crucial: this only changes the MOVE PLAYED. The training target (the visit-
+# count `pi` appended to the trajectory BEFORE this call) is unchanged — only
+# the position distribution that enters the buffer shifts. Per-process
+# (set once by the worker). 0.0 = OFF (no roll, no W read, byte-identical
+# baseline; the `_sample_action(pi, rng)` call site runs verbatim). Paper
+# default is p=0.5; the cell defaults to 0.5. The Q used is child Q from the
+# parent's (root side-to-move's) perspective, the standard MCTS backup
+# convention (W[a] is incremented by +v on own side, -v after the negamax
+# flip — so W[a]/N[a] is in [-1,+1] from the side-about-to-play's POV).
+_CONTEMPT_P = 0.0
+
+
 def configure_value_discount(gamma: float | None = None) -> None:
     """Set the process-wide value-target discount (gamma in (0,1]); 1.0 = flat
     outcomes (current behavior). Call once before generation."""
@@ -130,6 +152,15 @@ def configure_draw_value(delta: float | None = None) -> None:
     global _DRAW_VALUE
     if delta is not None:
         _DRAW_VALUE = float(delta)
+
+
+def configure_search_contempt(p: float | None = None) -> None:
+    """Set the process-wide search-contempt per-move probability (p in [0,1]);
+    0.0 = OFF (move selection runs the standard temperature-sampled visit-
+    policy path, byte-identical baseline). Call once before generation."""
+    global _CONTEMPT_P
+    if p is not None:
+        _CONTEMPT_P = float(p)
 
 
 def _discount_z(z: float, plies_to_end: int) -> float:
@@ -547,6 +578,80 @@ def _sample_action(pi: np.ndarray, rng: np.random.Generator) -> int:
     return int(rng.choice(len(pi), p=pi))
 
 
+def _contempt_distribution(
+    visits: np.ndarray,
+    child_w: np.ndarray,
+    tau: float,
+) -> np.ndarray:
+    """Build the contempt-perturbed action distribution from child visit counts
+    and cumulative win values (W[a] from the C MCTS backup, in the parent
+    side-to-move's perspective).
+
+    For each child with N[a] > 0, the contempt SCORE is `-|child_Q[a]|` where
+    `child_Q[a] = W[a] / N[a]` ∈ [-1, +1]. Children with the most CONTESTED
+    Q (closest to 0) score highest, so the resulting softmax peaks on moves
+    that lead to harder-to-convert positions (the paper's mechanism). The
+    softmax uses `max(tau, 1e-2)` as a temperature floor so the play
+    distribution doesn't collapse to one-hot near the late-game tau=0.1
+    regime (the recorded `pi` already collapses; we want some exploration in
+    the contempt-perturbed play distribution to keep the position-flow
+    diverse). Children with N[a] == 0 (never visited by MCTS) score `-inf`
+    (no Q estimate, never picked by contempt). Illegal/unvisited actions get
+    zero probability mass.
+
+    Returns a length-`N_ACTIONS` float64 array summing to 1.0 over the visited
+    legal children, or all-zeros if no children have visits (degenerate).
+    """
+    n = np.asarray(visits, dtype=np.int64)
+    w = np.asarray(child_w, dtype=np.float64)
+    out = np.zeros_like(w, dtype=np.float64)
+    visited = n > 0
+    if not visited.any():
+        return out
+    q = np.zeros_like(w, dtype=np.float64)
+    q[visited] = w[visited] / n[visited]
+    score = np.full_like(q, -np.inf, dtype=np.float64)
+    score[visited] = -np.abs(q[visited])
+    tau_eff = max(float(tau), 1e-2)
+    # numerically stable softmax over the visited subset
+    finite_scores = score[visited]
+    m = float(finite_scores.max())
+    shifted = (finite_scores - m) / tau_eff
+    exps = np.exp(shifted)
+    Z = float(exps.sum())
+    if Z <= 0 or not np.isfinite(Z):
+        # All-equal-or-degenerate fallback: uniform over visited children.
+        idx = np.flatnonzero(visited)
+        out[idx] = 1.0 / float(len(idx))
+        return out
+    probs = exps / Z
+    idx = np.flatnonzero(visited)
+    out[idx] = probs
+    return out
+
+
+def _contempt_sample_action(
+    visits: np.ndarray,
+    child_w: np.ndarray,
+    pi: np.ndarray,
+    tau: float,
+    rng: np.random.Generator,
+) -> int:
+    """Sample a move from the CONTEMPT-perturbed action distribution.
+
+    See `_contempt_distribution` for the math. Falls back to the visit-policy
+    `pi` (via `_sample_action`) if the contempt distribution is degenerate
+    (no visited children — happens at the very first call before any sims
+    have backed up). Guarantees a finite, legal action choice (the caller's
+    `_sample_action` NaN safety net is the final fallback).
+    """
+    contempt_pi = _contempt_distribution(visits, child_w, tau)
+    s = float(contempt_pi.sum())
+    if not np.isfinite(s) or s <= 0:
+        return _sample_action(pi, rng)
+    return int(rng.choice(len(contempt_pi), p=contempt_pi / s))
+
+
 def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameState, int]:
     """Play `n_moves` uniform-random legal moves from an empty board, then return
     the resulting state and the ply count (= n_moves, unless the random play hit
@@ -751,6 +856,19 @@ def _generate_games_native_gumbel(
                 if action < 0:
                     # Degenerate (terminal/no legal); fall back to argmax of pi.
                     action = int(np.argmax(pi))
+                # Search-contempt (Derby 'x-search-contempt', bead derby-qoq):
+                # with probability _CONTEMPT_P, REPLACE the SH-chosen move with
+                # a contempt-perturbed pick that favors children with Q closest
+                # to 0 (most contested). Uses tau=1.0 for the softmax (Gumbel
+                # has no temperature schedule of its own; the recorded training
+                # target `pi` is the COMPLETED-POLICY and is unchanged — only
+                # the position distribution shifts). OFF (_CONTEMPT_P <= 0):
+                # no roll, no W read, byte-identical baseline.
+                if _CONTEMPT_P > 0.0 and float(rng.random()) < _CONTEMPT_P:
+                    ds = g.gumbel_debug_state()
+                    action = _contempt_sample_action(
+                        g.visit_counts(), ds["W"], pi, 1.0, rng,
+                    )
                 with _profile_timer(profile, "advance_root_s"):
                     g.advance_root(action)
                 with _profile_timer(profile, "terminal_check_s"):
@@ -1187,7 +1305,21 @@ def _generate_games_native(
                         trajectories[g_idx].append((planes, pi.copy(), side))
 
                 with _profile_timer(profile, "sample_action_s"):
-                    action = _sample_action(pi, rng)
+                    # Search-contempt (Derby 'x-search-contempt', bead derby-qoq):
+                    # with probability _CONTEMPT_P, REPLACE the standard temperature-
+                    # sampled visit-policy pick with a contempt-perturbed pick that
+                    # favors children with Q closest to 0 (most contested). The
+                    # recorded training target `pi` above is UNCHANGED — only the
+                    # MOVE PLAYED (and thus the position distribution) shifts.
+                    # OFF (_CONTEMPT_P <= 0): no roll, no W read, byte-identical
+                    # baseline.
+                    if _CONTEMPT_P > 0.0 and float(rng.random()) < _CONTEMPT_P:
+                        ds = g.gumbel_debug_state()
+                        action = _contempt_sample_action(
+                            g.visit_counts(), ds["W"], pi, tau, rng,
+                        )
+                    else:
+                        action = _sample_action(pi, rng)
                 with _profile_timer(profile, "advance_root_s"):
                     g.advance_root(action)
                 with _profile_timer(profile, "terminal_check_s"):
