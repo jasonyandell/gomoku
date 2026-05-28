@@ -144,9 +144,13 @@ def test_authoritative_elo_logged_to_resumed_run(board, fake_wandb):
     )
 
     assert logged is True
-    # Resumed the SAME run id (not a fresh run) on the right project.
+    # Eval ELOs go to a SEPARATE "<run>-eval" run, NEVER the trainer's run id
+    # (Jason 2026-05-27). Writing into the trainer's run concurrently with the next
+    # slice resuming it was the "run ID <x> is in use" crash-loop; a derived eval run
+    # the trainer never touches removes the collision entirely.
     init = fake_wandb.recorder["init_kwargs"]
-    assert init["id"] == run_id
+    assert init["id"] == f"{run_id}-eval"
+    assert init["id"] != run_id  # must NOT collide with the training run
     assert init["resume"] == "allow"
     assert init["project"] == "gomoku"
     # Exactly one log call carrying the AUTHORITATIVE elo (1454, not the 788 mirage).

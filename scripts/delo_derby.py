@@ -520,11 +520,19 @@ def log_authoritative_elo_to_wandb(
         payload[DERBY_EPOCH_WANDB_KEY] = int(eval_epoch)
     if lag is not None:
         payload[DERBY_EVAL_LAG_WANDB_KEY] = int(lag)
+    # Eval ELOs live in their OWN wandb run, SEPARATE from the trainer's run
+    # (Jason 2026-05-27). The trainer owns `wandb_run_id` EXCLUSIVELY, so writing the
+    # eval/elo into a derived `<run>-eval` id can NEVER collide with the next training
+    # slice resuming the trainer's id — that concurrency was the "run ID <x> is in use"
+    # crash-loop (pipeline mode harvests an eval while the next slice resumes the run).
+    # Bonus: a clean separate "eval TV" run per lane, distinct from training metrics.
+    eval_run_id = f"{wandb_run_id}-eval"
     try:
         import wandb  # local import; heavy + optional
         run = wandb.init(
             project=project,
-            id=wandb_run_id,
+            id=eval_run_id,
+            name=f"{idea_name}-eval",
             resume="allow",
         )
         try:
@@ -532,7 +540,7 @@ def log_authoritative_elo_to_wandb(
         finally:
             run.finish()
         derby_print(f"[derby/elo] {idea_name}: logged authoritative "
-                    f"{DERBY_ELO_WANDB_KEY}={model_elo:.0f} -> wandb run {wandb_run_id}")
+                    f"{DERBY_ELO_WANDB_KEY}={model_elo:.0f} -> SEPARATE eval run {eval_run_id}")
         return True
     except Exception as e:  # wandb unavailable, network down, bad run id, etc.
         derby_print(f"[derby/elo] {idea_name}: wandb authoritative-elo log skipped ({e})")
@@ -1124,6 +1132,11 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
     if args.chunk_timeout and args.chunk_timeout > slice_timeout:
         slice_timeout = args.chunk_timeout
     lines_before = count_jsonl_lines(board, idea_name)
+    # Crash-loop guard (2026-05-27): snapshot the TRUE trainer epoch before the slice.
+    # run_sweep can exit 0 even when its child trainer died on startup (e.g. a wandb
+    # "run ID in use" collision), so rc/status alone miss it. A real slice ALWAYS
+    # advances the epoch; a crashed one doesn't — we compare after the slice.
+    trainer_epoch_before = read_trainer_epoch(board, idea_name) if resume else None
     cmd = build_sweep_slice_cmd(board, idea_spec, resume=resume, final_eval=not pipeline)
     rc, status = run_subprocess(cmd, chunk_log, slice_timeout)
     dt = time.time() - t0
@@ -1141,6 +1154,21 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
         # (e.g. cell not yet defined in run_sweep.CELLS) can't burn the whole budget.
         _handle_chunk_failure(board, state, idea_name, args,
                               f"run_sweep {status} (rc={rc})", milestones, state_p)
+        return
+
+    # --- crash-loop guard: rc=0 but the trainer made NO epoch progress = a crash ---
+    # (e.g. wandb "run ID in use" kills gomoku.train on startup, yet run_sweep still
+    # exits 0). Without this the derby billed 16s "successes" and silently re-queued
+    # for ~1.5h. A no-progress slice is routed through the SAME retry/error path as a
+    # hard failure, so a crash-loop self-arrests into an 'errored' lane (surfaced) fast.
+    trainer_epoch_after = read_trainer_epoch(board, idea_name)
+    if (resume and trainer_epoch_before is not None and trainer_epoch_after is not None
+            and trainer_epoch_after <= trainer_epoch_before):
+        _handle_chunk_failure(
+            board, state, idea_name, args,
+            f"no epoch progress (trainer epoch {trainer_epoch_before}->{trainer_epoch_after} "
+            f"in {dt:.0f}s) — trainer likely crashed; see {chunk_log}",
+            milestones, state_p)
         return
 
     # --- bill the wall time (the chunk completed; the model trained + saved) ---
