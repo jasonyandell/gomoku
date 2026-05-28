@@ -11,7 +11,9 @@ The orchestrating session IS the "derby runner" — it owns the GPU, runs the de
 plateaued/starved/spent lanes for fresh cells by judgement**. This skill is the muscle
 memory: the exact commands, the scoreboard script, the swap procedure, the verdict
 ritual. Battle-tested over a 7h+ autonomous run (Derby v8, 2026-05-27) with two clean
-verdict-driven swaps.
+verdict-driven swaps, and hardened by the v9 net-capacity cook (parked-lane load
+balancing + a silent wandb crash-loop caught and fixed — see Infrastructure failure
+modes).
 
 **Read once for context, then just run the loop:**
 - `gomoku-research-lab` — the broad lab charter (two queues, receipts, stop-gates).
@@ -172,7 +174,9 @@ pkill -TERM -f 'delo_derby.py --board scripts/derby_vN'
 pkill -TERM -f 'run_sweep.py --cell derby-'; pkill -TERM -f 'gomoku.selfplay_worker'
 pkill -TERM -f 'gomoku.train .*derby-'; pkill -TERM -f 'gomoku.eval_worker'
 sleep 5   # NEVER kill -9 — SIGTERM lets the trainer self-save a resumable latest.pt
-# confirm 0 survivors, then:
+# wait for the trainer to actually exit (the 1.5M-buffer save takes ~15-40s); confirm
+# 0 gomoku.train survivors, THEN reap orphaned wandb procs that lock run ids "in use":
+pkill -f 'wandb-core'; pkill -f 'wandb-xpu'   # else next resume → "run ID in use" crash-loop
 # (c) edit scripts/derby_vN_board.json: replace the dead lane's idea entry (keep ~4).
 # (d) drop the dead lane from sweep_runs/derby_vN/derby_state.json["ideas"] (its peak.pt
 #     stays in _peaks/ as an anchor); --resume adds the new idea fresh from the board.
@@ -219,6 +223,51 @@ impressive `peak_elo` talk you into promoting/keeping a lane; conversely don't t
 lane just because it tops the anchored board. Always confirm with H2H before concluding.
 A corollary: even the CHAMPION's anchored elo isn't hard-capped at the ~1700 "saturation"
 lore — mate-discount pushed 1699→1811 with more training; "saturated" ≠ done.
+
+## Infrastructure failure modes — detect crashes, don't bill fake successes (added 2026-05-27, the v9 wandb crash-loop)
+
+A whole class of failure is **silent**: a chunk that *looks* successful but did no
+training. v9 crash-looped for **~1.5h** before it was caught. The lessons:
+
+- **rc=0 ≠ trained.** `run_sweep.py` exits 0 even when its child `gomoku.train` dies on
+  startup, so the derby billed `slice done (16s)` "successes" and re-queued forever. The
+  derby now has a guard (`is_no_progress_slice`): a slice that returns rc=0 but advances
+  **no trainer epoch** is routed through the retry→`errored` path. **So a real crash-loop
+  now surfaces as an `errored` lane (or repeated short slices) — when you see either,
+  READ `sweep_logs/<cell>/trainer.log` for the actual traceback; never let it re-queue.**
+- **The LIVE trainer epoch is the truth, not `elo_history`.** The eval stream
+  (`derby_state` elo-epochs) LAGS the trainer badly — minutes-to-hundreds-of-epochs,
+  worst on the big net. To judge real progress / spot a stall, read the live trainer log,
+  not the scoreboard's eval-epoch:
+  ```bash
+  grep -oE 'epoch [0-9]+' sweep_logs/<cell>/trainer.log | tail -1
+  ```
+  The tell that caught v9: **`total_chunks_run` climbing while a lane's LIVE epoch is
+  flat** (and `slice done (Ns)` with N ≪ `slice_secs` in the derby log).
+- **wandb is ESSENTIAL (Jason's "TV") — never disable it to dodge a wandb bug.** Fix the
+  root cause. The v9 crash was wandb `run ID <x> is in use`: the derby was logging the
+  eval/elo **into the trainer's own wandb run**, and in pipeline mode that harvest runs
+  concurrently with the next slice resuming that same run → collision → trainer dies on
+  startup. **Fix (now in `log_authoritative_elo_to_wandb`): eval ELOs go to a SEPARATE
+  `<run>-eval` wandb run + `eval_results.jsonl` — truly separate from the training run, so
+  the trainer owns its run id exclusively.** Training metrics → trainer's run; eval/elo →
+  the `-eval` run. They must never share a run id. (Disabling wandb was my wrong first
+  instinct — Jason: "wandb is essential, that's my TV.")
+- **Clean-stop must reap orphaned wandb procs.** A SIGTERM'd trainer can leave a
+  `wandb-core`/`wandb-xpu` child that keeps the run id "running" server-side, so the next
+  resume hits `run ID in use` → fresh crash-loop. After the trainers die, **also**
+  `pkill -f 'wandb-core'; pkill -f 'wandb-xpu'` (it's in the swap procedure now).
+- **Count distinct trainer PIDs, not cmdline matches.** `pgrep -f gomoku.train` should
+  show exactly ONE PID. Don't be fooled by `grep -oE 'derby-vN-[a-z]+'` over `ps` output
+  over-counting (one trainer's cmdline names its cell ~3× via `--worker-input-dir`/
+  `--worker-weights-path`/`--checkpoint-dir`). To find real orphans, count PIDs:
+  `pgrep -f gomoku.train | wc -l`.
+- **When you change derby/eval/wandb code mid-run, the running derby holds the OLD code in
+  memory** — it only picks up `delo_derby.py` changes on restart (it re-reads
+  `run_sweep.CELLS` per chunk, so cell edits land next chunk, but the engine code does
+  not). Restart the derby to deploy an engine fix; cell-flag edits take effect on their
+  own. And lock the fix in: a pure predicate + unit test (e.g. `is_no_progress_slice` in
+  `tests/test_derby_elo_readout.py`) is how "detect errors better" becomes durable.
 
 ## When research is exhausted — HOLD, don't churn (added 2026-05-27)
 
