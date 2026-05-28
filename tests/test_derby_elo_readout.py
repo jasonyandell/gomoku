@@ -26,6 +26,7 @@ from scripts.delo_derby import (
     DERBY_PEAK_WANDB_KEY,
     DERBY_EVAL_LAG_WANDB_KEY,
     compute_eval_lag,
+    is_no_progress_slice,
     log_authoritative_elo_to_wandb,
     read_last_elo,
 )
@@ -120,6 +121,28 @@ def test_compute_eval_lag_clamps_negative_to_zero():
 def test_compute_eval_lag_none_when_unknown():
     assert compute_eval_lag(None, 45) is None
     assert compute_eval_lag(242, None) is None
+
+
+# ---------------------------------------------------------------------------
+# is_no_progress_slice — the crash-loop guard (rc=0 but trainer made no epochs)
+# ---------------------------------------------------------------------------
+
+def test_no_progress_slice_detects_flat_epoch():
+    # The crash-loop signature: a "successful" slice that advanced no epochs.
+    assert is_no_progress_slice(resume=True, epoch_before=796, epoch_after=796) is True
+    assert is_no_progress_slice(resume=True, epoch_before=796, epoch_after=790) is True
+
+
+def test_no_progress_slice_false_for_healthy_slice():
+    # A real slice advances the epoch — never routed to the failure path.
+    assert is_no_progress_slice(resume=True, epoch_before=796, epoch_after=821) is False
+
+
+def test_no_progress_slice_false_when_not_checkable():
+    # Fresh slice (no 'before') or unknown epochs must NOT false-positive a crash.
+    assert is_no_progress_slice(resume=False, epoch_before=None, epoch_after=10) is False
+    assert is_no_progress_slice(resume=True, epoch_before=None, epoch_after=821) is False
+    assert is_no_progress_slice(resume=True, epoch_before=796, epoch_after=None) is False
 
 
 # ---------------------------------------------------------------------------

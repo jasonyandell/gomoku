@@ -463,6 +463,23 @@ def compute_eval_lag(trainer_epoch: Optional[int],
     return max(0, int(trainer_epoch) - int(eval_epoch))
 
 
+def is_no_progress_slice(resume: bool,
+                         epoch_before: Optional[int],
+                         epoch_after: Optional[int]) -> bool:
+    """True if a 'successful' (rc=0) slice actually did NO training — the crash-loop
+    signature. Pure/stateless so it's unit-testable without subprocesses or a GPU.
+
+    run_sweep can exit 0 even when its child trainer died on startup (e.g. a wandb
+    "run ID in use" collision), so rc/status miss it. A real slice ALWAYS advances the
+    trainer epoch; a crashed one leaves it flat. Only meaningful on a --resume slice
+    with both epochs known (a fresh slice has no 'before', and unknown epochs must not
+    false-positive a healthy slice into the failure path).
+    """
+    if not resume or epoch_before is None or epoch_after is None:
+        return False
+    return epoch_after <= epoch_before
+
+
 def log_authoritative_elo_to_wandb(
     board: dict,
     idea_name: str,
@@ -1162,8 +1179,7 @@ def run_sweep_chunk(board: dict, state: dict, idea_name: str,
     # for ~1.5h. A no-progress slice is routed through the SAME retry/error path as a
     # hard failure, so a crash-loop self-arrests into an 'errored' lane (surfaced) fast.
     trainer_epoch_after = read_trainer_epoch(board, idea_name)
-    if (resume and trainer_epoch_before is not None and trainer_epoch_after is not None
-            and trainer_epoch_after <= trainer_epoch_before):
+    if is_no_progress_slice(resume, trainer_epoch_before, trainer_epoch_after):
         _handle_chunk_failure(
             board, state, idea_name, args,
             f"no epoch progress (trainer epoch {trainer_epoch_before}->{trainer_epoch_after} "
