@@ -235,6 +235,18 @@ training. v9 crash-looped for **~1.5h** before it was caught. The lessons:
   **no trainer epoch** is routed through the retry→`errored` path. **So a real crash-loop
   now surfaces as an `errored` lane (or repeated short slices) — when you see either,
   READ `sweep_logs/<cell>/trainer.log` for the actual traceback; never let it re-queue.**
+- **A crashed/`errored` lane → DEMOTE it, don't keep retrying (Jason, 2026-05-27).** Once
+  a lane errors out (retries exhausted) for a non-transient reason, take it OFF the active
+  board — same procedure as parking a spent lane (remove from board json + `derby_state`
+  ideas; **preserve its `peak.pt` anchor AND `latest.pt`** so it's re-promotable once the
+  root cause is fixed). **Why it's not optional:** an `errored` lane left on the board can
+  DEADLOCK the derby — if every *other* lane is `capped`, the runnable set is empty AND the
+  watchdog's "all lanes capped" cap-bump won't fire (the errored lane isn't "capped"), so
+  the derby sits with nothing to run (hit 2026-05-27: medium-capped + large-errored). Demote
+  the errored lane to unstick, note the re-promotion recipe, and let the healthy lanes cook.
+  (Re-promote later by fixing the root cause — e.g. a poisoned wandb run: clear the embedded
+  `wandb_run_id` in `latest.pt` so the trainer starts a FRESH run, train.py:868/1018 — then
+  add the cell back to the board.)
 - **The LIVE trainer epoch is the truth, not `elo_history`.** The eval stream
   (`derby_state` elo-epochs) LAGS the trainer badly — minutes-to-hundreds-of-epochs,
   worst on the big net. To judge real progress / spot a stall, read the live trainer log,
