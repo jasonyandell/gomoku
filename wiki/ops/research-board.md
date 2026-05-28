@@ -473,6 +473,14 @@ anchored elo.
       the same way (below small's ~1738 potential). CONFOUND: the run hit a **v9 wandb crash-loop** (runner
       hardened it, commits 0c83693/e1039da/91a7b93) which disrupted maturation. Still anchored-only + small
       under-trained — but the scale-doesn't-pay-at-9×9 read keeps firming.
+    - **`large` (128×10) ERRORED — trainer CRASHED (97 chunks, 01:28Z):** milestones log — "no epoch
+      progress (trainer epoch 628→628 in 9s) — trainer likely crashed"; derby retried once, errored it,
+      tore down the lane (`large/chunk.log`: "trainer exited"). So the BIGGEST net isn't just slow — **it's
+      unstable here** (crash, likely OOM / numerical at 128×10 on this box). Combined with `medium`
+      underperforming `small` at-cap, the scale axis now reads doubly bad: 96×6 < 64×4, and 128×10 won't
+      train stably. (Derby itself HEALTHY — `delo_derby`+watchdog up, 9 workers; a transient `pgrep`=0 mid-
+      cycle briefly looked like a halt but was a false alarm, re-verified.) `large`'s teardown frees a lane —
+      `derby-x-medium-signal` (the aux capacity-unlock probe) is the natural swap-in.
   - 🔎 **IS `small` AT STANDARD? (asked 2026-05-28) — roughly yes, within noise, but PARKED EARLY + the
     "scale hint" is fragile.** `small` is byte-identical to the v8 champion (`mate-discount`) at the small
     net. At MATCHED training (~36 evals = small's parking point): small peaked **1555**, the champion peaked
