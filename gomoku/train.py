@@ -30,6 +30,78 @@ class _ShutdownRequested(Exception):
     epoch-boundary clean-stop path instead of hanging until SIGKILL."""
 
 
+def _is_run_in_use_error(exc: BaseException) -> bool:
+    """True if `exc` is the wandb server-side 'run ID <x> is in use' lock
+    collision (a ServerResponseError, surfaced when a previous slice resumed
+    the same id but never wandb.finish()'d cleanly so the run stayed
+    "running" server-side). Matched by message text so we don't have to
+    import wandb's error class (it moves between versions)."""
+    msg = str(exc).lower()
+    return "is in use" in msg or "run id" in msg and "in use" in msg
+
+
+def _init_wandb_run(wandb, *, project, name, run_id, config):
+    """Initialize (and resume, if `run_id` is set) the trainer's single
+    per-lane wandb run. Preserves the resumed-single-run-per-lane model
+    (the embedded `wandb_run_id` in latest.pt + derby/* logging resume the
+    SAME id).
+
+    Defense-in-depth (fix (c)): if resuming raises the 'run ID in use'
+    server-lock collision (an interrupted prior chunk that never released
+    the run cleanly — the (a) fix prevents this going forward, but old
+    checkpoints carry already-poisoned ids), retry once, then fall back to a
+    FRESH run id with a logged warning rather than crash-looping the trainer
+    on startup. The fresh id is then re-embedded in latest.pt on the next
+    save, so the lane self-heals.
+    """
+    resume_mode = "allow" if run_id else None
+    try:
+        return wandb.init(project=project, name=name, id=run_id,
+                          resume=resume_mode, config=config)
+    except Exception as exc:  # noqa: BLE001 — wandb errors are version-specific
+        if not (run_id and _is_run_in_use_error(exc)):
+            raise
+        # The resumed id is locked server-side (unclean prior finish). One
+        # brief retry in case the server is mid-release; then a fresh run.
+        print(f"warning: wandb resume(id={run_id}) hit a 'run ID in use' "
+              f"lock ({exc}); retrying once", flush=True)
+        time.sleep(2.0)
+        try:
+            return wandb.init(project=project, name=name, id=run_id,
+                              resume=resume_mode, config=config)
+        except Exception as exc2:  # noqa: BLE001
+            if not _is_run_in_use_error(exc2):
+                raise
+            print(f"warning: wandb id={run_id} still locked ({exc2}); "
+                  f"falling back to a FRESH run id (a new run; the lane's "
+                  f"latest.pt will re-embed the new id on next save)",
+                  flush=True)
+            return wandb.init(project=project, name=name, id=None,
+                              resume=None, config=config)
+
+
+def _release_wandb_run(run) -> None:
+    """Release the wandb run cleanly on the SIGTERM/cap stop path (fix (a)).
+
+    Marks the run as preempting and finishes it so the run is no longer
+    "running" server-side; the NEXT slice's resume(id, resume="allow") then
+    succeeds instead of colliding with a 'run ID in use' lock. A no-op when
+    there is no active run. Best-effort: a wandb hiccup here must not turn a
+    clean capped-slice exit into a crash."""
+    if run is None:
+        return
+    try:
+        mark = getattr(run, "mark_preempting", None)
+        if callable(mark):
+            mark()
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: wandb mark_preempting failed: {exc}", flush=True)
+    try:
+        run.finish()
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: wandb finish failed: {exc}", flush=True)
+
+
 def policy_loss(logits: torch.Tensor, pi: torch.Tensor) -> torch.Tensor:
     """Cross-entropy with soft targets. pi may have zeros on illegal moves; those contribute 0."""
     logp = F.log_softmax(logits, dim=-1)
@@ -1011,11 +1083,11 @@ def main() -> None:
             print("warning: --wandb set but no WANDB_API_KEY in keychain or env")
         else:
             import wandb
-            run = wandb.init(
+            run = _init_wandb_run(
+                wandb,
                 project=args.wandb_project,
                 name=args.run_name,
-                id=wandb_run_id,
-                resume="allow" if wandb_run_id else None,
+                run_id=wandb_run_id,
                 config=vars(args),
             )
             wandb_run_id = run.id
@@ -2160,6 +2232,13 @@ def main() -> None:
                   f"saving resumable checkpoint (buffer embedded), exiting",
                   flush=True)
             _save_resumable(epoch + 1)
+            # Fix (a): release the wandb run cleanly BEFORE exit so it is no
+            # longer "running" server-side. Without this an interrupted/capped
+            # chunk leaves the run locked, and the next slice's
+            # resume(id, resume="allow") crash-loops with 'run ID in use'.
+            # Preserves the resumed-single-run-per-lane model (same id; we
+            # just release it cleanly so the next resume can re-acquire it).
+            _release_wandb_run(run)
             break
 
 
