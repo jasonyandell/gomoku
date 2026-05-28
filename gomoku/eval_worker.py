@@ -109,6 +109,16 @@ def parse_args() -> argparse.Namespace:
                         "KataGo uses c≈0.45 (subtree) / 0.20 (root); LCZero "
                         "0.33. EVAL-ONLY: self-play / generation / training "
                         "are NOT affected.")
+    p.add_argument("--reuse-tree", action="store_true", default=False,
+                   help="Reuse the MCTS tree across plies at EVAL time (derby-jmi). "
+                        "Default OFF = byte-identical fresh-tree-per-call legacy. "
+                        "When set, the eval picker holds one MCTSGame across the "
+                        "match and calls MCTSGame.advance_root after each ply pair, "
+                        "inheriting the previously-explored subtree's visits / W / "
+                        "priors. Effectively multiplies the sim budget by the tree-"
+                        "reuse fraction at zero extra compute (standard AlphaZero / "
+                        "KataGo / LCZero). EVAL-ONLY: self-play / generation / "
+                        "training are NOT affected.")
     return p.parse_args()
 
 
@@ -161,6 +171,7 @@ def main() -> None:
             eval_vcf_nodes=args.eval_vcf_nodes,
             eval_vcf_depth=args.eval_vcf_depth,
             fpu_reduction_c=args.fpu_reduction_c,
+            reuse_tree=args.reuse_tree,
         )
 
         log: dict = {"eval_worker/epoch_evaluated": epoch_tag}
@@ -187,6 +198,7 @@ def main() -> None:
                     eval_vcf_nodes=args.eval_vcf_nodes,
                     eval_vcf_depth=args.eval_vcf_depth,
                     fpu_reduction_c=args.fpu_reduction_c,
+                    reuse_tree=args.reuse_tree,
                 )
             else:
                 res = play_match_pickers(
