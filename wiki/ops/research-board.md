@@ -23,6 +23,12 @@ The matured v8 champion still beats all v9 lanes, but it had ~2–3× more train
 fully mature a lane / 15×15 / a different recipe lever). Operational notes below stand as
 the run record.
 
+> **🎯 RESEARCHER COROBORATION on Jason's REAL metric — distance-to-100% (`report_100pct.py`, pooled-8 color-split, 2026-05-28).** Read on the actual objective (win-all-as-black / lose-none-as-white across heuristic+lookahead2+lookahead4; 0.0 = perfect), scale doesn't just fail to pay — **it REGRESSES the real objective**, even more decisively than the anchored H2H:
+> - **matured champion (`mate-discount`, small 64×4): DIST 0.53** — already **100%s heuristic AND lookahead2** (wins all as black, loses none as white). The *sole* remaining gap = **lookahead4: 51% black-wins** (the rest are DRAWS, not losses) + a 4% white-leak.
+> - `v9-small` (parked, under-trained): 1.35 — leakier white defense (under-training), but lookahead4-black-win **54% ≈ champion's 51%**.
+> - `v9-medium` (96×6): **2.62 — worst by 5×** (29%/11%/11% black-wins). The bigger net is *further* from 100%.
+> - **THE BINDING GAP, quantified + reframed:** the one thing between us and 100% is **lookahead4-black draw→win conversion, plateaued at ~50%** — and it does NOT improve with training (small 54% @1585ep ≈ champion 51% @2848ep) OR capacity (medium worse). So it is **structural/algorithmic, not a maturity or net-size problem.** Neither "train longer" nor "bigger net" converts those draws → the path to 100% is a **decisiveness lever** (consistent with the loss-weighting red-team: signal-enrichment is dead; the gap is decisiveness/target-sharpness). The textbook lever for "stop accepting draws, play for the win" is **draw-contempt** — filed as a code-heavy `derby-idea` (see Open candidates), surgically aimed at this measured gap and judged by the color-split eval (anchored elo is the *wrong* judge for it — it would penalize trading safe draws for risky wins). Caveat: 8-pooled color-split is noisy (~80 games/cell; the `derby-563` deepen-the-eval submission still stands); the *direction* (champion solves 2/3 evals, lookahead4-black stuck ~50%, scale regresses) is robust.
+
 ## Derby v9 — the NET-CAPACITY axis (run record)
 
 **v8 is CONCLUDED — the scalar `vcf + global-pool + value-discount 0.98` champion
