@@ -53,7 +53,12 @@ class Node:
         return int(self.N.sum())
 
 
-def _select_action(node: Node, c_puct_init: float, c_puct_base: float) -> int:
+def _select_action(
+    node: Node,
+    c_puct_init: float,
+    c_puct_base: float,
+    fpu_reduction_c: float = 0.0,
+) -> int:
     """PUCT selection over legal actions only.
 
     AlphaGo Zero log-schedule:
@@ -64,11 +69,22 @@ def _select_action(node: Node, c_puct_init: float, c_puct_base: float) -> int:
     N_parent it equals c_puct_init; as the parent accumulates visits it grows
     slowly, tilting toward more exploration. With c_puct_base=19652 it's nearly
     constant for the typical sims-per-move budget but matches the AGZ recipe.
+
+    ``fpu_reduction_c`` (default 0.0 = OFF, byte-identical legacy) enables
+    KataGo-style First-Play Urgency reduction: unvisited children inherit
+    ``parent_V - c * sqrt(sum_visited_priors)`` instead of Q=0. Eval-only knob;
+    self-play / gen never set this (they take the c=0 branch).
     """
     total = node.total_visits()
     pb_c = float(np.log((1.0 + total + c_puct_base) / c_puct_base) + c_puct_init)
     sqrt_total = np.sqrt(total + 1e-8)
-    Q = np.where(node.N > 0, node.W / np.maximum(node.N, 1), 0.0)
+    if fpu_reduction_c > 0.0 and total > 0:
+        parent_V = float(node.W.sum()) / float(total)
+        sum_visited_priors = float(node.P[node.N > 0].sum())
+        fpu_q = parent_V - fpu_reduction_c * float(np.sqrt(max(sum_visited_priors, 0.0)))
+        Q = np.where(node.N > 0, node.W / np.maximum(node.N, 1), fpu_q)
+    else:
+        Q = np.where(node.N > 0, node.W / np.maximum(node.N, 1), 0.0)
     U = pb_c * node.P * sqrt_total / (1.0 + node.N)
     score = Q + U
     # Mask illegal moves to -inf so they're never selected.
@@ -155,7 +171,11 @@ class _PendingLeaf:
 
 
 def _select_one(
-    root: Node, c_puct_init: float, c_puct_base: float, forced_playout_k: float = 0.0
+    root: Node,
+    c_puct_init: float,
+    c_puct_base: float,
+    forced_playout_k: float = 0.0,
+    fpu_reduction_c: float = 0.0,
 ) -> _PendingLeaf:
     """Descend tree until we reach either an unexpanded node or a terminal."""
     node = root
@@ -169,7 +189,7 @@ def _select_one(
         if forced_playout_k > 0.0 and node is root:
             a = _select_root_action_forced(node, forced_playout_k)
         if a < 0:
-            a = _select_action(node, c_puct_init, c_puct_base)
+            a = _select_action(node, c_puct_init, c_puct_base, fpu_reduction_c=fpu_reduction_c)
         if a not in node.children:
             # Lazy child creation
             child_state = node.state.apply(a)
@@ -213,6 +233,7 @@ class MCTSGame:
         dirichlet_alpha: float = 0.3,
         dirichlet_eps: float = 0.25,
         forced_playout_k: float = 0.0,
+        fpu_reduction_c: float = 0.0,
         rng: np.random.Generator | None = None,
     ):
         self.c_puct = c_puct  # acts as c_puct_init in the AGZ log schedule
@@ -221,6 +242,9 @@ class MCTSGame:
         self.dirichlet_eps = dirichlet_eps
         # KataGo forced-playouts constant. 0.0 == OFF == byte-identical legacy.
         self.forced_playout_k = forced_playout_k
+        # KataGo FPU-reduction constant. 0.0 == OFF == byte-identical legacy
+        # (unvisited children take Q=0). Eval-only knob.
+        self.fpu_reduction_c = fpu_reduction_c
         self.rng = rng or np.random.default_rng()
         self.root = Node(state=state)
         _init_node(self.root)
@@ -263,7 +287,13 @@ def run_batched_mcts(
 
     for _ in range(n_simulations):
         pending = [
-            _select_one(g.root, g.c_puct, g.c_puct_base, getattr(g, "forced_playout_k", 0.0))
+            _select_one(
+                g.root,
+                g.c_puct,
+                g.c_puct_base,
+                getattr(g, "forced_playout_k", 0.0),
+                getattr(g, "fpu_reduction_c", 0.0),
+            )
             for g in games
         ]
 
