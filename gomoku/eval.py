@@ -17,7 +17,7 @@ from typing import Callable
 
 import numpy as np
 
-from gomoku.game import GameState
+from gomoku.game import BOARD_SIZE, GameState
 from gomoku.mcts import Evaluator, MCTSGame, policy_from_visits, run_batched_mcts
 
 
@@ -99,6 +99,58 @@ def vcf_overlay_picker(
     return pick
 
 
+def _infer_moves_from_diff(
+    rs: GameState, state: GameState
+) -> tuple[int, ...] | None:
+    """Infer the sequence of 1 or 2 actions played to get from ``rs`` to ``state``.
+
+    Returns the action tuple, or ``None`` if the diff doesn't match a clean
+    1- or 2-ply continuation (e.g. opponent surprise via VCF-overlay short-
+    circuit, or stale state). Caller falls back to rebuilding a fresh tree.
+
+    Mechanics (canonical-perspective bookkeeping in ``GameState.apply``):
+      - ``rs.board[0]``  = side-to-move at rs's stones; ``rs.board[1]`` = opp.
+      - After 1 ply: side flips. ``state.board[1]`` now holds rs's mover's
+        stones (incl new one). New cell = ``state.board[1] & ~rs.board[0]``.
+      - After 2 plies: perspective flips back. ``state.board[0]`` holds rs's
+        mover's stones (incl their move ``a``); ``state.board[1]`` holds the
+        opponent's stones (incl their reply ``b``).
+    """
+    mc_diff = state.move_count - rs.move_count
+    if mc_diff == 1:
+        new_cells = state.board[1] & (~rs.board[0])
+        if int(new_cells.sum()) != 1:
+            return None
+        coords = np.argwhere(new_cells)
+        r, c = int(coords[0, 0]), int(coords[0, 1])
+        a = r * BOARD_SIZE + c
+        # Verify by replaying — defends against any sneaky board-shape mismatch.
+        try:
+            ns = rs.apply(a)
+        except Exception:
+            return None
+        if not np.array_equal(ns.board, state.board):
+            return None
+        return (a,)
+    if mc_diff == 2:
+        new_a_cells = state.board[0] & (~rs.board[0])
+        new_b_cells = state.board[1] & (~rs.board[1])
+        if int(new_a_cells.sum()) != 1 or int(new_b_cells.sum()) != 1:
+            return None
+        ra, ca = np.argwhere(new_a_cells)[0]
+        rb, cb = np.argwhere(new_b_cells)[0]
+        a = int(ra) * BOARD_SIZE + int(ca)
+        b = int(rb) * BOARD_SIZE + int(cb)
+        try:
+            ns = rs.apply(a).apply(b)
+        except Exception:
+            return None
+        if not np.array_equal(ns.board, state.board):
+            return None
+        return (a, b)
+    return None
+
+
 def mcts_picker(
     evaluator: Evaluator,
     *,
@@ -106,11 +158,31 @@ def mcts_picker(
     c_puct: float = 1.5,
     eval_vcf_nodes: int = 0,
     eval_vcf_depth: int = 0,
+    reuse_tree: bool = False,
 ) -> Picker:
     """Wrap a leaf evaluator into a one-shot picker for use in matches.
 
-    Builds a fresh MCTS tree per call (no cross-move reuse — matches don't need
-    it and this keeps the wrapper simple).
+    Default (``reuse_tree=False``, BYTE-IDENTICAL legacy): builds a fresh MCTS
+    tree per call — no cross-move reuse, no state held between picks.
+
+    ``reuse_tree=True`` (the derby-jmi lever, EVAL-ONLY): returns a STATEFUL
+    closure that holds one persistent ``MCTSGame`` across the match. On the
+    first call it builds the tree at ``state``. On subsequent calls it infers
+    the 1 or 2 actions played since the previous root (by board diff) and calls
+    ``MCTSGame.advance_root`` for each — promoting the played child to be the
+    new root and reusing its already-explored subtree (visits / W / priors).
+    Effectively multiplies the per-move sim budget by the tree-reuse fraction
+    at zero extra compute. Standard AlphaZero / KataGo / LCZero.
+
+    Reset / safety rules (all rebuild a fresh tree):
+      - First call (no game yet).
+      - ``state.move_count`` decreased OR is 0 → new match.
+      - Diff doesn't match a clean 1- or 2-ply continuation (e.g. opponent
+        surprise via the VCF overlay short-circuit, mid-game pickup).
+
+    EVAL-ONLY: the self-play / generation / training path NEVER calls this with
+    ``reuse_tree=True`` — gen MCTS has its own tree-management semantics
+    (Dirichlet noise per move, full sim budget per ply) and stays unchanged.
 
     ``eval_vcf_nodes`` (default 0 = OFF, byte-identical to the pre-lever path)
     enables an eval-time root VCF overlay: before MCTS picks a move, run a
@@ -120,13 +192,77 @@ def mcts_picker(
     overlay is EVAL-ONLY — never used by self-play / generation / training.
     """
 
-    def pick(state: GameState, rng: np.random.Generator) -> int:
-        g = MCTSGame(state, c_puct=c_puct, rng=rng)
-        run_batched_mcts([g], evaluator, n_simulations=n_simulations, add_root_noise=False)
-        pi = policy_from_visits(g.root, temperature=0.0)
-        return int(np.argmax(pi))
+    if not reuse_tree:
+        # Legacy path — byte-identical to pre-lever behavior. Same code shape
+        # as before so the OFF lane has zero extra branches in the hot loop.
+        def pick(state: GameState, rng: np.random.Generator) -> int:
+            g = MCTSGame(state, c_puct=c_puct, rng=rng)
+            run_batched_mcts(
+                [g], evaluator, n_simulations=n_simulations, add_root_noise=False
+            )
+            pi = policy_from_visits(g.root, temperature=0.0)
+            return int(np.argmax(pi))
 
-    return vcf_overlay_picker(pick, max_nodes=eval_vcf_nodes, max_depth=eval_vcf_depth)
+        return vcf_overlay_picker(
+            pick, max_nodes=eval_vcf_nodes, max_depth=eval_vcf_depth
+        )
+
+    # Stateful reuse-tree picker. Holds one MCTSGame across the match.
+    # `state_holder` is a dict so the closure can rebind without `nonlocal`.
+    state_holder: dict = {"game": None}
+
+    def _build_fresh(state: GameState, rng: np.random.Generator) -> MCTSGame:
+        return MCTSGame(state, c_puct=c_puct, rng=rng)
+
+    def pick(state: GameState, rng: np.random.Generator) -> int:
+        g = state_holder["game"]
+        rebuild = False
+        if g is None:
+            rebuild = True
+        elif state.move_count == 0:
+            # New match started — initial position. Even if g's root happens to
+            # equal initial, rebuild to drop any stale stats from a prior game.
+            rebuild = True
+        elif state.move_count < g.root.state.move_count:
+            # Time went backwards → new match or resumed earlier — rebuild.
+            rebuild = True
+        elif state.move_count == g.root.state.move_count:
+            # Root already at this state (e.g. unusual replay) → no advance.
+            if not np.array_equal(state.board, g.root.state.board):
+                rebuild = True
+        else:
+            moves = _infer_moves_from_diff(g.root.state, state)
+            if moves is None:
+                rebuild = True
+            else:
+                for a in moves:
+                    g.advance_root(int(a))
+        if rebuild:
+            g = _build_fresh(state, rng)
+            state_holder["game"] = g
+        run_batched_mcts(
+            [g], evaluator, n_simulations=n_simulations, add_root_noise=False
+        )
+        pi = policy_from_visits(g.root, temperature=0.0)
+        chosen = int(np.argmax(pi))
+        # Advance through our own move so the next call (after opponent reply)
+        # only needs to advance one more ply.
+        g.advance_root(chosen)
+        return chosen
+
+    # Expose the holder for tests (state-invariant + reset-on-new-match) so
+    # they can introspect the persistent MCTSGame without re-entering pick().
+    pick._reuse_state = state_holder  # type: ignore[attr-defined]
+
+    wrapped = vcf_overlay_picker(
+        pick, max_nodes=eval_vcf_nodes, max_depth=eval_vcf_depth
+    )
+    # Propagate the holder onto whichever picker we hand back (the wrapper at
+    # eval_vcf_nodes>0, or `pick` itself when the overlay is OFF and the wrapper
+    # is `pick` unchanged) so callers always see ._reuse_state.
+    if wrapped is not pick:
+        wrapped._reuse_state = state_holder  # type: ignore[attr-defined]
+    return wrapped
 
 
 def _match_result_from_outcomes(
@@ -239,7 +375,8 @@ _WORKER_OPP_PICKER: Picker | None = None
 
 def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
                device: str, opp_spec_str: str,
-               eval_vcf_nodes: int = 0, eval_vcf_depth: int = 0) -> None:
+               eval_vcf_nodes: int = 0, eval_vcf_depth: int = 0,
+               reuse_tree: bool = False) -> None:
     """Run once in each worker on Pool startup. Loads the model + opp picker.
 
     Each worker holds its own copy of the model (forked-then-loaded, so the
@@ -249,6 +386,12 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
 
     ``eval_vcf_nodes`` (default 0 = OFF, byte-identical) threads the eval-time
     root VCF overlay through to the model picker in each worker.
+
+    ``reuse_tree`` (default False = OFF, byte-identical) threads the eval-time
+    cross-ply tree-reuse lever through to the model picker in each worker.
+    Each worker reuses its own picker across games in the pool — the
+    new-match reset rule (move_count==0) rebuilds between games so cross-game
+    contamination is impossible.
     """
     global _WORKER_MODEL_PICKER, _WORKER_OPP_PICKER
 
@@ -265,6 +408,7 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
         _WORKER_MODEL_PICKER = mcts_picker(
             evaluator, n_simulations=sims, c_puct=c_puct,
             eval_vcf_nodes=eval_vcf_nodes, eval_vcf_depth=eval_vcf_depth,
+            reuse_tree=reuse_tree,
         )
     _WORKER_OPP_PICKER = build_player(parse_spec(opp_spec_str))
 
@@ -311,6 +455,7 @@ def play_match_parallel(
     device: str = "cpu",
     eval_vcf_nodes: int = 0,
     eval_vcf_depth: int = 0,
+    reuse_tree: bool = False,
 ) -> MatchResult:
     """Play `n_games` of the model (loaded from `checkpoint_path`) vs the
     baseline described by `opp_spec`, in parallel via multiprocessing.Pool.
@@ -324,13 +469,16 @@ def play_match_parallel(
 
     ``eval_vcf_nodes`` (default 0 = OFF, byte-identical) threads the eval-time
     root VCF overlay through into each worker's model picker.
+
+    ``reuse_tree`` (default False = OFF, byte-identical) threads the eval-time
+    cross-ply tree-reuse lever through into each worker's model picker.
     """
     import multiprocessing as mp
 
     if n_workers < 2:
         raise ValueError(f"play_match_parallel needs n_workers >= 2, got {n_workers}")
     init_args = (checkpoint_path, sims, c_puct, device, opp_spec,
-                 eval_vcf_nodes, eval_vcf_depth)
+                 eval_vcf_nodes, eval_vcf_depth, reuse_tree)
     game_args = [(g_idx, seed + g_idx + 1) for g_idx in range(n_games)]
     # spawn (not fork) on macOS by default; spawn re-imports the module in
     # each worker, which is what we want for clean state.
