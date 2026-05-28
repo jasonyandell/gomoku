@@ -937,6 +937,15 @@ def parse_args() -> argparse.Namespace:
                         "EVAL-ONLY: self-play / generation / training (the trainer "
                         "step itself) are NOT affected — only the in-loop eval "
                         "matchups vs the fast/slow baselines.")
+    p.add_argument("--proven-prop", action="store_true", default=False,
+                   help="KataGo proven-win/loss propagation in the in-trainer "
+                        "eval MCTS (derby-b3n). Default OFF = byte-identical "
+                        "legacy. EVAL-ONLY: gen and the trainer step itself "
+                        "are NOT affected.")
+    p.add_argument("--proven-vcf-leaf-nodes", type=int, default=0,
+                   help="Bounded solve_vcf at MCTS leaf expansion for the "
+                        "in-trainer eval (derby-b3n). Default 0 = OFF (byte-"
+                        "identical legacy). Requires --proven-prop. EVAL-ONLY.")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--save-buffer-every", type=int, default=20,
                    help="Rewrite `latest.pt` (which embeds the ~1.4 GB replay "
@@ -2424,7 +2433,9 @@ def main() -> None:
                                        eval_vcf_nodes=args.eval_vcf_nodes,
                                        eval_vcf_depth=args.eval_vcf_depth,
                                        fpu_reduction_c=args.fpu_reduction_c,
-                                       reuse_tree=args.reuse_tree)
+                                       reuse_tree=args.reuse_tree,
+                                       proven_prop=args.proven_prop,
+                                       proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes)
 
             run_slow = bool(slow_pickers) and (eval_counter % args.eval_slow_every == 0)
             batches = [("fast", fast_pickers, args.eval_baseline_games)]

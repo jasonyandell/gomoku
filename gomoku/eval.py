@@ -160,6 +160,8 @@ def mcts_picker(
     eval_vcf_depth: int = 0,
     fpu_reduction_c: float = 0.0,
     reuse_tree: bool = False,
+    proven_prop: bool = False,
+    proven_vcf_leaf_nodes: int = 0,
 ) -> Picker:
     """Wrap a leaf evaluator into a one-shot picker for use in matches.
 
@@ -198,16 +200,57 @@ def mcts_picker(
     self-play / gen MCTS stays untouched (their MCTSGame is constructed
     elsewhere with the default 0.0). KataGo uses c≈0.45 (subtree) / 0.20
     (root); LCZero 0.33.
+
+    ``proven_prop`` (default False = OFF, byte-identical) enables KataGo-style
+    proven-win/loss propagation through the MCTS tree (derby-b3n): terminal
+    outcomes (and optionally bounded leaf-VCF results) propagate upward,
+    selection deprioritizes proven-loss children (Q=-inf) and prioritizes
+    proven-win children (Q=+inf), and on root short-circuit we play any proven
+    winning move immediately. EVAL-ONLY: self-play / generation / training are
+    NOT affected (their MCTSGame construction never sets this).
+
+    ``proven_vcf_leaf_nodes`` (default 0 = OFF, byte-identical) enables a
+    bounded ``solve_vcf`` call at MCTS leaf expansion (derby-b3n; KataGo's
+    "graphSearch lite"). When >0, every newly-expanded leaf runs
+    ``solve_vcf(state, max_nodes=N)``; on ``has_forced_win=True`` the leaf's
+    ``proven_value`` is set to +1 immediately, propagating up via the proven-
+    prop machinery. Requires ``proven_prop=True`` to have any effect. Reuses
+    the bounded VCF solver from derby-b6r (same per-call work as
+    ``--eval-vcf-nodes``).
     """
 
     if not reuse_tree:
-        # Legacy path — byte-identical to pre-lever behavior. Same code shape
-        # as before so the OFF lane has zero extra branches in the hot loop.
+        # Legacy path — byte-identical to pre-lever behavior when proven_prop
+        # is OFF and proven_vcf_leaf_nodes is OFF. Same code shape otherwise.
         def pick(state: GameState, rng: np.random.Generator) -> int:
-            g = MCTSGame(state, c_puct=c_puct, fpu_reduction_c=fpu_reduction_c, rng=rng)
+            g = MCTSGame(
+                state,
+                c_puct=c_puct,
+                fpu_reduction_c=fpu_reduction_c,
+                proven_prop=proven_prop,
+                proven_vcf_leaf_nodes=proven_vcf_leaf_nodes,
+                rng=rng,
+            )
             run_batched_mcts(
                 [g], evaluator, n_simulations=n_simulations, add_root_noise=False
             )
+            # derby-b3n root short-circuit:
+            #   1. If leaf-VCF proved a win at the root and supplied the
+            #      first attacker move (root.proven_action), play it.
+            #   2. Else, if any root CHILD is proven-winning for us
+            #      (child.proven_value == -1 in the child's POV ⇒ opponent
+            #      loses ⇒ we win), play that move.
+            # Closes the "missing-one-sim" gap.
+            if proven_prop:
+                if (
+                    g.root.proven_value == +1
+                    and g.root.proven_action >= 0
+                    and g.root.legal_mask[g.root.proven_action]
+                ):
+                    return int(g.root.proven_action)
+                for a, child in g.root.children.items():
+                    if child.proven_value == -1 and g.root.legal_mask[a]:
+                        return int(a)
             pi = policy_from_visits(g.root, temperature=0.0)
             return int(np.argmax(pi))
 
@@ -221,7 +264,12 @@ def mcts_picker(
 
     def _build_fresh(state: GameState, rng: np.random.Generator) -> MCTSGame:
         return MCTSGame(
-            state, c_puct=c_puct, fpu_reduction_c=fpu_reduction_c, rng=rng
+            state,
+            c_puct=c_puct,
+            fpu_reduction_c=fpu_reduction_c,
+            proven_prop=proven_prop,
+            proven_vcf_leaf_nodes=proven_vcf_leaf_nodes,
+            rng=rng,
         )
 
     def pick(state: GameState, rng: np.random.Generator) -> int:
@@ -253,8 +301,22 @@ def mcts_picker(
         run_batched_mcts(
             [g], evaluator, n_simulations=n_simulations, add_root_noise=False
         )
-        pi = policy_from_visits(g.root, temperature=0.0)
-        chosen = int(np.argmax(pi))
+        chosen: int | None = None
+        if proven_prop:
+            if (
+                g.root.proven_value == +1
+                and g.root.proven_action >= 0
+                and g.root.legal_mask[g.root.proven_action]
+            ):
+                chosen = int(g.root.proven_action)
+            else:
+                for a, child in g.root.children.items():
+                    if child.proven_value == -1 and g.root.legal_mask[a]:
+                        chosen = int(a)
+                        break
+        if chosen is None:
+            pi = policy_from_visits(g.root, temperature=0.0)
+            chosen = int(np.argmax(pi))
         # Advance through our own move so the next call (after opponent reply)
         # only needs to advance one more ply.
         g.advance_root(chosen)
@@ -387,7 +449,9 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
                device: str, opp_spec_str: str,
                eval_vcf_nodes: int = 0, eval_vcf_depth: int = 0,
                fpu_reduction_c: float = 0.0,
-               reuse_tree: bool = False) -> None:
+               reuse_tree: bool = False,
+               proven_prop: bool = False,
+               proven_vcf_leaf_nodes: int = 0) -> None:
     """Run once in each worker on Pool startup. Loads the model + opp picker.
 
     Each worker holds its own copy of the model (forked-then-loaded, so the
@@ -424,6 +488,8 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
             eval_vcf_nodes=eval_vcf_nodes, eval_vcf_depth=eval_vcf_depth,
             fpu_reduction_c=fpu_reduction_c,
             reuse_tree=reuse_tree,
+            proven_prop=proven_prop,
+            proven_vcf_leaf_nodes=proven_vcf_leaf_nodes,
         )
     _WORKER_OPP_PICKER = build_player(parse_spec(opp_spec_str))
 
@@ -472,6 +538,8 @@ def play_match_parallel(
     eval_vcf_depth: int = 0,
     fpu_reduction_c: float = 0.0,
     reuse_tree: bool = False,
+    proven_prop: bool = False,
+    proven_vcf_leaf_nodes: int = 0,
 ) -> MatchResult:
     """Play `n_games` of the model (loaded from `checkpoint_path`) vs the
     baseline described by `opp_spec`, in parallel via multiprocessing.Pool.
@@ -498,7 +566,7 @@ def play_match_parallel(
         raise ValueError(f"play_match_parallel needs n_workers >= 2, got {n_workers}")
     init_args = (checkpoint_path, sims, c_puct, device, opp_spec,
                  eval_vcf_nodes, eval_vcf_depth, fpu_reduction_c,
-                 reuse_tree)
+                 reuse_tree, proven_prop, proven_vcf_leaf_nodes)
     game_args = [(g_idx, seed + g_idx + 1) for g_idx in range(n_games)]
     # spawn (not fork) on macOS by default; spawn re-imports the module in
     # each worker, which is what we want for clean state.

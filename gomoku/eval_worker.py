@@ -119,6 +119,24 @@ def parse_args() -> argparse.Namespace:
                         "reuse fraction at zero extra compute (standard AlphaZero / "
                         "KataGo / LCZero). EVAL-ONLY: self-play / generation / "
                         "training are NOT affected.")
+    p.add_argument("--proven-prop", action="store_true", default=False,
+                   help="KataGo-style proven-win/loss propagation in MCTS "
+                        "(derby-b3n). Default OFF = byte-identical legacy. When "
+                        "set, terminal outcomes (and optionally leaf-VCF results) "
+                        "propagate as proven_value through the tree; selection "
+                        "deprioritizes proven-loss children (Q=-inf), prioritizes "
+                        "proven-win children (Q=+inf), and any proven-win root "
+                        "child short-circuits sims and is played immediately. "
+                        "EVAL-ONLY: self-play / generation / training are NOT "
+                        "affected.")
+    p.add_argument("--proven-vcf-leaf-nodes", type=int, default=0,
+                   help="Bounded solve_vcf at MCTS leaf expansion (derby-b3n; "
+                        "KataGo 'graphSearch lite'). Default 0 = OFF (byte-"
+                        "identical legacy). When >0, every newly-expanded leaf "
+                        "runs solve_vcf(state, max_nodes=N); on has_forced_win="
+                        "True the leaf's proven_value is set to +1 and "
+                        "propagates upward via --proven-prop. Requires "
+                        "--proven-prop to have any effect.")
     return p.parse_args()
 
 
@@ -172,6 +190,8 @@ def main() -> None:
             eval_vcf_depth=args.eval_vcf_depth,
             fpu_reduction_c=args.fpu_reduction_c,
             reuse_tree=args.reuse_tree,
+            proven_prop=args.proven_prop,
+            proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes,
         )
 
         log: dict = {"eval_worker/epoch_evaluated": epoch_tag}
@@ -199,6 +219,8 @@ def main() -> None:
                     eval_vcf_depth=args.eval_vcf_depth,
                     fpu_reduction_c=args.fpu_reduction_c,
                     reuse_tree=args.reuse_tree,
+                    proven_prop=args.proven_prop,
+                    proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes,
                 )
             else:
                 res = play_match_pickers(
