@@ -235,6 +235,20 @@ training. v9 crash-looped for **~1.5h** before it was caught. The lessons:
   **no trainer epoch** is routed through the retry→`errored` path. **So a real crash-loop
   now surfaces as an `errored` lane (or repeated short slices) — when you see either,
   READ `sweep_logs/<cell>/trainer.log` for the actual traceback; never let it re-queue.**
+- **NEVER launch a derby on an existing cell without protecting its `latest.pt` (2026-05-28).**
+  The derby's first chunk runs FRESH (no `--resume`) when `derby_state.json` has
+  `wall_secs_total=0`, which **silently overwrites any pre-existing `latest.pt` in the
+  cell's checkpoint dir** with a brand-new seed-0 trainer's state. Burned this on the
+  champion continuation — `latest.pt @ epoch 2848` got clobbered to epoch 12 in seconds.
+  **Before launching a derby that resumes a pre-existing cell** (e.g. a `champ
+  continuation` board, re-promoting a parked/demoted lane), do **all three**:
+  (a) **back up** `latest.pt` to `$CLAUDE_JOB_DIR/<cell>_latest.bak.pt`;
+  (b) **pre-populate** `<base_out_dir>/derby_state.json` with the lane's idea entry and
+  `wall_secs_total > 0` (e.g. `1.0`) so the derby's `resume = wall_secs_total > 0` check
+  trips True on the first chunk — that's what forces `--resume <latest.pt>`;
+  (c) **dry-run + verify** the trainer's cmdline contains `--resume <path>` (via
+  `ps -o command= $(pgrep -f gomoku.train)`) *before* letting the first chunk run. If
+  `--resume` is missing — kill immediately, you're about to clobber the checkpoint.
 - **A crashed/`errored` lane → DEMOTE it, don't keep retrying (Jason, 2026-05-27).** Once
   a lane errors out (retries exhausted) for a non-transient reason, take it OFF the active
   board — same procedure as parking a spent lane (remove from board json + `derby_state`

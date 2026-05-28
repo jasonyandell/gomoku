@@ -1,0 +1,23 @@
+{
+  "_doc": "Derby CHAMP (2026-05-28) \u2014 continuation run of the v8 champion (derby-v7-mate-discount: vcf+global-pool+value-discount 0.98+gumbel-m16, small 64f/4blk, the H2H king from v8 round-robin +151). Single lane, resuming from latest.pt @ epoch 2848 / anchored peak 1811. Goal (Jason): keep the GPU productive on the proven champion 'until you get something new' \u2014 more training pushes its ceiling past 1811 and tightens H2H vs any future contender. Same operating model (single GPU executor, 300s chunks, derby owns scheduling). Holds until Jason picks a real next-axis experiment.",
+  "global": {
+    "engine": "run_sweep_wall_slice",
+    "slice_secs": 300,
+    "cap_wall_secs": 100800.0,
+    "base_out_dir": "sweep_runs/derby_champ",
+    "board_md_path": "sweep_runs/derby_champ/standings.md",
+    "beat_heuristic_elo": 800,
+    "pipeline_eval": true,
+    "peak_window": 6,
+    "patience_chunks": 4,
+    "starvation_factor": 2
+  },
+  "ideas": [
+    {
+      "name": "champ",
+      "cell": "derby-v7-mate-discount",
+      "cell_name": "derby-v7-mate-discount",
+      "lever": "the v8 H2H champion (vcf + global-pool + value-discount 0.98), resumed from latest.pt @ epoch 2848 / peak 1811. Continuation training to push the ceiling past 1811 while we wait for the next-axis decision."
+    }
+  ]
+}

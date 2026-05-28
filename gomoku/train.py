@@ -1960,6 +1960,12 @@ def main() -> None:
         # Pre-compute the post-ingest cumulative (the var itself is updated
         # later in the epoch log block); the scheduler needs the AS-OF-NOW
         # value to make a cadence decision against rows we just ingested.
+        # Cold-start safety (2026-05-28): n_positions_this_cycle is canonically
+        # assigned at L~2016 from records — but L1963 uses it FIRST, and on the
+        # first iteration after a resume from a weights-only checkpoint (peak.pt
+        # has no buffer), records can be empty and the var is unbound. Seed to 0;
+        # L~2016 reassigns the actual per-cycle value before any later use.
+        n_positions_this_cycle = 0
         reanalyze_cum_positions = cumulative_new_positions + n_positions_this_cycle
         # Cadence gate: ask the scheduler whether to fire THIS epoch. The
         # buffer.size warmup gate (">= batch_size") is preserved as a hard
