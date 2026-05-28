@@ -807,6 +807,18 @@ def parse_args() -> argparse.Namespace:
                    help="run --eval-baselines-slow every Nth eval cycle (=Nx eval-every epochs)")
     p.add_argument("--eval-slow-games", type=int, default=6,
                    help="games per matchup vs each slow baseline")
+    p.add_argument("--eval-vcf-nodes", type=int, default=0,
+                   help="Eval-time root VCF overlay node budget for the in-trainer "
+                        "eval. Default 0 = OFF (byte-identical to the pre-lever "
+                        "path). When >0, before MCTS picks a move the eval picker "
+                        "runs a bounded solve_vcf from the root; if a forced four-"
+                        "in-a-row win is proven, it plays the solver's move; else "
+                        "the MCTS choice runs as today. EVAL-ONLY: self-play / "
+                        "generation / training are NOT affected.")
+    p.add_argument("--eval-vcf-depth", type=int, default=0,
+                   help="Eval-time root VCF overlay depth cap (attacker plies). "
+                        "0 = use vcf.DEFAULT_MAX_DEPTH (16). Only matters with "
+                        "--eval-vcf-nodes > 0.")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--save-buffer-every", type=int, default=20,
                    help="Rewrite `latest.pt` (which embeds the ~1.4 GB replay "
@@ -2247,7 +2259,9 @@ def main() -> None:
             eval_evaluator = make_torch_evaluator(model, device)
             model_picker = mcts_picker(eval_evaluator,
                                        n_simulations=args.eval_sims,
-                                       c_puct=args.c_puct)
+                                       c_puct=args.c_puct,
+                                       eval_vcf_nodes=args.eval_vcf_nodes,
+                                       eval_vcf_depth=args.eval_vcf_depth)
 
             run_slow = bool(slow_pickers) and (eval_counter % args.eval_slow_every == 0)
             batches = [("fast", fast_pickers, args.eval_baseline_games)]
