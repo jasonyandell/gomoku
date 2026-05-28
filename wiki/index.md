@@ -101,6 +101,7 @@ read is:
 | [topics/wall-clock-to-elo-metric.md](topics/wall-clock-to-elo-metric.md) | LF1-followup #4 design: wall-clock-to-elo as a first-class metric family (MTTE primary, EPWH/Δelo·Δt⁻¹ secondary) the throughput proxies must be checked against; protocol, val/policy_ce gate, gap analysis vs `delta_e_harness.py`, proposed charter diff. |
 | [topics/research-lab-reviewer-role.md](topics/research-lab-reviewer-role.md) | Codified Reviewer role: when it fires (post-lane + mid-loop), the audit prompts, the three verdicts (APPROVE/REVISE/BLOCK), and what it does NOT do. |
 | [topics/research-lab-session-runbook.md](topics/research-lab-session-runbook.md) | End-to-end procedure for running a GPU-required lab item (perf cell, training slice, or sweep): pre-flight, naming, command surfaces, receipt, surfaces to update. |
+| [topics/probe-100pct.md](topics/probe-100pct.md) | `scripts/probe_100pct.py` — one-command driver for the RESUME PLAYBOOK step 1 sweep (eval-sims × eval-VCF vs lookahead4) on a matured checkpoint; per-cell distance-to-100% via the existing `report_100pct.py` formula. |
 
 ### Operations And Use
 
