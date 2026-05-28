@@ -235,20 +235,24 @@ training. v9 crash-looped for **~1.5h** before it was caught. The lessons:
   **no trainer epoch** is routed through the retry→`errored` path. **So a real crash-loop
   now surfaces as an `errored` lane (or repeated short slices) — when you see either,
   READ `sweep_logs/<cell>/trainer.log` for the actual traceback; never let it re-queue.**
-- **NEVER launch a derby on an existing cell without protecting its `latest.pt` (2026-05-28).**
+- **NEVER launch a derby on an existing cell without `scripts/derby_safe_resume.py` (2026-05-28).**
   The derby's first chunk runs FRESH (no `--resume`) when `derby_state.json` has
   `wall_secs_total=0`, which **silently overwrites any pre-existing `latest.pt` in the
   cell's checkpoint dir** with a brand-new seed-0 trainer's state. Burned this on the
   champion continuation — `latest.pt @ epoch 2848` got clobbered to epoch 12 in seconds.
-  **Before launching a derby that resumes a pre-existing cell** (e.g. a `champ
-  continuation` board, re-promoting a parked/demoted lane), do **all three**:
-  (a) **back up** `latest.pt` to `$CLAUDE_JOB_DIR/<cell>_latest.bak.pt`;
-  (b) **pre-populate** `<base_out_dir>/derby_state.json` with the lane's idea entry and
-  `wall_secs_total > 0` (e.g. `1.0`) so the derby's `resume = wall_secs_total > 0` check
-  trips True on the first chunk — that's what forces `--resume <latest.pt>`;
-  (c) **dry-run + verify** the trainer's cmdline contains `--resume <path>` (via
-  `ps -o command= $(pgrep -f gomoku.train)`) *before* letting the first chunk run. If
-  `--resume` is missing — kill immediately, you're about to clobber the checkpoint.
+  The helper script makes the 4-step protocol atomic (archive junk → restore peak.pt with
+  cleared `wandb_run_id` → pre-populate state with `wall_secs_total=1.0` → backup), and
+  **prints the exact `--resume`-verification command you must run before the first chunk
+  is allowed to live**:
+  ```bash
+  python scripts/derby_safe_resume.py \
+      --cell derby-v7-mate-discount \
+      --peak sweep_runs/derby_v8/_peaks/mate-discount/peak.pt \
+      --board scripts/derby_champ_board.json --idea-name champ
+  # then run the launch + verify commands it prints (the `ps -o command= $(pgrep -f
+  # gomoku.train) | grep -- --resume` check is the non-negotiable gate: empty → KILL).
+  ```
+  Doing this by hand is how the clobber happened. Use the script.
 - **A crashed/`errored` lane → DEMOTE it, don't keep retrying (Jason, 2026-05-27).** Once
   a lane errors out (retries exhausted) for a non-transient reason, take it OFF the active
   board — same procedure as parking a spent lane (remove from board json + `derby_state`
@@ -295,6 +299,53 @@ training. v9 crash-looped for **~1.5h** before it was caught. The lessons:
   own. And lock the fix in: a pure predicate + unit test (e.g. `is_no_progress_slice` in
   `tests/test_derby_elo_readout.py`) is how "detect errors better" becomes durable.
 
+- **Demoting/parking a lane → REAP its eval_worker too (added 2026-05-28).** When you
+  pull a lane off the board, the `gomoku.eval_worker` process you spawned for it is **not**
+  killed by removing the idea from the board — it polls its `worker_weights.pt` forever
+  on 4 CPU workers, silently eating ~50% CPU and starving anything else (caught a stale
+  `derby-x-wdl-max` eval_worker eating CPU long after v9 ended). After any swap/demote:
+  `pgrep -fl 'gomoku.eval_worker.*<old-cell>' | head` and `pkill -TERM` survivors.
+- **Probes designed to co-run with the derby still need CPU headroom.** `probe_100pct.py`
+  has `--i-know-derby-is-running` — but the live trainer's 8 self-play workers + eval can
+  saturate the cores and deadlock the probe's multiprocessing pool (probe hung at 0% CPU
+  for 50 min, 0 rows). Two safe co-run options: (1) run probe with `--n-workers=1` (slower,
+  in-process serial, no multiprocessing deadlock); (2) pause the derby for the probe's
+  runtime and resume. The probe writes its JSONL **atomically at the very end** (all cells),
+  so "no rows yet" is normal — but combine with 0% CPU + no children = it's stuck, not slow.
+
+## Champion continuation — single-lane "train the champ more until something else shows up" (added 2026-05-28)
+
+A natural fallback between derbies: the v8 champion stays the deliverable, and we keep
+training it on the full GPU to push its ceiling past its current peak (Jason 2026-05-28:
+"train the champ more, in 5 minute chunks, until something else shows up"). Distinct
+from a swap-driven race — it's a single-lane board with a clean resume.
+
+**Setup (use the helper — handles the clobber trap):**
+```bash
+# Build a derby_<champ>_board.json with ONE idea (the champion cell).
+# Then make the resume safe in one shot:
+python scripts/derby_safe_resume.py \
+    --cell <champion-cell>  \
+    --peak sweep_runs/<old-board>/_peaks/<idea>/peak.pt \
+    --board scripts/derby_<champ>_board.json --idea-name champ
+# It prints the exact verify-then-launch sequence. Follow it.
+```
+**Operating cadence:** same 10-min cron, but the per-tick action shrinks — there's no
+swap logic (single lane), so each tick is just SCAN + health + a one-line live-epoch /
+peak / last5-elos line. Steady-state ticks are 1-sentence ("All healthy. Champ epoch X,
+peak Y holds, last5 …"). When a new peak lands (peak.pt updates), call it out.
+
+**When to stop:** Jason calls it (`"I declare champ trained"`), or a real research lever
+arrives that wants the GPU. The reference run pushed v8 champion 1811 → 1876 anchored
+across ~14.8k post-recovery epochs over ~168 chunks. Champ's anchored noise band is
+~1300-1750 with the peak set by lucky high-side eval; expect long stretches without a
+new peak even while the model genuinely improves.
+
+**Co-running eval probes:** OK on CPU against a frozen anchor checkpoint (NOT the live
+latest.pt) — see "Probes designed to co-run" above for the contention gotcha. The probe
+should target a stable preserved peak (e.g. the v8 champion peak.pt anchor), not the
+champ board's live checkpoint dir.
+
 ## When research is exhausted — HOLD, don't churn (added 2026-05-27)
 
 Eventually a board's question gets *answered*: the champion beats every lever, the
@@ -321,12 +372,25 @@ checks get brief commentary; expand only when something interesting happened (a 
 verdict, a new peak, a collapse). Narrate the swap *plan* one check ahead when you can, so
 the decision is legible. Restate results in text (tool output is invisible to the reader).
 
-## What "working" looked like (the v8 reference run, 2026-05-27)
+## What "working" looked like (reference runs)
 
-~7h fully autonomous: 10-min cron loop; field climbed mate-discount→1699, two clean
-verdict-driven swaps (`stack`/max-plies-45 → `disc-recency` after stack regressed;
-`control`/spent-baseline → `vdisc-097` to probe the value-discount optimum); two
-round-robins; findings = **value-discount 0.98 is the champion lever, recency is an
-additive #2, the combo is competitive, max-plies hurts, 0.97 is too sharp**, plus the
-fresh-start-lag methodology lesson. The derby never stopped; every swap was config-only,
-committed, and pushed.
+**v8 reference (2026-05-27, ~7h fully autonomous):** 10-min cron loop; field climbed
+mate-discount→1699, two clean verdict-driven swaps (`stack`/max-plies-45 →
+`disc-recency` after stack regressed; `control`/spent-baseline → `vdisc-097` to probe
+the value-discount optimum); two round-robins; findings = **value-discount 0.98 is the
+champion lever, recency is an additive #2, the combo is competitive, max-plies hurts,
+0.97 is too sharp**, plus the fresh-start-lag methodology lesson. Derby never stopped;
+every swap was config-only, committed, pushed.
+
+**The multi-day arc (2026-05-26 → 2026-05-28):** v8 derby → v9 net-capacity verdict
+(small≈medium Δ0.0 H2H, **capacity doesn't pay at 9×9**) → champion continuation pushed
+anchored peak **1811 → 1876** across ~14.8k post-recovery epochs. Caught + recovered
+from a catastrophic `latest.pt` clobber (champion's epoch-2848 state overwritten by a
+fresh trainer because `derby_state.json` had `wall_secs_total=0`) — recovered from the
+preserved peak.pt anchor, then permanently fixed the trap with `scripts/derby_safe_resume.py`.
+Three infra fixes landed code-side: `is_no_progress_slice` crash detection + eval/training
+wandb-run separation + the demote-on-crash protocol. Five orthogonal eval-config levers
+landed from other sessions and were merged + inventoried (sims+vcf, FPU reduction,
+tree-reuse, proven-prop, search-contempt training cell) — all ready when wanted. The
+load-bearing pattern across all of it: **every lesson got either a coded guard (with a
+unit test) or a script + skill entry**, so the next session doesn't pay the same cost.
