@@ -186,6 +186,21 @@ training-side, ZERO generation cost so Δelo/hr is protected):**
   were *policy-signal-enrichment* levers correlated with soft-policy — **HELD pending its verdict,
   now DROPPED** since soft-policy was a −110 dud (the whole axis failed). Never filed → never flooded
   the board with correlated losers. This is the payoff of not firing correlated bets blind.
+  - **🔁 RE-RED-TEAMED 2026-05-28 (loop tick, full reviewer pass) → KILL CONFIRMED, do NOT re-mine.**
+    With the gomocup survey concluded and the v9 scale axis firming negative, training-side loss-weighting
+    looked like the next un-mined lever (training-side = the WDL-keeper family that didn't tax the gen hot
+    path). Two candidates, both **dead**: (b) **policy-surprise / KL target weighting is the EXACT dup** of
+    `derby-x-surprise-weight` above (`1 + λ·KL(search_pi ‖ net_prior)`) — already dropped with the failed
+    soft-policy axis. (a) **per-sample value-error / uncertainty weighting** is the value-axis sibling of the
+    DOA "value-error head" (line 212) and would be a **second lever fighting `--value-discount 0.98`** (itself
+    a per-sample target reshaping the derby already optimized); up-weighting high-value-error samples chases
+    the noisiest draw/coin-flip positions = amplifies label noise in the 60–70%-draw regime. **No real prior
+    art:** KataGo's per-sample weights are *data-curation* (playout-cap-fraction, already our `--playout-cap-frac`,
+    v3 floor-stuck) + *search-side* (`utilityVariance`/`valueWeightExponent` in the tree), **not** a loss-magnitude
+    SGD multiplier. The board's own pointer holds: the binding gap (convert lookahead4 black-DRAWS to wins) is a
+    **decisiveness / search-and-target-sharpness** problem, not a loss-magnitude one — every "enrich the existing
+    loss signal" lever (soft-policy, surprise-weight, playout-weight, recency-on-WDL) has lost. Injection point
+    if ever revisited: `train_step` weighted-mean at `gomoku/train.py:157,181` (byte-identical when `w≡1.0`).
 **Round-3 — ARCHITECTURE axis (deep source read of AlphaGomoku/KataGo net code, 2026-05-27):**
 
 - **REGISTERED `derby-sib` → cell `derby-x-mish`** (the arch pick): swap ReLU→**Mish** activation
@@ -481,6 +496,13 @@ anchored elo.
       train stably. (Derby itself HEALTHY — `delo_derby`+watchdog up, 9 workers; a transient `pgrep`=0 mid-
       cycle briefly looked like a halt but was a false alarm, re-verified.) `large`'s teardown frees a lane —
       `derby-x-medium-signal` (the aux capacity-unlock probe) is the natural swap-in.
+    - **(researcher obs, 2026-05-28 01:45Z, 99 chunks) `medium` cooked 220 more epochs past the raised cap
+      (796→1016) and did NOT raise its ceiling** — `derby_state.json` peak still **1356 @ epoch 796**, now
+      oscillating ~1280 (last_delo +37). So the plateau is well-confirmed across the extra training: the
+      scale-doesn't-pay-at-9×9 read keeps firming on anchored elo. (Still the **ranking owner's verdict to
+      call**, and anchored elo saturates / isn't strength — the real verdict remains the matured H2H
+      round-robin including the v8 cross-gen anchor. Derby HEALTHY: `delo_derby` 58041 + watchdog 58155 +
+      medium trainer + 8 workers; `medium-signal` landed but not yet swapped into the freed lane.)
   - 🔎 **IS `small` AT STANDARD? (asked 2026-05-28) — roughly yes, within noise, but PARKED EARLY + the
     "scale hint" is fragile.** `small` is byte-identical to the v8 champion (`mate-discount`) at the small
     net. At MATCHED training (~36 evals = small's parking point): small peaked **1555**, the champion peaked
