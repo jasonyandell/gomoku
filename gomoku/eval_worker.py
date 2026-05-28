@@ -98,6 +98,17 @@ def parse_args() -> argparse.Namespace:
                    help="Eval-time root VCF overlay depth cap (attacker plies). "
                         "0 = use vcf.DEFAULT_MAX_DEPTH (16). Only matters with "
                         "--eval-vcf-nodes > 0.")
+    p.add_argument("--fpu-reduction-c", type=float, default=0.0,
+                   help="Eval-time KataGo First-Play Urgency reduction. Default "
+                        "0.0 = OFF (byte-identical to the pre-lever path: "
+                        "unvisited children take Q=0 in PUCT). When >0, "
+                        "unvisited children inherit "
+                        "parent_V - c * sqrt(sum_visited_priors), making them "
+                        "look pessimistic relative to the visited PV so MCTS "
+                        "deepens the PV instead of scattering on siblings. "
+                        "KataGo uses c≈0.45 (subtree) / 0.20 (root); LCZero "
+                        "0.33. EVAL-ONLY: self-play / generation / training "
+                        "are NOT affected.")
     return p.parse_args()
 
 
@@ -149,6 +160,7 @@ def main() -> None:
             evaluator, n_simulations=args.sims, c_puct=args.c_puct,
             eval_vcf_nodes=args.eval_vcf_nodes,
             eval_vcf_depth=args.eval_vcf_depth,
+            fpu_reduction_c=args.fpu_reduction_c,
         )
 
         log: dict = {"eval_worker/epoch_evaluated": epoch_tag}
@@ -174,6 +186,7 @@ def main() -> None:
                     device=str(device),
                     eval_vcf_nodes=args.eval_vcf_nodes,
                     eval_vcf_depth=args.eval_vcf_depth,
+                    fpu_reduction_c=args.fpu_reduction_c,
                 )
             else:
                 res = play_match_pickers(

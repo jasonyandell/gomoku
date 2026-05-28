@@ -106,6 +106,7 @@ def mcts_picker(
     c_puct: float = 1.5,
     eval_vcf_nodes: int = 0,
     eval_vcf_depth: int = 0,
+    fpu_reduction_c: float = 0.0,
 ) -> Picker:
     """Wrap a leaf evaluator into a one-shot picker for use in matches.
 
@@ -118,10 +119,17 @@ def mcts_picker(
     is proven, play that move; else fall through to the unchanged MCTS choice.
     ``eval_vcf_depth`` (default 0 → ``vcf.DEFAULT_MAX_DEPTH``) caps depth. The
     overlay is EVAL-ONLY — never used by self-play / generation / training.
+
+    ``fpu_reduction_c`` (default 0.0 = OFF, byte-identical) enables KataGo
+    First-Play Urgency reduction in MCTS selection: unvisited children inherit
+    ``parent_V - c * sqrt(sum_visited_priors)`` instead of Q=0. Eval-only —
+    self-play / gen MCTS stays untouched (their MCTSGame is constructed
+    elsewhere with the default 0.0). KataGo uses c≈0.45 (subtree) / 0.20
+    (root); LCZero 0.33.
     """
 
     def pick(state: GameState, rng: np.random.Generator) -> int:
-        g = MCTSGame(state, c_puct=c_puct, rng=rng)
+        g = MCTSGame(state, c_puct=c_puct, fpu_reduction_c=fpu_reduction_c, rng=rng)
         run_batched_mcts([g], evaluator, n_simulations=n_simulations, add_root_noise=False)
         pi = policy_from_visits(g.root, temperature=0.0)
         return int(np.argmax(pi))
@@ -239,7 +247,8 @@ _WORKER_OPP_PICKER: Picker | None = None
 
 def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
                device: str, opp_spec_str: str,
-               eval_vcf_nodes: int = 0, eval_vcf_depth: int = 0) -> None:
+               eval_vcf_nodes: int = 0, eval_vcf_depth: int = 0,
+               fpu_reduction_c: float = 0.0) -> None:
     """Run once in each worker on Pool startup. Loads the model + opp picker.
 
     Each worker holds its own copy of the model (forked-then-loaded, so the
@@ -249,6 +258,8 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
 
     ``eval_vcf_nodes`` (default 0 = OFF, byte-identical) threads the eval-time
     root VCF overlay through to the model picker in each worker.
+    ``fpu_reduction_c`` (default 0.0 = OFF, byte-identical) threads the eval-
+    time FPU reduction through to the model picker in each worker.
     """
     global _WORKER_MODEL_PICKER, _WORKER_OPP_PICKER
 
@@ -265,6 +276,7 @@ def _pool_init(checkpoint_path: str | None, sims: int, c_puct: float,
         _WORKER_MODEL_PICKER = mcts_picker(
             evaluator, n_simulations=sims, c_puct=c_puct,
             eval_vcf_nodes=eval_vcf_nodes, eval_vcf_depth=eval_vcf_depth,
+            fpu_reduction_c=fpu_reduction_c,
         )
     _WORKER_OPP_PICKER = build_player(parse_spec(opp_spec_str))
 
@@ -311,6 +323,7 @@ def play_match_parallel(
     device: str = "cpu",
     eval_vcf_nodes: int = 0,
     eval_vcf_depth: int = 0,
+    fpu_reduction_c: float = 0.0,
 ) -> MatchResult:
     """Play `n_games` of the model (loaded from `checkpoint_path`) vs the
     baseline described by `opp_spec`, in parallel via multiprocessing.Pool.
@@ -324,13 +337,15 @@ def play_match_parallel(
 
     ``eval_vcf_nodes`` (default 0 = OFF, byte-identical) threads the eval-time
     root VCF overlay through into each worker's model picker.
+    ``fpu_reduction_c`` (default 0.0 = OFF, byte-identical) threads the eval-
+    time FPU reduction through into each worker's model picker.
     """
     import multiprocessing as mp
 
     if n_workers < 2:
         raise ValueError(f"play_match_parallel needs n_workers >= 2, got {n_workers}")
     init_args = (checkpoint_path, sims, c_puct, device, opp_spec,
-                 eval_vcf_nodes, eval_vcf_depth)
+                 eval_vcf_nodes, eval_vcf_depth, fpu_reduction_c)
     game_args = [(g_idx, seed + g_idx + 1) for g_idx in range(n_games)]
     # spawn (not fork) on macOS by default; spawn re-imports the module in
     # each worker, which is what we want for clean state.
