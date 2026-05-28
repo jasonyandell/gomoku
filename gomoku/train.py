@@ -19,7 +19,7 @@ from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import build_model, load_checkpoint, n_params, save_checkpoint
 from gomoku.replay_buffer import ReplayBuffer
-from gomoku.self_play import generate_games, generate_games_vs_baseline
+from gomoku.self_play import configure_draw_value, generate_games, generate_games_vs_baseline
 from gomoku.util import load_wandb_key_from_keychain, pick_device
 
 
@@ -503,6 +503,16 @@ def parse_args() -> argparse.Namespace:
                         "head trained with cross-entropy (the scalar v=P(win)-P(loss) is "
                         "derived for MCTS/eval). The value-discount + VCF-stamp targets "
                         "are re-expressed natively in WDL; this is the ONLY lever.")
+    p.add_argument("--draw-value", type=float, default=0.0,
+                   help="Derby 'x-draw-contempt' DECISIVENESS lever (bead derby-9q4): "
+                        "training-side value-TARGET reshape; when DELTA > 0 and a game "
+                        "ends in a DRAW, the value target is set to -DELTA (mildly "
+                        "losing) instead of exactly 0, so the net learns to avoid "
+                        "draws -> MCTS prefers non-drawing continuations. Default 0.0 "
+                        "= OFF (byte-identical baseline). Sibling of --value-discount "
+                        "(zero gen-hot-path cost); composes with it via the same "
+                        "gamma^plies shape (-DELTA * gamma^(plies_to_end)). Lives in "
+                        "the self-play target-build path; the model is UNCHANGED.")
     p.add_argument("--activation", type=str, default="relu", choices=["relu", "mish"],
                    help="Derby 'x-mish' activation-function lever (bead derby-sib): "
                         "'relu' (default) = nn.ReLU, byte-identical to before this flag "
@@ -592,6 +602,60 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cross-game-max-blend", type=float, default=0.5,
                    help="Cap on the cross-game aggregate's weight in the z blend "
                         "(the remaining (1-w) always stays single-game z).")
+    # --- Reanalyze engine (subtask 1/3, bead derby-fm9; parent derby-3vs) ----
+    # Re-MCTS old buffer positions with the CURRENT (stronger) net and overwrite
+    # their stored policy targets in place. OFF (default) => the engine module
+    # is never imported and the buffer is byte-identical to the pre-lever path.
+    # The scheduler (cadence + feedback-loop guard) is subtask 2/3 (derby-1nt);
+    # registering a derby cell is subtask 3/3 (derby-wdw). The flags below give
+    # the engine its bounded-cost envelope per cycle.
+    p.add_argument("--reanalyze", action="store_true", default=False,
+                   help="ENABLE reanalyze: re-MCTS a small sample of OLD buffer "
+                        "positions each epoch and overwrite their stored policy "
+                        "targets with the current net's search. OFF (default) is "
+                        "byte-identical to the pre-lever buffer/training path.")
+    p.add_argument("--reanalyze-fraction", type=float, default=0.05,
+                   help="Per-cycle fraction of buffer.size to re-MCTS (default "
+                        "0.05). Bounded above by --reanalyze-max-positions.")
+    p.add_argument("--reanalyze-max-positions", type=int, default=1024,
+                   help="Hard cap on positions re-MCTS'd per cycle (default "
+                        "1024). Stops the engine from running away if buffer "
+                        "grows or fraction is mis-set.")
+    p.add_argument("--reanalyze-sims", type=int, default=200,
+                   help="MCTS simulations per reanalyzed position (default 200, "
+                        "deliberately deeper than fresh self-play's 100).")
+    p.add_argument("--reanalyze-mcts-batch", type=int, default=32,
+                   help="Positions per MCTS batch call (default 32). Controls "
+                        "the leaf-batched evaluator's per-call width.")
+    p.add_argument("--reanalyze-relabel-value", action="store_true",
+                   default=False,
+                   help="Also overwrite buffer.z with the MCTS root value "
+                        "(default OFF — relabeling z is more aggressive; "
+                        "scheduler subtask decides when to enable).")
+    # --- Reanalyze scheduler (subtask 2/3, bead derby-1nt) -----------------
+    # Cadence + per-row cooldown for the engine above. The master switch is
+    # still --reanalyze; these knobs are inert when it is off (the scheduler
+    # is never instantiated). Defaults reproduce the 1/3 engine's behavior:
+    # fire EVERY epoch, with a 3-cycle cooldown that lets recently-relabeled
+    # rows breathe before another sharpening pass (the feedback-loop guard).
+    p.add_argument("--reanalyze-every-epochs", type=int, default=1,
+                   help="Cadence: fire a reanalyze cycle every N epochs "
+                        "(default 1 = every epoch, preserving the 1/3 engine's "
+                        "behavior).")
+    p.add_argument("--reanalyze-every-positions", type=int, default=0,
+                   help="Cadence (opt-in): also fire after K new positions "
+                        "have been ingested since the last fire (OR-combined "
+                        "with --reanalyze-every-epochs). 0 = disabled (default).")
+    p.add_argument("--reanalyze-cooldown-cycles", type=int, default=3,
+                   help="Feedback-loop guard: refuse to reanalyze a row again "
+                        "within this many cycles (default 3). The row is also "
+                        "made eligible again if the buffer overwrites it with "
+                        "new self-play data (weight_version mismatch).")
+    p.add_argument("--reanalyze-cooldown-positions", type=int, default=0,
+                   help="Feedback-loop guard (opt-in): also require K new "
+                        "positions to have been ingested since a row was last "
+                        "reanalyzed before re-reanalyzing it (intersected with "
+                        "--reanalyze-cooldown-cycles). 0 = disabled (default).")
     p.add_argument("--cross-game-max-ply", type=int, default=10,
                    help="OPENING-ONLY cap (bead derby-4bq): only positions with "
                         "ply < this are aggregated into the cross-game store. The "
@@ -743,6 +807,18 @@ def parse_args() -> argparse.Namespace:
                    help="run --eval-baselines-slow every Nth eval cycle (=Nx eval-every epochs)")
     p.add_argument("--eval-slow-games", type=int, default=6,
                    help="games per matchup vs each slow baseline")
+    p.add_argument("--eval-vcf-nodes", type=int, default=0,
+                   help="Eval-time root VCF overlay node budget for the in-trainer "
+                        "eval. Default 0 = OFF (byte-identical to the pre-lever "
+                        "path). When >0, before MCTS picks a move the eval picker "
+                        "runs a bounded solve_vcf from the root; if a forced four-"
+                        "in-a-row win is proven, it plays the solver's move; else "
+                        "the MCTS choice runs as today. EVAL-ONLY: self-play / "
+                        "generation / training are NOT affected.")
+    p.add_argument("--eval-vcf-depth", type=int, default=0,
+                   help="Eval-time root VCF overlay depth cap (attacker plies). "
+                        "0 = use vcf.DEFAULT_MAX_DEPTH (16). Only matters with "
+                        "--eval-vcf-nodes > 0.")
     p.add_argument("--save-every", type=int, default=1)
     p.add_argument("--save-buffer-every", type=int, default=20,
                    help="Rewrite `latest.pt` (which embeds the ~1.4 GB replay "
@@ -885,6 +961,15 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
 
+    # Derby 'x-draw-contempt' (bead derby-9q4): per-process draw-target reshape.
+    # No-op when --draw-value == 0.0 (default; byte-identical baseline). Set
+    # before any generate_games / generate_games_vs_baseline call so the
+    # in-process self-play path picks it up; the subprocess worker path
+    # (selfplay_worker.py) sets it independently from its own --draw-value arg.
+    configure_draw_value(args.draw_value)
+    if args.draw_value > 0.0:
+        print(f"draw-contempt ENABLED (delta={args.draw_value})")
+
     # V3 aux opponent-reply lever. The single weight flag gates the head
     # (constructed iff weight > 0), the buffer aux tensors, the self-play aux
     # target recording, and the aux loss term. 0.0 (default) => everything off
@@ -928,6 +1013,34 @@ def main() -> None:
               f"min_visits={position_stats.min_visits}, "
               f"max_blend={position_stats.max_blend}, "
               f"max_ply={position_stats.max_ply})")
+
+    # Reanalyze engine (subtask 1/3, bead derby-fm9). OFF default => the engine
+    # module is not imported and the post-ingest hook below is a no-op, leaving
+    # buffer state byte-identical to the pre-lever path. The aux-head discipline
+    # mirrors cross-game above (no allocation, no import, no call when off).
+    reanalyze_on = bool(args.reanalyze)
+    # Scheduler instance (subtask 2/3, bead derby-1nt). Built ONLY in the
+    # gated branch — OFF path never imports the class or allocates the
+    # per-row cooldown tables (aux-head discipline).
+    reanalyze_scheduler = None
+    if reanalyze_on:
+        if args.reanalyze_fraction <= 0.0:
+            raise SystemExit(
+                "--reanalyze set but --reanalyze-fraction <= 0 — nothing to do"
+            )
+        print(
+            f"reanalyze ENABLED (fraction={args.reanalyze_fraction}, "
+            f"max_positions={args.reanalyze_max_positions}, "
+            f"sims={args.reanalyze_sims}, "
+            f"mcts_batch={args.reanalyze_mcts_batch}, "
+            f"relabel_value={args.reanalyze_relabel_value})"
+        )
+        print(
+            f"reanalyze SCHEDULER (every_epochs={args.reanalyze_every_epochs}, "
+            f"every_positions={args.reanalyze_every_positions}, "
+            f"cooldown_cycles={args.reanalyze_cooldown_cycles}, "
+            f"cooldown_positions={args.reanalyze_cooldown_positions})"
+        )
 
     # Build / load model
     start_epoch = 0
@@ -1039,6 +1152,17 @@ def main() -> None:
     if args.buffer_recency_frac > 0.0:
         print(f"buffer curator: recency_frac={args.buffer_recency_frac} "
               f"window={args.buffer_recency_window}")
+    # Build the reanalyze scheduler now that buffer.capacity is known.
+    # OFF path never enters this branch — no import, no allocation.
+    if reanalyze_on:
+        from gomoku.reanalyze import ReanalyzeScheduler
+        reanalyze_scheduler = ReanalyzeScheduler(
+            int(buffer.capacity),
+            every_epochs=int(args.reanalyze_every_epochs),
+            every_positions=int(args.reanalyze_every_positions),
+            cooldown_cycles=int(args.reanalyze_cooldown_cycles),
+            cooldown_positions=int(args.reanalyze_cooldown_positions),
+        )
     if args.resume:
         # Optional: restore buffer if it was saved.
         payload_buf = payload.get("replay_buffer")
@@ -1826,6 +1950,47 @@ def main() -> None:
                         canonical_key_from_planes(e.planes), e.z, ply=ply,
                     )
 
+        # Reanalyze pass (subtask 1/3, bead derby-fm9). Single-writer mutator
+        # of buffer.pi (and optionally buffer.z) on a SAMPLED subset of OLD
+        # rows. Runs AFTER the new-records add (so freshly-added rows are
+        # eligible too) and BEFORE the SGD path that samples from `buffer`,
+        # so the relabeled targets feed THIS epoch's training. OFF (default)
+        # => never called.
+        reanalyze_metrics = None
+        # Pre-compute the post-ingest cumulative (the var itself is updated
+        # later in the epoch log block); the scheduler needs the AS-OF-NOW
+        # value to make a cadence decision against rows we just ingested.
+        reanalyze_cum_positions = cumulative_new_positions + n_positions_this_cycle
+        # Cadence gate: ask the scheduler whether to fire THIS epoch. The
+        # buffer.size warmup gate (">= batch_size") is preserved as a hard
+        # floor — the scheduler decides cadence, the trainer decides safety.
+        reanalyze_should_fire = (
+            reanalyze_on
+            and buffer.size >= args.batch_size
+            and reanalyze_scheduler is not None
+            and reanalyze_scheduler.should_fire(epoch, reanalyze_cum_positions)
+        )
+        if reanalyze_should_fire:
+            from gomoku.reanalyze import reanalyze_cycle
+            reanalyze_metrics = reanalyze_cycle(
+                buffer, model, device,
+                fraction=float(args.reanalyze_fraction),
+                max_positions=int(args.reanalyze_max_positions),
+                sims=int(args.reanalyze_sims),
+                mcts_batch=int(args.reanalyze_mcts_batch),
+                relabel_value=bool(args.reanalyze_relabel_value),
+                c_puct=float(args.c_puct),
+                c_puct_base=float(args.c_puct_base),
+                rng=rng,
+                eligibility_filter=reanalyze_scheduler.eligibility_filter(buffer),
+            )
+            # Post-cycle update: tell the scheduler which rows we wrote so
+            # the cooldown bookkeeping reflects this cycle.
+            reanalyze_scheduler.record_cycle(
+                reanalyze_metrics.written_rows, buffer,
+                reanalyze_cum_positions, epoch=epoch,
+            )
+
         plies_mean = float(np.mean([r.plies for r in records])) if records else 0.0
         # Plies-distribution percentiles for the new records — quick check on
         # game-length shape going INTO the buffer this cycle.
@@ -2027,6 +2192,24 @@ def main() -> None:
             # Computed every cycle so wandb shows shape evolution over time.
             **buffer.shape_stats(),
         }
+        # Reanalyze metrics (bead derby-fm9). Only emit when the lever is on
+        # AND a cycle actually ran this epoch — keeps OFF-path log keys
+        # byte-identical to the pre-lever baseline.
+        if reanalyze_metrics is not None:
+            log["reanalyze/sampled_n"] = reanalyze_metrics.sampled_n
+            log["reanalyze/skipped_terminal"] = reanalyze_metrics.skipped_terminal
+            log["reanalyze/mcts_batches"] = reanalyze_metrics.mcts_batches
+            log["reanalyze/sims_per_pos"] = reanalyze_metrics.sims_per_pos
+            log["reanalyze/fraction"] = reanalyze_metrics.fraction
+            log["reanalyze/relabel_value"] = 1 if reanalyze_metrics.relabel_value else 0
+            # Scheduler-side observability (bead derby-1nt): how many rows
+            # were eligible AFTER this cycle's record_cycle (i.e. how much
+            # headroom the cooldown leaves). A shrinking eligible_count
+            # toward 0 is the operator's signal that the cooldown is too
+            # tight for the current ingest rate.
+            if reanalyze_scheduler is not None:
+                log["reanalyze/cycle"] = reanalyze_scheduler.cycle
+                log["reanalyze/eligible_after"] = reanalyze_scheduler.eligible_count(buffer)
         # TRAINER MODE metrics (only when --sgd-steps-per-epoch>0; otherwise
         # NO new keys are emitted, so wave-mode / schedule cells log exactly as
         # before). These measure the whole point of the mode:
@@ -2076,7 +2259,9 @@ def main() -> None:
             eval_evaluator = make_torch_evaluator(model, device)
             model_picker = mcts_picker(eval_evaluator,
                                        n_simulations=args.eval_sims,
-                                       c_puct=args.c_puct)
+                                       c_puct=args.c_puct,
+                                       eval_vcf_nodes=args.eval_vcf_nodes,
+                                       eval_vcf_depth=args.eval_vcf_depth)
 
             run_slow = bool(slow_pickers) and (eval_counter % args.eval_slow_every == 0)
             batches = [("fast", fast_pickers, args.eval_baseline_games)]
