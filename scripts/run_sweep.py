@@ -1386,6 +1386,36 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # 'x-draw-contempt' = DECISIVENESS lever (bead derby-9q4). VERBATIM clone of
+    # derby-v7-mate-discount (the reigning champion: gumbel-root + vcf-teacher +
+    # value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1 league mix +
+    # sgd-steps-per-epoch 64) with ONE lever added: --draw-value 0.05 on the
+    # worker (mild contempt). Training-side value-TARGET reshape — when a game
+    # ends in a draw, the target becomes -0.05 (composed with value-discount via
+    # gamma^plies, same shape as decisive outcomes) instead of exactly 0, so the
+    # net learns to avoid draws -> MCTS prefers non-drawing continuations. Zero
+    # gen-hot-path cost (sibling of --value-discount). Targets the measured
+    # binding gap: the v8 champion 100%s heuristic + lookahead2 but only converts
+    # ~51% of lookahead4-as-BLACK to wins (the rest are draws, not losses); the
+    # gap is structural (does not improve with training or capacity per v9).
+    # Lane-isolated under sweep_runs/derby-x-draw-contempt/.
+    "derby-x-draw-contempt": Cell("derby-x-draw-contempt", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98", "--draw-value", "0.05"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
 }
 
 
