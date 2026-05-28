@@ -459,6 +459,17 @@ anchored elo.
     ceiling (1497)** → suggestive that a bigger net raises the ceiling. STILL not a clean verdict (large
     fed more wall; anchored elo is noisy + saturating; the 100%-read can't be trusted until the eval is
     deepened per `derby-563`) — but the direction (bigger net > small's plateau) is the first real scale hint.
+  - 🔎 **IS `small` AT STANDARD? (asked 2026-05-28) — roughly yes, within noise, but PARKED EARLY + the
+    "scale hint" is fragile.** `small` is byte-identical to the v8 champion (`mate-discount`) at the small
+    net. At MATCHED training (~36 evals = small's parking point): small peaked **1555**, the champion peaked
+    **1649** — small ~94 below, but the champion's own anchored elo SWINGS 1405→1649→1738→1434 eval-to-eval,
+    so that gap is inside the noise. The champion's "1738" is a noisy TRANSIENT over 117 evals (3× small's
+    training), NOT a stable bar. **Two consequences:** (1) `small` (36 evals) is UNDER-TRAINED — 1555 isn't
+    its ceiling, and its true potential (champion ~1738 transient) likely sits ABOVE `large`'s current 1580,
+    so the "large beats small" hint is **not safe** — small was parked before reaching its known level;
+    (2) anchored elo is so noisy (champion alone spans 1405-1738) it CANNOT adjudicate small vs the scale
+    ladder. Both point to the same fix (`derby-563`: the 100% metric + more games + a fair, equal-training
+    comparison). Re-feeding `small` to its real ceiling for a fair baseline is the ranking owner's call.
   - ⚠️ **EVAL IS TOO NOISY TO READ THE 100% TARGET (20 chunks, direct color-split read):** at 10 games/color
     the lookahead4-black-win signal is noise-dominated — e.g. `derby-v9-small` showed L4-black **9-0-1** yet
     heuristic-black **2-0-8** (internally contradictory: can't be near-perfect vs lookahead4 and weak vs the
