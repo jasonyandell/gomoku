@@ -102,6 +102,20 @@ def configure_vct_teacher(max_depth: int | None = None,
 _VALUE_DISCOUNT = 1.0
 
 
+# Draw-contempt (Derby 'x-draw-contempt', bead derby-9q4): a DECISIVENESS lever.
+# When a game ends in a DRAW (raw outcome z=0), reshape the value TARGET to
+# -DRAW_VALUE (mildly losing) instead of exactly 0, so the net learns that a draw
+# is mildly worse than equal -> at MCTS/eval time the value head reports draws as
+# slightly losing -> the search prefers non-drawing continuations. Per-process
+# (set once by the worker / trainer). 0.0 = OFF (draws stay 0, byte-identical
+# baseline). Composes with --value-discount the same way decisive outcomes do:
+# the contempt magnitude DELTA is scaled by gamma^(plies_to_end), i.e. positions
+# far from the (drawn) game end get a smaller contempt push, positions near the
+# end get the full -DELTA. This preserves the existing math shape (z scaled by
+# gamma^plies) and the sibling-of-mate-discount property.
+_DRAW_VALUE = 0.0
+
+
 def configure_value_discount(gamma: float | None = None) -> None:
     """Set the process-wide value-target discount (gamma in (0,1]); 1.0 = flat
     outcomes (current behavior). Call once before generation."""
@@ -110,10 +124,33 @@ def configure_value_discount(gamma: float | None = None) -> None:
         _VALUE_DISCOUNT = float(gamma)
 
 
+def configure_draw_value(delta: float | None = None) -> None:
+    """Set the process-wide draw-contempt magnitude (DELTA >= 0); 0.0 = OFF (draws
+    stay exactly 0, byte-identical baseline). Call once before generation."""
+    global _DRAW_VALUE
+    if delta is not None:
+        _DRAW_VALUE = float(delta)
+
+
 def _discount_z(z: float, plies_to_end: int) -> float:
-    """Scale an outcome value target by gamma^plies_to_end. No-op when gamma>=1.0 or
-    z==0 (draws stay 0). plies_to_end = recorded-trajectory steps to game end."""
-    if _VALUE_DISCOUNT >= 1.0 or z == 0.0:
+    """Scale an outcome value target by gamma^plies_to_end.
+
+    Decisive outcomes (z != 0): scaled by gamma^plies_to_end (no-op when
+    gamma>=1.0). Draws (z == 0): if draw-contempt is enabled (DRAW_VALUE > 0),
+    the target becomes -DRAW_VALUE * gamma^plies_to_end (mildly losing, with the
+    same gamma^plies shape as decisive outcomes — so contempt and mate-discount
+    compose multiplicatively, exactly like z * gamma^plies for decisive games).
+    When both DRAW_VALUE == 0 AND (gamma >= 1.0 or z == 0), the function is the
+    pre-lever identity (byte-identical baseline)."""
+    if z == 0.0:
+        if _DRAW_VALUE <= 0.0:
+            return z
+        # Draw-contempt: -DELTA, then discounted by gamma^plies_to_end the same
+        # way decisive outcomes are discounted (composes with --value-discount).
+        if _VALUE_DISCOUNT >= 1.0:
+            return -_DRAW_VALUE
+        return -_DRAW_VALUE * (_VALUE_DISCOUNT ** max(0, plies_to_end))
+    if _VALUE_DISCOUNT >= 1.0:
         return z
     return z * (_VALUE_DISCOUNT ** max(0, plies_to_end))
 

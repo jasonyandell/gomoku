@@ -19,7 +19,7 @@ from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import build_model, load_checkpoint, n_params, save_checkpoint
 from gomoku.replay_buffer import ReplayBuffer
-from gomoku.self_play import generate_games, generate_games_vs_baseline
+from gomoku.self_play import configure_draw_value, generate_games, generate_games_vs_baseline
 from gomoku.util import load_wandb_key_from_keychain, pick_device
 
 
@@ -503,6 +503,16 @@ def parse_args() -> argparse.Namespace:
                         "head trained with cross-entropy (the scalar v=P(win)-P(loss) is "
                         "derived for MCTS/eval). The value-discount + VCF-stamp targets "
                         "are re-expressed natively in WDL; this is the ONLY lever.")
+    p.add_argument("--draw-value", type=float, default=0.0,
+                   help="Derby 'x-draw-contempt' DECISIVENESS lever (bead derby-9q4): "
+                        "training-side value-TARGET reshape; when DELTA > 0 and a game "
+                        "ends in a DRAW, the value target is set to -DELTA (mildly "
+                        "losing) instead of exactly 0, so the net learns to avoid "
+                        "draws -> MCTS prefers non-drawing continuations. Default 0.0 "
+                        "= OFF (byte-identical baseline). Sibling of --value-discount "
+                        "(zero gen-hot-path cost); composes with it via the same "
+                        "gamma^plies shape (-DELTA * gamma^(plies_to_end)). Lives in "
+                        "the self-play target-build path; the model is UNCHANGED.")
     p.add_argument("--activation", type=str, default="relu", choices=["relu", "mish"],
                    help="Derby 'x-mish' activation-function lever (bead derby-sib): "
                         "'relu' (default) = nn.ReLU, byte-identical to before this flag "
@@ -884,6 +894,15 @@ def main() -> None:
 
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
+
+    # Derby 'x-draw-contempt' (bead derby-9q4): per-process draw-target reshape.
+    # No-op when --draw-value == 0.0 (default; byte-identical baseline). Set
+    # before any generate_games / generate_games_vs_baseline call so the
+    # in-process self-play path picks it up; the subprocess worker path
+    # (selfplay_worker.py) sets it independently from its own --draw-value arg.
+    configure_draw_value(args.draw_value)
+    if args.draw_value > 0.0:
+        print(f"draw-contempt ENABLED (delta={args.draw_value})")
 
     # V3 aux opponent-reply lever. The single weight flag gates the head
     # (constructed iff weight > 0), the buffer aux tensors, the self-play aux

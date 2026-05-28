@@ -59,6 +59,7 @@ from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import (
+    configure_draw_value,
     configure_vcf_teacher,
     configure_vct_teacher,
     configure_value_discount,
@@ -204,6 +205,15 @@ def parse_args() -> argparse.Namespace:
                         "None/1.0 = flat ±1 (byte-identical). Generalizes the VCF "
                         "mate-distance discount to all outcomes; applied before the "
                         "VCF teacher so forced wins still overwrite with their value.")
+    p.add_argument("--draw-value", type=float, default=0.0,
+                   help="Derby 'x-draw-contempt' DECISIVENESS lever (bead derby-9q4): "
+                        "training-side value-TARGET reshape; when DELTA > 0 and a game "
+                        "ends in a DRAW, the value target is set to -DELTA (mildly "
+                        "losing) instead of exactly 0, so the net learns to avoid "
+                        "draws -> MCTS prefers non-drawing continuations. Default 0.0 "
+                        "= OFF (byte-identical baseline). Sibling of --value-discount "
+                        "(zero gen-hot-path cost); composes with it via the same "
+                        "gamma^plies shape (-DELTA * gamma^(plies_to_end)).")
     p.add_argument("--value-head", type=str, default="scalar", choices=["scalar", "wdl"],
                    help="Derby 'x-wdl' value-representation lever (bead derby-cgf). "
                         "Accepted for cell symmetry with --value-head on the trainer; "
@@ -813,6 +823,8 @@ def main() -> None:
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
     configure_vct_teacher(args.vct_max_depth, args.vct_max_nodes)
     configure_value_discount(args.value_discount)
+    # Derby 'x-draw-contempt' (bead derby-9q4): no-op when DELTA == 0.0 (default).
+    configure_draw_value(args.draw_value)
     device = pick_device(args.device)
     print(f"[{args.worker_id}] device={device}", flush=True)
     print(f"[{args.worker_id}] weights={args.weights_path} output={args.output_dir}", flush=True)
