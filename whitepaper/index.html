@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gomoku Lab · mk1 — Compounding Trust</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400;1,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f4f0e7;
+  --paper-2:#ece7da;
+  --ink:#221c16;
+  --ink-2:#3a322a;
+  --soft:#6b6256;
+  --faint:#94897a;
+  --rule:rgba(34,28,22,.16);
+  --rule-soft:rgba(34,28,22,.085);
+  --accent:#9a3324;
+  --accent-2:#b6533c;
+  --accent-soft:rgba(154,51,36,.10);
+  --serif:"Spectral",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-weight:400;
+  font-size:18px;
+  line-height:1.72;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  position:relative;
+}
+/* paper grain */
+body::before{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode:multiply;
+}
+
+/* reading-progress bar */
+.progress{position:fixed;top:0;left:0;height:2px;width:0;background:var(--accent);z-index:50}
+
+/* running header */
+.runhead{
+  position:fixed;top:0;left:0;right:0;z-index:40;
+  display:flex;justify-content:space-between;align-items:center;
+  padding:11px 30px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--soft);
+  background:linear-gradient(180deg,var(--paper) 55%,rgba(244,240,231,0));
+}
+.runhead .l b{color:var(--ink)}
+.runhead .r{color:var(--accent);font-weight:500;display:flex;align-items:center;gap:8px}
+.runhead .r .blink{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:bl 2.2s ease-in-out infinite}
+@keyframes bl{0%,100%{opacity:1}50%{opacity:.3}}
+@media(max-width:640px){.runhead .l{display:none}}
+
+main{position:relative;z-index:2;max-width:720px;margin:0 auto;padding:0 30px 120px}
+
+/* ---------- masthead ---------- */
+.masthead{padding:118px 0 0;opacity:0;animation:rise 1s cubic-bezier(.16,1,.3,1) .1s forwards}
+@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.eyebrow{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.32em;text-transform:uppercase;color:var(--accent);margin-bottom:30px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.eyebrow .sep{width:5px;height:5px;background:var(--accent);border-radius:50%;display:inline-block}
+.masthead h1{font-family:var(--serif);font-weight:500;font-size:clamp(38px,6.6vw,62px);line-height:1.04;letter-spacing:-.018em;margin-bottom:24px}
+.masthead h1 em{font-style:italic;font-weight:400}
+.dek{font-size:clamp(19px,2.5vw,23px);line-height:1.5;color:var(--ink-2);font-weight:300;max-width:34ch;font-style:italic;margin-bottom:38px}
+.byline{font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:var(--soft);line-height:1.9;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:18px 0;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.byline b{color:var(--ink);font-weight:500}
+.byline .status{color:var(--accent);font-weight:500}
+
+/* ---------- abstract ---------- */
+.abstract{margin:46px 0 8px;padding-left:22px;border-left:2px solid var(--accent)}
+.abstract .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+.abstract p{font-size:18.5px;line-height:1.7;color:var(--ink-2)}
+.abstract p + p{margin-top:14px}
+
+/* ---------- sections ---------- */
+section{margin-top:74px}
+.snum{font-family:var(--mono);font-size:12px;font-weight:500;letter-spacing:.14em;color:var(--accent);margin-bottom:12px}
+h2{font-family:var(--serif);font-weight:500;font-size:clamp(26px,4vw,36px);line-height:1.12;letter-spacing:-.012em;margin-bottom:8px}
+h2 em{font-style:italic;font-weight:400}
+.sdek{font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:var(--faint);margin-bottom:26px;text-transform:uppercase}
+h3{font-family:var(--serif);font-weight:600;font-size:20px;letter-spacing:-.005em;margin:34px 0 6px}
+p{margin-bottom:18px;hyphens:auto}
+p a,a.ref{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+p a:hover{border-bottom-color:var(--accent)}
+strong,b{font-weight:600;color:var(--ink)}
+em{font-style:italic}
+.lead-cap::first-letter{font-family:var(--serif);font-weight:500;float:left;font-size:62px;line-height:.78;padding:7px 10px 0 0;color:var(--accent)}
+code{font-family:var(--mono);font-size:.82em;background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:3px}
+.sup{font-family:var(--mono);font-size:.62em;vertical-align:super;color:var(--accent);font-weight:500;text-decoration:none}
+
+/* pull quote */
+.pull{margin:34px 0;padding:6px 0 6px 26px;border-left:3px solid var(--accent)}
+.pull q{font-family:var(--serif);font-style:italic;font-size:clamp(22px,3.4vw,30px);line-height:1.32;font-weight:400;quotes:none;display:block;letter-spacing:-.01em}
+.pull .who{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--soft);margin-top:16px}
+
+/* principle list */
+.principles{margin:30px 0;counter-reset:pr}
+.principle{display:grid;grid-template-columns:46px 1fr;gap:6px 18px;padding:22px 0;border-top:1px solid var(--rule)}
+.principle:last-child{border-bottom:1px solid var(--rule)}
+.principle::before{counter-increment:pr;content:"0" counter(pr);font-family:var(--mono);font-size:12px;font-weight:500;color:var(--accent);padding-top:6px}
+.principle h3{margin:0 0 5px;grid-column:2}
+.principle p{grid-column:2;margin:0;font-size:16.5px;line-height:1.62;color:var(--ink-2)}
+
+/* figure ---------- */
+figure{margin:40px 0;text-align:center}
+.fig-board{width:100%;max-width:300px;margin:0 auto;display:block}
+.gl{stroke:var(--rule);stroke-width:1}
+.gf{stroke:rgba(34,28,22,.4);stroke-width:1.3;fill:none}
+.sb{fill:#221c16}
+.sw{fill:#faf7ef;stroke:#221c16;stroke-width:1.3}
+.wl{stroke:var(--accent);stroke-width:3;stroke-linecap:round;fill:none;stroke-dasharray:280;stroke-dashoffset:280}
+.wl.draw{animation:dr 1.1s ease-out .4s forwards}
+@keyframes dr{to{stroke-dashoffset:0}}
+figcaption{font-family:var(--mono);font-size:11.5px;letter-spacing:.03em;color:var(--soft);margin-top:18px;line-height:1.6}
+figcaption b{color:var(--accent);font-weight:500}
+
+/* results table */
+.tbl-wrap{margin:30px 0}
+table.res{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13.5px}
+table.res caption{font-family:var(--mono);font-size:11.5px;letter-spacing:.03em;color:var(--soft);text-align:left;margin-bottom:14px;line-height:1.6}
+table.res caption b{color:var(--accent);font-weight:500}
+table.res th{text-align:left;font-weight:500;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--soft);padding:0 12px 11px 0;border-bottom:1.5px solid var(--ink)}
+table.res th.r,table.res td.r{text-align:right;padding-right:0}
+table.res td{padding:11px 12px 11px 0;border-bottom:1px solid var(--rule-soft);color:var(--ink)}
+table.res td.opp{color:var(--soft)}
+table.res .ok{color:var(--accent);font-weight:500}
+table.res tr:last-child td{border-bottom:1.5px solid var(--ink)}
+
+/* failure list */
+.fails{margin:26px 0;display:flex;flex-direction:column;gap:0}
+.fail{padding:20px 0;border-top:1px solid var(--rule);display:grid;grid-template-columns:1fr;gap:5px}
+.fail:last-child{border-bottom:1px solid var(--rule)}
+.fail .ttl{font-family:var(--serif);font-weight:600;font-size:18px}
+.fail .ttl .tag{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent-soft);background:var(--accent-soft);padding:2px 7px;border-radius:20px;margin-left:8px;vertical-align:middle}
+.fail p{margin:0;font-size:16px;line-height:1.6;color:var(--ink-2)}
+
+/* callout */
+.callout{margin:36px 0;background:var(--paper-2);border:1px solid var(--rule);border-radius:4px;padding:26px 28px}
+.callout p{margin:0;font-size:17px;line-height:1.62;color:var(--ink-2)}
+.callout p b{color:var(--ink)}
+
+/* references / colophon */
+.refs{margin-top:74px;padding-top:30px;border-top:2px solid var(--ink)}
+.refs h2{font-size:22px;margin-bottom:20px}
+.refs ol{list-style:none;counter-reset:rf;font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--soft)}
+.refs li{counter-increment:rf;padding:9px 0;border-bottom:1px solid var(--rule-soft);padding-left:34px;position:relative}
+.refs li::before{content:"[" counter(rf) "]";position:absolute;left:0;color:var(--accent);font-weight:500}
+.refs li b{color:var(--ink);font-weight:500}
+.colophon{margin-top:34px;font-family:var(--mono);font-size:11.5px;line-height:1.8;color:var(--faint)}
+.colophon b{color:var(--soft);font-weight:500}
+
+::selection{background:var(--accent);color:var(--paper)}
+
+@media print{
+  .runhead,.progress{display:none}
+  body{background:#fff;font-size:11pt}
+  .masthead{padding-top:0;animation:none;opacity:1}
+}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="runhead">
+  <div class="l"><b>Gomoku Lab · mk1</b> — Compounding Trust</div>
+  <div class="r"><span class="blink"></span>Draft · for review</div>
+</div>
+
+<main>
+  <!-- ===================== MASTHEAD ===================== -->
+  <header class="masthead">
+    <div class="eyebrow">Technical Report <span class="sep"></span> Gomoku Lab <span class="sep"></span> mk1</div>
+    <h1>Compounding Trust:<br>a lab that taught<br>itself <em>gomoku</em></h1>
+    <p class="dek">How verified skills become trust, and trust — left to run — compounds into an autonomous research loop.</p>
+    <div class="byline">
+      <span>Jason Yandell · <b>Claude Code</b> (Opus 4.8)</span>
+      <span>9×9 AlphaZero · single M5 Max · <b>May 2026</b></span>
+    </div>
+  </header>
+
+  <!-- ===================== ABSTRACT ===================== -->
+  <div class="abstract">
+    <div class="lbl">Abstract</div>
+    <p>We set out to train an AlphaZero agent for 9×9 free-style gomoku on a single Apple-Silicon laptop — and, in doing so, to build an autonomous lab that could run the experiments largely without a human at the keyboard. The organizing idea is borrowed from Sid Bidasaria’s <em>“Stop babysitting your agents”</em>: teach an agent to verify its own work, and reliability follows; reliability lets you run agents in parallel; parallel agents, left in background loops, do the work while you sleep. Each stage rests on the one beneath it, and trust is the currency that lets you climb.</p>
+    <p>The agent works. From self-play alone it reaches <b>100% against the fixed opponent ladder</b> — every game won as Black, none lost as White — versus a heuristic player and shallow lookahead search. Getting there meant defeating a stubborn failure mode and discarding a long list of plausible ideas that did not survive verification. This report is as much about the discards as the wins.</p>
+  </div>
+
+  <!-- ===================== §1 ===================== -->
+  <section id="idea">
+    <div class="snum">§ 1</div>
+    <h2>The motivating idea</h2>
+    <div class="sdek">Verification → trust → compounding</div>
+    <p class="lead-cap">The premise of Bidasaria’s talk<a class="sup" href="#r1">1</a> is that models have outgrown the way we supervise them: we sit in the loop out of habit, not necessity. His remedy is a ladder of three skills, each of which only becomes safe to climb once the one below it is solid.</p>
+    <p>First, <b>verification</b> — give the agent the tools and instructions to check its own work, the same write-build-test-debug loop a careful engineer runs. Second, <b>parallelism</b> — once an agent reliably verifies itself, you can run many at once without your attention becoming the bottleneck. Third, <b>background loops</b> — recurring prompts and scheduled routines that take the agent off your keyboard entirely, handling the standing chores: triage, docs, keeping the build green.</p>
+    <div class="pull">
+      <q>Hold Claude’s hand and show it how to verify; once it knows how, it can summarize those learnings into a skill file.</q>
+      <div class="who">— Sid Bidasaria, paraphrased from the talk transcript<a class="sup" href="#r1">1</a></div>
+    </div>
+    <p>The through-line is <b>trust as a compounding asset</b>. You cannot stop babysitting an agent you cannot verify; verification is what earns the trust to delegate; delegation is what lets the work compound. Skills are the unit that carries trust forward — a verified procedure, written down once, reused without re-supervision. The same logic applies to a research lab: a result you can independently check becomes a foundation the next experiment can stand on.</p>
+    <p>One framing in this report — treating the lab as a <em>cockpit</em> to be designed rather than an <em>autopilot</em> to be trusted blindly — is our own extension, not Bidasaria’s. His three stages are the spine; the lab below is one concrete attempt to live by them on a real, GPU-bound problem.</p>
+  </section>
+
+  <!-- ===================== §2 ===================== -->
+  <section id="protocol">
+    <div class="snum">§ 2</div>
+    <h2>The protocol, <em>at altitude</em></h2>
+    <div class="sdek">Six principles that keep verification cheap</div>
+    <p>If trust is the currency, the protocol exists to make verification — the thing that mints it — as cheap and as honest as possible. The operational details live in the project wiki<a class="sup" href="#r2">2</a>; what matters here are the principles, and why each one earns its place.</p>
+    <div class="principles">
+      <div class="principle">
+        <h3>One GPU tenant, two queues</h3>
+        <p>Heavy work — training, self-play, evaluation — runs strictly one-at-a-time on the GPU, so a measurement is never confounded by a competing tenant. Everything else — code, analysis, writing, audits — fans out in parallel. The scarce, serial resource is protected; the cheap, parallel one is exploited.</p>
+      </div>
+      <div class="principle">
+        <h3>Receipts are the record</h3>
+        <p>An experiment that ran without filing a receipt — its command, configuration, run ID, checkpoint, and metrics — did not happen, as far as the next session is concerned. The receipt is what makes a result re-checkable, and therefore trustworthy. Evidence is kept immutable; only the synthesis on top of it is revised.</p>
+      </div>
+      <div class="principle">
+        <h3>Verify against something fixed</h3>
+        <p>Strength is measured only against <em>fixed</em> opponents — a heuristic player and lookahead search — never sibling-versus-sibling, which is non-transitive and flatters the field. A separate reviewer pass audits each result before it is promoted. Short evaluations are treated as hints, not verdicts.</p>
+      </div>
+      <div class="principle">
+        <h3>Optimise the honest objective</h3>
+        <p>The north-star metric is <b>elo gained per wall-clock hour</b> — measured end-to-end, from a common checkpoint against a stable anchor. Throughput proxies such as augmentations-per-second are gameable <em>means</em>; the lab repeatedly caught configurations that won the proxy and lost the objective.</p>
+      </div>
+      <div class="principle">
+        <h3>Isolate so parallel work composes</h3>
+        <p>Every change is made in its own isolated workspace and merged back with an explicit merge commit — never rebased or squashed. Concurrent efforts stay legible and never entangle, which is what makes running many agents at once safe rather than chaotic.</p>
+      </div>
+      <div class="principle">
+        <h3>Autonomy as a deny-list</h3>
+        <p>Reversible, local work proceeds without asking; only the genuinely consequential moves — publishing, dependency changes, architectural decisions — pause for a human. Earned trust defaults to action. The boundary is drawn around what is hard to undo, not around what is large.</p>
+      </div>
+    </div>
+    <div class="callout">
+      <p>Read together, the principles are a single bet: <b>make verification so cheap that being wrong is cheap too.</b> When a bad idea costs a 60-second probe and a one-line receipt to disprove, you can afford to test many of them — and the lab’s long list of discarded ideas (§ 5) is the dividend.</p>
+    </div>
+  </section>
+
+  <!-- ===================== §3 ===================== -->
+  <section id="method">
+    <div class="snum">§ 3</div>
+    <h2>The method, briefly</h2>
+    <div class="sdek">AlphaZero, in enough words to be true</div>
+    <p>The learner is a standard AlphaZero loop with no human games and no opening book. A single residual network reads the board and emits two predictions: a <b>policy</b> (a distribution over moves) and a <b>value</b> (who is winning). That network guides a <b>PUCT</b> tree search, which balances the policy’s suggestions against the win-rates it accumulates as it reads ahead. The agent plays itself; the search makes each move stronger than the raw network, and the network is then trained to imitate the search. Self-play, train, evaluate against fixed baselines, repeat.</p>
+    <p>Two engineering choices make it tractable on one laptop. Leaf positions from many concurrent games are pooled into a single <b>wave-batched</b> forward pass to keep the GPU saturated; and every position is expanded into its eight board symmetries (<b>D4 augmentation</b>), yielding eight training examples for the price of one game.</p>
+    <figure>
+      <svg class="fig-board" viewBox="0 0 300 300" role="img" aria-label="A 9 by 9 gomoku board with a winning diagonal of five black stones">
+        <g id="grid"></g>
+        <rect class="gf" x="18" y="18" width="264" height="264" rx="1.5"/>
+        <g id="stones"></g>
+        <line class="wl" id="winline" x1="84" y1="216" x2="216" y2="84"/>
+      </svg>
+      <figcaption><b>Figure 1.</b> The 9×9 board, free-style: five-in-a-row wins, no restrictions. A won game for Black (●), with the forced line marked.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===================== §4 ===================== -->
+  <section id="worked">
+    <div class="snum">§ 4</div>
+    <h2>What worked</h2>
+    <div class="sdek">Four levers, each isolated and verified</div>
+    <p>The path to the result was not a single insight but four changes, each tested alone against the fixed ladder before being kept. In plain terms:</p>
+    <h3>In-search VCF</h3>
+    <p>A fast solver checks each search leaf for a forced win by consecutive fours and backs up a proven outcome. It teaches the network to <em>recognise</em> forcing threats without having to search them move-by-move — a decisive gain over the baseline.</p>
+    <h3>Whole-board (global-pool) sampling</h3>
+    <p>Instead of training mostly on the most recent games, the replay buffer is sampled uniformly across its whole history. Flattening what the model sees is what finally broke the feedback loop behind the central failure (§ 5).</p>
+    <h3>Value discount</h3>
+    <p>Slow wins are discounted slightly against quick, clean ones, so a decisive finish trains a sharper gradient than a grind. This pulled the agent out of a defensive-draw stall without sending it back into reckless attack.</p>
+    <h3>First-Play-Urgency reduction (evaluation only)</h3>
+    <p>At evaluation time, unvisited moves are given a smarter default than zero, so the search explores more evenly. It costs nothing in training and is what cracks the deepest lookahead opponents.</p>
+    <div class="tbl-wrap">
+      <table class="res">
+        <caption><b>Table 1.</b> Champion (run <b>44cxzc9d</b>; recipe vcf → +global-pool → +value-discount), trained from scratch. Win/loss against the fixed opponent ladder.</caption>
+        <thead><tr><th>Fixed opponent</th><th class="r">Win as Black</th><th class="r">Loss as White</th></tr></thead>
+        <tbody>
+          <tr><td class="opp">Heuristic</td><td class="r"><span class="ok">100%</span></td><td class="r">0%</td></tr>
+          <tr><td class="opp">Lookahead-2</td><td class="r"><span class="ok">100%</span></td><td class="r">0%</td></tr>
+          <tr><td class="opp">Lookahead-4</td><td class="r"><span class="ok">100%</span></td><td class="r">0%</td></tr>
+          <tr><td class="opp">Lookahead-6 †</td><td class="r"><span class="ok">~86–90%</span></td><td class="r">0%</td></tr>
+          <tr><td class="opp">Lookahead-8 †</td><td class="r"><span class="ok">100%</span></td><td class="r">0%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-family:var(--mono);font-size:12px;color:var(--soft);line-height:1.6">The headline target — win all as Black, lose none as White against the heuristic and lookahead-2/4 — is met at default settings, with no evaluation-time tricks. <b style="color:var(--accent)">†</b> the evaluation-only levers then generalise to the harder lookahead-6/8 opponents.</p>
+  </section>
+
+  <!-- ===================== §5 ===================== -->
+  <section id="didnt">
+    <div class="snum">§ 5</div>
+    <h2>What didn’t work</h2>
+    <div class="sdek">The discards — each one cheap, because verification was cheap</div>
+    <p>A research log is honest only if it records the failures, and most of this project was failures. They fall into three kinds: a failure mode that had to be solved, beliefs that turned out to be wrong, and levers that simply did not earn their keep.</p>
+
+    <h3>The failure mode</h3>
+    <div class="fails">
+      <div class="fail">
+        <div class="ttl">Fast-attack collapse <span class="tag">central</span></div>
+        <p>Because both selves play equally weak defence, a low-budget search keeps confirming its own attacking prior and never explores the blocks. Games degenerate into a short blitz where whoever strikes first wins — in one early cell the agent scored 0/20 against the heuristic while game length collapsed from ~20 plies to ~12. The value head finds the result trivially predictable, which hides the rot. More search alone does not fix it; the buffer itself is starved of the positions that would teach defence.</p>
+      </div>
+    </div>
+
+    <h3>Beliefs that were wrong</h3>
+    <div class="fails">
+      <div class="fail">
+        <div class="ttl">“We’re generation-bound” <span class="tag">corrected</span></div>
+        <p>We assumed self-play generation was the bottleneck and that a wider single process would help. Benchmarks showed per-game time was flat across batch sizes — going wider in one process bought nothing. Running four worker processes instead gave a 5–6× speedup (≈85 s/epoch down to ≈15 s), at which point the loop was SGD-bound, not generation-bound.</p>
+      </div>
+      <div class="fail">
+        <div class="ttl">Throughput as a proxy for learning <span class="tag">corrected</span></div>
+        <p>Faster data is not better data. A search budget that produced 2.9× more games yielded only ~1.9× more <em>examples</em> because the games were shorter; and configurations with high throughput collapsed to fast-attack just the same. Raw speed is a gameable means — the reason the north-star metric is elo-per-hour, not data-per-hour.</p>
+      </div>
+      <div class="fail">
+        <div class="ttl">Core ML / ANE as a raw-speed win <span class="tag">corrected</span></div>
+        <p>Moving evaluation to Apple’s neural engine was slower per call than fused PyTorch on the GPU, not faster. Its only plausible advantage is overlapping with concurrent training — an as-yet-unproven systems bet, not the latency win first hoped for. An earlier performance “haircut” estimate was likewise withdrawn once it proved to be a measurement artifact.</p>
+      </div>
+    </div>
+
+    <h3>Levers that didn’t earn their keep</h3>
+    <div class="fails">
+      <div class="fail">
+        <div class="ttl">Random openings</div>
+        <p>Forcing varied first moves widened opening diversity (13 distinct first squares, up from 2) but did not touch the core collapse — nobody was forcing the agent to defend. Killed after eight epochs.</p>
+      </div>
+      <div class="fail">
+        <div class="ttl">An undersized replay buffer</div>
+        <p>The 1.5 M-position buffer cycled roughly 28× over a single run, churning out useful diversity faster than it could be retained. The lesson — size the buffer to the generation rate — fed the whole-board sampling that eventually worked.</p>
+      </div>
+      <div class="fail">
+        <div class="ttl">A field of rejected search/training tweaks</div>
+        <p>Head-to-head racing retired a parade of plausible ideas: a Mish activation (a fast-but-misleading anchored climb that finished last in real play), a narrower search-breadth setting, a soft-policy target, a continuous-threats (VCT) solver, and a value-only evaluation overlay that boosted attack while wrecking defence. Each looked reasonable; none survived a fixed-baseline check.</p>
+      </div>
+      <div class="fail">
+        <div class="ttl">Infrastructure built and never run</div>
+        <p>A standalone GPU-broker daemon was written and then superseded before it ever ran — the racing loop re-derived the scheduling it needed. A reminder that the cheapest verification is the one that stops you building the wrong thing.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== §6 ===================== -->
+  <section id="compounds">
+    <div class="snum">§ 6</div>
+    <h2>Why it compounds</h2>
+    <div class="sdek">From a single result to a loop that improves itself</div>
+    <p>The discards in § 5 are not a confession; they are the point. Because a fixed-baseline check costs a short probe and a receipt, the lab could afford to be wrong dozens of times and still converge — failure was cheap precisely because verification was cheap. That is Bidasaria’s ladder running in a research setting: verification first, so that the parallel racing of recipes is trustworthy, so that the whole thing can be left in a background loop.</p>
+    <p>The compounding shows up in the documentation, too. Raw evidence is frozen; a synthesis layer on top of it is rewritten each time we learn something, so the next session starts from the distilled lesson rather than re-deriving it from logs. A verified result becomes a foundation; a foundation becomes a starting point; the starting point makes the next result cheaper to reach. That is what it means for trust to compound — and it is why a single Mac, left running, could climb from a blank network to a perfect record against its baselines.</p>
+    <div class="pull">
+      <q>All three skills together end up with a system that does a lot of work without you manually on the keyboard.</q>
+      <div class="who">— Sid Bidasaria<a class="sup" href="#r1">1</a></div>
+    </div>
+  </section>
+
+  <!-- ===================== REFERENCES ===================== -->
+  <section class="refs" id="refs">
+    <h2>References &amp; notes</h2>
+    <ol>
+      <li id="r1"><b>S. Bidasaria, “Stop babysitting your agents.”</b> Talk, 20 May 2026. Transcribed locally with Whisper (no official captions); quotations are close paraphrases and may carry minor ASR artifacts. The verification → parallelism → background-loops progression is his; the “cockpit vs. autopilot” framing is ours.</li>
+      <li id="r2"><b>Gomoku project wiki and training notebook.</b> The maintained synthesis layer (topic pages, charter, research board) over an append-only experiment log. All numbers, run IDs, and verdicts in this report trace back to it.</li>
+      <li><b>Champion checkpoint.</b> W&amp;B run <code>44cxzc9d</code>; recipe vcf → +global-pool → +value-discount, trained from scratch on an Apple M5 Max via PyTorch + MPS, logged to Weights &amp; Biases throughout.</li>
+    </ol>
+    <div class="colophon">
+      <b>Gomoku Lab · mk1.</b> Status: draft for review. Set in Spectral &amp; IBM&nbsp;Plex&nbsp;Mono.<br>
+      A note on certainty: figures are reported as the project recorded them; the lookahead-6 result is shown as a range because it depends on evaluation settings. Where the record was ambiguous, this report says less, not more.
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+  // reading progress
+  var bar=document.getElementById("progress");
+  function upd(){
+    var h=document.documentElement;
+    var max=h.scrollHeight-h.clientHeight;
+    bar.style.width=(max>0?(h.scrollTop/max*100):0)+"%";
+  }
+  document.addEventListener("scroll",upd,{passive:true});upd();
+
+  // figure board
+  var NS="http://www.w3.org/2000/svg",g=document.getElementById("grid");
+  for(var i=0;i<9;i++){var p=18+i*33;
+    var v=document.createElementNS(NS,"line");v.setAttribute("class","gl");v.setAttribute("x1",p);v.setAttribute("x2",p);v.setAttribute("y1",18);v.setAttribute("y2",282);g.appendChild(v);
+    var hl=document.createElementNS(NS,"line");hl.setAttribute("class","gl");hl.setAttribute("x1",18);hl.setAttribute("x2",282);hl.setAttribute("y1",p);hl.setAttribute("y2",p);g.appendChild(hl);
+  }
+  function xy(c){return 18+c*33;}
+  var stones=[[2,6,"b"],[3,5,"b"],[4,4,"b"],[5,3,"b"],[6,2,"b"],[4,6,"w"],[5,5,"w"],[3,3,"w"],[6,4,"w"],[2,4,"w"],[5,6,"w"]];
+  var sg=document.getElementById("stones");
+  stones.forEach(function(s){var c=document.createElementNS(NS,"circle");c.setAttribute("class",s[2]==="b"?"sb":"sw");c.setAttribute("cx",xy(s[0]));c.setAttribute("cy",xy(s[1]));c.setAttribute("r",13);sg.appendChild(c);});
+
+  // draw winning line when the figure scrolls into view
+  var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){document.getElementById("winline").classList.add("draw");io.disconnect();}});},{threshold:.4});
+  io.observe(document.querySelector("figure"));
+})();
+</script>
+</body>
+</html>
