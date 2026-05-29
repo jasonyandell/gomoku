@@ -236,13 +236,21 @@ footer{padding:60px 0 80px;border-bottom:none}
 .colophon .meta{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);text-align:right}
 @media(max-width:680px){.colophon .meta{text-align:left}}
 
+/* ---------- DRAFT treatment ---------- */
+.draft-ribbon{position:fixed;top:0;right:0;z-index:60;width:188px;height:188px;overflow:hidden;pointer-events:none}
+.draft-ribbon span{position:absolute;top:36px;right:-54px;transform:rotate(45deg);display:block;width:240px;text-align:center;background:var(--cinnabar);color:var(--ink);font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.46em;text-indent:.46em;text-transform:uppercase;padding:8px 0;box-shadow:0 7px 20px rgba(0,0,0,.55);border-top:1px solid rgba(255,255,255,.25);border-bottom:1px solid rgba(0,0,0,.3)}
+.draft-pill{font-family:var(--mono);font-weight:600;font-size:10px;letter-spacing:.22em;color:var(--ink);background:var(--cinnabar);padding:3px 9px;border-radius:2px;margin-left:12px;animation:pulse 2.4s ease-in-out infinite}
+@media(min-width:681px){.topbar{padding-right:150px}}
+@media(max-width:680px){.draft-ribbon{width:132px;height:132px}.draft-ribbon span{top:24px;right:-62px;font-size:11px;letter-spacing:.32em;text-indent:.32em}}
 ::selection{background:var(--cinnabar);color:var(--ink)}
 </style>
 </head>
 <body>
 
+<div class="draft-ribbon" aria-hidden="true"><span>Draft</span></div>
+
 <div class="topbar">
-  <div class="brand"><b>◆</b> GOMOKU / ALPHAZERO</div>
+  <div class="brand"><b>◆</b> GOMOKU / ALPHAZERO <span class="draft-pill">Draft · WIP</span></div>
   <div class="stat">
     <span><span class="dot"></span>M5 MAX · MPS</span>
     <span>W&amp;B FROM DAY ONE</span>
