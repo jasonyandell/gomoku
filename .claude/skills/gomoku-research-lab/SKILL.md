@@ -419,6 +419,8 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 
 ### 2026-05-25 (continuous-research loop on Beads — a label gate is invisible to `bd ready`)
 
+*(Beads is retired as of 2026-05-28 — task tracking is GitHub issues now; see `gomoku-bead-runner`. This entry is beads-era history; note the gate-modeling lesson INVERTED on GitHub, where issues have only open/closed and the gate IS a `deferred` LABEL the ready query excludes — see `wiki/topics/research-loop.md`.)*
+
 **Modeling the "Jason gates ideas" approval step with a LABEL (`proposed`/`ready`) let un-gated ideas surface in `bd ready` — anyone pulling work could pick up something never approved.**
 - Symptom: stood up the research-idea backlog in beads with the gate as a label (`proposed` until Jason approved → `ready`). But `bd ready` returned ALL 9 un-gated ideas as workable.
 - Root cause: **`bd ready` = status `open` AND no blocking deps — it is label-agnostic.** A label gate is decorative; `ready` doesn't consult it. So every freshly-filed idea (status `open` by default, no blockers) shows as ready-to-claim regardless of its `proposed` label.
@@ -436,6 +438,8 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 - Lesson: any `bd <verb>` in a shell loop gets `</dev/null`. Verify batch bd ops with a count (`bd list --status X | grep -c`), never trust the loop's exit.
 
 ### 2026-05-26 (beads-runner model + the watchdog startup-race that spawns a DUPLICATE derby)
+
+*(Beads is retired as of 2026-05-28 — the code-only work units are GitHub issues now; see `gomoku-bead-runner`. The operating model below is unchanged; only the tracker changed.)*
 
 **Operating model clarified (Jason): the derby is the SINGLE GPU executor (the "derby runner" = the orchestrating session); beads are CODE-ONLY work for OTHER sessions that land a cell "available for the derby."** A bead must NEVER run the GPU (`run_sweep`/training) — two GPU executors collide. Symptom that triggered this: I'd filed "experiment" beads whose recipe was `run python scripts/run_sweep.py … --max-wall-secs 3600` (code+GPU) — a separate bead-runner executing those would fight the live derby. Fix: closed them (those cells already exist; the derby races them directly), and reworked the epic "race" subtasks to end at "add cell + mark available" (no GPU). Rule: config-only levers (existing flags) don't even need a bead — the derby runner just adds the cell + races it; reserve beads for genuinely code-heavy builds (solver/sampler/harness). The derby doles 300s chunks by Δelo-rate; the runner swaps plateaued/starved lanes for fresh cells by judgement (a climber is never swapped); cap_wall_secs is a generous backstop, not a hard 1h kill.
 

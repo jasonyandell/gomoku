@@ -110,25 +110,32 @@ UI, play a checkpoint) and `gomoku-research-lab` (two-queue scheduler: GPU-seria
 + parallel agent fan-out, receipts + Reviewer audits, time-capped training
 slices, the Δelo Derby; north-star metric **Δelo/Δt**).
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
+## GitHub Issues — task tracking
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+This project tracks ALL work in **GitHub issues** (`jasonyandell/gomoku`) via the `gh` CLI.
+`scripts/gh_prime.sh` prints the live ready queue + this workflow on session start.
+(Beads `bd` is **retired** as of 2026-05-28; `.beads/` is dormant history.)
 
-### Quick Reference
+### Quick reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+# Ready work — open, unblocked, code-only (excludes epics / in-progress / runner-domain / human-gated):
+gh issue list --state open --search 'no:assignee -label:blocked -label:deferred -label:in-progress -label:epic -label:runner-domain -label:human-gated'
+gh issue view <N>                      # issue details
+gh issue edit <N> --add-assignee @me   # claim
+gh issue close <N>                     # complete (or auto-close via `Closes #N` in the merge commit)
 ```
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use **GitHub issues** for ALL task tracking — do NOT use TodoWrite, TaskCreate, beads (`bd`), or markdown TODO lists.
+- GitHub has only open/closed; bd's extra states are encoded as labels **excluded from the ready query**:
+  `deferred` (awaiting Jason's gate), `blocked` (unmet dependency), `in-progress` (mirror of an assignee).
+  Routing labels: `derby-idea`, `runner-domain`, `code-only`, `gpu`, `needs-live-validation`,
+  `decision-loop-ownership`, `proposed`, `human-gated`.
+- One worktree per issue: `python scripts/gh_worktree.py <N>` (title→slug, drops `.gh_issue`); put
+  `Closes #N` in the merge commit so GitHub auto-closes on merge to `main`.
+- Persistent knowledge → the wiki + `~/.claude/.../memory/` (NOT issues; the old `bd remember` is retired).
 
 ## Session Completion
 
@@ -136,23 +143,21 @@ bd close <id>         # Complete work
 
 **MANDATORY WORKFLOW:**
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+1. **File issues for remaining work** — `gh issue create` for anything that needs follow-up.
+2. **Run quality gates** (if code changed) — tests, linters, builds.
+3. **Update issue status** — close finished work (`gh issue close`, or `Closes #N` in the merge commit); update in-progress items.
+4. **PUSH TO REMOTE** — this is MANDATORY (this repo integrates with `merge --no-ff`; **never rebase**):
    ```bash
-   git pull --rebase
-   bd dolt push
+   git pull --no-rebase   # merge, never rebase
    git push
-   git status  # MUST show "up to date with origin"
+   git status             # MUST show "up to date with origin"
    ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+5. **Clean up** — clear stashes, remove the worktree + branch, prune remote branches.
+6. **Verify** — all changes committed AND pushed.
+7. **Hand off** — provide context for next session.
 
 **CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
+- Work is NOT complete until `git push` succeeds.
+- NEVER stop before pushing — that leaves work stranded locally.
+- NEVER say "ready to push when you are" — YOU must push.
+- If push fails, resolve and retry until it succeeds.
