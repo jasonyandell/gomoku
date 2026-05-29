@@ -109,6 +109,27 @@ the run record.
 > - **eval-VCF root overlay (`derby-ehw`): NEUTRAL with FPU, HARMFUL alone.** When paired with FPU, contributes nothing (cells 1=2, 3=5, 7=8, etc. all tied across vcf). Alone (fpu=0, vcf=800): boosts Bwin to 90% but TANKS white-defense to 35% Wloss — the overlay finds attacks but trades safe draws for losing defensive positions. **Wrong-axis lever; FPU subsumes its benefit and avoids its cost.**
 >
 > **Headline:** the matured champion deterministically meets the 100% target on **la6 too**, with the eval-config tuple `--fpu-reduction-c 0.45 --reuse-tree 1 --proven-prop 1` (vcf unused). 95% Bwin / 0% Wloss / dist 0.050 at 40g/cell — Wilson 95% CI is `[81%,100%]` for the 19/20 Bwin, so we can claim ≥81% true Bwin with 95% confidence; tightening to ≥95% would need 100g/100g.
+
+**100g RE-EVAL — verdict tightens (2026-05-29 00:02Z, 50 black + 50 white per cell):**
+
+| fpu | reuse | pp | 100g Bwin | 100g Wloss | dist | Δ vs 40g |
+|---|---|---|---|---|---|---|
+| 0.45 | 1 | 1 | **90% (45/50)** | **0%** | **0.100** | Bwin 95%→90% (5pp drop — 19/20 was lucky tail) |
+| 0.45 | 0 | 0 (FPU alone) | **86%** | **0%** | **0.140** | Bwin 80%→86% (closer to optimal than 40g suggested) |
+| 0.45 | 0 | 1 | 82% | 0% | 0.180 | 80%→82% |
+| 0.45 | 1 | 0 | 76% | 0% | 0.240 | 75%→76% |
+| 0 | 1 | 0/1 | 80% | 30% | 0.500 | white-hurt confirmed; 20%→30% Wloss |
+| 0 | 0 | 0/1 | 74% | 24% | 0.500 | baseline ≈ 70%/20% reconfirmed |
+
+**Verdict refinements at 100g:**
+1. **FPU alone is closer to the triple-optimum than 40g suggested** — 86% vs 90% (only 4pp gap, vs 15pp at 40g). The 95% at 40g was on the lucky tail (19/20 → first-half of the 50 black games had 1 draw; the next 30 had 4 more draws).
+2. **FPU is THE lever, confirmed and tightened** — every fpu=0.45 cell has 0% Wloss; every fpu=0 cell has 24-30%. The white-side is solved by FPU and FPU alone.
+3. **Tree-reuse alone (without FPU) HURTS white slightly** (24%→30% Wloss) — real and replicated at 100g; was a hint at 40g.
+4. **Proven-prop alone is fully neutral** (cells with fpu=0/pp=0 = cells with fpu=0/pp=1 at all 100g samples). Only pays off as the third leg of fpu+reuse+pp.
+5. **Recipe recommendation (revised):** the SIMPLEST winner is `--fpu-reduction-c 0.45` alone — 86% Bwin / 0% Wloss / dist 0.140. Adding `--reuse-tree 1 --proven-prop 1` gives +4pp Bwin for the engineering cost; reasonable optional add-on, not the headline.
+6. **Wilson 95% CI for the new best**: 45/50 Bwin = [78.6%, 95.7%]; 0/50 Wloss = [0%, 7.1%]. Both consistent with the 40g result; CI tightened modestly.
+
+**Probe-script bug discovered (worth noting):** `probe_100pct.py` silently expands single-value grids — e.g. `--fpu-c-grid 0.45` actually ran cells at fpu ∈ {0, 0.45} (8 cells instead of 1). Happy accident here (we got the full matrix re-run at 100g for free), but a real spec bug — script should either RESPECT single-value grids or document the expansion. File as a follow-up perf-meta bead per the operability-gates rule that just landed in `gomoku-derby-register` SKILL.
 >
 > **Strategic implications:**
 > 1. The eval-side investment (FPU + tree-reuse + proven-prop + the probe driver) was the right call. The earlier discovery that la4 was already saturated made it look "built for a non-problem" — but the same lever set crushes la6.
