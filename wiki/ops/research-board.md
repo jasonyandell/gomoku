@@ -170,6 +170,21 @@ the run record.
 > - **What about Jason's morning framing "we're not 100% on heuristic"?** It applied to the under-trained v9 lanes (small 57%, medium 25%) or to mid-training-history of the champion's cell — NOT to peak.pt. The production matured champion IS at 100% heuristic-Bwin (and has been across all in-loop eval rows: every single row shows 10/0/0). The synthesis (closed self-play loop is structurally hard) is still valid — the v9 lanes demonstrate it — but the matured champion eventually escapes it after enough training.
 > - **Action implications:** (a) the RESUME PLAYBOOK's step 1 (eval-sims × eval-VCF on champion vs la4) is **answered before it ran** — the matured champion is already there. (b) Pivot eval-side levers to the la6 objective. (c) Heuristic-mix POC on v9-medium becomes the cleanest test of the covariate-shift theory.
 
+> **🧭 FROM-SCRATCH vs CONTINUATION — three frames (Jason clarifying question, 2026-05-29).** After the FPU/la-ladder win, the natural next question is "would training from scratch get us to similar levels FASTER?" Honest three-frame answer (banked here for the next session to inherit):
+>
+> **Frame 1 — "Faster to reach the same place" (vanilla rerun of current recipe):** probably no speedup. The recipe is the recipe; ~22h is what it takes given current hardware + gen volume. A fresh-from-scratch run with the same recipe reproduces the same trajectory, then needs the same FPU flip at the end. The *training* work was already complete — FPU at eval just lets us USE the existing strength efficiently. So vanilla from-scratch mostly tests reproducibility, not speedup.
+>
+> **Frame 2 — "Faster *because* we now know things we didn't know during the original run"** (rerun with the now-known recipe PLUS FPU at gen time too): genuinely unknown. Two possible outcomes, can't tell without testing:
+> - (a) Sharper self-play games (FPU-at-gen pools sims on the PV → better visit-count policy targets) → faster learning per epoch → reaches 1811 in less wall. **Possible win.**
+> - (b) Less sibling exploration during self-play → buffer less diverse → plateaus *lower* than the current champion. **Possible loss.**
+> - Untested lever. The FPU win at *eval* doesn't auto-imply a win at *gen* — they're separate experiments.
+>
+> **Frame 3 — Test the question cheaply via a CONTINUATION, not from-scratch:** resume the matured champion with `--fpu-reduction-c 0.45` at gen and run ~2-4 chunks. Does the ceiling push past 1811 H2H? Or drift down (gen-distribution shift)? **Cheaper than from-scratch (~30-60 min vs 22h), tests the most novel question (is FPU also a training-time lever?), worst case = "no improvement, retire after a few chunks."** Preserves all the existing training work. If positive, *then* a fresh-from-scratch FPU-at-gen run becomes worth doing because you can't tell from a continuation whether early-training FPU shifts the *trajectory* — only late drift.
+>
+> **The deeper framing:** "faster to a known endpoint" is incremental optimization. The bigger question is **"what's the next objective?"** The eval-tier (heuristic → la8) is solved by `champion + --fpu-reduction-c 0.45`. The next frontier is harder opponents (Rapfi-class engines / la10-la12 / 15×15). From-scratch optimization is in the "make the inner loop faster" bucket; objective change is in the "find what's actually hard" bucket. Both are valid; one has higher ceiling.
+>
+> **Recommendation (Jason asked, not gated):** if exactly one thing in this direction, **the FPU-at-gen continuation** (Frame 3) is the highest information-per-hour. Vanilla from-scratch is a reproducibility check, not a speedup test. Fresh-from-scratch FPU-at-gen is only the right call IF the continuation shows a meaningful effect.
+
 ## Derby v9 — the NET-CAPACITY axis (run record)
 
 **v8 is CONCLUDED — the scalar `vcf + global-pool + value-discount 0.98` champion
