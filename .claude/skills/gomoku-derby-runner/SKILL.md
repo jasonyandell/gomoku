@@ -27,10 +27,10 @@ modes).
 - **The derby owns the GPU.** One `delo_derby.py` process, doling ~300s chunks by
   Δelo-rate (peak-progress + patience). `cap_wall_secs` is a generous backstop, NOT a
   hard kill — the ~hourly assess+swap is the runner's job, so a climber is never cut off.
-- **Beads never run the GPU.** A bead = CODE-only work for *another* session that lands
+- **Issues never run the GPU.** An issue = CODE-only work for *another* session that lands
   a cell in `run_sweep.CELLS` "available for the derby." Two GPU executors collide.
-  **Config-only levers (existing flags) skip beads** — the runner just adds the cell and
-  races it. Reserve beads for code-heavy builds (new solver/sampler/harness).
+  **Config-only levers (existing flags) skip issues** — the runner just adds the cell and
+  races it. Reserve issues for code-heavy builds (new solver/sampler/harness).
 - **"You can't pick wrong as long as you keep things moving."** Everything gets run
   eventually; a reasonable swap is always fine. Default to continuing. Keep reports tight.
 
@@ -40,13 +40,13 @@ Set a recurring cron (`CronCreate`) whose prompt is the derby-runner check. Pick
 off-minute cadence (e.g. `3,13,23,33,43,53 * * * *`) to dodge the :00/:30 fleet marks.
 Each tick does SCAN → HEALTH → SCOREBOARD → SWAP-IF-WARRANTED → report. The cron prompt
 should restate the whole procedure (so a post-compact session can run it cold) + the
-rules: own-the-GPU, beads-are-code-only, never PushNotification unless the derby is dead
+rules: own-the-GPU, issues-are-code-only, never PushNotification unless the derby is dead
 AND unrecoverable, next check ~10 min.
 
 ### 0. SCAN FOR NEW RESEARCH (the loop self-feeds — added 2026-05-27)
 
 Other sessions land cells in `run_sweep.CELLS` "available for the derby" and close
-`derby-idea` beads (new levers, or fixes to a crippled one). **The loop pulls these in
+`derby-idea` issues (new levers, or fixes to a crippled one). **The loop pulls these in
 itself** — don't wait to be told "check main." Each tick, before health:
 ```bash
 cd ~/code/gomoku && git fetch origin -q
@@ -62,25 +62,25 @@ git log --oneline HEAD..origin/main | head        # new commits landed?
   python -c "import sys;sys.path.insert(0,'scripts');import run_sweep,json; \
   board={x['cell'] for x in json.load(open('scripts/derby_vN_board.json'))['ideas']}; \
   print('OFF-BOARD CELLS:',[c for c in run_sweep.CELLS if c.startswith('derby') and c not in board])"
-  bd list --label derby-idea 2>/dev/null | tail -20   # recently closed = a fix/lever landed
+  gh issue list --label derby-idea --state all -L 20   # recently closed = a fix/lever landed
   ```
 - **A new/fixed cell is a swap candidate** — race it by judgement (swap out a
   plateaued/characterized lane, §3). A cell that was a *fix* to a previously-crippled
   lane (e.g. derby-eda fixed derby-x-crossgame's O(N) ingest) → **re-race it FRESH**:
   archive the old `sweep_runs/<cell>/` (stale checkpoint + an incompatible store) so it
   starts seed-0 with the fixed code, then verify the fix held under live GPU load (the
-  symptom that triggered the bead — here, epoch wall stays flat). **Verify at FULL load,
+  symptom that triggered the issue — here, epoch wall stays flat). **Verify at FULL load,
   not early:** wait until the buffer is full and gen floods (epoch ~50+, `new` large) —
-  an early small-`new` reading can look flat and fool you into closing the bead too soon
+  an early small-`new` reading can look flat and fool you into closing the issue too soon
   (it did, 2026-05-27: crossgame read 5s @epoch27/new=32, then settled ~30s @epoch55/
-  new=848 once flooding kicked in). Only close the bead once it holds under flooding.
+  new=848 once flooding kicked in). Only `gh issue close <N>` the fix once it holds under flooding.
 - **A code-heavy lever (esp. a per-move solver: VCF/VCT/defense-teacher) has TWO
   failure modes — check BOTH:** (1) slow TRAINING epochs (epoch wall grows — crossgame's
   O(store) sidecar), and (2) **generation STARVATION** — `buf=0 / games=0 / pl=nan` while
   the self-play workers are alive but stuck in an unbounded per-move solve (2026-05-27:
   `derby-x-vct` produced ZERO games in ~50s — VCT search ≫ VCF, no `--max-depth/-nodes`
   bound). So on a new solver lane's first peek, confirm **buf is FILLING** (not just that
-  epoch wall is flat). If buf stays 0 → pull it, bead the fix (bound the solve), restore.
+  epoch wall is flat). If buf stays 0 → pull it, file an issue for the fix (bound the solve), restore.
 - This is read-mostly (fetch + log + grep); only the `merge` writes, and only when
   something landed. It costs ~1s/tick and keeps the board fed without a human nudge.
 
@@ -187,9 +187,9 @@ sleep 6; pgrep -f 'delo_derby.py --board scripts/derby_vN'|wc -l   # MUST be 1
 nohup bash scripts/derby_watchdog.sh scripts/derby_vN_board.json >/dev/null 2>&1 &
 # (f) commit + push the board + cell change (clean main fast-forward, not confirm-gated).
 ```
-A **code-heavy** lever (new solver/sampler/harness) does NOT get built here — file a bead
-(status `open`, label `derby-idea`, `external_ref=claude-session:$CLAUDE_CODE_SESSION_ID`,
-description = a CODE-ONLY recipe that lands a cell, NO GPU run) for another session.
+A **code-heavy** lever (new solver/sampler/harness) does NOT get built here — file a GitHub
+issue (open, label `derby-idea`, body carries `external_ref: claude-session:$CLAUDE_CODE_SESSION_ID`
++ a CODE-ONLY recipe that lands a cell, NO GPU run) for another session (see gomoku-derby-register).
 
 ### 4. VERDICT — round-robin when the field plateaus
 
@@ -349,7 +349,7 @@ champ board's live checkpoint dir.
 ## When research is exhausted — HOLD, don't churn (added 2026-05-27)
 
 Eventually a board's question gets *answered*: the champion beats every lever, the
-researcher's queue is drained, the remaining beads are perf-blocked. When that happens
+researcher's queue is drained, the remaining issues are perf-blocked. When that happens
 and the board is healthy, **holding is the correct move** — keep the champion training
 (it's the deliverable and often still improving), let the SCAN auto-pull anything new,
 and report tight "steady" ticks. Do NOT:

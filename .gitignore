@@ -28,6 +28,10 @@ archives/
 # never tracked. See wiki/topics/branch-and-worktree-workflow.md.
 .claude-session
 
+# Per-worktree GitHub-issue marker written by scripts/gh_worktree.py (the worker
+# reads it for `Closes #N`). Ephemeral per worktree — never tracked.
+.gh_issue
+
 # Frontier lab runtime artifacts (keep .frontier/config.json and lanes.json tracked)
 .frontier/runs/
 .frontier/worktrees/
