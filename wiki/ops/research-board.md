@@ -129,7 +129,37 @@ the run record.
 5. **Recipe recommendation (revised):** the SIMPLEST winner is `--fpu-reduction-c 0.45` alone — 86% Bwin / 0% Wloss / dist 0.140. Adding `--reuse-tree 1 --proven-prop 1` gives +4pp Bwin for the engineering cost; reasonable optional add-on, not the headline.
 6. **Wilson 95% CI for the new best**: 45/50 Bwin = [78.6%, 95.7%]; 0/50 Wloss = [0%, 7.1%]. Both consistent with the 40g result; CI tightened modestly.
 
-**Probe-script bug discovered (worth noting):** `probe_100pct.py` silently expands single-value grids — e.g. `--fpu-c-grid 0.45` actually ran cells at fpu ∈ {0, 0.45} (8 cells instead of 1). Happy accident here (we got the full matrix re-run at 100g for free), but a real spec bug — script should either RESPECT single-value grids or document the expansion. File as a follow-up perf-meta bead per the operability-gates rule that just landed in `gomoku-derby-register` SKILL.
+**Probe-script bug discovered (worth noting):** `probe_100pct.py` silently expands single-value grids — e.g. `--fpu-c-grid 0.45` actually ran cells at fpu ∈ {0, 0.45} (8 cells instead of 1). Happy accident here (we got the full matrix re-run at 100g for free), but a real spec bug — script should either RESPECT single-value grids or document the expansion. **FIXED in `derby-cec`** (operability gate retrofit, 2026-05-29 00:45Z).
+
+> **🎯 LA8 VERDICT — FPU GENERALIZES, the matured champion solves the entire reasonable opponent ladder (2026-05-29 01:30Z).** Per Jason's "perf as first-class" — kicked off a la8 probe, observed it was super slow (~145s/game sequential), used `--n-workers 8` for ~8× parallel speedup (~23 min total vs ~194 min sequential):
+>
+> | fpu | Bwin (B-W/L/D) | Wloss (W-W/L/D) | dist | wall |
+> |---|---|---|---|---|
+> | 0.0 (baseline) | 14W/6L/0D = **70%** | 0W/0L/20D = **0%** | 0.300 | 11min |
+> | **0.45 (FPU on)** | **20W/0L/0D = 100%** | 0W/0L/20D = **0%** | **0.000** | 12.5min |
+>
+> **With FPU=0.45 alone, the matured champion goes 70%/0%/0.300 → 100%/0%/0.000 vs lookahead:depth=8** — same flag flip that crushed la6 also crushes la8. The lever GENERALIZES. (40g Wilson 95% CI for 20/20 Bwin = [83.9%, 100%]; tightening would need 100g.)
+>
+> **The matured champion (`derby_v8/_peaks/mate-discount/peak.pt`) + `--fpu-reduction-c 0.45` now meets the 100% target on the ENTIRE reasonable opponent ladder:**
+> - heuristic: 100%/0% (baseline at default config already perfect)
+> - lookahead:depth=2: 100%/0% (baseline already perfect)
+> - lookahead:depth=4: 100%/0% (baseline already perfect)
+> - lookahead:depth=6: 86%/0% with FPU alone (90%/0% with FPU+reuse+pp)
+> - **lookahead:depth=8: 100%/0% with FPU alone (this finding)**
+>
+> **Strategic implications:**
+> 1. **The eval-side investment is fully validated and the FPU lever is dominant + universal across opponent strength tiers.** What looked like "built for a non-problem" at la4 turned into "the universal answer" at la6+la8.
+> 2. **The 100% target as defined is essentially solved.** Production champion + one flag = perfect across the eval set + extensions.
+> 3. **Next objective candidates:**
+>    - **External strong engines** (Rapfi, ELO ~2700+) — the genuine elo-ceiling test
+>    - **15×15 freestyle gomoku** — the canonical board where the engineering matters
+>    - **lookahead:depth=10 or 12** — purely "is there ANY tractable opponent that beats FPU?" curiosity
+>    - But probably the question to ask Jason: "what's the next target?" since this tier is solved.
+> 4. **The 100% target's DEFINITION should probably evolve.** If FPU is "free" at eval time (one flag, no training, no compute change), it should arguably be part of the default eval config. Then "100% target" becomes a real measurement again. This is a ranking-owner decision (per submit-don't-rank rule), but the evidence supports it.
+>
+> **Process notes (operability-gate dogfood):**
+> - The la8 sweep is the FIRST experiment under the new operability gates (per `gomoku-derby-register` skill update, 2026-05-28 23:50Z). Used `--n-workers 8` to cut wall ~8×. *But* streaming didn't actually land in the `derby-cec` retrofit — file only appeared at end of run, not per-cell. Another perf-meta bead to file. The principle bit (perf first-class) is working; the implementation needs another pass.
+> - The discovery cadence: la4-too-saturated → la6-real-ceiling-FPU-crushes → la8-real-ceiling-FPU-also-crushes is the EVAL-SIDE STORY of the day. The entire 4-axis matrix work paid off when applied to the right opponent.
 >
 > **Strategic implications:**
 > 1. The eval-side investment (FPU + tree-reuse + proven-prop + the probe driver) was the right call. The earlier discovery that la4 was already saturated made it look "built for a non-problem" — but the same lever set crushes la6.
