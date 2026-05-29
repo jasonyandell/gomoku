@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gomoku — an AlphaZero, and the lab that trained it</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Spline+Sans+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0c0e0f;
+  --ink-2:#121618;
+  --ink-3:#171c1e;
+  --paper:#ece6d6;
+  --dim:#9d988a;
+  --faint:#6b6a61;
+  --line:rgba(236,230,214,.11);
+  --line-2:rgba(236,230,214,.05);
+  --cinnabar:#e3492c;
+  --cinnabar-soft:rgba(227,73,44,.14);
+  --jade:#5cb59b;
+  --jade-soft:rgba(92,181,155,.12);
+  --gold:#d6a955;
+  --serif:"Fraunces",Georgia,serif;
+  --mono:"Spline Sans Mono",ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--ink);
+  color:var(--paper);
+  font-family:var(--mono);
+  font-weight:300;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+  position:relative;
+}
+/* faint board grid behind everything */
+body::before{
+  content:"";
+  position:fixed;inset:0;
+  background-image:
+    linear-gradient(var(--line-2) 1px,transparent 1px),
+    linear-gradient(90deg,var(--line-2) 1px,transparent 1px);
+  background-size:44px 44px;
+  background-position:center;
+  z-index:0;pointer-events:none;
+  mask-image:radial-gradient(ellipse 120% 90% at 50% 0%,#000 30%,transparent 95%);
+}
+/* grain */
+body::after{
+  content:"";position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.035;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.wrap{position:relative;z-index:2;max-width:1140px;margin:0 auto;padding:0 28px}
+
+/* ---------- top bar ---------- */
+.topbar{
+  position:sticky;top:0;z-index:40;
+  display:flex;justify-content:space-between;align-items:center;
+  padding:14px 28px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);
+  border-bottom:1px solid var(--line);
+  background:rgba(12,14,15,.78);
+  backdrop-filter:blur(10px);
+}
+.topbar .brand{color:var(--paper);font-weight:500}
+.topbar .brand b{color:var(--cinnabar);font-weight:600}
+.topbar .stat{display:flex;gap:16px}
+.topbar .stat span{display:flex;align-items:center;gap:6px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--jade);box-shadow:0 0 8px var(--jade);animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media(max-width:680px){.topbar .stat{display:none}}
+
+/* ---------- generic reveal ---------- */
+.rv{opacity:0;transform:translateY(22px);transition:opacity .9s cubic-bezier(.16,1,.3,1),transform .9s cubic-bezier(.16,1,.3,1)}
+.rv.in{opacity:1;transform:none}
+
+/* ---------- kicker / headings ---------- */
+.kicker{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.28em;text-transform:uppercase;color:var(--cinnabar);display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.kicker::before{content:"";width:34px;height:1px;background:var(--cinnabar);display:inline-block}
+h2{font-family:var(--serif);font-weight:300;font-size:clamp(30px,5vw,52px);line-height:1.04;letter-spacing:-.02em;margin-bottom:20px}
+h2 em{font-style:italic;color:var(--gold)}
+.lede{font-family:var(--serif);font-weight:300;font-size:clamp(17px,2.1vw,21px);line-height:1.55;color:var(--paper);max-width:60ch;letter-spacing:.005em}
+.lede.dim{color:var(--dim)}
+section{padding:clamp(64px,9vw,118px) 0;border-bottom:1px solid var(--line)}
+
+/* ---------- hero ---------- */
+.hero{padding-top:clamp(48px,8vw,92px);padding-bottom:clamp(48px,8vw,86px);border-bottom:1px solid var(--line)}
+.hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:clamp(28px,5vw,64px);align-items:center}
+@media(max-width:860px){.hero-grid{grid-template-columns:1fr;gap:40px}}
+.hero h1{font-family:var(--serif);font-weight:300;font-size:clamp(40px,7.2vw,82px);line-height:.98;letter-spacing:-.03em;margin-bottom:26px}
+.hero h1 em{font-style:italic}
+.hero h1 .c{color:var(--cinnabar)}
+.hero p{font-family:var(--serif);font-size:clamp(16px,2vw,20px);font-weight:300;line-height:1.55;color:var(--dim);max-width:46ch;margin-bottom:30px}
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chip{font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;color:var(--paper);border:1px solid var(--line);padding:7px 13px;border-radius:2px;background:var(--ink-2)}
+.chip b{color:var(--jade);font-weight:500}
+.hero-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.3em;text-transform:uppercase;color:var(--faint);margin-bottom:26px}
+
+/* ---------- board ---------- */
+.board-stage{aspect-ratio:1;width:100%;max-width:400px;margin:0 auto;position:relative}
+.board-stage svg{width:100%;height:100%;display:block}
+.gline{stroke:var(--line);stroke-width:1}
+.gframe{stroke:rgba(236,230,214,.22);stroke-width:1.4;fill:none}
+.stone-b{fill:url(#bgrad);stroke:rgba(236,230,214,.28);stroke-width:.9;filter:drop-shadow(0 3px 6px rgba(0,0,0,.65))}
+.stone-w{fill:url(#wgrad);filter:drop-shadow(0 3px 5px rgba(0,0,0,.45))}
+.stone{transform-origin:center;transform-box:fill-box;opacity:0;animation:drop .5s cubic-bezier(.34,1.4,.5,1) forwards}
+@keyframes drop{from{opacity:0;transform:scale(.2) translateY(-8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.winline{stroke:var(--cinnabar);stroke-width:3.5;stroke-linecap:round;fill:none;filter:drop-shadow(0 0 7px rgba(227,73,44,.7));stroke-dasharray:280;stroke-dashoffset:280;animation:draw 1.1s ease-out 1.5s forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+.board-cap{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);text-align:center;margin-top:18px}
+
+/* ---------- big numbers strip ---------- */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
+@media(max-width:760px){.metrics{grid-template-columns:repeat(2,1fr)}}
+.metric{background:var(--ink-2);padding:26px 22px}
+.metric .n{font-family:var(--serif);font-size:clamp(30px,4.6vw,46px);font-weight:400;letter-spacing:-.02em;line-height:1;color:var(--paper)}
+.metric .n .u{font-size:.45em;color:var(--cinnabar);margin-left:3px}
+.metric .l{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--dim);margin-top:12px;line-height:1.5}
+
+/* ---------- role cards ---------- */
+.roles{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-top:46px}
+@media(max-width:760px){.roles{grid-template-columns:1fr}}
+.role{background:var(--ink-2);padding:26px 26px 28px;position:relative;transition:background .35s}
+.role:hover{background:var(--ink-3)}
+.role .idx{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.1em}
+.role h3{font-family:var(--serif);font-size:22px;font-weight:400;margin:8px 0 4px;letter-spacing:-.01em}
+.role .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:14px;display:inline-block}
+.role.gpu .tag{color:var(--cinnabar)}
+.role.code .tag{color:var(--jade)}
+.role.meta .tag{color:var(--gold)}
+.role p{font-size:13.5px;color:var(--dim);line-height:1.62}
+.role::after{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent}
+.role.gpu::after{background:var(--cinnabar)}
+.role.code::after{background:var(--jade)}
+.role.meta::after{background:var(--gold)}
+
+.legend{display:flex;flex-wrap:wrap;gap:22px;margin-top:24px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--dim)}
+.legend span{display:flex;align-items:center;gap:8px}
+.legend i{width:14px;height:2px;display:inline-block}
+
+/* ---------- protocol ---------- */
+.proto{margin-top:46px;border-top:1px solid var(--line)}
+.rule{display:grid;grid-template-columns:200px 1fr;gap:30px;padding:26px 4px;border-bottom:1px solid var(--line);align-items:start}
+@media(max-width:760px){.rule{grid-template-columns:1fr;gap:8px}}
+.rule .name{font-family:var(--serif);font-size:20px;font-weight:400;letter-spacing:-.01em}
+.rule .name .no{font-family:var(--mono);font-size:11px;color:var(--cinnabar);letter-spacing:.1em;display:block;margin-bottom:5px}
+.rule p{font-size:14px;color:var(--dim);line-height:1.65;max-width:62ch}
+.rule p b{color:var(--paper);font-weight:500}
+.rule code{font-family:var(--mono);font-size:12.5px;color:var(--jade);background:var(--jade-soft);padding:1px 6px;border-radius:3px}
+
+/* ---------- two-queue diagram ---------- */
+.queues{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-top:40px}
+@media(max-width:680px){.queues{grid-template-columns:1fr}}
+.queue{background:var(--ink-2);padding:28px}
+.queue h4{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:18px;display:flex;align-items:center;gap:10px}
+.queue.serial h4{color:var(--cinnabar)}
+.queue.parallel h4{color:var(--jade)}
+.queue .badge{font-family:var(--mono);font-size:10px;border:1px solid var(--line);padding:2px 8px;border-radius:20px;color:var(--dim);letter-spacing:.08em}
+.lanes{display:flex;flex-direction:column;gap:9px}
+.lane{font-family:var(--mono);font-size:12.5px;color:var(--paper);background:var(--ink-3);border:1px solid var(--line);padding:11px 14px;border-radius:3px;display:flex;justify-content:space-between;align-items:center}
+.lane span{color:var(--faint);font-size:11px}
+.queue.parallel .lanes{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.queue .note{font-size:12.5px;color:var(--dim);margin-top:18px;line-height:1.6}
+
+/* ---------- north star ---------- */
+.northstar{margin-top:46px;background:var(--ink-2);border:1px solid var(--line);border-left:2px solid var(--gold);border-radius:3px;padding:clamp(28px,4vw,46px);display:grid;grid-template-columns:auto 1fr;gap:clamp(28px,5vw,56px);align-items:center}
+@media(max-width:680px){.northstar{grid-template-columns:1fr;gap:24px}}
+.formula{font-family:var(--serif);font-size:clamp(40px,8vw,72px);font-weight:300;line-height:1;white-space:nowrap}
+.formula .num{display:block;border-bottom:2px solid var(--paper);padding-bottom:8px;margin-bottom:8px}
+.formula .den{display:block}
+.formula .d{color:var(--cinnabar)}
+.northstar .body h3{font-family:var(--serif);font-size:26px;font-weight:400;margin-bottom:14px}
+.northstar .body p{font-size:14px;color:var(--dim);line-height:1.66;max-width:54ch}
+.northstar .body p b{color:var(--paper);font-weight:500}
+
+/* ---------- concept cards ---------- */
+.concepts{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-top:46px}
+@media(max-width:760px){.concepts{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.concepts{grid-template-columns:1fr}}
+.concept{background:var(--ink-2);padding:24px;transition:background .3s}
+.concept:hover{background:var(--ink-3)}
+.concept .t{font-family:var(--serif);font-size:18px;font-weight:500;margin-bottom:9px;letter-spacing:-.01em}
+.concept .t b{color:var(--cinnabar);font-weight:500}
+.concept p{font-size:12.5px;color:var(--dim);line-height:1.6}
+
+/* ---------- failure callout ---------- */
+.failure{margin-top:46px;background:linear-gradient(180deg,var(--cinnabar-soft),transparent);border:1px solid rgba(227,73,44,.3);border-left:3px solid var(--cinnabar);border-radius:3px;padding:clamp(26px,4vw,40px)}
+.failure h3{font-family:var(--serif);font-size:clamp(22px,3vw,30px);font-weight:400;margin-bottom:16px}
+.failure h3 .glitch{color:var(--cinnabar);font-style:italic}
+.failure p{font-size:14.5px;color:var(--paper);line-height:1.7;max-width:72ch}
+.failure p.sub{color:var(--dim);font-size:13.5px;margin-top:14px}
+
+/* ---------- levers ---------- */
+.levers{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-top:46px}
+@media(max-width:680px){.levers{grid-template-columns:1fr}}
+.lever{background:var(--ink-2);padding:28px;transition:background .3s}
+.lever:hover{background:var(--ink-3)}
+.lever .h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+.lever h3{font-family:var(--serif);font-size:21px;font-weight:400;letter-spacing:-.01em}
+.lever .win{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--jade);border:1px solid var(--jade-soft);background:var(--jade-soft);padding:3px 8px;border-radius:20px;white-space:nowrap}
+.lever p{font-size:13.5px;color:var(--dim);line-height:1.62}
+.lever p .arrow{color:var(--cinnabar)}
+.lever p b{color:var(--paper);font-weight:500}
+
+/* ---------- outcome ---------- */
+.outcome-grid{display:grid;grid-template-columns:.85fr 1.15fr;gap:clamp(30px,5vw,60px);align-items:center;margin-top:46px}
+@media(max-width:780px){.outcome-grid{grid-template-columns:1fr;gap:36px}}
+.bignum{font-family:var(--serif);font-size:clamp(120px,22vw,230px);font-weight:300;line-height:.82;letter-spacing:-.04em;color:var(--paper)}
+.bignum .pct{color:var(--cinnabar);font-size:.5em;vertical-align:super}
+.bignum-sub{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-top:8px}
+.ladder{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px}
+.ladder th{text-align:left;font-weight:500;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:0 0 14px;border-bottom:1px solid var(--line)}
+.ladder th.r,.ladder td.r{text-align:right}
+.ladder td{padding:13px 0;border-bottom:1px solid var(--line-2);color:var(--paper)}
+.ladder td.opp{color:var(--dim)}
+.ladder td .ok{color:var(--jade)}
+.ladder td .zero{color:var(--cinnabar)}
+.ladder tr:hover td{color:var(--paper)}
+.lineage{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:30px;font-family:var(--mono);font-size:12.5px}
+.lineage .step{background:var(--ink-2);border:1px solid var(--line);padding:7px 13px;border-radius:3px;color:var(--paper)}
+.lineage .step.gold{border-color:var(--gold);color:var(--gold)}
+.lineage .plus{color:var(--cinnabar);font-weight:600}
+.fn{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:22px;line-height:1.6;max-width:70ch}
+
+/* ---------- footer ---------- */
+footer{padding:60px 0 80px;border-bottom:none}
+.colophon{display:grid;grid-template-columns:1fr auto;gap:30px;align-items:end}
+@media(max-width:680px){.colophon{grid-template-columns:1fr}}
+.colophon p{font-family:var(--mono);font-size:12px;color:var(--dim);line-height:1.8;max-width:58ch}
+.colophon p b{color:var(--paper);font-weight:500}
+.colophon .meta{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);text-align:right}
+@media(max-width:680px){.colophon .meta{text-align:left}}
+
+::selection{background:var(--cinnabar);color:var(--ink)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><b>◆</b> GOMOKU / ALPHAZERO</div>
+  <div class="stat">
+    <span><span class="dot"></span>M5 MAX · MPS</span>
+    <span>W&amp;B FROM DAY ONE</span>
+    <span>NO HUMAN GAMES</span>
+  </div>
+</div>
+
+<!-- ================= HERO ================= -->
+<header class="hero">
+  <div class="wrap">
+    <div class="hero-eyebrow rv">A self-taught player &amp; the autonomous lab behind it</div>
+    <div class="hero-grid">
+      <div>
+        <h1 class="rv">It learned <em>five-in-a-row</em><br>from <span class="c">nothing</span>—<br>and trained itself.</h1>
+        <p class="rv">A from-scratch AlphaZero for 9×9 free-style gomoku on a single Mac. The model is the easy part. The real artifact is the <b style="color:var(--paper)">harness</b>: a receipt-driven lab of cooperating agents that runs the experiments while no one is watching.</p>
+        <div class="chips rv">
+          <span class="chip"><b>100%</b> vs the opponent ladder</span>
+          <span class="chip">single <b>M5 Max</b></span>
+          <span class="chip">trained <b>from scratch</b></span>
+        </div>
+      </div>
+      <div class="rv">
+        <div class="board-stage">
+          <svg viewBox="0 0 360 360" role="img" aria-label="9 by 9 gomoku board with a winning diagonal of five black stones">
+            <defs>
+              <radialGradient id="bgrad" cx="36%" cy="32%" r="78%">
+                <stop offset="0%" stop-color="#6a7177"/>
+                <stop offset="30%" stop-color="#3a4045"/>
+                <stop offset="68%" stop-color="#1c2125"/>
+                <stop offset="100%" stop-color="#080a0c"/>
+              </radialGradient>
+              <radialGradient id="wgrad" cx="38%" cy="34%" r="74%">
+                <stop offset="0%" stop-color="#fdfaf0"/>
+                <stop offset="55%" stop-color="#e6dfcd"/>
+                <stop offset="100%" stop-color="#bdb6a3"/>
+              </radialGradient>
+            </defs>
+            <!-- grid -->
+            <g id="grid"></g>
+            <rect class="gframe" x="20" y="20" width="320" height="320" rx="2"/>
+            <!-- stones injected by JS -->
+            <g id="stones"></g>
+            <!-- winning line: from (100,260) to (260,100) -->
+            <line class="winline" x1="100" y1="260" x2="260" y2="100"/>
+          </svg>
+        </div>
+        <div class="board-cap">9×9 · free-style · five wins · no restrictions</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ================= THE HARNESS ================= -->
+<section id="harness">
+  <div class="wrap">
+    <div class="kicker rv">01 — The Harness</div>
+    <h2 class="rv">A small crew of agents,<br>and <em>one rule</em> they never break.</h2>
+    <p class="lede rv">Built in the spirit of “stop babysitting your agents”: dispatch the work, verify by receipt, and never block code behind the GPU. Several agents cooperate — each owning one domain — and <b style="color:var(--paper)">exactly one of them is ever allowed to touch the GPU at a time.</b></p>
+
+    <div class="roles rv">
+      <div class="role gpu">
+        <div class="idx">A1</div><h3>Orchestrator</h3>
+        <span class="tag">owns both queues</span>
+        <p>The live session driving the loop. Spins GPU slices, fans code &amp; wiki work out to parallel sub-agents, and reads the queue for resume state on every wake.</p>
+      </div>
+      <div class="role gpu">
+        <div class="idx">A2</div><h3>Derby Runner</h3>
+        <span class="tag">single serial GPU executor</span>
+        <p>The only process the GPU sees. Runs the race in ~300-second chunks; on a ~10-minute cron it asserts health, reads the scoreboard, and swaps stalled lanes by judgement.</p>
+      </div>
+      <div class="role code">
+        <div class="idx">A3</div><h3>Derby Register</h3>
+        <span class="tag">intake</span>
+        <p>Routes a new idea. A one-flag lever clones a cell; a code-heavy lever files a GitHub issue to be built. Enforces one lever per cell — and never runs the GPU.</p>
+      </div>
+      <div class="role meta">
+        <div class="idx">A4</div><h3>Reviewer</h3>
+        <span class="tag">the audit gate</span>
+        <p>Spawned fresh after each finished lane to check the math and the receipts against the charter. Three verdicts — <b style="color:var(--paper)">APPROVE / REVISE / BLOCK</b> — and only BLOCK halts the loop.</p>
+      </div>
+      <div class="role code">
+        <div class="idx">A5</div><h3>Issue Runner</h3>
+        <span class="tag">code-only dispatcher</span>
+        <p>Polls the GitHub ready queue, claims unblocked code-only issues, and hands each to an isolated worktree worker. Mirrors status back; touches no GPU.</p>
+      </div>
+      <div class="role meta">
+        <div class="idx">A6</div><h3>Janitor + Watchdog</h3>
+        <span class="tag">hygiene &amp; heartbeat</span>
+        <p>At session start the janitor reclaims worktrees leaked by crashed sessions and prints a hygiene gauge. An off-minute cron re-invokes the loop and pushes a one-line “needs you” on escalation.</p>
+      </div>
+    </div>
+    <div class="legend rv">
+      <span><i style="background:var(--cinnabar)"></i> GPU lane — strictly serial</span>
+      <span><i style="background:var(--jade)"></i> code lane — fans out in parallel</span>
+      <span><i style="background:var(--gold)"></i> meta lane — audits &amp; upkeep</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PROTOCOL ================= -->
+<section id="protocol">
+  <div class="wrap">
+    <div class="kicker rv">02 — The Protocol</div>
+    <h2 class="rv">The rules that let it <em>run unattended.</em></h2>
+    <p class="lede dim rv">A handful of conventions do all the work. They keep parallel sessions from entangling, make every result reproducible, and let the loop default to action instead of asking permission.</p>
+
+    <!-- two-queue diagram -->
+    <div class="queues rv">
+      <div class="queue serial">
+        <h4><span class="dot" style="background:var(--cinnabar);box-shadow:0 0 8px var(--cinnabar)"></span>GPU-required <span class="badge">serial · one at a time</span></h4>
+        <div class="lanes">
+          <div class="lane">train slice<span>--max-wall-secs</span></div>
+          <div class="lane">self-play generation<span>wave-batched</span></div>
+          <div class="lane">eval probe<span>vs fixed baselines</span></div>
+        </div>
+        <p class="note">Heavy work runs one lane at a time on MPS. The GPU is the bottleneck, so it is never contended.</p>
+      </div>
+      <div class="queue parallel">
+        <h4><span class="dot"></span>Everything else <span class="badge">parallel · fan-out</span></h4>
+        <div class="lanes">
+          <div class="lane">code</div>
+          <div class="lane">wiki</div>
+          <div class="lane">plots</div>
+          <div class="lane">audits</div>
+        </div>
+        <p class="note">Code, docs and analysis fan out through worktrees and sub-agents — never serialized behind the GPU.</p>
+      </div>
+    </div>
+
+    <div class="proto">
+      <div class="rule rv">
+        <div class="name"><span class="no">R1</span>Receipts are<br>the record</div>
+        <p>A lane that ran without filing a <b>receipt</b> — a ledger entry, baseline rows, a line in the narrative log — is invisible to the next session. The receipt <em>is</em> the work; the verdict carries the run ID, config, checkpoint and metrics.</p>
+      </div>
+      <div class="rule rv">
+        <div class="name"><span class="no">R2</span>Worktree per<br>unit of work</div>
+        <p>Every change gets its own git worktree off <code>main</code>, merged back with <code>merge --no-ff</code>. <b>Never rebase, never squash</b> — explicit merge commits keep each experiment legible in the graph while the derby and other sessions share the repo concurrently.</p>
+      </div>
+      <div class="rule rv">
+        <div class="name"><span class="no">R3</span>Smoke<br>first</div>
+        <p>The default probe is <b>60–90 seconds</b>, not five minutes. Escalate to a longer run only when the signal sits inside the noise floor. Cheap evidence before expensive evidence; small-n is a hint, not a verdict.</p>
+      </div>
+      <div class="rule rv">
+        <div class="name"><span class="no">R4</span>Autonomy is<br>a deny-list</div>
+        <p>Default-allow. Reversible local work just happens — no asking. Only <b>hard-to-reverse or architectural</b> moves (a remote push, a dependency bump, a model-architecture change) stop to confirm. Timing and context are not the same as permission.</p>
+      </div>
+      <div class="rule rv">
+        <div class="name"><span class="no">R5</span>Verify before<br>you trust</div>
+        <p>Strength is measured against <b>fixed baselines</b> — a heuristic player and lookahead-N — never sibling head-to-head, which is non-transitive. A recipe that changes training behaviour can’t be promoted until a canary confirms it didn’t quietly regress quality.</p>
+      </div>
+    </div>
+
+    <!-- north star -->
+    <div class="northstar rv">
+      <div class="formula">
+        <span class="num">Δ<span class="d">elo</span></span>
+        <span class="den">Δ<span class="d">t</span></span>
+      </div>
+      <div class="body">
+        <h3>The north star — “delta-e”</h3>
+        <p>Elo gained <b>per wall-clock hour</b>, measured from a common checkpoint against a stable anchor. Throughput proxies like augmentations-per-second are gameable <em>means</em>; this is the end. A generator that doubles aug/s but floods the trainer into a runaway <b>loses</b> on Δelo/Δt — and the lab is built to catch exactly that.</p>
+      </div>
+    </div>
+
+    <p class="lede dim rv" style="margin-top:46px">And the engine itself: the <b style="color:var(--paper)">Δelo Derby</b> races training recipes — each differing from the reigning champion by exactly one lever — toward a wall-time cap. A priority queue feeds the steepest climber first, so leaders get more GPU while everyone still finishes, and the board always shows the best model so far. State is written atomically after every chunk, so an overnight run resumes from a crash without losing a step.</p>
+  </div>
+</section>
+
+<!-- ================= THE ML ================= -->
+<section id="approach">
+  <div class="wrap">
+    <div class="kicker rv">03 — The Method</div>
+    <h2 class="rv">Enough AlphaZero<br>to tell the truth about it.</h2>
+    <p class="lede dim rv">No human games, no openings book, no curriculum. The system learns entirely from its own play, search and evaluation looping into each other.</p>
+
+    <div class="concepts rv">
+      <div class="concept"><div class="t"><b>Self-play</b></div><p>The model plays itself to generate every training game. The only teacher is its own search.</p></div>
+      <div class="concept"><div class="t"><b>PUCT MCTS</b></div><p>A tree search that balances the network’s move prior (explore) against accumulated win-rate (exploit) to choose a move.</p></div>
+      <div class="concept"><div class="t"><b>Policy + value net</b></div><p>One residual trunk, two heads: predicted move probabilities, and predicted outcome from this position.</p></div>
+      <div class="concept"><div class="t">The <b>loop</b></div><p>Train on searched games → generate stronger games with the new weights → evaluate vs fixed baselines → repeat.</p></div>
+      <div class="concept"><div class="t"><b>Wave-batched eval</b></div><p>Leaf positions from many parallel games are pooled into one forward pass to keep the GPU saturated.</p></div>
+      <div class="concept"><div class="t"><b>D4 augmentation</b></div><p>Every position is rotated and mirrored into its 8 board symmetries — eight times the data, for free.</p></div>
+    </div>
+
+    <!-- failure -->
+    <div class="failure rv">
+      <h3>The thing that had to be solved: <span class="glitch">fast-attack collapse.</span></h3>
+      <p>Early on, both selves play equally weak defence — so MCTS at a small budget keeps confirming its own attacking prior and never explores the blocks. Games degenerate into a 5-to-10-move blitz where whoever strikes first wins, and the network never learns to defend. The value head finds the result trivially easy to predict, which hides the problem.</p>
+      <p class="sub">More simulations alone doesn’t fix it: the replay buffer itself is starved of the positions that would teach defence. The fix had to change <em>what the model sees</em>, not just how hard it looks.</p>
+    </div>
+
+    <!-- levers -->
+    <h2 class="rv" style="margin-top:clamp(56px,8vw,90px)">What actually <em>worked.</em></h2>
+    <p class="lede dim rv">Four levers, each isolated and raced in the derby. Stacked, they break the collapse and climb past the whole opponent ladder.</p>
+    <div class="levers rv">
+      <div class="lever">
+        <div class="h"><h3>In-search VCF</h3><span class="win">confirmed</span></div>
+        <p>A fast solver checks each leaf for a forced <b>win-by-continuous-fours</b> and backs up a proven value. Teaches the net to <em>see</em> forcing threats without having to search them. <span class="arrow">→</span> a decisive win over the baseline.</p>
+      </div>
+      <div class="lever">
+        <div class="h"><h3>Global-pool sampling</h3><span class="win">confirmed</span></div>
+        <p>Sample the replay buffer <b>uniformly across all of history</b> instead of crowding recent games. Flattens the buffer’s composition and breaks the fast-attack feedback loop. <span class="arrow">→</span> defence finally gets gradient.</p>
+      </div>
+      <div class="lever">
+        <div class="h"><h3>Value-discount (γ≈0.98)</h3><span class="win">confirmed</span></div>
+        <p>Slightly discount slow wins, so a <b>quick, clean win</b> trains a sharper gradient than a long grind. <span class="arrow">→</span> broke the defensive-draw stall without re-collapsing into blitz.</p>
+      </div>
+      <div class="lever">
+        <div class="h"><h3>FPU reduction</h3><span class="win">eval-only · free</span></div>
+        <p>At evaluation time, give unvisited moves a smarter default than zero so the search spreads more evenly. Zero training cost. <span class="arrow">→</span> cracks the <b>deepest</b> lookahead opponents.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= OUTCOME ================= -->
+<section id="outcome" style="border-bottom:none">
+  <div class="wrap">
+    <div class="kicker rv">04 — The Outcome</div>
+    <div class="outcome-grid">
+      <div class="rv">
+        <div class="bignum">100<span class="pct">%</span></div>
+        <div class="bignum-sub">of the opponent ladder, solved</div>
+        <div class="lineage">
+          <span class="step">vcf</span>
+          <span class="plus">+</span>
+          <span class="step">global-pool</span>
+          <span class="plus">+</span>
+          <span class="step gold">value-discount</span>
+        </div>
+        <p class="fn">The winning recipe, built one lever at a time. Champion: run <b style="color:var(--paper)">44cxzc9d</b>, trained from scratch on the M5 Max.</p>
+      </div>
+      <div class="rv">
+        <table class="ladder">
+          <thead>
+            <tr><th>Fixed opponent</th><th class="r">win as Black</th><th class="r">loss as White</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="opp">Heuristic</td><td class="r"><span class="ok">100%</span></td><td class="r"><span class="zero">0%</span></td></tr>
+            <tr><td class="opp">Lookahead-2</td><td class="r"><span class="ok">100%</span></td><td class="r"><span class="zero">0%</span></td></tr>
+            <tr><td class="opp">Lookahead-4</td><td class="r"><span class="ok">100%</span></td><td class="r"><span class="zero">0%</span></td></tr>
+            <tr><td class="opp">Lookahead-6 *</td><td class="r"><span class="ok">~86–90%</span></td><td class="r"><span class="zero">0%</span></td></tr>
+            <tr><td class="opp">Lookahead-8 *</td><td class="r"><span class="ok">100%</span></td><td class="r"><span class="zero">0%</span></td></tr>
+          </tbody>
+        </table>
+        <p class="fn">The stated 100% target — win all as Black, lose none as White against the heuristic and lookahead-2/4 — is met at <b style="color:var(--paper)">default settings, with no eval-time tricks</b>. <br>* the eval-only levers (FPU + tree-reuse) then generalise to the harder lookahead-6/8 opponents.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer>
+  <div class="wrap">
+    <div class="colophon rv">
+      <p>Presented from the project <b>wiki</b> — the maintained synthesis layer that lets each session start smarter than the last. Raw evidence stays immutable; the wiki compounds the learning. The roles, the protocol and the result above all trace back to it.</p>
+      <div class="meta">
+        Gomoku · AlphaZero<br>
+        Type — Fraunces &amp; Spline Sans Mono<br>
+        Built with the frontend-design skill · 2026
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var NS="http://www.w3.org/2000/svg";
+  // draw 9x9 grid lines (intersections at 20 + i*40, i=0..8)
+  var grid=document.getElementById("grid");
+  for(var i=0;i<9;i++){
+    var p=20+i*40;
+    [["x",p],["y",p]].forEach(function(o){
+      var l=document.createElementNS(NS,"line");
+      l.setAttribute("class","gline");
+      if(o[0]==="x"){l.setAttribute("x1",p);l.setAttribute("x2",p);l.setAttribute("y1",20);l.setAttribute("y2",340);}
+      else{l.setAttribute("x1",20);l.setAttribute("x2",340);l.setAttribute("y1",p);l.setAttribute("y2",p);}
+      grid.appendChild(l);
+    });
+  }
+  // stones: [col,row,color]; winning black diagonal + scattered context
+  function xy(c){return 20+c*40;}
+  var stones=[
+    // winning black diagonal (col,row) bottom-left -> top-right
+    [2,6,"b"],[3,5,"b"],[4,4,"b"],[5,3,"b"],[6,2,"b"],
+    // white defenders, scattered
+    [4,6,"w"],[5,5,"w"],[3,3,"w"],[6,4,"w"],[2,4,"w"],[5,6,"w"],[3,6,"w"]
+  ];
+  var sg=document.getElementById("stones");
+  stones.forEach(function(s,k){
+    var c=document.createElementNS(NS,"circle");
+    c.setAttribute("class","stone "+(s[2]==="b"?"stone-b":"stone-w"));
+    c.setAttribute("cx",xy(s[0]));c.setAttribute("cy",xy(s[1]));
+    c.setAttribute("r",16);
+    c.style.animationDelay=(0.45+k*0.075)+"s";
+    sg.appendChild(c);
+  });
+
+  // scroll reveal
+  var io=new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting){
+        var sibs=[].slice.call(e.target.parentNode.querySelectorAll(".rv"));
+        e.target.classList.add("in");
+        io.unobserve(e.target);
+      }
+    });
+  },{threshold:.12,rootMargin:"0px 0px -8% 0px"});
+  // stagger reveals within shared containers
+  document.querySelectorAll(".rv").forEach(function(el,i){
+    io.observe(el);
+  });
+  // hero reveals fire immediately on load (staggered)
+  window.addEventListener("load",function(){
+    document.querySelectorAll(".hero .rv").forEach(function(el,i){
+      setTimeout(function(){el.classList.add("in");},120+i*120);
+    });
+  });
+})();
+</script>
+</body>
+</html>
