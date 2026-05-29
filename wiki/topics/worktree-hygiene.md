@@ -84,6 +84,20 @@ repo-hygiene: worktrees=15 (orphaned=0) branches=17 (merged-undeleted=0) — cle
 --apply`. This is what makes slow entropy visible **the day it grows**
 instead of the week someone notices.
 
+### Gauge has a built-in 15s budget (derby-o3s)
+
+The gauge runs from a cron narrator, so it must be fast **and**
+unblockable. Every git subprocess in `reclaim_worktrees.py` is invoked
+with `stdin=subprocess.DEVNULL`, `GIT_TERMINAL_PROMPT=0` /
+`GIT_ASKPASS=/bin/true`, `--no-pager`, and a per-call `timeout` (8s). The
+gauge path wraps that with a **15-second hard wall budget**: if any
+subprocess times out, the gauge still emits the metric line with a
+`[partial: <which call> timed out at Ns]` suffix and a `⚠` flag so the
+narrator never silently wedges. Bullet-proof I/O closes the four blocking
+surfaces — inherited stdin, credential prompt, implicit pager, stale lock
+— that wedged the gauge ~2min on 2026-05-28 (derby-o3s). The metric
+definition itself is unchanged; only the I/O is hardened.
+
 ## The standing rule (generalizes beyond worktrees)
 
 **For every class of artifact the lab creates — worktrees, branches,
