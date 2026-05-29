@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
 """Eval-config sweep driver — the one-command orchestrator for the
-RESUME PLAYBOOK step 1 probe (derby-5xs, extended in derby-u8d).
+RESUME PLAYBOOK step 1 probe (derby-5xs, extended in derby-u8d, operability
+gates retrofitted in derby-cec).
+
+OPERABILITY PROPERTIES (derby-cec, 2026-05-28):
+  - Streaming output: per-cell JSON rows are flushed to ``--output`` as each
+    cell completes (append mode), so a mid-run crash leaves all completed
+    cells safe on disk. The meta header is written once at run start.
+  - ``--resume`` (default ON): if the ``--output`` file already exists, the
+    driver parses any prior cell rows, builds a set of completed cell-keys
+    (tuple of all axis values), and SKIPS those cells on the new run. Pass
+    ``--no-resume`` to ignore the file (still appends).
+  - Honest timing self-report: at run start the driver prints a plan line
+    with cell count, estimated per-cell wall, and total ETA; at end it
+    prints the actual/estimate ratio so the operator can calibrate future
+    estimates (and the driver suggests filing a perf-meta bead when the
+    ratio exceeds 2x).
+  - Grids RESPECT single values: ``--fpu-c-grid 0.45`` runs EXACTLY ONE
+    cell at fpu=0.45 (no silent expansion to {0, 0.45}). To explicitly
+    ablate a non-zero value against OFF, pass ``--fpu-c-grid 0,0.45``.
+    This REVERSED the derby-u8d behaviour that silently injected OFF.
 
 The matured v8 champion 100%s heuristic + lookahead2; the SOLE binding gap to
 the v9 "100% target" (Jason, 2026-05-27) is lookahead4-as-BLACK ~50% wins
@@ -142,17 +161,22 @@ class Cell:
 
 
 def _normalize_grid(values, axis: str) -> list:
-    """Ensure OFF is present in each grid, sorted ascending.
+    """Dedupe + sort a per-axis grid; RESPECT what the caller passed.
 
-    The cheap-first ordering relies on the all-OFF baseline existing in the
-    Cartesian product. If the caller passes a grid that omits OFF we silently
-    inject it so the baseline cell is always available (cost: at most one
-    extra cell).
+    Derby-cec (2026-05-28) reversed the prior derby-u8d behaviour of silently
+    injecting OFF into every grid. The new contract: **what you pass is what
+    you get** — a single-value grid is a single cell, full stop. To ablate a
+    non-OFF value against OFF, pass an explicit two-value grid (e.g.
+    ``--fpu-c-grid 0,0.45``).
+
+    Rationale: the auto-injection produced a silent 2x cell-count expansion
+    that bit derby-cec's 100g re-eval (8 cells silently instead of the 1
+    requested). The principle of least surprise wins; cheap-first ordering
+    survives because callers who *want* the baseline still pass it
+    explicitly.
     """
     out = list(dict.fromkeys(values))  # dedupe, preserve order
-    if OFF_VALUES[axis] not in out:
-        out.append(OFF_VALUES[axis])
-    # Sort ascending so iteration is predictable & smallest non-OFF comes first.
+    # Sort ascending so iteration is predictable & smallest value comes first.
     return sorted(out)
 
 
@@ -449,7 +473,9 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
               n_games: int, seed: int, c_puct: float, device: str,
               n_workers: int, eval_fn=None,
               early_stop_on_target: float | None = None,
-              worse_than_baseline_margin: float | None = None) -> list[CellResult]:
+              worse_than_baseline_margin: float | None = None,
+              on_cell=None,
+              skip_keys: set | None = None) -> list[CellResult]:
     """Iterate the cell grid serially, calling ``eval_fn`` for each cell.
 
     ``eval_fn`` defaults to ``run_cell_eval`` (the GPU-touching path); tests
@@ -474,6 +500,16 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
     losing levers in the JSONL.
 
     Both knobs are independent and may be combined.
+
+    Streaming + resume hooks (derby-cec):
+        - ``on_cell``: optional callable invoked as ``on_cell(cell_result)``
+          immediately after each cell completes (or is recorded as skipped).
+          Used by ``main()`` to stream rows to disk + flush.
+        - ``skip_keys``: optional set of cell-key tuples (in ``cell_key()``
+          form) — cells whose key is in the set are skipped entirely (no
+          eval call, no result row appended). Resume-friendly: callers that
+          want the old "produce a row per cell" behaviour should pre-filter
+          before passing ``cells`` instead of using ``skip_keys``.
     """
     if eval_fn is None:
         eval_fn = run_cell_eval
@@ -483,8 +519,12 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
     baseline_distance: float | None = None
 
     for cell in cells:
+        if skip_keys is not None and cell_key(cell) in skip_keys:
+            # Resume case: this cell already has a row on disk; do not re-eval
+            # and do not double-write.
+            continue
         if target_hit:
-            results.append(CellResult(
+            cr = CellResult(
                 sims=cell.sims,
                 eval_vcf_nodes=cell.eval_vcf_nodes,
                 fpu_reduction_c=cell.fpu_reduction_c,
@@ -494,7 +534,10 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
                 n_games=n_games,
                 baseline=baseline,
                 early_stop="skipped:target-hit",
-            ))
+            )
+            results.append(cr)
+            if on_cell is not None:
+                on_cell(cr)
             continue
         t0 = time.perf_counter()
         try:
@@ -571,6 +614,8 @@ def run_probe(*, checkpoint: str, baseline: str, cells: list[Cell],
                 error=f"{type(e).__name__}: {e}",
             )
         results.append(cr)
+        if on_cell is not None:
+            on_cell(cr)
     return results
 
 
@@ -776,11 +821,141 @@ def _axis_repr(axis: str, v) -> str:
 
 def write_jsonl(results: list[CellResult], path: Path, meta: dict) -> None:
     """One JSON object per line. First line is a meta header
-    ({"meta": {...}}); subsequent lines are CellResult dicts."""
+    ({"meta": {...}}); subsequent lines are CellResult dicts.
+
+    LEGACY (pre-derby-cec) batch writer — kept for callers that hold full
+    results in memory and want to dump them as a single atomic file. The
+    driver's ``main()`` no longer uses this; it streams per-cell via
+    ``append_meta_header`` + ``append_cell_row`` so a mid-run crash leaves
+    completed cells safe on disk.
+    """
     with open(path, "w") as f:
         f.write(json.dumps({"meta": meta}) + "\n")
         for r in results:
             f.write(json.dumps(asdict(r)) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Streaming output + --resume helpers (derby-cec)
+
+
+def cell_key(cell: Cell) -> tuple:
+    """Stable hashable key for a cell — tuple of all axis values in
+    canonical order. Used by ``--resume`` to skip completed cells."""
+    return tuple(cell.axis_value(a) for a in AXIS_NAMES)
+
+
+def result_key(row: dict) -> tuple:
+    """Build a cell-key tuple from a parsed JSONL row dict. Mirrors
+    ``cell_key`` but reads from the row's recorded axis values.
+
+    Skipped cells (target-hit) still count as 'completed' for resume
+    purposes — re-running shouldn't re-evaluate a cell the prior run
+    decided not to evaluate.
+    """
+    return tuple(row[a] for a in AXIS_NAMES)
+
+
+def parse_completed_keys(output_path: Path) -> tuple[set, int]:
+    """Read an existing --output file and return (set of cell-keys already
+    on disk, count of those keys).
+
+    Robust to a partial last line (a mid-write crash). Skips the meta header
+    row. Missing file → empty set.
+    """
+    if not output_path.exists():
+        return set(), 0
+    keys: set = set()
+    with open(output_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                # Partial last line from a SIGKILL mid-write — ignore.
+                continue
+            if "meta" in row and len(row) == 1:
+                continue
+            try:
+                keys.add(result_key(row))
+            except KeyError:
+                # Older-format row missing an axis — best-effort skip.
+                continue
+    return keys, len(keys)
+
+
+def append_meta_header(output_path: Path, meta: dict) -> None:
+    """Append a meta-header row to the output file (append-mode + flush).
+
+    Idempotent-ish: callers normally only invoke this when the file does
+    NOT already contain a meta header. On --resume we DO NOT re-write the
+    meta header (the original run's meta is the canonical one).
+    """
+    with open(output_path, "a") as f:
+        f.write(json.dumps({"meta": meta}) + "\n")
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass  # tmpfs / read-only mount during tests — best-effort.
+
+
+def append_cell_row(output_path: Path, cr: CellResult) -> None:
+    """Append a single cell-result row and flush immediately. The point of
+    streaming: a SIGKILL after this returns leaves the row safe on disk."""
+    with open(output_path, "a") as f:
+        f.write(json.dumps(asdict(cr)) + "\n")
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Honest timing self-report (derby-cec)
+
+
+# Per-100-sims baseline wall (seconds). The 100g re-eval observed ~14 min /
+# cell at sims=100, n_games=100, single-worker CPU — so ~14*60/100 = 8.4
+# seconds-per-game-at-sims=100. Use 9 as a round number; the actual/estimate
+# ratio reported at end will calibrate it.
+SECS_PER_GAME_AT_SIMS_100_BASELINE = 9.0
+
+
+def estimate_cell_wall_secs(cell: Cell, n_games: int, n_workers: int = 1) -> float:
+    """Rough per-cell wall-clock estimate, in seconds.
+
+    Scaling factors (best-effort; the actual/estimate ratio printed at end
+    is the calibration loop):
+      - linear in n_games / n_workers
+      - linear in sims / 100
+      - ~+15% per extra non-OFF lever (vcf nodes, fpu, reuse-tree, proven-*)
+    """
+    per_game = SECS_PER_GAME_AT_SIMS_100_BASELINE * (cell.sims / 100.0)
+    levers = cell.num_active_levers()
+    # Count the sims-axis lever as part of the per-game cost above, so the
+    # lever-overhead bump applies only to NON-sims active levers.
+    non_sims_levers = max(0, levers - (1 if cell.sims != OFF_VALUES["sims"] else 0))
+    per_game *= (1.0 + 0.15 * non_sims_levers)
+    total = per_game * n_games / max(1, n_workers)
+    return total
+
+
+def estimate_total_wall_secs(cells: list[Cell], n_games: int,
+                             n_workers: int = 1) -> float:
+    return sum(estimate_cell_wall_secs(c, n_games, n_workers) for c in cells)
+
+
+def format_duration(secs: float) -> str:
+    """Concise duration: '12.3s', '4.5min', '2.7h'."""
+    if secs < 60:
+        return f"{secs:.1f}s"
+    if secs < 3600:
+        return f"{secs/60:.1f}min"
+    return f"{secs/3600:.2f}h"
 
 
 # ---------------------------------------------------------------------------
@@ -821,22 +996,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Comma-separated eval-vcf-nodes values "
                         "(0 disables the overlay).")
 
-    # New axes (derby-u8d).
+    # New axes (derby-u8d). Per derby-cec: grids RESPECT what you pass —
+    # a single value runs exactly one cell on that axis. To ablate a
+    # non-zero value against OFF, pass an explicit two-value grid
+    # (e.g. ``--fpu-c-grid 0,0.45``).
     p.add_argument("--fpu-c-grid", type=str, default="0.0",
                    help="Comma-separated FPU-reduction c values (derby-3w0). "
-                        "Default '0.0' (single = OFF, byte-identical).")
+                        "Single value = one cell at that value (no auto-injection "
+                        "of OFF). To ablate against 0, pass '0,VAL'. "
+                        "Default '0.0' (single = OFF).")
     p.add_argument("--reuse-tree-grid", type=str, default="0",
                    help="Comma-separated 0/1 values for the cross-ply tree-reuse "
-                        "lever (derby-jmi). Default '0' (single = OFF, "
-                        "byte-identical).")
+                        "lever (derby-jmi). Single value = one cell at that "
+                        "value (no auto-injection of OFF). To ablate against 0, "
+                        "pass '0,1'. Default '0' (single = OFF).")
     p.add_argument("--proven-prop-grid", type=str, default="0",
                    help="Comma-separated 0/1 values for the proven-win/loss "
-                        "propagation lever (derby-b3n). Default '0' (single = "
-                        "OFF, byte-identical).")
+                        "propagation lever (derby-b3n). Single value = one cell at "
+                        "that value (no auto-injection of OFF). To ablate against "
+                        "0, pass '0,1'. Default '0' (single = OFF).")
     p.add_argument("--proven-vcf-leaf-nodes-grid", type=str, default="0",
                    help="Comma-separated leaf-VCF bounded-nodes values "
                         "(derby-b3n; requires --proven-prop=1 to take effect). "
-                        "Default '0' (single = OFF, byte-identical).")
+                        "Single value = one cell at that value (no auto-injection "
+                        "of OFF). To ablate against 0, pass '0,VAL'. "
+                        "Default '0' (single = OFF).")
 
     # Ordering + early-stop knobs.
     p.add_argument("--order", type=str, default="cheap-first",
@@ -855,8 +1039,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "Informational only — the sweep continues. Default off.")
 
     p.add_argument("--output", type=str, default=None,
-                   help="Output JSONL path. Default "
-                        "probe_100pct_<UTC-timestamp>.jsonl in CWD.")
+                   help="Output JSONL path (append mode + per-cell flush). "
+                        "Default probe_100pct_<UTC-timestamp>.jsonl in CWD.")
+    p.add_argument("--no-resume", dest="resume", action="store_false",
+                   default=True,
+                   help="Disable --resume. By default, if --output already "
+                        "exists the driver parses completed cell-keys and skips "
+                        "them; --no-resume re-evaluates every cell (still "
+                        "appends to the file).")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--c-puct", type=float, default=1.5)
     p.add_argument("--device", type=str, default="cpu",
@@ -917,9 +1107,31 @@ def main(argv: list[str] | None = None,
     if args.output is None:
         ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         args.output = f"probe_100pct_{ts}.jsonl"
-    out_path = Path(args.output)
+    out_path = Path(args.output).resolve()
 
-    print(f"[probe] checkpoint={args.checkpoint}")
+    # --resume: parse the existing --output (if any) and build the skip set.
+    # If --no-resume was passed, skip the pre-pass entirely.
+    skip_keys: set = set()
+    file_exists = out_path.exists()
+    if args.resume and file_exists:
+        skip_keys, n_done = parse_completed_keys(out_path)
+        print(f"[probe] resuming: {n_done}/{len(cells)} cells already "
+              f"complete in {out_path}")
+    elif file_exists and not args.resume:
+        print(f"[probe] --no-resume: ignoring prior cells in {out_path} "
+              f"(still appending)")
+
+    # Honest timing self-report: upfront plan + ETA, plus absolute paths so
+    # the operator can confirm cwd/checkpoint are what they think.
+    remaining_cells = [c for c in cells if cell_key(c) not in skip_keys]
+    est_total_secs = estimate_total_wall_secs(
+        remaining_cells, args.games_per_cell, args.n_workers,
+    )
+    est_per_cell_secs = (
+        est_total_secs / len(remaining_cells) if remaining_cells else 0.0
+    )
+
+    print(f"[probe] checkpoint={Path(args.checkpoint).resolve()}")
     print(f"[probe] baseline={args.baseline}  games/cell={args.games_per_cell}")
     print(f"[probe] grid: sims={sims_grid}  vcf_nodes={vcf_grid}  "
           f"fpu_c={fpu_c_grid}  reuse_tree={reuse_tree_grid}  "
@@ -932,21 +1144,14 @@ def main(argv: list[str] | None = None,
     if args.worse_than_baseline_margin is not None:
         print(f"[probe] mark cells worse-than-baseline by ≥ "
               f"{args.worse_than_baseline_margin}")
+    print(f"[probe] cwd={Path.cwd()}")
     print(f"[probe] output={out_path}")
-
-    results = run_probe(
-        checkpoint=args.checkpoint,
-        baseline=args.baseline,
-        cells=cells,
-        n_games=args.games_per_cell,
-        seed=args.seed,
-        c_puct=args.c_puct,
-        device=args.device,
-        n_workers=args.n_workers,
-        eval_fn=eval_fn,
-        early_stop_on_target=args.early_stop_on_target,
-        worse_than_baseline_margin=args.worse_than_baseline_margin,
-    )
+    print(f"[probe] plan: {len(remaining_cells)} cells to run "
+          f"(of {len(cells)} total), estimated "
+          f"~{format_duration(est_per_cell_secs)}/cell, "
+          f"total ~{format_duration(est_total_secs)} "
+          f"(scales linearly with sims, n_games, n_workers; "
+          f"calibration in ratio printed at end).")
 
     meta = {
         "checkpoint": args.checkpoint,
@@ -966,12 +1171,42 @@ def main(argv: list[str] | None = None,
         "device": args.device,
         "n_workers": args.n_workers,
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "resume": args.resume,
     }
-    write_jsonl(results, out_path, meta)
+
+    # Streaming output: write the meta header ONCE (only when the file does
+    # NOT already have one). Then stream cells via on_cell.
+    if not file_exists:
+        append_meta_header(out_path, meta)
+
+    def stream_row(cr: CellResult) -> None:
+        append_cell_row(out_path, cr)
+
+    t_run_start = time.perf_counter()
+    results = run_probe(
+        checkpoint=args.checkpoint,
+        baseline=args.baseline,
+        cells=cells,
+        n_games=args.games_per_cell,
+        seed=args.seed,
+        c_puct=args.c_puct,
+        device=args.device,
+        n_workers=args.n_workers,
+        eval_fn=eval_fn,
+        early_stop_on_target=args.early_stop_on_target,
+        worse_than_baseline_margin=args.worse_than_baseline_margin,
+        on_cell=stream_row,
+        skip_keys=skip_keys,
+    )
+    actual_secs = time.perf_counter() - t_run_start
 
     print()
     print(format_per_cell_table(results))
     print()
+    # The grid renderer needs the full set of results (skipped cells from a
+    # prior run live in the file but aren't in ``results``); for the table we
+    # only render what this run produced. Callers that want a unified
+    # post-resume view should re-parse the file.
     print(format_distance_grid(
         results, sims_grid, vcf_grid,
         fpu_c_grid=fpu_c_grid,
@@ -981,6 +1216,22 @@ def main(argv: list[str] | None = None,
     ))
     print()
     print(f"[probe] wrote {len(results)} cells to {out_path}")
+
+    # Honest timing self-report — end-of-run actual/estimate ratio.
+    ratio = (actual_secs / est_total_secs) if est_total_secs > 0 else 0.0
+    print(
+        f"[probe] actual/estimate ratio: {len(results)} cells in "
+        f"{format_duration(actual_secs)} "
+        f"({format_duration(est_total_secs)} estimated; "
+        f"ratio {ratio:.2f}x)"
+    )
+    if ratio > 2.0:
+        print(
+            f"[probe] WARNING: actual/estimate ratio {ratio:.2f}x > 2.0x — "
+            f"suspect contention or a missed cost factor; consider filing a "
+            f"perf-meta bead to update SECS_PER_GAME_AT_SIMS_100_BASELINE "
+            f"or the scaling factors in estimate_cell_wall_secs."
+        )
     return 0
 
 

@@ -31,7 +31,58 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
+
+# I/O budget — every git subprocess gets a short timeout, and the --gauge
+# path enforces a hard wall budget so the cron narrator can never wedge on a
+# blocking git call (a stale lock, a credential prompt, an implicit pager).
+# See wiki/topics/worktree-hygiene.md (gauge has a built-in 15s budget).
+PER_CALL_TIMEOUT_S = 8.0
+GAUGE_BUDGET_S = 15.0
+
+
+class GitTimeoutError(RuntimeError):
+    """Raised when a git subprocess exceeds the per-call timeout."""
+
+    def __init__(self, cmd: list[str], timeout: float):
+        self.cmd = cmd
+        self.timeout = timeout
+        super().__init__(f"git {' '.join(cmd)} timed out after {timeout:.1f}s")
+
+
+def _git_env() -> dict:
+    """Env that forbids credential prompts (prevents indefinite wait on stdin)."""
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = "/bin/true"
+    # Belt + suspenders: ensure no SSH askpass prompt either.
+    env.setdefault("SSH_ASKPASS", "/bin/true")
+    return env
+
+
+def _git_run(args: list[str], cwd: str, timeout: float = PER_CALL_TIMEOUT_S
+             ) -> subprocess.CompletedProcess:
+    """Non-interactive git invocation: no pager, no stdin, no prompts, capped time.
+
+    Every git call in this script goes through here. The fix for derby-o3s
+    (gauge hanging ~2min) is preventative — stdin=DEVNULL plus
+    GIT_TERMINAL_PROMPT=0 plus --no-pager closes the three blocking surfaces
+    (inherited stdin, credential prompt, implicit pager), and `timeout`
+    bounds the rest (stale index lock, network probe, slow filesystem)."""
+    cmd = ["git", "--no-pager", *args]
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=_git_env(),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitTimeoutError(cmd, timeout) from exc
 
 
 @dataclass
@@ -127,14 +178,27 @@ def classify_worktree(
 
 
 def run(cmd: list[str], cwd: str, apply: bool) -> tuple[int, str]:
+    """Run a mutating git command (or dry-run noop). Routes through _git_run.
+
+    `cmd` is expected to start with 'git' (callers in --apply mode pass
+    full git argv). The leading 'git' is stripped because _git_run prepends
+    its own ['git', '--no-pager']."""
     if not apply:
         return 0, "(dry-run)"
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    args = cmd[1:] if cmd and cmd[0] == "git" else cmd
+    try:
+        p = _git_run(args, cwd=cwd)
+    except GitTimeoutError as exc:
+        return 124, f"timeout after {exc.timeout:.1f}s"
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
-def git_lines(args: list[str], cwd: str) -> list[str]:
-    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def git_lines(args: list[str], cwd: str, timeout: float = PER_CALL_TIMEOUT_S
+              ) -> list[str]:
+    """Read-only git invocation returning non-empty stdout lines.
+
+    Propagates GitTimeoutError so the caller can degrade gracefully."""
+    p = _git_run(args, cwd=cwd, timeout=timeout)
     return [ln for ln in p.stdout.splitlines() if ln.strip()]
 
 
@@ -155,11 +219,10 @@ class Plan:
     keep: list[tuple[Worktree, str, str]] = field(default_factory=list)
 
 
-def build_plan(repo_root: str, agent_subdir: str, external_prefixes) -> Plan:
-    porcelain = subprocess.run(
-        ["git", "worktree", "list", "--porcelain"],
-        cwd=repo_root, capture_output=True, text=True,
-    ).stdout
+def build_plan(repo_root: str, agent_subdir: str, external_prefixes,
+               timeout: float = PER_CALL_TIMEOUT_S) -> Plan:
+    porcelain = _git_run(["worktree", "list", "--porcelain"],
+                         cwd=repo_root, timeout=timeout).stdout
     plan = Plan()
     for wt in parse_worktrees(porcelain):
         if wt.bare:
@@ -172,26 +235,71 @@ def build_plan(repo_root: str, agent_subdir: str, external_prefixes) -> Plan:
     return plan
 
 
-def gauge(repo_root: str, agent_subdir: str, external_prefixes) -> str:
+def gauge(repo_root: str, agent_subdir: str, external_prefixes,
+          budget_s: float = GAUGE_BUDGET_S) -> str:
     """One-line repo-hygiene metric for the cron narrator — never mutates.
 
     Turns silent, slow-accumulating entropy (leaked worktrees, undeleted
     merged branches) into a number that shows up every reporting cycle, so
-    you notice the day it grows, not the week someone calls the repo messy."""
-    plan = build_plan(repo_root, agent_subdir, external_prefixes)
-    orphaned = len(plan.reclaim)
-    wt_total = len(plan.reclaim) + len(plan.keep)
-    branches = git_lines(["branch"], repo_root)
-    merged = [b for b in git_lines(["branch", "--merged", "main"], repo_root)
-              if not b.strip().startswith("*")]
-    checked = {ln.removeprefix("branch refs/heads/")
-               for ln in git_lines(["worktree", "list", "--porcelain"], repo_root)
-               if ln.startswith("branch ")}
-    merged_undeleted = sum(1 for b in merged
-                           if b.strip().lstrip("+ ").strip() not in checked)
-    flag = "⚠ run reclaim_worktrees --apply" if (orphaned or merged_undeleted > 3) else "clean"
+    you notice the day it grows, not the week someone calls the repo messy.
+
+    Hard internal budget (default 15s). If any subprocess times out we print
+    whatever we already have plus a `[partial: ...]` marker — the metric
+    must be *fast and honest*, never silently wedged. See derby-o3s and
+    wiki/topics/worktree-hygiene.md."""
+    start = time.monotonic()
+
+    def remaining(min_s: float = 1.0) -> float:
+        # Always leave at least min_s so an in-flight call has room to finish
+        # or report a timeout cleanly; never hand a negative timeout to git.
+        left = budget_s - (time.monotonic() - start)
+        return max(min_s, min(PER_CALL_TIMEOUT_S, left))
+
+    wt_total: int | str = "?"
+    orphaned: int | str = "?"
+    n_branches: int | str = "?"
+    merged_undeleted: int | str = "?"
+    degraded: list[str] = []
+
+    try:
+        plan = build_plan(repo_root, agent_subdir, external_prefixes,
+                          timeout=remaining())
+        orphaned = len(plan.reclaim)
+        wt_total = len(plan.reclaim) + len(plan.keep)
+    except GitTimeoutError as exc:
+        degraded.append(f"worktree-list timed out at {exc.timeout:.1f}s")
+
+    try:
+        branches = git_lines(["branch"], repo_root, timeout=remaining())
+        n_branches = len(branches)
+    except GitTimeoutError as exc:
+        degraded.append(f"branch timed out at {exc.timeout:.1f}s")
+
+    try:
+        merged = [b for b in git_lines(["branch", "--merged", "main"],
+                                       repo_root, timeout=remaining())
+                  if not b.strip().startswith("*")]
+        checked = {ln.removeprefix("branch refs/heads/")
+                   for ln in git_lines(["worktree", "list", "--porcelain"],
+                                       repo_root, timeout=remaining())
+                   if ln.startswith("branch ")}
+        merged_undeleted = sum(1 for b in merged
+                               if b.strip().lstrip("+ ").strip() not in checked)
+    except GitTimeoutError as exc:
+        degraded.append(f"merged-branch sweep timed out at {exc.timeout:.1f}s")
+
+    # The flag fires on any RECLAIM-able state OR degraded I/O — the gauge
+    # is the trip-wire; if it can't see, treat it as "needs a human look".
+    numeric_orphaned = orphaned if isinstance(orphaned, int) else 0
+    numeric_undeleted = merged_undeleted if isinstance(merged_undeleted, int) else 0
+    needs_action = numeric_orphaned > 0 or numeric_undeleted > 3 or degraded
+    flag = "⚠ run reclaim_worktrees --apply" if needs_action else "clean"
+    suffix = ""
+    if degraded:
+        suffix = f" [partial: {'; '.join(degraded)}]"
     return (f"repo-hygiene: worktrees={wt_total} (orphaned={orphaned}) "
-            f"branches={len(branches)} (merged-undeleted={merged_undeleted}) — {flag}")
+            f"branches={n_branches} (merged-undeleted={merged_undeleted}) — {flag}"
+            f"{suffix}")
 
 
 def main(argv=None) -> int:
