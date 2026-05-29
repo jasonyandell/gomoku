@@ -143,16 +143,25 @@ def test_extended_grid_is_cartesian_product_of_all_axes():
     assert by_axis_values["pvcf"] == {0, 200}
 
 
-def test_normalize_grid_injects_off_if_missing():
-    """The normalizer guarantees OFF is present in each grid. Cheap-first
-    relies on the all-OFF baseline existing in the Cartesian product."""
-    # Caller forgets to include 0 in vcf grid → driver injects it silently.
+def test_normalize_grid_respects_caller_grid():
+    """Derby-cec (2026-05-28): the normalizer RESPECTS what the caller
+    passes — single-value (or no-OFF) grids must NOT silently expand. To
+    ablate against OFF, pass it explicitly (e.g. ``--grid 0,VAL``).
+
+    Reversed from the derby-u8d behaviour, which silently injected OFF and
+    caused derby-cec's 100g re-eval to run 8 cells instead of the 1
+    requested."""
     cells = probe.enumerate_cells(
         sims_grid=[100],
         vcf_nodes_grid=[200, 800],
     )
     vcfs = sorted({c.eval_vcf_nodes for c in cells})
-    assert 0 in vcfs
+    assert vcfs == [200, 800], (
+        "Driver auto-injected OFF — that's the derby-cec spec bug; "
+        "single-value (or no-OFF) grids must NOT silently expand."
+    )
+    # 1 sims × 2 vcf = 2 cells (not 3 with an injected OFF).
+    assert len(cells) == 2
 
 
 # ---------------------------------------------------------------------------
