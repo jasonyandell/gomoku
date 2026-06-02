@@ -3,6 +3,22 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-01] topics | Added workflow-orchestration: Claude Code Workflows mapped onto the lab
+
+Filed [topics/workflow-orchestration.md](topics/workflow-orchestration.md) and the
+lab's first real workflow at `.claude/workflows/reviewer-gated-fanout.js`. The
+synthesis: the Claude Code *Workflow* feature is **deterministic agent-chaining**
+(distinct from the `/loop` looper) and maps exactly onto the *everything-else*
+lane of the two-queue scheduler — the half that is prose today (fan-out, Reviewer
+gate, worktree lifecycle). It does **not** fit the GPU lane (agents can't hold the
+MPS lock; `delo_derby`/`run_sweep`/watchdog stay as-is) or cross-session crons.
+Page carries the fit/misfit table and the cockpit framing: a `pipeline` whose
+second stage is the Reviewer makes the verify-gate non-skippable structure rather
+than skippable discipline. Indexed under Performance And Hardware (next to
+conventions). Next candidate noted: an issue-runner workflow for the bead-runner
+loop. Pairs with [topics/cockpit-vs-autopilot.md](topics/cockpit-vs-autopilot.md)
+(still unwritten — referenced from MEMORY.md but absent from the repo).
+
 ## [2026-05-25] sources | Added Sid Bidasaria "Stop babysitting your agents" talk transcript
 
 Filed [sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md](sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md)
