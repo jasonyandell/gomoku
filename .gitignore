@@ -22,6 +22,7 @@ archives/
 .DS_Store
 .claude/*
 !.claude/skills/
+!.claude/workflows/
 
 # Per-worktree owner record written by scripts/worktree_session.py (find session
 # logs later via `claude --resume`). The durable registry lives in .git/ and is
