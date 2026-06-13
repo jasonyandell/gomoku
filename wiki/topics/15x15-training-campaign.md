@@ -120,3 +120,28 @@ Cadence ~5 min (use 270s wakeups to stay cache-warm). Order:
   net crushes la4/la6 — that's when the external Rapfi ladder takes over.
   Improvement Workflow `wx2qh95qd` in flight (external-ladder eval + tuned
   vcf-teacher `G15-vcf` cell), Reviewer-gated.
+- 2026-06-13 — External-ladder eval harness (`scripts/ladder_eval_15x15.py`,
+  CPU-default) + `G15-vcf` contestant merged. **First Rapfi yardstick** (vs
+  Gomocup-2625, 15×15 freestyle, n=6/tier): the warm net is competitive and
+  climbing — e180 50%/25% → e300 67%/67% → e503 67%/83% (200ms/1000ms).
+- 2026-06-13 — **FPU eval-lever does NOT transfer to 15×15** (clean frozen-ckpt
+  A/B: FPU-off 50/83%, FPU-on 33/83% — within noise / no gain). Unlike the
+  mature 9×9 champion. Recorded negative; deprioritized.
+- 2026-06-13 — Loss-bounce interpreted correctly: pl rose to a higher BAND
+  (~1.0→~1.4-1.5) but OSCILLATING not climbing, plies stable ~30-40, vl steady,
+  and Rapfi strength rose through it → BENIGN maturation (training on harder
+  positions), not collapse. The structural signals (plies/vl/external strength)
+  override the raw loss number.
+- 2026-06-13 — **Both capacity/strength levers merged** (Reviewer APPROVE,
+  byte-identical-OFF verified): bit-packed replay buffer (#25, enables a ~3M
+  15×15 buffer in a few GB; flood-scale validation still pending before the
+  live run adopts it) and the WDL value head (#26, `G15-wdl` contestant; the
+  head impl was already on main, this added the cell + warmstart head-swap).
+  **PHASE SHIFT:** base `G15-seed` appears to be PLATEAUING ~60-70% vs Rapfi
+  (e300→e600 win-rate bounces 50-83%, mean ~67%, no clear upward trend; rapid
+  early gains over). Contestants now ready (`G15-vcf`, `G15-wdl`) + bigger-buffer
+  capability landed. NEXT: plateau-break — flood-smoke the packed 3M buffer,
+  and/or net2net widen 64×4→96×8 (capacity is the likely 15×15 ceiling;
+  net2net warm-starts to avoid cold-start collapse), then a GPU-serial derby
+  (swapped contestants, never 2 concurrent runs). Base keeps training as the
+  control meanwhile (healthy, not regressing).
