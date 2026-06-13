@@ -169,6 +169,38 @@ Two lessons, both sharp:
   a bigger net can't move it; (c) measurement noise is hiding a real ~75%. A
   higher-n re-eval plus training to ~e500 is what tells these apart.
 
+**The n=16 head-to-head (e348): the ceiling itself was noise — and capacity REVERSED
+at depth.** We then ran both nets at n=16, 5000ms, to pin the deep-TC values with
+±12% bars instead of ±18%. The result corrected the whole record:
+
+| deep-TC (5000ms) | n=8 (what we'd been quoting) | **n=16 (pinned)** |
+|---|---|---|
+| 96×8 e499 | 88% | **69% (11-5-0)** |
+| 128×10+bigbuf e348 | 62% | **50% (8-8-0)** |
+
+Two corrections fall out:
+- *The "88% deep-TC ceiling" never existed.* It was a high n=8 sample; the 96×8's
+  real deep-TC is ~69%. We'd threaded "88%" through a dozen status updates as if it
+  were a fixed wall. The champion's honest record is **75% fast / 69% deep**, not
+  75/88. **Lesson, paid twice now: a number you're going to reason against for hours
+  deserves n≥16 the first time.**
+- *But the ordering is robust, and it's the surprise:* **96×8 (69%) > 128×10 (50%)
+  at deep TC**, while **128×10 (88%) > 96×8 (75%) at fast TC.** So capacity didn't
+  just "fail to transfer" to depth — it **reversed**: the bigger net is the better
+  *snap* player and the worse *deep* player. Capacity-pays-at-depth held 64×4→96×8
+  and then flipped 96×8→128×10. That asymmetry is the real finding, and it's the
+  kind of "should-have-worked-didn't" that's worth more than a clean win.
+
+The leading mechanistic guess (testable, not yet confirmed): the extra capacity
+made the **policy** sharper — great for fast, low-search play (it picks strong
+moves immediately, hence 88% fast-TC) — but the **value/positional eval didn't
+improve proportionally**, so when the *opponent* gets deep search (5000ms Rapfi),
+it out-reads the 128×10's flatter value surface. More params bought confident
+intuition, not deeper judgement. The "still-early" alternative (the 3.3M net just
+needs more epochs to convert capacity into depth) gets its fair test at e500 — a
+final n=16 deep-TC read. If 50% climbs toward/past 69%, it was early; if it sticks,
+the reversal is real.
+
 **Methodological keeper:** a negative result ("more data didn't help") is a real
 finding when it's a clean, single-axis A/B with a trustworthy external metric. It
 *reallocates the search* — it told us to stop spending GPU on 96×8 data and move
