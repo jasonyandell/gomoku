@@ -147,6 +147,32 @@ CELLS: dict[str, Cell] = {
                     n_workers=2, games_per_batch=4,
                     temperature_moves=10, temperature_final=0.1,
                     save_buffer_every=100_000, epochs=100_000, wandb=False),
+    # First real 15x15 training run (epic #21 Phase 4). Replicates the v8
+    # champion recipe (= derby-v7-mate-discount: small 64x4 + global_pool +
+    # value-discount 0.98 + gumbel-m16 + vcf-teacher + fixed 64 SGD steps/epoch)
+    # on the 15x15 board. LAUNCH WITH GOMOKU_BOARD_SIZE=15. Starts FRESH (no
+    # warm-start loader yet) so expect a cold ramp. buffer=400k (~6GB at 15x15,
+    # no bit-packing yet -> raise to 3M once #25 lands); wave=64 = the
+    # dispatch-bound free training-regime point at 15x15. Continuous + resumable
+    # (epochs huge; latest.pt embeds the buffer). See
+    # wiki/topics/15x15-training-campaign.md.
+    "G15-seed": Cell("G15-seed-v8recipe-board15", sgd_per_game=1.0,
+                buffer_size=400_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     "A": Cell("A-K1-buf50k",   sgd_per_game=1.0, buffer_size=50_000),
     "B": Cell("B-K2-buf50k",   sgd_per_game=2.0, buffer_size=50_000),
     "C": Cell("C-K4-buf50k",   sgd_per_game=4.0, buffer_size=50_000),
