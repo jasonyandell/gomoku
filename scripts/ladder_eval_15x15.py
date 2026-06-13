@@ -66,6 +66,20 @@ def _pin_board_size() -> None:
     os.environ["GOMOKU_BOARD_SIZE"] = str(_REQUIRED_BOARD_SIZE)
 
 
+def _pin_cpu_default() -> None:
+    """Default the model evaluator to CPU so a paced ladder eval never competes
+    with the GPU-owning live training run.
+
+    This driver is meant to be called periodically WHILE a G15-seed training run
+    owns the GPU (8 self-play workers + trainer on MPS). Rapfi is CPU-only; our
+    model's MCTS forwards are the only thing that could touch MPS. A handful of
+    eval games on CPU is plenty fast and keeps the GPU uncontended. The operator
+    can override for a free GPU by exporting GOMOKU_DEVICE=mps before launch.
+    """
+    if not os.environ.get("GOMOKU_DEVICE", "").strip():
+        os.environ["GOMOKU_DEVICE"] = "cpu"
+
+
 DEFAULT_CHECKPOINT = (
     "sweep_runs/G15-seed-v8recipe-board15/checkpoints/latest.pt"
 )
@@ -178,6 +192,7 @@ def main(argv: list[str] | None = None) -> None:
 # Pin the board size at import time, before this module's heavy import path and
 # before argparse runs, so `from eval_vs_rapfi import ...` resolves BOARD_SIZE=15.
 _pin_board_size()
+_pin_cpu_default()
 
 # Make sibling scripts importable (eval_vs_rapfi lives in the same scripts/ dir).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
