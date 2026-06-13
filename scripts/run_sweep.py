@@ -220,7 +220,12 @@ CELLS: dict[str, Cell] = {
     "G15-128x10": Cell("G15-128x10-grown-board15", sgd_per_game=1.0,
                 buffer_size=400_000, games_per_epoch=64,
                 size="large", stem_padding=1, n_simulations=100,
-                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                # n_workers=4 (NOT 8): the 3M-param trainer is slow (~60s+/epoch),
+                # so 8 workers FLOODED it — per-epoch ingest cost ran away
+                # (62→313s, new/epoch 168→512) on 2026-06-13. Fewer workers
+                # decouple inflow from the slow big-net trainer. Big nets need
+                # fewer workers (gen-flood lesson, memory feedback_gen_flooding).
+                n_workers=4, wave_size=64, games_per_batch=8, wave_mode=False,
                 c_puct=1.25, c_puct_base=19652.0,
                 dirichlet_alpha=0.13, dirichlet_eps=0.25,
                 temperature_moves=30, temperature_final=0.1,
