@@ -246,8 +246,82 @@ re-open the perf levers (§3 list) *before* committing to long runs.
    opening protocol in self-play, or train free openings and bolt swap2 on
    at match time? (Rapfi-side precedent suggests the latter is weak.)
 
-## 6. Decision record
+## 6. Results log (one-shot execution, 2026-06-12)
+
+The plan was executed in one autonomous pass the same day it was written
+(Jason: "one shot that as best you can, I'm losing internet soon"). Network
+work was front-loaded; compute is all local (Rapfi is a local binary,
+run_sweep can run `WANDB_MODE=offline`).
+
+### Phase 0 — Rapfi certification of the 9×9 champion (DONE)
+
+`scripts/eval_vs_rapfi.py` was first extended (merge `1a8b635`) to thread the
+verified derby eval config (`--fpu-reduction-c`, `--reuse-tree`,
+`--proven-prop`) and record it in the JSONL provenance. Then:
+
+```
+PYTHONPATH=$PWD python scripts/eval_vs_rapfi.py \
+  --checkpoint sweep_runs/derby_v8/_peaks/mate-discount/peak.pt \
+  --sims 400 --rapfi engines/rapfi/pbrain-rapfi \
+  --timeouts 100 500 1000 --n-games 40 --seed 0 \
+  --fpu-reduction-c 0.45 --reuse-tree --proven-prop \
+  --out sweep_logs/rapfi_cert_v8champ_20260612.jsonl
+```
+
+Results (40 games/tier, color-alternated, model perspective):
+
+| Rapfi tier | W-L-D | win_rate |
+|---|---|---|
+| 100 ms | 16W-0L-**24D** | 70% |
+| 500 ms | 15W-**1L**-24D | 68% |
+| 1000 ms | _(pending at writeup; see JSONL)_ | |
+
+**Headline:** the v8 champion + FPU does **not lose** to Rapfi (Gomocup
+freestyle 2625 Elo) at 9×9 freestyle — 1 loss in 80 games across the two
+completed tiers, the rest wins or draws. This is the formal close of the 9×9
+strength era: the board is exhausted, exactly as §1 argued. (Caveat per
+[external-engine-baselines.md](external-engine-baselines.md): 9×9 freestyle is
+intrinsically drawish and the 2625 is a 15×15/20×20 rating — treat as a
+yardstick, not a 9×9 Elo label. The point stands: there is no headroom left to
+chase here.)
+
+### Phase 1 — Rules variant (DECIDED under one-shot authority)
+
+Kept **free-style, free openings** so the port stays pure parameterization.
+swap2 (match-protocol work) filed as #22; renju (forbidden-move game logic)
+filed as #23, deferred. Revisit when targeting Rapfi's rated table.
+
+### Phase 2 — Board-size parameterization (DONE, merged `27718c7`)
+
+Board size is now process-level config (`gomoku/board_config.py`:
+`--board-size` > `GOMOKU_BOARD_SIZE` env > default 9, resolved once at import
+and propagated to workers). Native C extensions parameterized **at compile
+time** (generalized multiword bitboard; `_state_ops_native15` /
+`_mcts_native15` modules built alongside the 9×9 ones); sizes other than 9/15
+fall back to pure Python with a warning. Checkpoints embed `board_size`;
+legacy checkpoints load as 9×9; `load_checkpoint` rejects a size mismatch. New
+`96x8` net preset (~1.55M params at 15×15). Gates met: full pytest green at
+9×9 (608 passed), 22-test 15×15 module green, 9×9 fixed-seed regression match
+byte-identical before/after on both native and pure-Python backends.
+Follow-up: web UI `app.js` still hardcodes 9 (#24).
+
+Informational throughput (port agent, single-process, tiny net, sims=50,
+wave=16, on MPS): **141.4 pos/s = 2.11 games/s at 15×15** — in line with the
+§3 envelope's ~1.5–2 games/s guess for a real run.
+
+### Phase 3 — 15×15 plumbing smoke (cell landed, run pending)
+
+`SMOKE15` cell added to `run_sweep.py` (merge `1344f6d`). Run:
+`GOMOKU_BOARD_SIZE=15 python scripts/run_sweep.py --cell SMOKE15 --foreground
+--max-wall-secs 90`. Deferred behind the Phase 0 cert to keep the GPU
+uncontended for the headline measurement; results appended when run.
+
+## 7. Decision record
 
 - 2026-06-12 — Page created with the scaling bench evidence
   (`scripts/bench_board_scaling.py`); plan proposed, no port work started.
   GPU idle (derby v8 concluded, v9-medium errored + parked).
+- 2026-06-12 (later, one-shot pass) — Phases 0–2 executed and merged to
+  `main`; Phase 1 decided as free-style (swap2 → #22, renju → #23); Phase 3
+  cell landed, run pending. Rapfi cert: champion does not lose to Rapfi at
+  9×9 (1L in 80 games over the 100/500 ms tiers). See §6.

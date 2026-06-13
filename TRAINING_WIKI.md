@@ -3541,3 +3541,38 @@ Synthesis + the durable lesson: `wiki/topics/cross-game-value-sidecar.md`. Lesso
 training-loop ingest perf must be validated under live flooding, not a CPU sim —
 sibling of the perf-bench lesson (`wiki/topics/perf-bench-vs-real-training-cost.md`).
 (Captured by the bead-runner session, 2026-05-27.)
+
+## 2026-06-12 — 9×9 era closed (Rapfi cert) + 15×15 port landed
+
+One-shot autonomous pass (Jason: "I'm losing internet soon"). Full synthesis +
+plan: `wiki/topics/15x15-era-feasibility-and-plan.md` (§6 results log). Compact
+record here:
+
+- **The 9×9 strength frontier is closed.** v8 champion
+  (`sweep_runs/derby_v8/_peaks/mate-discount/peak.pt`, 64×4,
+  vcf+global-pool+value-discount-0.98+gumbel) at sims=400 + the verified eval
+  config (`--fpu-reduction-c 0.45 --reuse-tree --proven-prop`) vs **Rapfi
+  (Gomocup freestyle 2625 Elo)** on 9×9 freestyle, 40 games/tier, seed 0:
+  rapfi100 = 16W-0L-24D (70%), rapfi500 = 15W-1L-24D (68%), rapfi1000 pending.
+  **1 loss in 80 games against a 2625-rated engine.** 9×9 freestyle is drawish
+  and the rating is a 15×15 rating, so this is a yardstick not an Elo label —
+  but it confirms there is no 9×9 headroom left to chase. Cert JSONL:
+  `sweep_logs/rapfi_cert_v8champ_20260612.jsonl`.
+- **Why this matters:** combined with derby v9 (bigger nets lose at 9×9) and
+  the FPU sweep (champion sweeps the lookahead ladder), the case to graduate
+  to 15×15 is now evidence-backed, not aspirational.
+- **The perf ceiling was the small model, not the Mac.** New bench
+  `scripts/bench_board_scaling.py`: at production wave=64, the champion arch
+  runs 15×15 for free (0.98×); a 96×8/1.55M-param 15×15 net costs only 2.32×;
+  128×10 is 4.62×. Dispatch-bound regime confirmed. ~week-scale wall-clock for
+  a 1M-game 15×15 run (envelope, to be validated by a live smoke).
+- **Codebase ported to parameterized board size** (merge `27718c7`):
+  `gomoku/board_config.py`, native C parameterized at compile time
+  (`_*_native15`), checkpoints embed board_size, `96x8` preset. Full pytest
+  green at 9×9 (608 passed); 22-test 15×15 module green; 9×9 fixed-seed match
+  byte-identical before/after. Free-style rules kept (swap2 → #22, renju →
+  #23). Single-process 15×15 throughput sanity: 2.11 games/s (tiny net).
+- **Next:** run `SMOKE15` (`GOMOKU_BOARD_SIZE=15 python scripts/run_sweep.py
+  --cell SMOKE15 --foreground --max-wall-secs 90`) for the live aug/s go/no-go,
+  then Phase 4 (first real 15×15 run, WDL head as first new contestant,
+  bit-packed buffer prerequisite). Epic #21.
