@@ -13,6 +13,7 @@ reading it front-to-back unless the work actually needs that.
 
 | Need | Start with | Then read |
 |---|---|---|
+| **Understand what AlphaZero taught us on this game (the learning artifact)** | [topics/alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) | [topics/15x15-training-campaign.md](topics/15x15-training-campaign.md), [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md). |
 | Current training story or "how did we get here?" | [topics/training-run-lineage.md](topics/training-run-lineage.md) | [TRAINING_WIKI.md](../TRAINING_WIKI.md) tail, then [log.md](log.md). |
 | Launch, resume, monitor, or stop a run | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | The relevant design page, then the latest run section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
 | Interpret training dynamics | [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) and [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | The run's evidence section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |

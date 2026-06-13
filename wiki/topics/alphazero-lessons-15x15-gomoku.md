@@ -1,0 +1,148 @@
+# What We Learned About AlphaZero on 15×15 Gomoku
+
+**Date:** 2026-06-13. **Why this page exists:** the goal of this project was
+never a Gomocup ranking — it was *learning AlphaZero deeply* on a game Jason
+first tried to crack in the 90s. **The learning is the artifact.** Strength is
+gravy (welcome, pursued, but not the point). This page is the distilled
+understanding from the 15×15 campaign — the "aha"s, made legible, separate from
+the run logs. Companion to [15x15-training-campaign.md](15x15-training-campaign.md)
+(the operational story) and the lab event log.
+
+The full-circle is worth stating plainly: a net trained by self-play on a game
+from a decades-old notebook learned, unsupervised, to *defend* — and that
+behaviour transferred across board sizes. The rest of this page is the mechanism
+behind that sentence.
+
+## 1. Representation transfer is real, and dramatic
+
+The single most striking result. We grew/seeded 15×15 nets from a strong 9×9
+champion's convolutional tower (the board-size-independent ~94% of params).
+
+- A **cold** 15×15 net (random init) slid straight into the classic fast-attack
+  collapse: the policy sharpened on "build a line fast," neither side learned to
+  block, and games ended in ~11 plies. Value-loss stayed *high* (the net wasn't
+  even confident) — it was thrashing, not converging.
+- A **warm-started** net — identical architecture, just seeded from the 9×9
+  champion — played **defended ~85-ply games from epoch 0**, skipping the
+  collapse entirely. Anchored elo ~1253 almost immediately.
+
+The lesson: the 9×9 net's learned notion of *threat* ("an open four is
+dangerous; respond to it") is **board-size-agnostic and lives in the conv
+tower.** It transferred to a board 2.8× larger with zero retraining of those
+features. You can practically watch the representation do its job. This is the
+clearest demonstration of feature transfer the project has produced, and it's
+the reason "best player we can make" was reachable at all on a laptop —
+we never trained 15×15 strength from nothing.
+
+**Durable corollary:** cold-start fast-attack collapse is a *real* failure mode
+at 15×15, not a bug; warm-start is the remedy (see
+[loss-floor-bouncing.md](loss-floor-bouncing.md) for the dynamics).
+
+## 2. Net capacity and search are multiplicative, not additive
+
+We climbed a capacity ladder (64×4 → 96×8 → 128×10) via **function-preserving
+net2net** growth — each bigger net starts at the smaller one's *exact* function
+(output-equivalence ~1e-4), so it inherits strength and trains into the extra
+capacity. No cold restart, no collapse.
+
+Measured against Rapfi (Gomocup freestyle engine) at two time controls:
+
+| net | params | vs Rapfi 1000ms | vs Rapfi 5000ms |
+|---|---|---|---|
+| 64×4 | 0.44M | ~67% | ~67% |
+| 96×8 | 1.55M | 62→62→**75%** | 75→**88%** |
+| 128×10 | 3.3M | (early) 50% | (early) **88%** |
+
+The shape of this is the lesson: **the 96×8's advantage over the 64×4 showed up
+at *deep* time control first** (88% @5000ms) and only later at fast TC. A bigger
+net evaluates positions better; that better evaluation *compounds with more
+search*. Net quality × search depth is multiplicative — the AlphaZero
+net/search duality, measured on our own board. (It also means a single
+fast-time-control eval can *miss* a capacity gain entirely — see §4.)
+
+## 3. The loss number lies; the structure tells the truth
+
+Policy-loss bounced all over a wide band (1.0–1.7) throughout healthy training.
+Reading it literally would have triggered false alarms repeatedly. The signals
+that actually track training health:
+
+- **`plies_mean`** — game length. Collapsing toward ~10 = fast-attack failure;
+  stable/high (~30–45) = defended, healthy play.
+- **value-loss** — collapsing toward zero *while plies collapse* = the net is
+  *confident* in bad fast-attack play = terminal. Value-loss steady/declining
+  while plies hold = healthy maturation.
+
+The rule we converged on: **judge training by the structural signals (plies, vl,
+external strength), not the raw loss.** A rising policy-loss with stable plies
+and declining value-loss is a net training on *harder* positions as it
+strengthens — exactly what you want, and exactly what the loss number makes look
+like a regression.
+
+## 4. Evaluation discipline: small-n lies louder than the loss
+
+Strength was measured vs a fixed external yardstick (Rapfi), because the
+anchored heuristic/lookahead ladder saturates (it literally emitted `elo=6000`
+garbage once the net crushed it). Two hard-won eval lessons:
+
+- **Small-n is brutally noisy.** An 8-game eval is ±~20%. A single eval read
+  100% (8-0) at one point — pure upward noise; the true rate was ~67%. **Weight
+  aggregates across evals, never a single number.**
+- **Wait for the capacity-sensitive measurement.** The 128×10's first eval read
+  50% at 1000ms (looked like a *loss* vs the 96×8) — but 88% at 5000ms (matching
+  the 96×8's mature peak, *early*). The 1000ms-only read would have wrongly
+  killed a promising capacity step. The deep-TC tier is where capacity shows;
+  read both tiers before judging.
+
+**Negative results are findings too:** the FPU eval-lever that gave the 9×9
+champion its 100%-ladder-sweep does **not** transfer to 15×15 (clean A/B, no
+gain). Recorded so no future session re-chases it. Knowing what *doesn't* work
+is half the map.
+
+## 5. Systems shape what you can learn
+
+Lessons that aren't about ML at all but gate it — the things 90s-compute
+couldn't even reach to stub a toe on:
+
+- **The dispatch-bound regime.** At this model size on Apple MPS, per-kernel
+  launch overhead dominates compute — which is *why* moving 9×9→15×15 cost
+  almost nothing at the training wave size (the GPU was idling through 9×9).
+  The "ceiling" was the small model, not the Mac.
+- **Gen/train balance, and the flood runaway.** The 3.3M-param trainer was slow
+  enough that 8 self-play workers *flooded* it: games piled up faster than it
+  could ingest, per-epoch ingest cost spiralled (62s → 313s), a positive-feedback
+  runaway. Fix: **fewer workers** (decouple inflow from a slow trainer). Big nets
+  want fewer workers. Generators outpacing the trainer is a recurring trap.
+- **Smoke-first earns its keep.** A 90s smoke of the real recipe caught that the
+  VCF teacher's 9×9 budget cost 3–9 s/game on the wide-open 15×15 board before
+  any multi-day run was committed. Cheap validation before expensive commitment.
+
+## 6. The methodology that emerged (the meta-lesson)
+
+The campaign converged on a repeatable loop that *is* the transferable artifact:
+
+> **warm-start** a new regime from the nearest strong net → **smoke** the real
+> config before committing → train as a crash-resumable slice → **gate every
+> step on a fixed external yardstick** (weighting aggregates, both tiers) →
+> **net2net-grow the confirmed winner** into more capacity (function-preserving,
+> no collapse) → swap GPU-serially, **always preserving the prior champion** →
+> repeat. Read training health structurally (plies/vl), not by the loss.
+
+That loop took a 9×9 net that beats a Gomocup engine 43-3-74 (short TC) and,
+overnight on one laptop, produced a 15×15 net that trades blows with the same
+engine at fast time controls and is still climbing a capacity ladder — every
+step backed by evidence, every champion preserved, with two genuine bugs
+(gen-flood runaway, FPU mis-transfer) caught and filed along the way.
+
+## 7. Honest bounds (so the astonishment stays calibrated)
+
+- Rapfi results are at **short** time controls (≤5 s/move). Rapfi at full
+  tournament time runs deep VCF/VCT solvers; our edge may shrink or invert there.
+  "Trades blows at fast TC" ≠ "tournament-competitive." (A long-TC eval is the
+  test that would settle it — queued, not yet run.)
+- 8-game tiers are hints, not proofs; we lean on trends across evals.
+- We validated the Rapfi wrapper *runs*; we have not stress-verified it gives
+  Rapfi its absolute best shot (threads, full config). A "beats engine X" claim
+  deserves that scrutiny before it's load-bearing.
+
+None of which dims the actual artifact: **we learned, concretely and on our own
+board, how AlphaZero teaches itself to defend — and how to grow that skill.**
