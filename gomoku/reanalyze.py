@@ -216,7 +216,12 @@ def reanalyze_cycle(
     # The buffer may live on MPS; the GameState reconstruction is pure-Python
     # numpy. The MCTS evaluator (`make_torch_evaluator`) re-derives planes
     # from the GameState and ships them back to `device` for the model.
-    sampled_planes = buffer.planes[idx].detach().cpu().numpy()
+    # Use the buffer's plane accessor so reanalyze works under both the
+    # float32 (`buffer.planes[idx]`) and the opt-in bit-packed storage modes;
+    # `_planes_at` unpacks on the fly when packing is on.
+    sampled_planes = buffer._planes_at(
+        torch.as_tensor(idx, dtype=torch.long)
+    ).detach().cpu().numpy()
 
     # Reconstruct minimal GameStates per row. Terminal positions are skipped
     # (cannot meaningfully re-MCTS; their target is undefined under the

@@ -18,13 +18,40 @@ class ReplayBuffer:
         aux_opponent_reply: bool = False,
         aux_ownership: bool = False,
         cross_game_value: bool = False,
+        pack_planes: bool = False,
     ):
         self.capacity = capacity
         self.device = torch.device(device)
-        self.planes = torch.zeros(
-            (capacity, N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE),
-            dtype=torch.float32, device=self.device,
-        )
+        # Per-position plane geometry, fixed at the active board size.
+        self._plane_shape = (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE)
+        self._plane_elems = N_INPUT_PLANES * BOARD_SIZE * BOARD_SIZE
+        # OPT-IN bit-packed plane storage (issue #25). When ON, the dominant
+        # float32 planes tensor (4 * N_INPUT_PLANES * N^2 bytes/pos) is replaced
+        # by a uint8 bit-packed array (ceil(N_INPUT_PLANES * N^2 / 8) bytes/pos,
+        # ~32x smaller) kept on the CPU; sample() unpacks per-batch back to
+        # float32 planes on `device`. When OFF (default) NOTHING below changes:
+        # `self.planes` is the same float32 tensor on `self.device` as before, so
+        # the off-case buffer (RAM, schema, sample math, checkpoints) is
+        # byte-identical to the pre-#25 path. Production planes are strictly
+        # binary occupancy (0/1) + a constant plane, so packing is lossless.
+        self.pack_planes = bool(pack_planes)
+        if self.pack_planes:
+            from gomoku.plane_packing import packed_bytes_per_position
+            self._packed_bytes = packed_bytes_per_position(self._plane_elems)
+            # Packed store lives on the CPU as a torch uint8 tensor: MPS cannot
+            # hold the wide buffers this lever targets (INT_MAX element cap), and
+            # the unpack→to(device) per batch is the intended hot-path transfer.
+            self.packed_planes = torch.zeros(
+                (capacity, self._packed_bytes), dtype=torch.uint8, device="cpu",
+            )
+            self.planes = None
+        else:
+            self._packed_bytes = 0
+            self.packed_planes = None
+            self.planes = torch.zeros(
+                (capacity, N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE),
+                dtype=torch.float32, device=self.device,
+            )
         self.pi = torch.zeros((capacity, N_ACTIONS), dtype=torch.float32, device=self.device)
         self.z = torch.zeros((capacity,), dtype=torch.float32, device=self.device)
         # Weight-version tag: which "brain" generated the position in each slot.
@@ -94,6 +121,34 @@ class ReplayBuffer:
         self._recency_frac = max(0.0, min(1.0, float(recency_frac)))
         self._recency_window = max(1, int(recency_window))
 
+    def _planes_at(self, idx) -> torch.Tensor:
+        """Return float32 planes for the given row indices on `self.device`.
+
+        The single read path for planes regardless of storage mode: a plain
+        gather of the float32 tensor when packing is OFF, or an unpack of the
+        bit-packed CPU store when packing is ON. `idx` may be a 1-D LongTensor or
+        anything torch indexing accepts.
+        """
+        if not self.pack_planes:
+            return self.planes[idx]
+        from gomoku.plane_packing import unpack_planes
+        idx_cpu = idx.detach().cpu() if torch.is_tensor(idx) else idx
+        packed = self.packed_planes[idx_cpu].numpy()
+        planes_np = unpack_planes(packed, self._plane_elems, self._plane_shape)
+        return torch.from_numpy(planes_np).to(self.device)
+
+    def _planes_view(self) -> torch.Tensor:
+        """Float32 view of the first `self.size` live rows' planes on `device`.
+
+        Used by the diagnostic/rebuild read paths that previously sliced
+        `self.planes[:self.size]` directly. Under packing this unpacks the live
+        rows once (CPU numpy → float32) — callers are bench/diagnostic, not the
+        per-batch hot path."""
+        if self.size == 0:
+            return torch.zeros((0, *self._plane_shape), dtype=torch.float32,
+                               device=self.device)
+        return self._planes_at(torch.arange(self.size))
+
     def _sample_indices(self, batch_size: int) -> torch.Tensor:
         """Pick batch indices. Uniform unless the recency curator is on (and the
         buffer has grown past the window), in which case a recency_frac slice is
@@ -115,7 +170,15 @@ class ReplayBuffer:
         if not examples:
             return
         n = len(examples)
-        planes = torch.from_numpy(np.stack([e.planes for e in examples]))
+        planes_np = np.stack([e.planes for e in examples])
+        if self.pack_planes:
+            # Bit-pack the binary planes once for the whole add; the ring loop
+            # below copies uint8 rows. Packing here (CPU numpy) keeps ingest
+            # cheap and the per-batch unpack on the sample side.
+            from gomoku.plane_packing import pack_planes
+            packed = torch.from_numpy(pack_planes(planes_np, self._plane_elems))
+        else:
+            planes = torch.from_numpy(planes_np)
         pi = torch.from_numpy(np.stack([e.pi for e in examples]))
         z = torch.from_numpy(np.array([e.z for e in examples], dtype=np.float32))
         side = torch.from_numpy(np.array([getattr(e, "side", 0) for e in examples], dtype=np.int8))
@@ -161,7 +224,10 @@ class ReplayBuffer:
         while i < n:
             end = min(self.head + (n - i), self.capacity)
             chunk = end - self.head
-            self.planes[self.head:end].copy_(planes[i:i + chunk].to(self.device))
+            if self.pack_planes:
+                self.packed_planes[self.head:end].copy_(packed[i:i + chunk])
+            else:
+                self.planes[self.head:end].copy_(planes[i:i + chunk].to(self.device))
             self.pi[self.head:end].copy_(pi[i:i + chunk].to(self.device))
             self.z[self.head:end].copy_(z[i:i + chunk].to(self.device))
             self.weight_version[self.head:end] = ver
@@ -190,7 +256,9 @@ class ReplayBuffer:
         if self.size == 0:
             raise ValueError("empty replay buffer")
         idx = self._sample_indices(batch_size)
-        base = (self.planes[idx], self.pi[idx], self.z[idx], self.side[idx], self.ply[idx])
+        # `_planes_at` is `self.planes[idx]` when packing is OFF (byte-identical)
+        # and the unpack-on-sample path when ON; both land float32 on `device`.
+        base = (self._planes_at(idx), self.pi[idx], self.z[idx], self.side[idx], self.ply[idx])
         if not return_aux and not return_ownership and not return_keys:
             # Default 5-tuple — byte-identical to the pre-aux signature so every
             # existing caller is untouched.
@@ -244,7 +312,7 @@ class ReplayBuffer:
         if not self.cross_game_enabled or self.size == 0:
             return
         from gomoku.position_stats import canonical_key_from_planes
-        planes_cpu = self.planes[:self.size].detach().cpu().numpy()
+        planes_cpu = self._planes_view().detach().cpu().numpy()
         for r in range(self.size):
             hi, lo, top = canonical_key_from_planes(planes_cpu[r])
             self.pos_key[r, 0] = np.uint64(hi)
@@ -273,7 +341,7 @@ class ReplayBuffer:
         from gomoku.game import N_INPUT_PLANES
         # current-side me-plane = 0, current-side opp-plane = N_INPUT_PLANES // 2
         opp_idx = N_INPUT_PLANES // 2
-        view = self.planes[:self.size]
+        view = self._planes_view()
         # sum stones per position: (n,) tensor of ints in [0, BOARD_SIZE^2]
         stones = (view[:, 0].sum(dim=(-2, -1)) + view[:, opp_idx].sum(dim=(-2, -1)))
         stones_cpu = stones.detach().cpu().numpy()
@@ -302,12 +370,39 @@ class ReplayBuffer:
             out["buffer/frac_current"] = float((age == 0).mean())
         return out
 
+    def _load_planes(self, sd: dict, n: int) -> None:
+        """Load the first `n` rows of planes from a checkpoint into this buffer,
+        cross-converting between the float32 ("planes") and bit-packed
+        ("packed_planes") storage forms as needed. Any save loads into any mode:
+          f32 ckpt → f32 buffer : direct copy (the pre-#25 byte-identical path).
+          f32 ckpt → packed buf : bit-pack on load.
+          packed ckpt → packed buf : direct copy.
+          packed ckpt → f32 buf : unpack on load.
+        Existing (pre-#25) checkpoints only ever carry "planes", so they restore
+        unchanged into the default (OFF) buffer."""
+        has_packed = "packed_planes" in sd
+        if self.pack_planes:
+            if has_packed:
+                self.packed_planes[:n].copy_(sd["packed_planes"][:n])
+            else:
+                from gomoku.plane_packing import pack_planes
+                planes_np = np.ascontiguousarray(sd["planes"][:n].cpu().numpy())
+                packed = pack_planes(planes_np, self._plane_elems)
+                self.packed_planes[:n].copy_(torch.from_numpy(packed))
+        else:
+            if has_packed:
+                from gomoku.plane_packing import unpack_planes
+                packed_np = np.ascontiguousarray(sd["packed_planes"][:n].cpu().numpy())
+                planes_np = unpack_planes(packed_np, self._plane_elems, self._plane_shape)
+                self.planes[:n].copy_(torch.from_numpy(planes_np).to(self.device))
+            else:
+                self.planes[:n].copy_(sd["planes"][:n].to(self.device))
+
     def state_dict(self) -> dict:
         sd = {
             "capacity": self.capacity,
             "head": self.head,
             "size": self.size,
-            "planes": self.planes[:self.size].cpu(),
             "pi": self.pi[:self.size].cpu(),
             "z": self.z[:self.size].cpu(),
             "weight_version": self.weight_version[:self.size].cpu(),
@@ -315,6 +410,16 @@ class ReplayBuffer:
             "ply": self.ply[:self.size].cpu(),
             "current_weight_version": int(self.current_weight_version),
         }
+        # Planes: when packing is OFF emit exactly the pre-#25 "planes" float32
+        # key (no marker, no extra keys) so an off-buffer checkpoint is
+        # byte-identical to the old schema. When ON emit the compact uint8
+        # "packed_planes" array plus a marker; load_state_dict cross-converts
+        # either form into either buffer mode.
+        if self.pack_planes:
+            sd["packed_planes"] = self.packed_planes[:self.size].cpu()
+            sd["pack_planes"] = True
+        else:
+            sd["planes"] = self.planes[:self.size].cpu()
         # Only emit aux tensors when the lever is on, so an off-buffer's
         # checkpoint is byte-identical to the pre-aux schema.
         if self.aux_enabled:
@@ -331,7 +436,7 @@ class ReplayBuffer:
             pass
         n = min(int(sd["size"]), self.capacity)
         if n > 0:
-            self.planes[:n].copy_(sd["planes"][:n].to(self.device))
+            self._load_planes(sd, n)
             self.pi[:n].copy_(sd["pi"][:n].to(self.device))
             self.z[:n].copy_(sd["z"][:n].to(self.device))
             if "weight_version" in sd:
