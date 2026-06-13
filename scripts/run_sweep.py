@@ -183,6 +183,59 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # G15-vcf: the planned 15x15-tuned vcf-teacher derby contestant (epic #21
+    # readiness-audit S3). BYTE-IDENTICAL to G15-seed in every Cell field EXCEPT
+    # it re-enables --vcf-teacher with a 15x15-appropriate per-move budget. This
+    # is the one-lever-changed sibling of G15-seed: race it against the base once
+    # the net matures and starts producing real threats.
+    #
+    # Budget rationale — why depth 8 / nodes 2500 (NOT the 9x9 defaults
+    # depth16/200k, NOR even depth10/12k):
+    #   The G15-seed comment records the measured gen cost on a wide-open 15x15
+    #   board: depth16/200k = 3-9 s/game; depth10/12k = ~5.4 s/game. The solver
+    #   runs at EVERY recorded ply and, on a quiet board, burns its full NODE
+    #   budget proving 'no win' before bailing — so per-game cost is dominated by
+    #   max_nodes x plies-solved, not depth. To hit the ~0.5 s/game vcf-overhead
+    #   target we cut the node budget ~5x below the 12k that already cost 5.4 s,
+    #   to 2500 (=> a quiet-position solve bails ~5x faster), and trim depth
+    #   16 -> 8 (a depth-8 attacker line = our four + their block, x4 — covers the
+    #   short forced wins that actually appear in self-play; longer proofs are
+    #   rare and the depth cap just makes the wide-open bail quicker).
+    #   The solver (gomoku/vcf.py) is sound at ANY budget: a cap-hit returns
+    #   'no forced win' (never a false positive), so a tight cap only trades
+    #   recall of LONG forced wins for generation throughput — exactly the
+    #   tradeoff we want on a maturing net where short tactics dominate.
+    #
+    # NO early-game ply-gate is applied: as of 2026-06-13 there is NO ply-gate /
+    # 'skip the first N plies' FLAG in selfplay_worker / self_play. The only
+    # gen-cost guards that exist are --vcf-max-depth/-nodes (tuned here) and
+    # --defense-teacher's INTERNAL already-fired + four-threat pre-scan (not a
+    # reusable ply-gate, and only on the defensive teacher). A cheap ply-gate
+    # (skip the solver for plies < ~10, where a forced win is impossible on a
+    # near-empty 15x15) would cut early-game cost further essentially for free,
+    # but it is a SEPARATE code task (filed as a recommendation), NOT built here.
+    # Budget tuning alone is expected to land near the target because the 2500-
+    # node cap already makes the early-game quiet solves bail fast.
+    "G15-vcf": Cell("G15-vcf-v8recipe-board15", sgd_per_game=1.0,
+                buffer_size=400_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98",
+                                   "--vcf-teacher",
+                                   "--vcf-max-depth", "8",
+                                   "--vcf-max-nodes", "2500"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     "A": Cell("A-K1-buf50k",   sgd_per_game=1.0, buffer_size=50_000),
     "B": Cell("B-K2-buf50k",   sgd_per_game=2.0, buffer_size=50_000),
     "C": Cell("C-K4-buf50k",   sgd_per_game=4.0, buffer_size=50_000),
