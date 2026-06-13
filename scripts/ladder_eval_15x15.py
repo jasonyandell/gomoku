@@ -147,6 +147,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--c-puct", type=float, default=1.5)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rule", type=int, default=0, help="0 = freestyle.")
+    # Eval-config levers (the 9x9 champion's 100%-ladder-sweep recipe). Default
+    # OFF = byte-identical to the plain ladder eval. Testing whether these
+    # transfer to 15x15 is a free strength experiment (no retraining).
+    ap.add_argument("--fpu-reduction-c", type=float, default=0.0,
+                    help="KataGo FPU reduction (0.0=OFF). 0.45 = verified 9x9 derby value.")
+    ap.add_argument("--reuse-tree", action="store_true",
+                    help="Persistent MCTS tree across moves (derby-jmi lever).")
+    ap.add_argument("--proven-prop", action="store_true",
+                    help="Proven win/loss propagation (derby-b3n lever).")
     ap.add_argument("--out", default=None,
                     help="JSONL output path (APPEND). Default: a "
                          "rapfi_ladder_15x15.jsonl alongside the checkpoint dir.")
@@ -169,6 +178,8 @@ def main(argv: list[str] | None = None) -> None:
         f"[ladder-15x15] checkpoint={ckpt}\n"
         f"[ladder-15x15] rapfi={args.rapfi} board_size={_REQUIRED_BOARD_SIZE} "
         f"n_games={args.n_games} timeouts={args.timeouts} sims={args.sims}\n"
+        f"[ladder-15x15] eval_config: fpu={args.fpu_reduction_c} "
+        f"reuse_tree={args.reuse_tree} proven_prop={args.proven_prop}\n"
         f"[ladder-15x15] out={out}",
         flush=True,
     )
@@ -184,6 +195,9 @@ def main(argv: list[str] | None = None) -> None:
         rule=args.rule,
         size=_REQUIRED_BOARD_SIZE,
         out=out,
+        fpu_reduction_c=args.fpu_reduction_c,
+        reuse_tree=args.reuse_tree,
+        proven_prop=args.proven_prop,
         extra_fields={"ladder": "rapfi_15x15"},
     )
     print(f"[ladder-15x15] wrote {len(records)} row(s) to {out}", flush=True)
