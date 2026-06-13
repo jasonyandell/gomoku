@@ -156,6 +156,16 @@ CELLS: dict[str, Cell] = {
     # dispatch-bound free training-regime point at 15x15. Continuous + resumable
     # (epochs huge; latest.pt embeds the buffer). See
     # wiki/topics/15x15-training-campaign.md.
+    #
+    # VCF-teacher DROPPED from the cold-start seed (staged decision, 2026-06-13
+    # smoke). The 9x9 defaults (depth16/200k nodes) cost 3-9 s/game on a
+    # wide-open 15x15 board; even capped to depth10/12k it was ~5.4 s/game,
+    # starving generation. WITHOUT it: ~1.8 s/game/worker (~4.4 games/s, reuse
+    # ~1.3 = trainer paced, not starved). On a cold board forced wins are rare
+    # so the teacher's early benefit is low while its cost is highest -> defer.
+    # A 15x15-tuned vcf-teacher (early-game skip + small per-move budget) is a
+    # planned derby contestant once the net matures (readiness-audit S3, epic
+    # #21). Kept cheap winning levers: global_pool + value-discount + gumbel.
     "G15-seed": Cell("G15-seed-v8recipe-board15", sgd_per_game=1.0,
                 buffer_size=400_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=100,
@@ -170,7 +180,7 @@ CELLS: dict[str, Cell] = {
                 weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
                 epochs=1_000_000, random_opening_moves=0,
                 global_pool=True,
-                extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
     "A": Cell("A-K1-buf50k",   sgd_per_game=1.0, buffer_size=50_000),
