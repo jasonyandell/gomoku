@@ -60,24 +60,45 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rule", type=int, default=0, help="0 = freestyle.")
     ap.add_argument("--size", type=int, default=9)
+    ap.add_argument("--fpu-reduction-c", type=float, default=0.0,
+                    help="KataGo-style FPU reduction (0.0 = OFF, byte-identical). "
+                         "0.45 is the verified derby-3w0 eval config.")
+    ap.add_argument("--reuse-tree", action="store_true",
+                    help="Persistent tree across moves (derby-jmi eval lever).")
+    ap.add_argument("--proven-prop", action="store_true",
+                    help="Proven win/loss propagation (derby-b3n eval lever).")
     ap.add_argument("--out", default=None, help="JSONL output path (append).")
     args = ap.parse_args()
 
     # Lazy: only import the heavy bits inside main so --help is cheap.
-    from gomoku.eval import play_match_pickers
+    from gomoku.eval import mcts_picker, play_match_pickers
     from gomoku.external_engine import (
         WRAPPER_VERSION,
         ExternalEngineConfig,
         ExternalEnginePlayer,
     )
-    from gomoku.match import build_player, parse_spec
 
     rapfi_abs = os.path.abspath(args.rapfi)
     if not os.path.exists(rapfi_abs):
         raise SystemExit(f"rapfi binary not found: {rapfi_abs}")
 
-    model_picker = build_player(
-        parse_spec(f"model:checkpoint={args.checkpoint},sims={args.sims},c_puct={args.c_puct}")
+    # Built directly via mcts_picker (not the match.py spec string) so the
+    # eval-config levers (FPU / tree-reuse / proven-prop) can be threaded.
+    from gomoku.mcts import make_torch_evaluator
+    from gomoku.model import fuse_model_for_inference, load_checkpoint
+    from gomoku.util import pick_device
+
+    device = pick_device(os.environ.get("GOMOKU_DEVICE"))
+    model, _ = load_checkpoint(args.checkpoint, device=device)
+    model = fuse_model_for_inference(model)
+    evaluator = make_torch_evaluator(model, device)
+    model_picker = mcts_picker(
+        evaluator,
+        n_simulations=args.sims,
+        c_puct=args.c_puct,
+        fpu_reduction_c=args.fpu_reduction_c,
+        reuse_tree=args.reuse_tree,
+        proven_prop=args.proven_prop,
     )
 
     build_ref = _build_ref(rapfi_abs)
@@ -106,6 +127,9 @@ def main() -> None:
             "checkpoint": os.path.abspath(args.checkpoint),
             "model_sims": args.sims,
             "model_c_puct": args.c_puct,
+            "fpu_reduction_c": args.fpu_reduction_c,
+            "reuse_tree": args.reuse_tree,
+            "proven_prop": args.proven_prop,
             "engine": f"rapfi{timeout_ms}",
             "engine_source": "https://github.com/dhbloo/rapfi",
             "engine_build_ref": build_ref,
