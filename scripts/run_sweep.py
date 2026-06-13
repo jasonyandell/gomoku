@@ -1990,7 +1990,8 @@ def _run_final_eval(cell: Cell, dirs: dict) -> None:
 
 
 def launch_cell(cell: Cell, foreground: bool, resume_path: str | None = None,
-                max_wall_secs: float = 0.0, final_eval: bool = False) -> None:
+                max_wall_secs: float = 0.0, final_eval: bool = False,
+                internal_eval: bool = False) -> None:
     dirs = cell_dirs(cell)
     dirs["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
     dirs["records_dir"].mkdir(parents=True, exist_ok=True)
@@ -2024,7 +2025,18 @@ def launch_cell(cell: Cell, foreground: bool, resume_path: str | None = None,
     time.sleep(2.0)
     for i in range(cell.n_workers):
         spawn(f"w{i}", worker_cmd(cell, dirs, f"w{i}", seed=1000 + i))
-    spawn("eval", eval_cmd(cell, dirs), env_override={"GOMOKU_DEVICE": "cpu"})
+    # Continuous internal-baseline eval (random/heuristic/lookahead) is OPT-IN.
+    # For mature nets it is saturated noise (all pin ~100%, Elo ceiling-clamps)
+    # AND costs real CPU (a lookahead:depth=4 cycle is ~200-320s, recurring every
+    # ~15-20 epochs) that competes with the Rapfi ladder — our actual yardstick.
+    # The trainer's own plies/vl/pl/wall already cover liveness for free. So it is
+    # off by default; opt back in with --internal-eval for a COLD-START run, where
+    # the random→heuristic→lookahead ladder genuinely tracks the early climb.
+    if internal_eval:
+        spawn("eval", eval_cmd(cell, dirs), env_override={"GOMOKU_DEVICE": "cpu"})
+    else:
+        print("  internal-baseline eval DISABLED (saturated for mature nets; "
+              "Rapfi ladder is the yardstick). Re-enable with --internal-eval.")
 
     capped = max_wall_secs > 0
     if not foreground and not capped:
@@ -2097,6 +2109,12 @@ def main() -> None:
                    help="After teardown, run one eval_worker cycle (--max-cycles 1) "
                         "against the final published weights so eval_results.jsonl "
                         "ends on a fresh eval/model_elo. Pairs with --max-wall-secs.")
+    p.add_argument("--internal-eval", action="store_true",
+                   help="Spawn the continuous internal-baseline eval worker "
+                        "(random/heuristic/lookahead). OFF by default — saturated "
+                        "noise for mature nets, and the ~200-320s/cycle lookahead "
+                        "games steal CPU from the Rapfi ladder. Turn ON for "
+                        "cold-start runs where the baseline ladder tracks the climb.")
     args = p.parse_args()
 
     if args.list or not args.cell:
@@ -2114,7 +2132,8 @@ def main() -> None:
         return
 
     launch_cell(cell, foreground=args.foreground, resume_path=args.resume,
-                max_wall_secs=args.max_wall_secs, final_eval=args.final_eval)
+                max_wall_secs=args.max_wall_secs, final_eval=args.final_eval,
+                internal_eval=args.internal_eval)
 
 
 if __name__ == "__main__":
