@@ -115,6 +115,19 @@ couldn't even reach to stub a toe on:
 - **Smoke-first earns its keep.** A 90s smoke of the real recipe caught that the
   VCF teacher's 9×9 budget cost 3–9 s/game on the wide-open 15×15 board before
   any multi-day run was committed. Cheap validation before expensive commitment.
+- **MPS has an INT_MAX tensor-dim cliff that flood-scale finds.** The bit-packed
+  buffer (the #25 capability, merged + unit-tested + small-smoked) crashed a
+  live run at ~550k positions: `MPSGraph does not support tensor dims larger
+  than INT_MAX`. Root cause — a helper unpacked the *whole* buffer into one
+  float32 planes tensor (board-15: 3825 elems/pos), crossing 2³¹−1 at exactly
+  `floor(INT_MAX/3825) = 561,629` rows, hit every cycle via `shape_stats()`.
+  CUDA/CPU don't have this dim cap; MPS does. Fix: chunk the unpack (≤2²⁸
+  elems/chunk) so no single tensor crosses the cap — packed store stays uint8
+  (the 32× win), only bounded chunks + the sampled batch ever unpack. **The
+  lesson is the recurring one: unit tests + a small smoke passed three times;
+  the bug only appeared at real (flood) scale** — sibling of the cross-game
+  ingest trap and the gen-flood runaway. When a capability has a scale axis,
+  the validation must exercise that axis, not just correctness in the small.
 
 ## 6. The methodology that emerged (the meta-lesson)
 
