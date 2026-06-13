@@ -681,6 +681,15 @@ def parse_args() -> argparse.Namespace:
                         "stronger net.")
     p.add_argument("--buffer-recency-window", type=int, default=200_000,
                    help="Size of the 'recent' slice for --buffer-recency-frac.")
+    p.add_argument("--pack-buffer", action="store_true", default=False,
+                   help="Issue #25: store the replay buffer's binary planes "
+                        "bit-packed (uint8, ~32x smaller than float32) on the CPU "
+                        "and unpack per-batch on sample. OFF (default) is "
+                        "byte-identical to the float32 path — the live run and all "
+                        "existing cells are unaffected. Prerequisite at 15x15 scale "
+                        "(a 3M-pos float32 buffer is ~45GB; packed ~3GB). Existing "
+                        "float32 checkpoints still load (packed on restore); packed "
+                        "checkpoints load into either mode.")
     p.add_argument("--cross-game-value", action="store_true", default=False,
                    help="Derby 'position-stats' cross-game value sidecar. OFF "
                         "(default) = byte-identical baseline (aux-head discipline). "
@@ -1316,7 +1325,11 @@ def main() -> None:
     buffer = ReplayBuffer(args.replay_buffer_size, device=device,
                           aux_opponent_reply=aux_on,
                           aux_ownership=ownership_on,
-                          cross_game_value=cross_game_on)
+                          cross_game_value=cross_game_on,
+                          pack_planes=bool(getattr(args, "pack_buffer", False)))
+    if buffer.pack_planes:
+        print(f"replay buffer: bit-packed planes ON ({buffer._packed_bytes} B/pos "
+              f"packed vs {buffer._plane_elems * 4} B/pos float32)")
     buffer.configure_curator(args.buffer_recency_frac, args.buffer_recency_window)
     if args.buffer_recency_frac > 0.0:
         print(f"buffer curator: recency_frac={args.buffer_recency_frac} "

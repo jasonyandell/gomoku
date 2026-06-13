@@ -4,6 +4,22 @@ Scoping doc for shrinking per-position storage in the replay buffer so we
 can hold many more games at the same RAM footprint. Captured during WL5
 monitoring (2026-05-21).
 
+> **STATUS 2026-06-12 (issue #25): landed a focused Option-A subset — the
+> bit-packed *planes* term only.** Opt-in via `--pack-buffer` (train.py) or
+> `ReplayBuffer(..., pack_planes=True)`; default OFF is byte-identical (same
+> `planes` float32 tensor, same checkpoint schema, same sample math). Planes
+> are stored as `uint8` bit-packed on the CPU (`np.packbits`), unpacked
+> per-batch on `sample()`. `pi`/`z` stay float32 (the FP16/sparse-pi part of
+> Option A was deferred — planes are 94% of the cost). Measured at 15×15:
+> **15,300 B/pos float32 → 479 B/pos packed (31.9×)**; a 3M-position planes
+> store drops from ~45.9 GB to ~1.44 GB. Cross-mode checkpoint loading works
+> both ways (old float32 saves pack-on-load; packed saves unpack into a float32
+> buffer). See `gomoku/plane_packing.py` + `tests/test_bitpack_buffer.py`.
+> CAVEAT: unpack runs in the train hot path (numpy `unpackbits` → float32 →
+> `to(device)` per batch); validate the overhead at flood scale per the
+> cross-game-value trap before flipping it on for a live cell — the prefetch
+> mitigation below is NOT yet implemented.
+
 ## Why this is worth doing
 
 Buffer width is a smoothing knob. AlphaZero at scale used very wide
