@@ -3576,3 +3576,24 @@ record here:
   --cell SMOKE15 --foreground --max-wall-secs 90`) for the live aug/s go/no-go,
   then Phase 4 (first real 15×15 run, WDL head as first new contestant,
   bit-packed buffer prerequisite). Epic #21.
+
+## 2026-06-12 (cont.) — Rapfi cert complete + 15×15 smoke GO
+
+Continuation of the one-shot pass (cert finished, GPU freed, smoke run clean).
+
+- **Rapfi cert, all 3 tiers** (`sweep_logs/rapfi_cert_v8champ_20260612.jsonl`):
+  rapfi100 16W-0L-24D (70%), rapfi500 15W-1L-24D (68%), rapfi1000 12W-2L-26D
+  (62%). **Total 43W-3L-74D over 120 games** vs Rapfi (Gomocup freestyle 2625)
+  at 9×9. 3 losses in 120; the rest wins (43) or draws (74). Expected trend:
+  more Rapfi time → wins decay to draws, never to losses. 9×9 era closed.
+- **15×15 plumbing smoke (SMOKE15, GO).** `board_size = 15` confirmed; full
+  loop (trainer + 2 workers + eval) ran end-to-end via run_sweep with the
+  native `_*_native15` extensions, 122 epochs in the 90 s cap, clean resumable
+  teardown. Plies ~40–78 = real 15×15 games. Throughput at tiny net / sims=30
+  / 2 workers / wave=16: **~7,574 aug/s, ~16.3 games/s** wall-clock — the
+  small-net 15×15 regime is as cheap as 9×9, confirming the dispatch-bound
+  bench. NOT the 96×8 production cost (that's a Phase-4 measurement).
+- **State:** epic #21 Phases 0–3 done + merged to main. Phase 4 unblocked —
+  first real 15×15 run (carry v8 recipe; WDL head = first new contestant;
+  bit-pack the buffer first per buffer-bit-packing.md). Follow-ups #22 (swap2),
+  #23 (renju), #24 (web UI 15×15).
