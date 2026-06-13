@@ -88,6 +88,25 @@ data to fill it, and see whether the joint move breaks past the 96×8's 88%
 ceiling. (That this was even runnable depended on the MPS INT_MAX bit-packing fix
 in §5 — a big net *and* a big buffer is exactly the regime that needs it.)
 
+**Interim result (e146, the joint run G15-128x10-bigbuf).** Ran exactly that —
+128×10 from the net2net seed on a fresh 1.5M buffer. First Rapfi read at e146:
+**75% @1000ms / 50% @5000ms.** Two things to read carefully:
+- *The big buffer cured the overfit.* The identical 128×10 net scored **37.5%
+  @1000ms on the frozen 400k buffer; now 75% on 1.5M** — back to the 96×8
+  champion's fast-tier level. The capacity-needs-data half of the thesis is
+  confirmed mechanistically: give the 3.3M net enough fresh data and it stops
+  overfitting.
+- *But deep-TC isn't there yet (50% vs the 96×8's 88%), and that's expected at
+  e146.* Recall §2: capacity strength at deep TC **emerges with training** — the
+  96×8 itself climbed 75%→88% @5000ms over e173→e343. The 3.3M net has ~3× the
+  96×8's parameters and learns into them *slower*; at e146 it is earlier on that
+  curve than the 96×8 was at its first strong eval. So a low deep-TC here is a
+  "not yet," not a "no." Honest status: **overfit cured (clean win), ceiling
+  question still open** — re-eval pending at ~e250/e350 to see whether deep-TC
+  climbs as it trains into capacity. (Discipline note: don't crown *or* bury a
+  big-net run on its first eval — the net×search interaction takes training to
+  show, and one n=8 deep-TC read is noisy besides.)
+
 **Methodological keeper:** a negative result ("more data didn't help") is a real
 finding when it's a clean, single-axis A/B with a trustworthy external metric. It
 *reallocates the search* — it told us to stop spending GPU on 96×8 data and move
