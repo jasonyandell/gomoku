@@ -209,6 +209,31 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # G15-128x10: SECOND capacity step (epic #21 derby). The 96x8 confirmed a
+    # capacity win vs Rapfi (1000ms 62->75%, 5000ms 75->88%, both > 64x4's
+    # ~67%, broadening with training), so ride the thesis. IDENTICAL recipe to
+    # G15-96x8 but size="large" (128ch x 10blk, ~3.3M params). Launched
+    # --resume sweep_runs/g15_128x10_seed.pt = the 96x8 e499 champion GROWN
+    # function-preservingly (net2net, output-equiv 1.8e-4) so it STARTS at the
+    # 96x8's strength and trains into the extra capacity. ~4.6x the 64x4 eval
+    # cost → epochs SLOW (~50-70s); buffer kept 400k.
+    "G15-128x10": Cell("G15-128x10-grown-board15", sgd_per_game=1.0,
+                buffer_size=400_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # G15-vcf: the planned 15x15-tuned vcf-teacher derby contestant (epic #21
     # readiness-audit S3). BYTE-IDENTICAL to G15-seed in every Cell field EXCEPT
     # it re-enables --vcf-teacher with a 15x15-appropriate per-move budget. This
