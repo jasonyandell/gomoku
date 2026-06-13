@@ -1136,3 +1136,16 @@ All navigable cross-refs in wiki/ updated to new names. Skill referred to as `go
   section + the v8 RR3/RR4/RR5 H2H verdicts confirmed WDL as the lone net-
   positive lever (+35/+56) but never beating the value-discount champion.
 - Catalog row added under Core → Sources in [index.md](index.md).
+
+## [2026-06-13] topics | Added alphazero-lessons-15x15-gomoku: the learning artifact
+
+Filed [topics/alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md)
+— the distilled UNDERSTANDING from the 15×15 campaign, written as the primary
+artifact (Jason: "the learning is the artifact"; Gomocup is not a goal). Seven
+sections: representation transfer (warm-start skips the cold fast-attack
+collapse), net×search multiplicative (capacity pays at deep TC), read structure
+not loss (plies/vl), eval discipline (small-n noise, both-tiers, FPU negative),
+systems shape learning (dispatch-bound regime, gen-flood runaway, smoke-first),
+the methodology meta-lesson (warm-start→smoke→external-gate→net2net-grow→preserve),
+and honest bounds (short-TC caveat). Indexed as the top "understand what we
+learned" doorway. See [[feedback-learning-is-the-artifact]] memory.
