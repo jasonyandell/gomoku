@@ -100,5 +100,23 @@ Cadence ~5 min (use 270s wakeups to stay cache-warm). Order:
 
 - 2026-06-13 — Campaign opened. GPU idle, port + smoke done (P4 unblocked).
   Recon agents dispatched (seed-cell author + 15×15 training-path readiness
-  audit) to gate the multi-day GPU commitment before launch. Seed run + the
-  parallel improvement workflow + the loop come up once recon clears.
+  audit) to gate the multi-day GPU commitment before launch.
+- 2026-06-13 — Recon cleared (GO-WITH-FIXES; the one blocking bug, cross-game
+  key truncation at 15×15, is inert because G15-seed doesn't use that lever).
+  `G15-seed` cell landed (v8 recipe at board 15). Smoke caught `--vcf-teacher`
+  costing 3–9 s/game on the wide-open 15×15 board (starves gen) → DROPPED it
+  from the cold-start seed (→ ~1.8 s/game). Launched cold (wandb `d6z4o5dw`).
+- 2026-06-13 — Cold run slid into the **fast-attack collapse** (plies 68→11,
+  VL rising = not terminal, expected cold chaos). Warm-start loader
+  (`scripts/warmstart_15x15.py`) built + merged: 94.6% param transfer from the
+  9×9 champion tower. **SWAPPED the run to warm-started** (wandb `qvr95npw`,
+  `--resume sweep_runs/g15_warmstart_seed.pt`). Result: plies ~85 from epoch 0
+  (defended play), collapse skipped. **Durable lesson: cold-start fast-attack
+  collapse is real at 15×15; warm-start is the remedy.**
+- 2026-06-13 — Warm run healthy + climbing: by epoch ~93 plies stabilized ~30
+  (efficient, NOT collapsing — VL declining 0.41→0.31, pl 1.7→1.63), anchored
+  **elo ≈ 1253** (heuristic 60% / lookahead2 75% / lookahead4 35%). The
+  anchored ladder still gives signal at this strength; it will saturate as the
+  net crushes la4/la6 — that's when the external Rapfi ladder takes over.
+  Improvement Workflow `wx2qh95qd` in flight (external-ladder eval + tuned
+  vcf-teacher `G15-vcf` cell), Reviewer-gated.
