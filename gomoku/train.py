@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from gomoku import board_config
 from gomoku.eval import mcts_picker, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
@@ -566,8 +567,10 @@ def _parse_specs(s: str) -> list:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
+    board_config.add_board_size_arg(p)
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
-    p.add_argument("--size", type=str, default="small", help="tiny / small / medium / large")
+    p.add_argument("--size", type=str, default="small",
+                   help="tiny / small / medium / 96x8 / large")
     p.add_argument("--stem-padding", type=int, default=None,
                    help="Override ModelConfig.stem_padding (default 3 = michaelnny's "
                         "edge-fix). Set to 1 for the legacy 9x9 internal feature map, "
@@ -1082,8 +1085,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    board_config.require_board_size(args.board_size)
     device = pick_device(args.device)
     print(f"device = {device}")
+    print(f"board_size = {board_config.BOARD_SIZE}")
 
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)

@@ -8,12 +8,29 @@ owns the PyTorch model callback at wave boundaries and the outer self-play loop.
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any
 
+from gomoku.board_config import BOARD_SIZE
+
+# Native MCTS is compiled per board size: `_mcts_native` is the 9x9 build,
+# `_mcts_native15` the 15x15 build (see setup.py). Any other size falls back
+# to the pure-Python MCTS (same code path as GOMOKU_DISABLE_NATIVE_MCTS=1).
 try:  # pragma: no cover - import path depends on local build artifacts.
     if os.environ.get("GOMOKU_DISABLE_NATIVE_MCTS"):
         raise ImportError("native MCTS disabled by environment")
-    from gomoku import _mcts_native as _native
+    if BOARD_SIZE == 9:
+        from gomoku import _mcts_native as _native
+    elif BOARD_SIZE == 15:
+        from gomoku import _mcts_native15 as _native
+    else:
+        warnings.warn(
+            f"no native MCTS build for board size {BOARD_SIZE}; "
+            "using pure-Python MCTS fallback",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        raise ImportError(f"no native MCTS for board size {BOARD_SIZE}")
 except ImportError:  # pragma: no cover - fallback path on source-only installs.
     _native = None
 

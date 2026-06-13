@@ -19,8 +19,14 @@ import numpy as np
 
 from gomoku import state_ops
 
-BOARD_SIZE = 9
-N_ACTIONS = BOARD_SIZE * BOARD_SIZE
+# Board size is a PROCESS-LEVEL constant resolved once at import time by
+# `gomoku.board_config` (precedence: `--board-size` CLI flag > the
+# GOMOKU_BOARD_SIZE env var > default 9). Every shape in the package
+# (N_ACTIONS, model heads, replay buffers, native-extension choice) derives
+# from it; changing it mid-process is not supported. See board_config.py for
+# the full contract.
+from gomoku.board_config import BOARD_SIZE, N_ACTIONS
+
 WIN_LEN = 5
 HISTORY_PLY = 8                                  # past plies of each side in the input
 N_INPUT_PLANES = 2 * HISTORY_PLY + 1             # 8 me-hist + 8 opp-hist + 1 const = 17
@@ -133,7 +139,7 @@ def _has_five_in_a_row(plane: np.ndarray) -> bool:
 # For each, the action index (r, c) maps to (r', c') under the same transform.
 
 def _sym_board(board: np.ndarray, sym: int) -> np.ndarray:
-    """Apply one of 8 D4 symmetries to a (..., 9, 9) array."""
+    """Apply one of 8 D4 symmetries to a (..., N, N) array."""
     rot = sym % 4
     flip = sym // 4
     out = np.rot90(board, rot, axes=(-2, -1))

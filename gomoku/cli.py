@@ -6,6 +6,7 @@ import argparse
 
 import numpy as np
 
+from gomoku import board_config
 from gomoku.game import GameState, action_to_str, render, str_to_action
 from gomoku.mcts import MCTSGame, make_torch_evaluator, policy_from_visits, run_batched_mcts
 from gomoku.model import fuse_model_for_inference, load_checkpoint
@@ -16,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--device", type=str, default=None)
+    board_config.add_board_size_arg(p)
     p.add_argument("--n-simulations", type=int, default=400)
     p.add_argument("--c-puct", type=float, default=1.5)
     p.add_argument("--first", type=str, default="ask", choices=["ask", "human", "model"])
@@ -49,6 +51,7 @@ def _model_move(state: GameState, evaluator, n_sims: int, c_puct: float, topk: i
 
 def main() -> None:
     args = parse_args()
+    board_config.require_board_size(args.board_size)
     device = pick_device(args.device)
     print(f"device = {device}")
     model, _payload = load_checkpoint(args.checkpoint, device=device)

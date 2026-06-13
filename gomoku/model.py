@@ -1,7 +1,13 @@
-"""Small AlphaZero-style ResNet for 9x9 gomoku.
+"""Small AlphaZero-style ResNet for gomoku (board size from cfg.board_size).
 
-Input:  (B, 3, 9, 9) float32 — see GameState.to_planes()
-Output: policy logits (B, 81), value (B,) in [-1, 1] after tanh.
+Input:  (B, N_INPUT_PLANES, board, board) float32 — see GameState.to_planes()
+Output: policy logits (B, board*board), value (B,) in [-1, 1] after tanh.
+
+Board size: every spatial/head dimension derives from ``cfg.board_size``
+(default = the process-level ``gomoku.board_config.BOARD_SIZE``). Checkpoints
+embed the board size in their model_config; ``load_checkpoint`` refuses a
+checkpoint whose board size differs from the active process config, and
+pre-board-size checkpoints (which were all 9x9) load as board_size=9.
 """
 
 from __future__ import annotations
@@ -19,6 +25,13 @@ from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES
 @dataclass
 class ModelConfig:
     n_input_planes: int = N_INPUT_PLANES
+    # Board side length. The default is the PROCESS-LEVEL board size resolved
+    # by gomoku.board_config at import time (9 unless GOMOKU_BOARD_SIZE /
+    # --board-size says otherwise), so existing 9x9 construction paths are
+    # unchanged. All head/output sizing inside GomokuNet derives from this
+    # field, never from the module-level constant, so a config fully describes
+    # the net it builds.
+    board_size: int = BOARD_SIZE
     n_filters: int = 64
     n_blocks: int = 4
     policy_filters: int = 2
@@ -111,6 +124,10 @@ SIZE_PRESETS: dict[str, ModelConfig] = {
     "tiny":   ModelConfig(n_filters=32, n_blocks=2, value_hidden=32),
     "small":  ModelConfig(n_filters=64, n_blocks=4, value_hidden=64),
     "medium": ModelConfig(n_filters=96, n_blocks=6, value_hidden=128),
+    # 96ch x 8blk — the planned first "serious" 15x15 net (wiki:
+    # 15x15-era-feasibility-and-plan.md §2: 2.32x the 9x9 champ eval cost at
+    # the training wave size). Constructible at any board size.
+    "96x8":   ModelConfig(n_filters=96, n_blocks=8, value_hidden=128),
     "large":  ModelConfig(n_filters=128, n_blocks=10, value_hidden=256),
 }
 
@@ -217,11 +234,12 @@ class GomokuNet(nn.Module):
         super().__init__()
         self.cfg = cfg
         c = cfg.n_filters
+        n_actions = cfg.board_size * cfg.board_size
 
         # 3x3 conv with padding=cfg.stem_padding. Output H/W after the stem is
-        # BOARD_SIZE + 2*stem_padding - 2. The residual tower preserves that shape.
+        # board_size + 2*stem_padding - 2. The residual tower preserves that shape.
         kernel = 3
-        spatial = BOARD_SIZE + 2 * cfg.stem_padding - kernel + 1
+        spatial = cfg.board_size + 2 * cfg.stem_padding - kernel + 1
 
         self.stem = nn.Sequential(
             nn.Conv2d(cfg.n_input_planes, c, kernel, padding=cfg.stem_padding, bias=False),
@@ -234,11 +252,11 @@ class GomokuNet(nn.Module):
             for use_gp in gp_flags
         ])
 
-        # Policy head: 1x1 conv -> flatten -> linear to BOARD_SIZE^2.
-        # Note the FC input uses the post-stem spatial size, not BOARD_SIZE.
+        # Policy head: 1x1 conv -> flatten -> linear to board_size^2.
+        # Note the FC input uses the post-stem spatial size, not board_size.
         self.policy_conv = nn.Conv2d(c, cfg.policy_filters, 1, bias=False)
         self.policy_bn = nn.BatchNorm2d(cfg.policy_filters)
-        self.policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, N_ACTIONS)
+        self.policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, n_actions)
 
         # Value head: 1x1 conv -> flatten -> linear -> head-specific final FC.
         # The shared trunk (conv/bn/fc1) is identical for both representations;
@@ -280,7 +298,7 @@ class GomokuNet(nn.Module):
         if cfg.aux_opponent_reply:
             self.aux_policy_conv = nn.Conv2d(c, cfg.policy_filters, 1, bias=False)
             self.aux_policy_bn = nn.BatchNorm2d(cfg.policy_filters)
-            self.aux_policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, N_ACTIONS)
+            self.aux_policy_fc = nn.Linear(cfg.policy_filters * spatial * spatial, n_actions)
 
         # V4 auxiliary ownership head — a dense head off the SAME shared tower
         # output `h`. Predicts per-cell final control (81-way, one scalar per
@@ -295,7 +313,7 @@ class GomokuNet(nn.Module):
         if cfg.aux_ownership:
             self.ownership_conv = nn.Conv2d(c, cfg.value_filters, 1, bias=False)
             self.ownership_bn = nn.BatchNorm2d(cfg.value_filters)
-            self.ownership_fc = nn.Linear(cfg.value_filters * spatial * spatial, N_ACTIONS)
+            self.ownership_fc = nn.Linear(cfg.value_filters * spatial * spatial, n_actions)
 
     def forward(
         self,
@@ -494,7 +512,19 @@ def save_checkpoint(
 def load_checkpoint(
     path: str,
     device: torch.device | str = "cpu",
+    *,
+    expect_board_size: int | None = BOARD_SIZE,
 ) -> tuple[GomokuNet, dict]:
+    """Load a checkpoint into a freshly built model.
+
+    Board-size contract: checkpoints embed ``board_size`` in their
+    model_config (older checkpoints predate the field and were all 9x9, so
+    they load as board_size=9). By default the checkpoint's board size must
+    match the active process board size (``gomoku.board_config.BOARD_SIZE``);
+    a mismatch raises ValueError instead of producing a model whose heads
+    disagree with every other shape in the process. Pass
+    ``expect_board_size=None`` to skip the check (offline inspection only).
+    """
     payload = torch.load(path, map_location=device, weights_only=False)
     saved_cfg = dict(payload["model_config"])
     # Pre-AZ-recipe checkpoints predate stem_padding; default to 1 so they load.
@@ -503,6 +533,16 @@ def load_checkpoint(
     # the ModelConfig defaults so a scalar/wdl checkpoint loads unchanged.
     saved_cfg.setdefault("value_hlgauss_bins", ModelConfig.value_hlgauss_bins)
     saved_cfg.setdefault("value_hlgauss_sigma", ModelConfig.value_hlgauss_sigma)
+    # Pre-15x15-era checkpoints predate board_size; they were all 9x9.
+    saved_cfg.setdefault("board_size", 9)
+    if expect_board_size is not None and saved_cfg["board_size"] != expect_board_size:
+        raise ValueError(
+            f"checkpoint {path!r} was trained at board size "
+            f"{saved_cfg['board_size']}, but this process is configured for "
+            f"board size {expect_board_size} (set GOMOKU_BOARD_SIZE="
+            f"{saved_cfg['board_size']} or pass --board-size "
+            f"{saved_cfg['board_size']} to use this checkpoint)"
+        )
     cfg = ModelConfig(**saved_cfg)
     model = GomokuNet(cfg).to(device)
     model.load_state_dict(payload["model_state_dict"])

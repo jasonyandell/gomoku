@@ -136,6 +136,16 @@ class PositionArchive:
     # -- manifest -----------------------------------------------------------
     def _load_manifest(self) -> None:
         man = json.loads((self.root / "manifest.json").read_text())
+        # Board-size guard: archives written before the field existed were all
+        # 9x9. Refuse to mix archives across board sizes — the planes/pi
+        # tensors would silently mis-shape every consumer.
+        archive_board = int(man.get("board_size", 9))
+        if archive_board != BOARD_SIZE:
+            raise ValueError(
+                f"position archive at {self.root} has board_size="
+                f"{archive_board}, but this process is configured for "
+                f"board_size={BOARD_SIZE}"
+            )
         self._shards = []
         start = 0
         for entry in man["shards"]:
