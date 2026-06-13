@@ -10,19 +10,35 @@ so a future C/Cython/Rust helper can replace the internals without changing
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any
 
 import numpy as np
 
-BOARD_SIZE = 9
-N_ACTIONS = BOARD_SIZE * BOARD_SIZE
+from gomoku.board_config import BOARD_SIZE, N_ACTIONS
+
 WIN_LEN = 5
 HISTORY_PLY = 8
 
+# Native extensions are compiled per board size: `_state_ops_native` is the
+# 9x9 build, `_state_ops_native15` the 15x15 build (see setup.py). Any other
+# size falls back to the pure-Python/NumPy paths below (same code path as
+# GOMOKU_DISABLE_NATIVE_STATE_OPS=1).
 try:  # pragma: no cover - exercised only when an optional extension exists.
     if os.environ.get("GOMOKU_DISABLE_NATIVE_STATE_OPS"):
         raise ImportError("native state ops disabled by environment")
-    from gomoku import _state_ops_native as _native
+    if BOARD_SIZE == 9:
+        from gomoku import _state_ops_native as _native
+    elif BOARD_SIZE == 15:
+        from gomoku import _state_ops_native15 as _native
+    else:
+        warnings.warn(
+            f"no native state-ops build for board size {BOARD_SIZE}; "
+            "using pure-Python fallback",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        raise ImportError(f"no native state ops for board size {BOARD_SIZE}")
 except ImportError:  # pragma: no cover - normal path when extension is absent.
     _native = None
 
@@ -98,7 +114,7 @@ def apply_move_arrays(
 
 
 def has_five_in_a_row(plane: np.ndarray) -> bool:
-    """Return True if a 9x9 bool plane has any 5-in-a-row."""
+    """Return True if a (BOARD_SIZE, BOARD_SIZE) bool plane has any 5-in-a-row."""
     if _native is not None and hasattr(_native, "has_five_in_a_row"):
         return bool(_native.has_five_in_a_row(plane))
     return _has_five_in_a_row_numpy(plane)

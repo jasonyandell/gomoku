@@ -55,6 +55,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from gomoku import board_config
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import fuse_model_for_inference, load_checkpoint
@@ -74,6 +75,7 @@ import tempfile
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
+    board_config.add_board_size_arg(p)
     p.add_argument("--weights-path", type=str, required=True,
                    help="Checkpoint file the worker (re)loads weights from. The "
                         "trainer publishes here via atomic rename.")
@@ -841,6 +843,7 @@ def _write_profile(
 
 def main() -> None:
     args = parse_args()
+    board_config.require_board_size(args.board_size)
     # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)

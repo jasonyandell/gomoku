@@ -59,6 +59,26 @@ def test_checkpoint_roundtrip(tmp_path):
         assert torch.equal(p1, p2)
 
 
+def test_checkpoint_embeds_board_size_and_legacy_defaults_to_9(tmp_path):
+    # 15x15-era contract: every new checkpoint embeds its board size, and a
+    # legacy checkpoint without the field loads as 9x9 (all pre-era nets were
+    # 9x9). At the default board size both paths must load cleanly.
+    m = build_model("tiny")
+    p = tmp_path / "ckpt.pt"
+    save_checkpoint(str(p), m)
+    _, payload = load_checkpoint(str(p))
+    assert payload["model_config"]["board_size"] == 9
+
+    # Strip the field to simulate a pre-board-size checkpoint.
+    raw = torch.load(str(p), weights_only=False)
+    del raw["model_config"]["board_size"]
+    torch.save(raw, str(p))
+    m2, payload2 = load_checkpoint(str(p))
+    assert m2.cfg.board_size == 9
+    for p1, p2 in zip(m.parameters(), m2.parameters()):
+        assert torch.equal(p1, p2)
+
+
 def test_to_planes_dtype():
     from gomoku.game import N_INPUT_PLANES, BOARD_SIZE
     s = GameState.initial()

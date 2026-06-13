@@ -7,19 +7,43 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Board size is a COMPILE-TIME parameter. The default build is 9x9
+ * (gomoku._mcts_native); additional sizes are built as separate extension
+ * modules from thin shim sources that define BOARD_SIZE and
+ * GOMOKU_MCTS_MODULE_NAME before including this file (see _mcts_native15.c
+ * and setup.py). */
+#ifndef BOARD_SIZE
 #define BOARD_SIZE 9
-#define N_ACTIONS 81
+#endif
+#define N_ACTIONS (BOARD_SIZE * BOARD_SIZE)
 #define HISTORY_PLY 8
 #define HISTORY_STORED 8
 #define N_INPUT_PLANES 17
 #define MAX_PATH N_ACTIONS
+/* 64-bit words needed for an N_ACTIONS-bit bitboard (2 for 9x9, 4 for 15x15). */
+#define BITS_WORDS ((N_ACTIONS + 63) / 64)
+/* Upper bound on 5-in-a-row windows: exact count is
+ * 2*B*(B-4) + 2*(B-4)^2 (140 at B=9, 572 at B=15); 4*N_ACTIONS is a safe
+ * compile-time bound (324 at B=9, 900 at B=15). */
+#define MAX_WIN_MASKS (4 * N_ACTIONS)
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
+#ifndef GOMOKU_MCTS_MODULE_NAME
+#define GOMOKU_MCTS_MODULE_NAME _mcts_native
+#endif
+#define GOMOKU_STR_(x) #x
+#define GOMOKU_STR(x) GOMOKU_STR_(x)
+#define GOMOKU_CAT_(a, b) a##b
+#define GOMOKU_CAT(a, b) GOMOKU_CAT_(a, b)
+
+/* Fixed-size bitboard sized at compile time from BOARD_SIZE. The 9x9 build
+ * uses 2 words (was the hand-rolled lo/hi pair); 15x15 needs 4 words for its
+ * 225 cells. All helpers below compile down to the same straight-line code at
+ * BITS_WORDS == 2. */
 typedef struct {
-    uint64_t lo;
-    uint64_t hi;
+    uint64_t w[BITS_WORDS];
 } Bits;
 
 typedef struct {
@@ -98,40 +122,40 @@ typedef struct {
 
 static PyTypeObject NativeMCTSGameType;
 
-static Bits win_masks[160];
+static Bits win_masks[MAX_WIN_MASKS];
 static int win_mask_count = 0;
 
 static inline Bits bits_zero(void) {
     Bits b;
-    b.lo = 0;
-    b.hi = 0;
+    for (int i = 0; i < BITS_WORDS; i++) {
+        b.w[i] = 0;
+    }
     return b;
 }
 
 static inline int bits_get(Bits b, int action) {
-    if (action < 64) {
-        return (int)((b.lo >> action) & 1ULL);
-    }
-    return (int)((b.hi >> (action - 64)) & 1ULL);
+    return (int)((b.w[action >> 6] >> (action & 63)) & 1ULL);
 }
 
 static inline void bits_set(Bits *b, int action) {
-    if (action < 64) {
-        b->lo |= (1ULL << action);
-    } else {
-        b->hi |= (1ULL << (action - 64));
-    }
+    b->w[action >> 6] |= (1ULL << (action & 63));
 }
 
 static inline Bits bits_or(Bits a, Bits b) {
     Bits out;
-    out.lo = a.lo | b.lo;
-    out.hi = a.hi | b.hi;
+    for (int i = 0; i < BITS_WORDS; i++) {
+        out.w[i] = a.w[i] | b.w[i];
+    }
     return out;
 }
 
 static inline int bits_contains_all(Bits value, Bits mask) {
-    return ((value.lo & mask.lo) == mask.lo) && ((value.hi & mask.hi) == mask.hi);
+    for (int i = 0; i < BITS_WORDS; i++) {
+        if ((value.w[i] & mask.w[i]) != mask.w[i]) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static void add_win_mask(int r, int c, int dr, int dc) {
@@ -251,12 +275,14 @@ static void state_initial(CState *state) {
 
 static int check_board_shape(PyArrayObject *arr) {
     if (PyArray_NDIM(arr) != 3) {
-        PyErr_SetString(PyExc_ValueError, "board must have shape (2, 9, 9)");
+        PyErr_Format(PyExc_ValueError, "board must have shape (2, %d, %d)",
+                     BOARD_SIZE, BOARD_SIZE);
         return 0;
     }
     npy_intp const *dims = PyArray_DIMS(arr);
     if (dims[0] != 2 || dims[1] != BOARD_SIZE || dims[2] != BOARD_SIZE) {
-        PyErr_SetString(PyExc_ValueError, "board must have shape (2, 9, 9)");
+        PyErr_Format(PyExc_ValueError, "board must have shape (2, %d, %d)",
+                     BOARD_SIZE, BOARD_SIZE);
         return 0;
     }
     return 1;
@@ -1076,7 +1102,8 @@ static int call_evaluator(
         PyArray_DIMS(priors)[1] != N_ACTIONS) {
         Py_DECREF(priors);
         Py_DECREF(values);
-        PyErr_SetString(PyExc_ValueError, "native MCTS priors must have shape (B, 81)");
+        PyErr_Format(PyExc_ValueError, "native MCTS priors must have shape (B, %d)",
+                     N_ACTIONS);
         return 0;
     }
     if (PyArray_NDIM(values) != 1 || PyArray_DIMS(values)[0] != n) {
@@ -2233,13 +2260,13 @@ static PyTypeObject NativeMCTSGameType = {
 
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
-    "_mcts_native",
+    GOMOKU_STR(GOMOKU_MCTS_MODULE_NAME),
     "Native arena-backed MCTS engine for Gomoku.",
     -1,
     module_methods
 };
 
-PyMODINIT_FUNC PyInit__mcts_native(void) {
+PyMODINIT_FUNC GOMOKU_CAT(PyInit_, GOMOKU_MCTS_MODULE_NAME)(void) {
     import_array();
     init_win_masks();
     if (PyType_Ready(&NativeMCTSGameType) < 0) {

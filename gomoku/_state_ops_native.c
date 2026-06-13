@@ -2,17 +2,34 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
+/* Board size is a COMPILE-TIME parameter. The default build is 9x9
+ * (gomoku._state_ops_native); additional sizes are built as separate
+ * extension modules from thin shim sources that define BOARD_SIZE and
+ * GOMOKU_STATE_OPS_MODULE_NAME before including this file (see
+ * _state_ops_native15.c and setup.py). */
+#ifndef BOARD_SIZE
 #define BOARD_SIZE 9
-#define N_ACTIONS 81
+#endif
+#define N_ACTIONS (BOARD_SIZE * BOARD_SIZE)
+
+#ifndef GOMOKU_STATE_OPS_MODULE_NAME
+#define GOMOKU_STATE_OPS_MODULE_NAME _state_ops_native
+#endif
+#define GOMOKU_STR_(x) #x
+#define GOMOKU_STR(x) GOMOKU_STR_(x)
+#define GOMOKU_CAT_(a, b) a##b
+#define GOMOKU_CAT(a, b) GOMOKU_CAT_(a, b)
 
 static int check_board_shape(PyArrayObject *arr) {
     if (PyArray_NDIM(arr) != 3) {
-        PyErr_SetString(PyExc_ValueError, "board must have shape (2, 9, 9)");
+        PyErr_Format(PyExc_ValueError, "board must have shape (2, %d, %d)",
+                     BOARD_SIZE, BOARD_SIZE);
         return 0;
     }
     npy_intp const *dims = PyArray_DIMS(arr);
     if (dims[0] != 2 || dims[1] != BOARD_SIZE || dims[2] != BOARD_SIZE) {
-        PyErr_SetString(PyExc_ValueError, "board must have shape (2, 9, 9)");
+        PyErr_Format(PyExc_ValueError, "board must have shape (2, %d, %d)",
+                     BOARD_SIZE, BOARD_SIZE);
         return 0;
     }
     return 1;
@@ -20,12 +37,14 @@ static int check_board_shape(PyArrayObject *arr) {
 
 static int check_plane_shape(PyArrayObject *arr) {
     if (PyArray_NDIM(arr) != 2) {
-        PyErr_SetString(PyExc_ValueError, "plane must have shape (9, 9)");
+        PyErr_Format(PyExc_ValueError, "plane must have shape (%d, %d)",
+                     BOARD_SIZE, BOARD_SIZE);
         return 0;
     }
     npy_intp const *dims = PyArray_DIMS(arr);
     if (dims[0] != BOARD_SIZE || dims[1] != BOARD_SIZE) {
-        PyErr_SetString(PyExc_ValueError, "plane must have shape (9, 9)");
+        PyErr_Format(PyExc_ValueError, "plane must have shape (%d, %d)",
+                     BOARD_SIZE, BOARD_SIZE);
         return 0;
     }
     return 1;
@@ -316,13 +335,13 @@ static PyMethodDef methods[] = {
 
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
-    "_state_ops_native",
+    GOMOKU_STR(GOMOKU_STATE_OPS_MODULE_NAME),
     "Native hot-path state operations for Gomoku.",
     -1,
     methods
 };
 
-PyMODINIT_FUNC PyInit__state_ops_native(void) {
+PyMODINIT_FUNC GOMOKU_CAT(PyInit_, GOMOKU_STATE_OPS_MODULE_NAME)(void) {
     import_array();
     return PyModule_Create(&moduledef);
 }
