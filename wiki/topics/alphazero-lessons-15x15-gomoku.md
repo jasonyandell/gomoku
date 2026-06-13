@@ -60,6 +60,39 @@ search*. Net quality × search depth is multiplicative — the AlphaZero
 net/search duality, measured on our own board. (It also means a single
 fast-time-control eval can *miss* a capacity gain entirely — see §4.)
 
+### 2a. Capacity-bound vs data-bound: which lever moves the needle is *net-size-specific*
+
+Having climbed the capacity ladder, we tested the **data axis** independently and
+got the cleanest pair of results in the campaign:
+
+- **96×8 + 3.75× more data didn't help.** We resumed the 75/88 champion (400k
+  replay buffer) on a **1.5M bit-packed buffer** — same recipe, same net, ~100
+  more epochs, reuse held at ~0.5 (high diversity). Re-eval at e597:
+  **50% @1000ms / 88% @5000ms** vs the champion's 75/88. The deep-TC tier — the
+  one that reflects strength — was **identical at 88%**. The training loss had
+  flattened into a steady-state band well before the eval and *stayed there*.
+  Verdict: **the 96×8's ~88% deep-TC is an architectural ceiling, not a
+  data-starved number. More data was not the lever for this net.**
+- **128×10 + only 400k data overfit** (§2 table: 37.5% aggregate @1000ms — the
+  capacity *overshot* the data).
+
+Put together, the lesson is sharper than either result alone: **whether data or
+capacity is your binding constraint depends on the net size, and you can only
+find out by varying one axis at a time and reading an external yardstick.** The
+96×8 is *capacity-bound* (saturates its data, ceiling set by params); the 128×10
+is *data-bound* (has params to spare, starves on 400k). The loss curve hinted at
+both (96×8 plateaued; 128×10's eval cratered) but couldn't *name* the constraint
+— only the paired A/B against Rapfi could. The natural next experiment writes
+itself: **128×10 *with* the 1.5M buffer** — pair the spare capacity with enough
+data to fill it, and see whether the joint move breaks past the 96×8's 88%
+ceiling. (That this was even runnable depended on the MPS INT_MAX bit-packing fix
+in §5 — a big net *and* a big buffer is exactly the regime that needs it.)
+
+**Methodological keeper:** a negative result ("more data didn't help") is a real
+finding when it's a clean, single-axis A/B with a trustworthy external metric. It
+*reallocates the search* — it told us to stop spending GPU on 96×8 data and move
+to the capacity×data corner. The learning is the artifact; negative results count.
+
 ## 3. The loss number lies; the structure tells the truth
 
 Policy-loss bounced all over a wide band (1.0–1.7) throughout healthy training.
