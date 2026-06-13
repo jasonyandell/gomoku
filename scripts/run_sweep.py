@@ -136,6 +136,17 @@ CELLS: dict[str, Cell] = {
                   n_workers=2, games_per_batch=4,
                   temperature_moves=10, temperature_final=0.1,
                   save_buffer_every=100_000, epochs=100_000, wandb=False),
+    # 15x15 plumbing smoke (epic #21 Phase 3). Board size is process-level
+    # config, not a Cell field yet: LAUNCH WITH GOMOKU_BOARD_SIZE=15, e.g.
+    #   GOMOKU_BOARD_SIZE=15 python scripts/run_sweep.py --cell SMOKE15 \
+    #       --foreground --max-wall-secs 90
+    # Own name -> own dirs, so it never collides with 9x9 SMOKE artifacts.
+    "SMOKE15": Cell("SMOKE15-board15-plumbing", sgd_per_game=1.0,
+                    buffer_size=5_000, games_per_epoch=8,
+                    size="tiny", stem_padding=1, n_simulations=30,
+                    n_workers=2, games_per_batch=4,
+                    temperature_moves=10, temperature_final=0.1,
+                    save_buffer_every=100_000, epochs=100_000, wandb=False),
     "A": Cell("A-K1-buf50k",   sgd_per_game=1.0, buffer_size=50_000),
     "B": Cell("B-K2-buf50k",   sgd_per_game=2.0, buffer_size=50_000),
     "C": Cell("C-K4-buf50k",   sgd_per_game=4.0, buffer_size=50_000),
