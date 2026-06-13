@@ -272,14 +272,18 @@ Results (40 games/tier, color-alternated, model perspective):
 
 | Rapfi tier | W-L-D | win_rate |
 |---|---|---|
-| 100 ms | 16W-0L-**24D** | 70% |
-| 500 ms | 15W-**1L**-24D | 68% |
-| 1000 ms | _(pending at writeup; see JSONL)_ | |
+| 100 ms | 16W-0L-24D | 70% |
+| 500 ms | 15W-1L-24D | 68% |
+| 1000 ms | 12W-2L-26D | 62% |
+| **total** | **43W-3L-74D** (120) | **67%** |
 
 **Headline:** the v8 champion + FPU does **not lose** to Rapfi (Gomocup
-freestyle 2625 Elo) at 9×9 freestyle — 1 loss in 80 games across the two
-completed tiers, the rest wins or draws. This is the formal close of the 9×9
-strength era: the board is exhausted, exactly as §1 argued. (Caveat per
+freestyle 2625 Elo) at 9×9 freestyle — **3 losses in 120 games** across all
+three tiers, the rest wins or draws (74 of 120 are draws). The trend is the
+expected one: more Rapfi thinking time pulls wins toward draws (70% → 62%),
+but even at 1000 ms/move the champion stays ahead and is never blown out. This
+is the formal close of the 9×9 strength era: the board is exhausted, exactly
+as §1 argued. (Caveat per
 [external-engine-baselines.md](external-engine-baselines.md): 9×9 freestyle is
 intrinsically drawish and the 2625 is a 15×15/20×20 rating — treat as a
 yardstick, not a 9×9 Elo label. The point stands: there is no headroom left to
@@ -309,19 +313,42 @@ Informational throughput (port agent, single-process, tiny net, sims=50,
 wave=16, on MPS): **141.4 pos/s = 2.11 games/s at 15×15** — in line with the
 §3 envelope's ~1.5–2 games/s guess for a real run.
 
-### Phase 3 — 15×15 plumbing smoke (cell landed, run pending)
+### Phase 3 — 15×15 plumbing smoke (DONE — go/no-go = GO)
 
-`SMOKE15` cell added to `run_sweep.py` (merge `1344f6d`). Run:
-`GOMOKU_BOARD_SIZE=15 python scripts/run_sweep.py --cell SMOKE15 --foreground
---max-wall-secs 90`. Deferred behind the Phase 0 cert to keep the GPU
-uncontended for the headline measurement; results appended when run.
+`SMOKE15` cell (merge `1344f6d`), run after the cert freed the GPU:
+
+```
+GOMOKU_BOARD_SIZE=15 WANDB_MODE=offline python scripts/run_sweep.py \
+  --cell SMOKE15 --foreground --max-wall-secs 90
+```
+
+**Plumbing: PASS.** `board_size = 15` confirmed in the trainer log; the full
+loop ran end-to-end through `run_sweep` — trainer + 2 self-play workers + eval
+worker, native `_*_native15` extensions in use, **122 epochs in the 90 s
+cap**, clean time-capped teardown with a resumable buffer-embedded checkpoint.
+Game lengths are genuinely 15×15 (plies ~40–78, vs ~30 typical at 9×9), so the
+larger board is really being played, not a mislabeled 9×9.
+
+**Throughput (tiny net, sims=30, 2 workers, wave=16):** ~7,574 aug/s, ~16.3
+games/s wall-clock (681,640 aug-examples / 1,468 games over the run). This is
+the *small-net* regime, not the 96×8 production candidate, so it is a sanity +
+plumbing number, not the Phase-4 per-game cost — but it confirms §2's central
+finding directly: at small scale 15×15 self-play is **as cheap as 9×9** (the
+dispatch-bound floor), with no contention surprises. The §3 envelope's
+per-game cost at the production 96×8 net is still to be measured at Phase-4
+scale; nothing in the smoke contradicts it.
+
+**Gate verdict:** GO. The 15×15 loop is real, fast at small scale, and
+resumable. Phase 4 (first real run) is unblocked.
 
 ## 7. Decision record
 
 - 2026-06-12 — Page created with the scaling bench evidence
   (`scripts/bench_board_scaling.py`); plan proposed, no port work started.
   GPU idle (derby v8 concluded, v9-medium errored + parked).
-- 2026-06-12 (later, one-shot pass) — Phases 0–2 executed and merged to
-  `main`; Phase 1 decided as free-style (swap2 → #22, renju → #23); Phase 3
-  cell landed, run pending. Rapfi cert: champion does not lose to Rapfi at
-  9×9 (1L in 80 games over the 100/500 ms tiers). See §6.
+- 2026-06-12 (later, one-shot pass) — Phases 0–3 executed and merged to
+  `main`. Phase 1 decided as free-style (swap2 → #22, renju → #23). Rapfi cert
+  complete: champion goes 43W-3L-74D over 120 games vs Rapfi at 9×9 (3 losses
+  total) — 9×9 strength era closed. Phase 3 smoke: 15×15 loop runs
+  end-to-end, ~7.6k aug/s at tiny scale, GO. Phase 4 (first real 15×15 run)
+  unblocked; not started. See §6.
