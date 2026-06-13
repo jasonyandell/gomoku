@@ -135,6 +135,40 @@ costs training time to convert into deep-TC strength* (more params ⇒ slower up
 the net×search curve). On a fixed laptop budget that trade — bigger ceiling, but
 you pay for it in epochs — is the whole planning problem in one sentence.
 
+**Reality check (e348): the "climb" was partly noise — deep-TC has NOT broken the
+ceiling.** A third read forced honesty. Full deep-TC trajectory across three n=8
+evals:
+
+| metric | e146 | e248 | e348 |
+|---|---|---|---|
+| vs Rapfi 1000ms | 75% | 88% | **88%** |
+| vs Rapfi 5000ms | 50% | 75% | **62%** |
+
+The fast tier is *robust*: 88% twice, durably above the 96×8 champion's 75%. But
+the deep tier went **50 → 75 → 62** — not a climb, a **scatter**. Three n=8 reads
+bouncing in a ±18% band around a true value of ~60–65%, **clearly below the 96×8's
+88%**. The e248=75% that looked like "climbing toward the ceiling" was the high
+sample of a noisy distribution; e348=62% walks it back. **No ceiling break.** As
+of e348 the 128×10+bigbuf is the *better fast-TC player and the worse deep-TC
+player* than the 96×8 — the exact opposite of the capacity-pays-at-depth story we
+saw going 64×4→96×8.
+
+Two lessons, both sharp:
+- *The n=8 trap caught us — using our own stated rule.* We'd written "don't read a
+  single n=8 deep-TC point" and then half-did exactly that at e248. The fix isn't
+  a better adjective, it's a **bigger n**: a deep-TC comparison with ±18% error
+  bars can't answer a "did it cross 88%" question. (Both sides are suspect — the
+  96×8's "88%" is *also* one n=8 read. Pinning the real values needs n≥16 on both,
+  which is the follow-up in flight.)
+- *Capacity didn't transfer to depth here, and that's the interesting part.*
+  64×4→96×8 bought deep-TC strength (capacity pays at depth). 96×8→128×10+data did
+  **not** (so far): it bought fast-TC and cured the overfit, but deep-TC sits
+  lower. Candidate reads, not yet separated: (a) still early — the 3.3M net needs
+  e500+ to convert capacity into depth (it learns slower); (b) deep-TC ~88% is a
+  **recipe/search ceiling** (sim count, MCTS shape), not a net-capacity ceiling, so
+  a bigger net can't move it; (c) measurement noise is hiding a real ~75%. A
+  higher-n re-eval plus training to ~e500 is what tells these apart.
+
 **Methodological keeper:** a negative result ("more data didn't help") is a real
 finding when it's a clean, single-axis A/B with a trustworthy external metric. It
 *reallocates the search* — it told us to stop spending GPU on 96×8 data and move
