@@ -70,14 +70,35 @@ def _resolve_board_size(arg_board_size: int) -> int:
     return bc.BOARD_SIZE
 
 
+# The value head's final FC is the only head whose KEY (not just shape) depends
+# on the value representation: "scalar" -> value_fc2, "wdl" -> value_wdl_fc,
+# "hlgauss" -> value_hlgauss_fc. When --target-value-head changes the
+# representation vs the source, the source's value-head FC has no name match in
+# the target and is an INTENDED fresh-head skip (the conv tower + value trunk
+# still transfer). We recognise these as expected skips so the arch-mismatch
+# assertion does not fire on a deliberate head swap.
+_VALUE_HEAD_FC_PREFIXES = frozenset({"value_fc2", "value_wdl_fc", "value_hlgauss_fc"})
+
+
+def _is_value_head_fc_key(name: str) -> bool:
+    return any(name.startswith(pfx) for pfx in _VALUE_HEAD_FC_PREFIXES)
+
+
 def warmstart(
     src_path: str,
     out_path: str,
     *,
     size: str,
     board_size: int,
+    target_value_head: str | None = None,
 ) -> dict:
     """Build a fresh `board_size` net, partial-load the source conv tower, save.
+
+    ``target_value_head`` (None = inherit the source's value_head) lets the
+    target use a DIFFERENT value representation than the source — e.g. warm-start
+    a WDL net's conv tower from a scalar 9x9 champion. The value head's final FC
+    is then a FRESH init (its key differs: value_fc2 vs value_wdl_fc), exactly
+    the intended behavior for the G15-wdl cell ("warm tower + fresh wdl head").
 
     Returns a summary dict (counts + percentages + key lists) for the caller to
     print / assert on.
@@ -114,11 +135,16 @@ def warmstart(
     #    structurally identical; only board_size changes. build_model only
     #    overrides non-default knobs, which keeps the off-path byte-identical.
     gp = src_cfg.get("global_pool", False)
+    src_value_head = src_cfg.get("value_head", "scalar")
+    # The target value head is the source's unless an override is requested
+    # (e.g. "wdl" warm-started from a "scalar" champion -> fresh WDL head).
+    tgt_value_head = target_value_head or src_value_head
+    head_swapped = tgt_value_head != src_value_head
     target = build_model(
         size,
         stem_padding=int(src_cfg.get("stem_padding", 1)),
         global_pool=(None if gp is False or gp == 0 else gp),
-        value_head=src_cfg.get("value_head", "scalar"),
+        value_head=tgt_value_head,
         value_hlgauss_bins=src_cfg.get("value_hlgauss_bins"),
         value_hlgauss_sigma=src_cfg.get("value_hlgauss_sigma"),
         activation=src_cfg.get("activation", "relu"),
@@ -163,9 +189,15 @@ def warmstart(
     # 4) ASSERT the entire conv tower transferred. A board-bound FC skip is
     #    expected; anything else (a conv / BN / pool_fc tensor that did NOT
     #    transfer) means the architectures diverged and the warm-start is unsafe.
-    surprises = sorted(
-        set(skipped_shape + skipped_missing) - _EXPECTED_BOARD_BOUND_KEYS
-    )
+    #    When the value head is deliberately swapped (--target-value-head), the
+    #    source's value-head FC (e.g. scalar value_fc2 -> WDL value_wdl_fc) is an
+    #    INTENDED fresh-head skip, not an arch mismatch, so it is tolerated too.
+    tolerated = set(_EXPECTED_BOARD_BOUND_KEYS)
+    if head_swapped:
+        tolerated |= {
+            k for k in (skipped_shape + skipped_missing) if _is_value_head_fc_key(k)
+        }
+    surprises = sorted(set(skipped_shape + skipped_missing) - tolerated)
     if surprises:
         raise SystemExit(
             "ARCH MISMATCH: these source tensors did NOT transfer and are not "
@@ -227,6 +259,7 @@ def warmstart(
         "size": size,
         "src_cfg": src_cfg,
         "target_cfg": dict(vars(target.cfg)),
+        "value_head_swapped": head_swapped,
         "n_src_keys": len(src_state),
         "n_transferred": len(transferred),
         "n_skipped": len(skipped_shape) + len(skipped_missing),
@@ -288,6 +321,13 @@ def main() -> None:
                    help="target architecture size preset (default: small)")
     p.add_argument("--board-size", type=int, default=15,
                    help="target board size (default: 15)")
+    p.add_argument("--target-value-head", default=None,
+                   choices=["scalar", "wdl", "hlgauss"],
+                   help="override the target's value representation (default: "
+                        "inherit the source's). Use 'wdl' to warm-start a WDL "
+                        "net's conv tower from a scalar champion — the value "
+                        "head's final FC is then a FRESH init (the G15-wdl "
+                        "warm-tower + fresh-wdl-head recipe).")
     args = p.parse_args()
 
     if not os.path.exists(args.src):
@@ -298,6 +338,7 @@ def main() -> None:
         args.out,
         size=args.size,
         board_size=args.board_size,
+        target_value_head=args.target_value_head,
     )
     _print_summary(summary)
     sys.exit(0)

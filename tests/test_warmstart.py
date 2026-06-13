@@ -167,3 +167,57 @@ def test_warmstart_detects_arch_mismatch(tmp_path):
     with pytest.raises(SystemExit, match="ARCH MISMATCH"):
         warmstart_mod.warmstart(src_path, out_path, size="small", board_size=15)
     assert not Path(out_path).exists()
+
+
+def test_warmstart_scalar_to_wdl_keeps_tower_and_fresh_head(tmp_path):
+    """The G15-wdl recipe: warm-start a WDL net's conv tower from a SCALAR 9x9
+    champion via --target-value-head wdl. The whole tower transfers; the scalar
+    source's value_fc2 is an INTENDED fresh-head skip (the WDL target has
+    value_wdl_fc instead), NOT an arch mismatch. The saved seed loads as a WDL
+    net that emits the derived scalar for MCTS/eval."""
+    src_path = str(tmp_path / "champ9_scalar.pt")
+    out_path = str(tmp_path / "g15_wdl_seed.pt")
+    src_state = _make_source_checkpoint(src_path)  # scalar champion
+
+    summary = warmstart_mod.warmstart(
+        src_path, out_path, size="small", board_size=15,
+        target_value_head="wdl",
+    )
+
+    assert summary["value_head_swapped"] is True
+    assert summary["target_cfg"]["value_head"] == "wdl"
+    assert summary["src_cfg"]["value_head"] == "scalar"
+    # The scalar value_fc2.* land in skipped_missing (no name match in the WDL
+    # target) and are tolerated; the three board-bound FCs are shape-skipped.
+    assert set(summary["skipped_missing"]) == {"value_fc2.weight", "value_fc2.bias"}
+    assert set(summary["skipped_shape"]) == _BOARD_BOUND
+    # The conv tower + value trunk still transfer at the same ~94% rate.
+    assert summary["pct_params_transferred"] > 90.0
+
+    # Saved seed loads as a 15x15 WDL net producing the scalar-value contract.
+    model, _ = load_checkpoint(out_path)
+    assert model.cfg.board_size == 15
+    assert model.cfg.value_head == "wdl"
+    model.eval()
+    x = torch.zeros(2, game.N_INPUT_PLANES, N, N)
+    with torch.no_grad():
+        out = model(x)
+        assert len(out) == 2  # eval/MCTS see (policy, derived scalar)
+        p, v = out
+    assert p.shape == (2, 225)
+    assert v.shape == (2,)
+    assert torch.all(v.abs() <= 1.0)
+
+    # The conv tower must be byte-identical to the scalar source (warm tower);
+    # the WDL head FC must be FRESH (its key is value_wdl_fc, absent from source).
+    seed_state = torch.load(out_path, map_location="cpu", weights_only=False)[
+        "model_state_dict"
+    ]
+    tower_prefixes = ("stem.", "tower.", "policy_conv", "policy_bn",
+                      "value_conv", "value_bn")
+    for k, src_t in src_state.items():
+        if k in _BOARD_BOUND or k.startswith("value_fc2"):
+            continue
+        assert torch.equal(seed_state[k], src_t), f"{k} not warm-transferred"
+    assert any(k.startswith("value_wdl_fc") for k in seed_state)
+    assert not any(k.startswith("value_fc2") for k in seed_state)
