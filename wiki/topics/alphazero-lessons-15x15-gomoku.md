@@ -107,6 +107,34 @@ in §5 — a big net *and* a big buffer is exactly the regime that needs it.)
   big-net run on its first eval — the net×search interaction takes training to
   show, and one n=8 deep-TC read is noisy besides.)
 
+**Confirmation (e248): both tiers climb — capacity×data is working.** Trained
+~100 more epochs and re-evaluated. The trajectory is the result:
+
+| run / epoch | vs Rapfi 1000ms | vs Rapfi 5000ms |
+|---|---|---|
+| 96×8 champion (e499) | 75% | **88%** |
+| 128×10+1.5M @ e146 | 75% | 50% |
+| 128×10+1.5M @ e248 | **88%** | 75% |
+
+Both tiers climbed as the 3.3M net trained into its capacity (fast 75→88, deep
+50→75) — the §2 "trains-into-capacity" curve, made concrete. Two reads:
+- *The fast tier now exceeds the 96×8 champion* (88% vs 75%). The bigger net,
+  once it has the data, is the better fast-TC player.
+- *The deep tier climbed 25 points (50→75) but isn't past the 96×8's 88% yet —
+  and e248 is only **half** the 96×8's training (the 96×8's own deep-TC didn't
+  reach 88% until ~e343).* So the two nets are roughly **tied in aggregate at
+  e248 with opposite tier-strengths**, and the 128×10's curve is still rising.
+  Ceiling-break verdict deferred to ~e350; the honest status is "on track, not
+  yet proven."
+
+The compound lesson across §2/§2a: **capacity and data are complements, not
+substitutes.** The 96×8 saturated its data (capacity-bound); the 128×10 starved
+on 400k (data-bound) then recovered on 1.5M; and with both levers pulled the
+bigger net climbs on both tiers toward and past the smaller one — but *capacity
+costs training time to convert into deep-TC strength* (more params ⇒ slower up
+the net×search curve). On a fixed laptop budget that trade — bigger ceiling, but
+you pay for it in epochs — is the whole planning problem in one sentence.
+
 **Methodological keeper:** a negative result ("more data didn't help") is a real
 finding when it's a clean, single-axis A/B with a trustworthy external metric. It
 *reallocates the search* — it told us to stop spending GPU on 96×8 data and move
