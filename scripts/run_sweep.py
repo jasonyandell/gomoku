@@ -209,6 +209,31 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # G15-96x8-bigbuf: the DATA experiment (2026-06-13). The 128x10 capacity step
+    # OVERSHOT — the 3.3M net got WORSE on the 400k buffer (overfit; aggregate
+    # 37.5% @1000ms vs the 96x8's 75%). FINDING: capacity must be matched by
+    # DATA. So test the data axis on the CONFIRMED-GOOD 96x8 (75/88, still
+    # improving when swapped out): same recipe but a 3.75x-bigger BIT-PACKED
+    # buffer (1.5M, #25; the 96x8 is fast enough that 8 workers fill it in
+    # ~40min). Q: does more data push the sweet-spot net past 75/88 AND avoid
+    # the overfit that bit the 128x10? Launch --resume from g15_champion_96x8_e499.pt.
+    "G15-96x8-bigbuf": Cell("G15-96x8-bigbuf-board15", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="96x8", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-128x10: SECOND capacity step (epic #21 derby). The 96x8 confirmed a
     # capacity win vs Rapfi (1000ms 62->75%, 5000ms 75->88%, both > 64x4's
     # ~67%, broadening with training), so ride the thesis. IDENTICAL recipe to
