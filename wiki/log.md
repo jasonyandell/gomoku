@@ -3,6 +3,24 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-12] topics | Added 15x15-era-feasibility-and-plan: the perf ceiling was the small model, not the Mac
+
+Filed [topics/15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md)
+plus the evidence cell `scripts/bench_board_scaling.py`. Measured on the idle
+M5 Max (torch 2.12.0, fp16, MPS): at the production wave=64 the champion arch
+runs 15×15 for **free** (0.98×), a 96×8/1.45M-param 15×15 net costs only
+**2.32×**, 128×10 costs 4.62× — direct confirmation of the dispatch-bound
+regime from [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
+Envelope: a WL5-scale 1M-game 15×15 run ≈ a week of wall-clock (to be
+validated by a live smoke slice per
+[topics/perf-bench-vs-real-training-cost.md](topics/perf-bench-vs-real-training-cost.md)).
+Plan: Phase 0 certify the v8 champion vs Rapfi at 9×9 → Phase 1 rules-variant
+decision (human-gated; swap2-freestyle recommended first) → Phase 2 port →
+Phase 3 smoke + sweeps + warm-start check → Phase 4 first 15×15 run (WDL head
+as first new contestant, bit-packed buffer prerequisite) → Phase 5 derby +
+perf-lab reopen (ANE `L09i-fix-load` first). Indexed as a new Start Here row
+and under Performance And Hardware.
+
 ## [2026-06-01] topics | Added workflow-orchestration: Claude Code Workflows mapped onto the lab
 
 Filed [topics/workflow-orchestration.md](topics/workflow-orchestration.md) and the
