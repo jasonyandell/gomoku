@@ -137,17 +137,37 @@ class ReplayBuffer:
         planes_np = unpack_planes(packed, self._plane_elems, self._plane_shape)
         return torch.from_numpy(planes_np).to(self.device)
 
-    def _planes_view(self) -> torch.Tensor:
-        """Float32 view of the first `self.size` live rows' planes on `device`.
+    # Max planes-tensor elements we will ever materialize in one unpack/reshape.
+    # MPSGraph rejects tensors with > INT_MAX (2**31-1) elements; at board 15 a
+    # whole-buffer unpack of a 1.5M-row packed store is ~5.7e9 elems, far past
+    # that (the ~550k-row crash in issue #25 was exactly this: 550k * 17*15*15 >
+    # INT_MAX). Diagnostic/rebuild read paths chunk to stay strictly under this,
+    # so a full-buffer op never builds a single oversized tensor regardless of
+    # buffer size or board. Budget << INT_MAX leaves headroom for the unpacked
+    # path's own gather intermediates and keeps each GPU chunk small.
+    _MAX_UNPACK_ELEMS = 1 << 28  # 268,435,456 — ~70 MB float32 per chunk
 
-        Used by the diagnostic/rebuild read paths that previously sliced
-        `self.planes[:self.size]` directly. Under packing this unpacks the live
-        rows once (CPU numpy → float32) — callers are bench/diagnostic, not the
-        per-batch hot path."""
+    def _plane_chunk_rows(self) -> int:
+        """Rows per chunk such that one unpacked chunk stays under the MPS
+        INT_MAX element cap. Always >= 1 (a single row is far under the cap)."""
+        return max(1, self._MAX_UNPACK_ELEMS // max(1, self._plane_elems))
+
+    def _iter_planes_chunks(self):
+        """Yield (start, planes_chunk) over the first `self.size` live rows, each
+        chunk a float32 tensor on `device` of at most `_plane_chunk_rows()` rows.
+
+        The chunked replacement for the old whole-buffer `_planes_view()`: a
+        full-buffer diagnostic (stone counts, key rebuild) consumes chunks and
+        reduces/copies each immediately, so NO single tensor ever exceeds the MPS
+        INT_MAX element cap regardless of buffer size or board. Under packing
+        each chunk is a small per-chunk unpack; when packing is OFF it is a plain
+        gather of `self.planes` (same values as the old `self.planes[:size]`)."""
         if self.size == 0:
-            return torch.zeros((0, *self._plane_shape), dtype=torch.float32,
-                               device=self.device)
-        return self._planes_at(torch.arange(self.size))
+            return
+        step = self._plane_chunk_rows()
+        for start in range(0, self.size, step):
+            end = min(start + step, self.size)
+            yield start, self._planes_at(torch.arange(start, end))
 
     def _sample_indices(self, batch_size: int) -> torch.Tensor:
         """Pick batch indices. Uniform unless the recency curator is on (and the
@@ -312,12 +332,17 @@ class ReplayBuffer:
         if not self.cross_game_enabled or self.size == 0:
             return
         from gomoku.position_stats import canonical_key_from_planes
-        planes_cpu = self._planes_view().detach().cpu().numpy()
-        for r in range(self.size):
-            hi, lo, top = canonical_key_from_planes(planes_cpu[r])
-            self.pos_key[r, 0] = np.uint64(hi)
-            self.pos_key[r, 1] = np.uint64(lo)
-            self.pos_key[r, 2] = np.uint64(top)
+        # Chunked: unpack at most `_plane_chunk_rows()` rows at a time and reduce
+        # each chunk to its per-row keys before moving on, so the whole-buffer
+        # rebuild never materializes a single >INT_MAX-element tensor (issue #25).
+        for start, chunk in self._iter_planes_chunks():
+            planes_cpu = chunk.detach().cpu().numpy()
+            for j in range(planes_cpu.shape[0]):
+                r = start + j
+                hi, lo, top = canonical_key_from_planes(planes_cpu[j])
+                self.pos_key[r, 0] = np.uint64(hi)
+                self.pos_key[r, 1] = np.uint64(lo)
+                self.pos_key[r, 2] = np.uint64(top)
 
     def shape_stats(self, stone_buckets: tuple[int, ...] = (0, 5, 10, 15, 20, 30, 40, 60, 81)
                     ) -> dict[str, float]:
@@ -341,10 +366,14 @@ class ReplayBuffer:
         from gomoku.game import N_INPUT_PLANES
         # current-side me-plane = 0, current-side opp-plane = N_INPUT_PLANES // 2
         opp_idx = N_INPUT_PLANES // 2
-        view = self._planes_view()
-        # sum stones per position: (n,) tensor of ints in [0, BOARD_SIZE^2]
-        stones = (view[:, 0].sum(dim=(-2, -1)) + view[:, opp_idx].sum(dim=(-2, -1)))
-        stones_cpu = stones.detach().cpu().numpy()
+        # Sum stones per position into a (size,) array, reducing each unpacked
+        # chunk to its per-row counts immediately. Chunking keeps the per-cycle
+        # diagnostic from materializing a single >INT_MAX-element planes tensor
+        # on MPS (issue #25 — the ~550k-row crash was here, called every cycle).
+        stones_cpu = np.empty((self.size,), dtype=np.float32)
+        for start, chunk in self._iter_planes_chunks():
+            s = (chunk[:, 0].sum(dim=(-2, -1)) + chunk[:, opp_idx].sum(dim=(-2, -1)))
+            stones_cpu[start:start + s.shape[0]] = s.detach().cpu().numpy()
         z = self.z[:self.size].detach().cpu().numpy()
         out: dict[str, float] = {
             "buffer/n": float(self.size),
