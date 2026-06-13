@@ -29,7 +29,13 @@ import numpy as np
 import pytest
 import torch
 
-from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES
+from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES, GameState
+from gomoku.mcts import (
+    MCTSGame,
+    make_torch_evaluator,
+    policy_from_visits,
+    run_batched_mcts,
+)
 from gomoku.model import (
     GomokuNet,
     ModelConfig,
@@ -298,3 +304,48 @@ def test_old_checkpoint_without_value_head_loads_as_scalar(tmp_path):
     loaded.eval()
     with torch.no_grad():
         assert len(loaded(x)) == 2
+
+
+# --------------------------------------------------------------------------
+# MCTS consumes a WDL net's DERIVED scalar value transparently (python path).
+# This is the load-bearing end-to-end gate: a WDL evaluator must plug into the
+# same MCTS backup as a scalar evaluator, because make_torch_evaluator only ever
+# sees model(x) -> (priors, scalar_value) — the 3 logits are scalarized to
+# P(win)-P(loss) INSIDE forward(), upstream of the evaluator boundary. The
+# native MCTS engine consumes that SAME scalar via evaluate_planes(), so it needs
+# no WDL awareness (see the G15-wdl cell comment in scripts/run_sweep.py).
+# --------------------------------------------------------------------------
+
+def test_mcts_runs_with_wdl_evaluator_python_path():
+    """A WDL net wrapped by make_torch_evaluator drives run_batched_mcts to a
+    valid visit policy — proving the derived scalar feeds MCTS backup exactly
+    like a scalar net. The evaluator returns (priors, values) where values are
+    the WDL-derived P(win)-P(loss); MCTS never knows it is a WDL net."""
+    torch.manual_seed(5)
+    m = build_model("small", value_head="wdl")
+    m.eval()
+    ev = make_torch_evaluator(m, DEV)
+
+    # The evaluator's value output is the derived scalar in [-1, 1], one per state.
+    states = [GameState.initial(), GameState.initial().apply(BOARD_SIZE * BOARD_SIZE // 2)]
+    priors, values = ev(states)
+    assert priors.shape == (2, N_ACTIONS)
+    assert values.shape == (2,)
+    assert np.all(values <= 1.0 + 1e-5) and np.all(values >= -1.0 - 1e-5)
+    # It must match the model's own derived scalar (the forward() P(W)-P(L)).
+    import numpy as _np  # local alias to keep the assert self-contained
+    x = _np.stack([s.to_planes() for s in states]).astype(_np.float32)
+    with torch.no_grad():
+        _, v_model = m(torch.from_numpy(x))
+    assert _np.allclose(values, v_model.numpy(), atol=1e-5)
+
+    # End to end: MCTS runs and produces a normalized policy over legal actions.
+    games = [MCTSGame(GameState.initial()) for _ in range(3)]
+    run_batched_mcts(games, ev, n_simulations=24, add_root_noise=False)
+    for g in games:
+        pi = policy_from_visits(g.root, temperature=1.0)
+        assert pi.shape == (N_ACTIONS,)
+        assert abs(float(pi.sum()) - 1.0) < 1e-4
+        # All visit mass sits on legal actions only.
+        assert float(pi[~g.root.legal_mask].sum()) == 0.0
+        assert g.root.total_visits() >= 24

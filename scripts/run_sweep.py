@@ -236,6 +236,48 @@ CELLS: dict[str, Cell] = {
                                    "--vcf-max-depth", "8",
                                    "--vcf-max-nodes", "2500"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # G15-wdl: the 15x15 WDL (win/draw/loss) value-representation derby contestant
+    # (epic #21; sibling of the 9x9 derby-x-wdl). BYTE-IDENTICAL to G15-seed in
+    # every Cell field EXCEPT it adds the ONE lever --value-head wdl on BOTH the
+    # train + worker args. The value head emits 3 logits over {win,draw,loss}
+    # trained with cross-entropy (target = the WDL generalization of the scalar z:
+    # (relu(z), 1-|z|, relu(-z))); every scalar consumer (MCTS leaf eval, the
+    # anchor ladder) sees the DERIVED v=P(win)-P(loss) computed in model.forward(),
+    # so the native C MCTS hot path and self-play generation are byte-identical —
+    # the C engine never sees the 3 logits, only the scalar that crosses the
+    # evaluate_planes() boundary. The --value-head wdl on the worker is a
+    # consistency assert; the model's head comes from the checkpoint config.
+    #
+    # WARM START: the conv tower warm-starts from the 9x9 scalar champion via
+    # `scripts/warmstart_15x15.py --target-value-head wdl` (the value head is
+    # FRESH regardless — a scalar source has value_fc2, a WDL target has
+    # value_wdl_fc, so the value-head weights never transfer by name). Launch
+    # with `--resume <wdl_warmstart_seed.pt>` exactly like G15-seed's swap to the
+    # warm-started seed (wandb qvr95npw). So: WARM tower (94.6% param transfer
+    # from the 9x9 champion) + FRESH 3-logit WDL value head — the head relearns
+    # the WDL representation from scratch while inheriting all board-pattern
+    # features. NOTE the value-discount target (0.98^plies) flows through the
+    # SAME WDL target builder, so this is still exactly ONE lever vs G15-seed:
+    # the value REPRESENTATION (scalar tanh -> categorical WDL).
+    "G15-wdl": Cell("G15-wdl-v8recipe-board15", sgd_per_game=1.0,
+                buffer_size=400_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98",
+                                   "--value-head", "wdl"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--value-head", "wdl"]),
     "A": Cell("A-K1-buf50k",   sgd_per_game=1.0, buffer_size=50_000),
     "B": Cell("B-K2-buf50k",   sgd_per_game=2.0, buffer_size=50_000),
     "C": Cell("C-K4-buf50k",   sgd_per_game=4.0, buffer_size=50_000),
