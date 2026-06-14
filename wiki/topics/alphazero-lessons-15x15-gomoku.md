@@ -201,6 +201,42 @@ needs more epochs to convert capacity into depth) gets its fair test at e500 —
 final n=16 deep-TC read. If 50% climbs toward/past 69%, it was early; if it sticks,
 the reversal is real.
 
+**Verdict (e502): the reversal is real, and the dissociation is the prize.** The
+final n=16 deep-TC read at e502 — ~154 epochs past e348 — came back **50%
+(8-8-0), identical to e348.** Flat. The "still-early" hypothesis is refuted: more
+training did not convert capacity into depth.
+
+What makes this worth more than a clean win is *what moved while strength didn't.*
+Over those 154 epochs the 128×10's **value-loss set fresh lows** (0.172 → 0.152)
+and its **self-play games lengthened** (~40 → ~55 plies, i.e. more defended, more
+"mature" play) — every *internal* signal said the net was still improving. And
+its **deep-search strength against Rapfi sat motionless at 50%.** The net got
+measurably better at its own training objective and not one game better at deep
+play. That is §3's "the loss lies" lesson in its most distilled form: *value-loss
+is a fit to the self-play distribution; it is not deep-search playing strength,
+and the two genuinely decoupled here.*
+
+The full capacity arc, with every number now at n≥16 where it matters:
+
+| net | vs Rapfi 1000ms (fast) | vs Rapfi 5000ms (deep) |
+|---|---|---|
+| 64×4 | ~67% | ~67% |
+| **96×8 (champion)** | 75% | **69%** |
+| 128×10 + 1.5M buffer | **88%** | 50% |
+
+It's an **inverted-U in deep strength**: capacity paid at depth up to 96×8, then
+96×8→128×10 *traded* deep strength for fast strength (deep 69→50, fast 75→88).
+**96×8 is the deep-TC sweet spot for this game/recipe/budget, and we are past it.**
+The honest mechanism is still the leading guess above (capacity sharpened the
+policy, not the value's deep-search discrimination) — but whether it's that, a
+policy/value tournament inside a fixed trunk, or the 15×15 recipe simply capping
+deep strength near where 96×8 already sits, the *operational* conclusion is firm:
+on a laptop budget, **scaling the net past the sweet spot buys you snap strength
+and costs you depth.** For competitive (long-TC) play, the smaller 96×8 is the
+better champion — the opposite of what "bigger net" intuition predicts.
+
+`96×8 e499 (75 fast / 69 deep)` stands as the 15×15 champion.
+
 **Methodological keeper:** a negative result ("more data didn't help") is a real
 finding when it's a clean, single-axis A/B with a trustworthy external metric. It
 *reallocates the search* — it told us to stop spending GPU on 96×8 data and move
