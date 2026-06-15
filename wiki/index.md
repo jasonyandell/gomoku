@@ -7,6 +7,17 @@ history.
 
 ## Start Here
 
+> ⚠️ **2026-06-15 RECKONING — read before trusting any 15×15 strength number.**
+> The Rapfi yardstick the campaign ranked on is **broken** (weightless classical
+> build; ignores its own search time → the "TC tiers" were one shallow engine
+> measured twice). Direct head-to-head **overturns the rankings**: `128×10` beats
+> the crowned `96×8 e499` champion **40-0**; the "capacity reversal" never happened;
+> the deepgen search-axis experiment failed (specializes, not strengthens). The
+> 96×8 "champion" is the *weakest* trained net. See **[lessons §8–§9](topics/alphazero-lessons-15x15-gomoku.md)**,
+> handoff `handoffs/handoff-2026-06-15-yardstick-overturns-campaign.md`, issues
+> **#28** (fix yardstick) and **#29** (re-crown + matched-epoch capacity ladder).
+> **Gate every "did this help?" on head-to-head vs the preserved champion, not Rapfi.**
+
 Pick the doorway that matches the task. The big training notebook is still the
 source of chronological evidence; these routes keep future sessions from
 reading it front-to-back unless the work actually needs that.
