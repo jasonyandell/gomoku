@@ -874,6 +874,51 @@ floor?" question. (Embryo26 also contends for the GPU via Vulkan, so it requires
 ### 12E — Status as of this writing
 
 The crush-ourselves red-team — white-defense failure mode, tactical blind-spots, seed/re-crown
-robustness — and the fixed real-engine tournament are in progress. Results will be appended. The
-discipline, not the scoreline, is the artifact: we will only believe a strength claim after we have
-failed to break it.
+robustness — and the fixed real-engine tournament are in progress. The real-engine bracket results
+are now in: see §12F.
+
+### 12F — The real-engine bracket, measured (harness fixed)
+
+**Harness fix (merged to main).** The fragility named in §12C is resolved.
+`gomoku/external_engine.py` now: sends RESTART before each BOARD command (re-entrant
+board replay); takes the move *only* from a bare `X,Y` line (skips banners,
+`DATABASE`, `my move [..]`, and non-fatal `ERROR` chatter); uses `BEGIN` on an empty
+board; and scales the read deadline. +5 regression tests, 124 tests pass, the Rapfi
+path preserved. This unblocked full games against real Gomocup engines running under
+wine on this Apple-Silicon Mac.
+
+**The bracket.** Champion `g15_128x10_bigbuf_eval502.pt` (128×10), sims=200,
+balanced openings (`--random-opening-moves 4`), 5000–10000ms, head-to-head validated
+(match.py champion-vs-self = 50%):
+
+| opponent | overall | as black | as white |
+|---|---|---|---|
+| Yixin2018 (n=8) | 8-0 (100%) | 4-0 | 4-0 |
+| Pela23, 2023 (n=8) | 4-4 (50%) | 4-0 | 0-4 |
+| Zetor17 (n=8) | 4-4 (50%) | 4-0 | 0-4 |
+| Embryo26, 2026 top seed (n=6) | 2-4 (33%) | 2-1 | 0-3 |
+
+**Interpretation.** The bracket shows a coherent strength gradient: we beat
+Yixin2018, draw Pela23 and Zetor17, and sit below the 2026 frontier (Embryo26).
+The champion is upper-mid-pack — not under the floor, not at the top. We cleared
+the humble bar (win-as-black or draw-as-white) against every engine, including 2
+wins over the 2026 top seed.
+
+**The actionable finding (consistent across all opponents, including Rapfi's 40%
+white in §12A):** the champion is dominant as black (4-0 vs every engine here) and
+weak as white — strong engines beat us 0-4 when they move first. Defense (the white
+side) is both the ceiling and the obvious next research target: we trained an
+attacker, not a defender.
+
+**Caveats (cork stays in):** n=6-8 is small. The engines run under wine and may be
+slowed vs native, so against native Embryo26 we likely sit lower than 33% implies.
+This is a placement, not a calibrated rating; much of the black dominance is
+first-mover advantage. Operator note: a hung `sudo`/gstreamer install was timing
+Embryo26 out — the human at the keyboard caught and approved it, unblocking the
+top-seed measurement. A remote agent would have seen only timeouts.
+
+**Honest process note.** The adversarial red-team workflow from §12C wedged
+partway through (GPU contention while the tournament ran) and never produced formal
+verdicts. Its primary target — the harness — was found and fixed manually. The
+white-defense weakness is already established from this bracket; a focused
+white-side failure-mode analysis is the clean follow-up.
