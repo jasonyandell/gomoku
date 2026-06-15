@@ -690,6 +690,36 @@ the recipe (buffer 400k / opponent-mix / SGD schedule) was tuned for 64×4 and i
 unstable at 96×8 capacity. Recipe surgery is the required follow-up before 96×8 can
 contribute a clean capacity result.
 
+### Correction (2026-06-15, later)
+
+The "redo reproduced the regression" conclusion above was overstated. The full
+trajectory vs the frozen seed (@100 sims, n=40) is:
+
+| checkpoint | result | win% |
+|---|---|---|
+| redo e127 | 40W-0L | 100% |
+| redo e234 | 40W-0L | 100% |
+| redo e377 | 20W-20L | 50% |
+| redo e440 | 20W-0L-20D | **75%, zero losses** |
+
+This is **noisy and non-monotonic** (100 → 100 → 50 → 75). The redo declined from
+its early peak but **never fell below seed** — zero losses at e440. The earlier
+"regression reproduced" reading over-weighted the single e377=50% dip. Moreover,
+the run was **stopped at e439**, before the epoch (~e499) where the original
+96x8-grown run collapsed to losing-the-seed 40-0. We did not observe that
+catastrophic below-seed drop in the redo at all.
+
+**Honest status: INCONCLUSIVE.** Whether the v8 recipe systematically regresses
+96×8 (vs the original run being partly anomalous) is unresolved. A clean re-test
+would train past e499 with a live head-to-head gate that freezes the peak and
+watches for a sustained drop below seed.
+
+**Meta-lesson:** This correction is itself an instance of §4/§8's discipline. We
+concluded "regression reproduced" from one noisy n=40 read at e377 — exactly the
+single-read trap the whole campaign is about. n=40 single reads are noisy; trends
+need multiple reads AND enough epochs to be load-bearing before a conclusion is
+published.
+
 ## 11. Capacity × search IS multiplicative — confirmed clean, the reversal was the artifact (2026-06-15)
 
 §2 originally claimed that net capacity and search depth are multiplicative — a
