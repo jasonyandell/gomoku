@@ -3597,3 +3597,39 @@ Continuation of the one-shot pass (cert finished, GPU freed, smoke run clean).
   first real 15×15 run (carry v8 recipe; WDL head = first new contestant;
   bit-pack the buffer first per buffer-bit-packing.md). Follow-ups #22 (swap2),
   #23 (renju), #24 (web UI 15×15).
+
+## 2026-06-15 — The 96×8 "champion" is REGRESSED below its own untrained seed
+
+**Correction to the 15×15 campaign record.** The overnight session (dbe0609b)
+re-ranked all 15×15 nets via direct head-to-head (match.py validated:
+champion-vs-self = 50%) and found that the Rapfi-based rankings were wrong
+end-to-end (§8–§9 of `wiki/topics/alphazero-lessons-15x15-gomoku.md`).
+Today's follow-up uncovered a deeper problem: the 96×8 trained "champion"
+(`g15_champion_96x8_e499.pt`) is **catastrophically regressed below its own
+untrained net2net seed** (`g15_96x8_seed.pt`):
+
+- `g15_96x8_seed.pt` vs `g15_champion_96x8_e499.pt` = **40-0** (seed wins).
+- `g15_96x8_seed.pt` vs `g15_champion_e909.pt` (64×4) = **50-50** (tied).
+- `g15_champion_96x8_e499.pt` vs `g15_champion_e909.pt` (64×4) = **0-40**.
+- `g15_champion_96x8_e499.pt` vs `g15_128x10_bigbuf_eval502.pt` = **0-40**.
+
+400 epochs of self-play training on the v8 recipe made the 96×8 40-0 **worse**
+than its starting point. This was entirely invisible to internal metrics
+throughout the run: plies 30–48, vl 0.17–0.25, internal-ladder win-rates
+85–100% — all looked healthy. The Rapfi yardstick (broken per §8) also did not
+flag it.
+
+**The net2net grow itself was valid** (output deviation <1e-4); the regression
+is in the TRAINING, not the grow step. Why the run regressed is open (recipe?
+self-play distribution drift?). The `G15-96x8-redo` experiment (cell added
+to `scripts/run_sweep.py`) re-trains from the good seed to test reproducibility.
+
+**Current champion (2026-06-15):** `g15_128x10_bigbuf_eval502.pt` (128×10) is
+the strongest preserved net, beating the 96×8 e499 40-0. Absolute strength
+awaits a fixed yardstick (#28); clean capacity curve awaits same-epoch matches
+(#29). See §10 of `wiki/topics/alphazero-lessons-15x15-gomoku.md` for the full
+lesson.
+
+**Operational note:** `g15_96x8_seed.pt` is a GOOD checkpoint (ties 64×4-e909).
+Do NOT use `g15_champion_96x8_e499.pt` as a resume point or production net —
+it is weaker than its own seed. The seed is the right warm-start for the redo.

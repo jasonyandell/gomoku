@@ -209,6 +209,44 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # G15-96x8-redo (2026-06-15): RE-TRAIN from the GOOD net2net seed to diagnose
+    # the silent self-play regression. Context: the original G15-96x8 run trained
+    # 400+ epochs and was crowned 15×15 champion — but head-to-head (2026-06-15)
+    # reveals it is CATASTROPHICALLY REGRESSED: its own untrained net2net seed
+    # (g15_96x8_seed.pt) BEATS the trained e499 champion 40-0, and that seed
+    # TIES the 64×4-e909 (50%). So 400 epochs of self-play made the net 40-0 WORSE
+    # than its starting point. This was INVISIBLE to every internal signal throughout:
+    # plies 30-48, vl 0.17-0.25, internal-ladder win-rates 85-100% — all healthy.
+    # The net2net grow itself was valid (output deviation <1e-4); the regression is
+    # in the TRAINING, not the grow step. Two hypotheses:
+    #   H1 CAPACITY: a re-run with the same recipe will produce a strong 96×8 net
+    #      (the original run was an unlucky outlier / one-off data-flow artifact).
+    #   H2 RECIPE: the v8 recipe systematically regresses 96×8 via self-play
+    #      distribution drift — a second run will also crater vs its seed.
+    # Evaluation: head-to-head vs the FROZEN seed and vs 64×4-e909, NOT Rapfi
+    # (the Rapfi yardstick is broken — §8 of alphazero-lessons-15x15-gomoku.md).
+    # A re-run that BEATS its seed (H1) rebuilds confidence in capacity monotonicity
+    # and unlocks 96×8 as a valid step on the capacity ladder. A re-run that REGRESSES
+    # again (H2) pins the recipe as the cause and points to recipe surgery.
+    # Seed: sweep_runs/g15_96x8_seed.pt (the good net2net grown checkpoint).
+    # BYTE-IDENTICAL to G15-96x8 — only the run-dir name changes.
+    "G15-96x8-redo": Cell("G15-96x8-redo-board15", sgd_per_game=1.0,
+                buffer_size=400_000, games_per_epoch=64,
+                size="96x8", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # G15-96x8-deepgen (2026-06-14, #27): the SEARCH-DEPTH axis. Every closed
     # 15x15 experiment (capacity 64x4->96x8->128x10, data 400k->1.5M, epochs
     # ->e617) held n_simulations=100 FIXED. The deep-TC plateau (96x8 champion
