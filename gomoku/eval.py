@@ -391,21 +391,58 @@ def play_match_pickers(
     *,
     n_games: int,
     seed: int = 0,
+    random_opening_moves: int = 0,
 ) -> MatchResult:
     """Play A vs B, alternating colors. Returns result from A's perspective.
 
     Draws count as half-wins in `win_rate`. The result also carries a per-color
     split (see `MatchResult`) so analyses can see whether losses cluster on the
     color the model played.
+
+    When ``random_opening_moves > 0`` each game pair shares the SAME random
+    opening position: game pair (2k, 2k+1) both start from an identical K-stone
+    opening drawn from a uniform-random playout, but swap which picker plays
+    black vs white.  This mirrors the swap-2 convention's goal of neutralising
+    first-mover advantage: neither player benefits from the opening stone
+    placement because each side plays both colors from the same starting board.
+
+    If ``n_games`` is odd the final game gets its own opening (no partner for
+    the color swap), so keep ``n_games`` even for balanced evaluation.
     """
+    from gomoku.self_play import _random_opening_state  # local to avoid heavy top-level dep
+
     rng = np.random.default_rng(seed)
     outcomes: list[tuple[bool, str]] = []
+    # Pre-generate one opening state per game-pair so both games in a pair
+    # share the same starting position before the pickers take over.
+    opening_states: list[GameState] = []
+    if random_opening_moves > 0:
+        for pair_idx in range((n_games + 1) // 2):
+            opening_state, _ = _random_opening_state(rng, random_opening_moves)
+            opening_states.append(opening_state)
+
     for g_idx in range(n_games):
         a_is_black = (g_idx % 2 == 0)
         a_to_move = a_is_black
-        state = GameState.initial()
+        # Use the shared opening for both games in each color-swap pair.
+        if random_opening_moves > 0:
+            pair_idx = g_idx // 2
+            state = opening_states[pair_idx]
+            # After a random opening, side-to-move is encoded in state.board[0].
+            # The ply counter drives picker assignment; seed it from the opening
+            # ply count so win/loss accounting stays correct regardless of how
+            # many moves were pre-played.
+            ply = state.move_count
+            # After an even-ply opening black is still to move; after an
+            # odd-ply opening white is to move.  Adjust a_to_move accordingly.
+            if ply % 2 == 1:
+                # White to move after the opening; flip from the base assignment.
+                a_to_move = not a_is_black
+        else:
+            state = GameState.initial()
+            ply = 0
+
         winner_side: int | None = None
-        ply = 0
         while True:
             picker = picker_a if a_to_move else picker_b
             action = picker(state, rng)

@@ -123,10 +123,19 @@ def _format_result(label_a: str, label_b: str, r: MatchResult) -> str:
     )
 
 
-def _run_single(spec_a: PlayerSpec, spec_b: PlayerSpec, n_games: int, seed: int) -> MatchResult:
+def _run_single(
+    spec_a: PlayerSpec,
+    spec_b: PlayerSpec,
+    n_games: int,
+    seed: int,
+    random_opening_moves: int = 0,
+) -> MatchResult:
     pa = build_player(spec_a)
     pb = build_player(spec_b)
-    return play_match_pickers(pa, pb, n_games=n_games, seed=seed)
+    return play_match_pickers(
+        pa, pb, n_games=n_games, seed=seed,
+        random_opening_moves=random_opening_moves,
+    )
 
 
 def _print_matrix(specs: list[PlayerSpec], results: dict[tuple[int, int], MatchResult]) -> None:
@@ -160,6 +169,16 @@ def parse_args() -> argparse.Namespace:
                    help="Run all pairs across all given specs.")
     p.add_argument("--n-games", type=int, default=20)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--random-opening-moves", type=int, default=0, metavar="N",
+        help=(
+            "Start each game pair from an identical N-stone random opening so "
+            "first-mover advantage is neutralised.  Each color-swap pair (A-as-"
+            "black / A-as-white) shares the same opening position. Default 0 "
+            "(empty board, reproduces old behaviour). Recommended: 4-6 for "
+            "15x15 freestyle where black has a strong first-mover advantage."
+        ),
+    )
     return p.parse_args()
 
 
@@ -177,7 +196,10 @@ def main() -> None:
                 if i == j:
                     continue
                 print(f"running {sa.label()} vs {sb.label()} ({args.n_games} games)...")
-                results[(i, j)] = _run_single(sa, sb, args.n_games, args.seed)
+                results[(i, j)] = _run_single(
+                    sa, sb, args.n_games, args.seed,
+                    random_opening_moves=args.random_opening_moves,
+                )
                 print("  " + _format_result(sa.label(), sb.label(), results[(i, j)]))
         print()
         _print_matrix(specs, results)
@@ -189,7 +211,10 @@ def main() -> None:
     spec_a = parse_spec(raw_specs[0])
     spec_b = parse_spec(raw_specs[1])
     print(f"running {spec_a.label()} vs {spec_b.label()} ({args.n_games} games)...")
-    r = _run_single(spec_a, spec_b, args.n_games, args.seed)
+    r = _run_single(
+        spec_a, spec_b, args.n_games, args.seed,
+        random_opening_moves=args.random_opening_moves,
+    )
     print(_format_result(spec_a.label(), spec_b.label(), r))
 
 

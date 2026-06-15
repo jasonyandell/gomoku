@@ -124,6 +124,7 @@ def run_rapfi_eval(
     fpu_reduction_c: float = 0.0,
     reuse_tree: bool = False,
     proven_prop: bool = False,
+    random_opening_moves: int = 0,
     out: str | None = None,
     extra_fields: dict | None = None,
     print_progress: bool = True,
@@ -198,7 +199,8 @@ def run_rapfi_eval(
         t0 = time.time()
         try:
             res = play_match_pickers(
-                model_picker, engine, n_games=n_games, seed=seed
+                model_picker, engine, n_games=n_games, seed=seed,
+                random_opening_moves=random_opening_moves,
             )
         finally:
             engine.close()
@@ -257,6 +259,14 @@ def main() -> None:
     ap.add_argument("--proven-prop", action="store_true",
                     help="Proven win/loss propagation (derby-b3n eval lever).")
     ap.add_argument("--out", default=None, help="JSONL output path (append).")
+    ap.add_argument(
+        "--random-opening-moves", type=int, default=0, metavar="N",
+        help=(
+            "Start each game pair from an identical N-stone random opening. "
+            "Default 0 (empty board). Recommended: 4-6 for 15x15 freestyle "
+            "to neutralise black's first-mover advantage."
+        ),
+    )
     args = ap.parse_args()
 
     records = run_rapfi_eval(
@@ -272,6 +282,7 @@ def main() -> None:
         fpu_reduction_c=args.fpu_reduction_c,
         reuse_tree=args.reuse_tree,
         proven_prop=args.proven_prop,
+        random_opening_moves=args.random_opening_moves,
         out=args.out,
     )
 
