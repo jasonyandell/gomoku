@@ -22,6 +22,7 @@ from gomoku.external_engine import (
     ExternalEngineError,
     ExternalEnginePlayer,
     _coord_to_xy,
+    _parse_coord,
     _xy_to_action,
 )
 from gomoku.game import BOARD_SIZE, GameState
@@ -137,6 +138,98 @@ def test_full_game_via_play_match_pickers():
     finally:
         a.close()
         b.close()
+
+
+def test_parse_coord_takes_only_bare_coordinates():
+    """The move reply is identified POSITIVELY: only a leading X,Y is a move."""
+    assert _parse_coord("7,7") == (7, 7)
+    assert _parse_coord("7,7 1") == (7, 7)  # swap-variant trailing tokens ok
+    # Chatter that must NOT be mistaken for a move:
+    assert _parse_coord("ERROR my move [7,7]") is None  # bracketed, not bare
+    assert _parse_coord("MESSAGE Speed=2175") is None
+    assert _parse_coord("DEBUG depth 50, nodes 0") is None
+    assert _parse_coord("DATABASE hit") is None
+    assert _parse_coord("?") is None
+    assert _parse_coord("OK") is None
+    assert _parse_coord("UNKNOWN command '7,7,2'") is None  # leading token != coord
+
+
+def test_nonfatal_error_chatter_is_skipped():
+    """Engines (Yixin/Pela/Eulring) emit 'ERROR my move [..]' diagnostics BEFORE
+    the real move. The OLD reader hard-failed on any ERROR line; the move reader
+    must skip them and read the following coordinate."""
+    p = ExternalEnginePlayer(
+        ExternalEngineConfig(cmd=_stub_cmd("err_chatter"), timeout_ms=200)
+    )
+    try:
+        state = GameState.initial().apply(0)  # one stone, so we send a BOARD
+        rng = np.random.default_rng(0)
+        action = p(state, rng)
+        assert action in set(int(a) for a in state.legal_actions())
+    finally:
+        p.close()
+
+
+def test_boardonce_engine_survives_multi_move_via_restart():
+    """Zetor2017 class: BOARD is one-shot; a second BOARD without an intervening
+    RESTART desyncs. Our wrapper sends RESTART before every BOARD, so a full
+    multi-move sequence must work against the 'boardonce' stub."""
+    p = ExternalEnginePlayer(
+        ExternalEngineConfig(cmd=_stub_cmd("boardonce"), timeout_ms=200)
+    )
+    try:
+        rng = np.random.default_rng(0)
+        state = GameState.initial().apply(0)  # non-empty -> BOARD path
+        for _ in range(4):  # several moves; each re-sends a full BOARD
+            action = p(state, rng)
+            assert action in set(int(a) for a in state.legal_actions())
+            state = state.apply(action)
+            # apply an opponent move too so the board keeps growing
+            opp_legal = list(int(a) for a in state.legal_actions())
+            state = state.apply(opp_legal[0])
+    finally:
+        p.close()
+
+
+def test_resign_on_empty_board_is_handled_via_begin():
+    """Zetor2017 resigns on an empty BOARD/DONE but answers BEGIN. On a truly
+    empty board the wrapper must send BEGIN (not an empty BOARD) and get a move."""
+    p = ExternalEnginePlayer(
+        ExternalEngineConfig(cmd=_stub_cmd("resign_empty"), timeout_ms=200)
+    )
+    try:
+        state = GameState.initial()  # empty board -> BEGIN path
+        rng = np.random.default_rng(0)
+        action = p(state, rng)
+        assert action == 0  # lowest empty cell on an empty board
+        assert action in set(int(a) for a in state.legal_actions())
+    finally:
+        p.close()
+
+
+def test_read_deadline_scales_with_timeout_budget():
+    """A long per-move budget must lift the read deadline above the static floor,
+    so a slow engine under a generous timeout_turn is not cut off early."""
+    cfg = ExternalEngineConfig(
+        cmd=_stub_cmd("lowest"), timeout_ms=20000, read_timeout_s=30.0,
+        read_timeout_slack=3.0,
+    )
+    p = ExternalEnginePlayer(cfg)
+    try:
+        # 20000ms * 3 = 60s > 30s floor.
+        assert p._read_deadline_s() == pytest.approx(60.0)
+    finally:
+        p.close()
+    # Short budget keeps the floor.
+    cfg2 = ExternalEngineConfig(
+        cmd=_stub_cmd("lowest"), timeout_ms=200, read_timeout_s=30.0,
+        read_timeout_slack=3.0,
+    )
+    p2 = ExternalEnginePlayer(cfg2)
+    try:
+        assert p2._read_deadline_s() == pytest.approx(30.0)
+    finally:
+        p2.close()
 
 
 def test_match_spec_builds_external_player():
