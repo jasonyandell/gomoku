@@ -796,3 +796,84 @@ for real play (deeper search) belongs to the bigger net. The 128×10 is not just
 3. **100/200 sims are modest.** The multiplicative effect should strengthen further
    at higher sim counts (400, 800). These results establish the shape; the magnitude
    at production search depths is still to be measured.
+
+## 12. Where we actually stand vs engines — and how hard we tried to disprove it (2026-06-15)
+
+### 12A — Strength vs Rapfi (the only readily-runnable strong engine on ARM)
+
+Champion net: `g15_128x10_bigbuf_eval502.pt` (128x10, re-crowned), sims=200, balanced openings
+(--random-opening-moves 4), 5000ms time limit, n=40 games, head-to-head validated (match.py
+champion-vs-self = 50%).
+
+| Rapfi config | result | per-color |
+|---|---|---|
+| Shallow NNUE (mix9svq, early-stop) | 62.5% (25-15) | black 85% (17-3), white 40% (8-12) |
+| Deep NNUE (force-full-search, db off) | 66.2% (26-13-1) | — |
+| Full-strength NNUE (depth 32-53 verified, 18 cores, db on, full 5s) | 62.5% (25-15) | black 85% (17-3), white 40% (8-12) |
+
+The full-strength result is BYTE-IDENTICAL to the shallow one. Same seed and openings,
+deterministic champion, and Rapfi played the same moves at depth 15 and depth 40: its deep search
+and database changed zero games. So we beat Rapfi ~62-66% robustly across its strength settings —
+but "full strength" ≈ "shallow" because Rapfi's NNUE move-selection is depth-insensitive in these
+positions.
+
+### 12B — Why this is NOT "we beat a champion" (the cork stays in)
+
+Honest demolition:
+
+1. **Self-built, self-patched Rapfi, zero independent calibration.** We compiled and patched this
+   Rapfi ourselves. There is no independent confirmation it actually plays at its rated ~2625 Elo.
+   The force-full-search patch could have degraded its move quality.
+2. **Depth-insensitivity is a yellow flag.** A genuinely strong engine usually plays better with
+   1000× more search. Rapfi didn't change a move. That is suspicious, not reassuring.
+3. **~Half the margin is first-mover edge.** Black 85% / white 40%: as the side-to-move defender
+   we lose most games. White-side defense is our real, concrete, demonstrated weakness.
+4. **Small-n, one engine, one harness, one session.** n=40 with a novel setup means every number
+   here has wide error bars.
+5. **Base rate on surprising results in this project.** A surprising strength result has turned out
+   to be a measurement artifact roughly five times in two days. The prior on "we beat the champion"
+   is "we mis-measured something" until independently proven.
+
+Honest sentence: our net beats a strong NNUE Rapfi ~62%, robustly across its depth settings. That
+is not a tournament-parity or world-ranking claim.
+
+### 12C — The crush-ourselves discipline + the harness is the weak link (a real finding)
+
+We red-teamed our own result — the right instinct: the fastest learning is trying to destroy your
+own claim. The first crack we found was our own harness.
+
+`gomoku/external_engine.py` is fragile. It desyncs with engines that emit non-standard output:
+`DATABASE`-prefixed lines are not in its chatter-skip list (`MESSAGE/DEBUG/INFO/ERROR/UNKNOWN/SUGGEST`).
+Real engines that announce moves as `my move [x,y]`-style lines or print engine banners cause it to
+read a non-move line, desync, and forward a board coordinate as a top-level command. Observed
+failures: engine-vs-engine crash `ERROR Unknown command: 9,2,1`; tournament crashes `ERROR my move
+[14,3]` on three engines; `Board isn't initialized` on another.
+
+Reusable lesson: an eval harness must accept ONLY a bare `X,Y` coordinate as the move (skip
+everything else), confirm the START handshake, and be validated against multiple engines. Validating
+against only Rapfi (whose chatter happens to be MESSAGE-prefixed) hid this fragility entirely.
+
+### 12D — Real-engine tournament infrastructure now exists
+
+Five actual Gomocup competition engines now run on this Apple-Silicon Mac via wine
+(installed to `~/.cache/gomocup/`):
+
+| Engine | Notes |
+|---|---|
+| Embryo26 | 2026 top engine, uses Vulkan |
+| Yixin2018 | 64-bit |
+| Pela23 | 64-bit |
+| Zetor17 | 32-bit via wow64 |
+| Eulring16 | 32-bit via wow64 |
+
+Wrappers at `~/.cache/gomocup/bin/run-*`. All boot and pass a single-move probe. The fragile
+harness (§12C) cannot play full games against them yet — it is being hardened. Once fixed, a real
+official-bracket test is possible: the honest "is Rapfi our ceiling, or are we below the real
+floor?" question. (Embryo26 also contends for the GPU via Vulkan, so it requires a clean-GPU run.)
+
+### 12E — Status as of this writing
+
+The crush-ourselves red-team — white-defense failure mode, tactical blind-spots, seed/re-crown
+robustness — and the fixed real-engine tournament are in progress. Results will be appended. The
+discipline, not the scoreline, is the artifact: we will only believe a strength claim after we have
+failed to break it.
