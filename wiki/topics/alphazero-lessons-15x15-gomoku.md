@@ -245,6 +245,13 @@ better champion — the opposite of what "bigger net" intuition predicts.
 
 `96×8 e499 (75 fast / 69 deep)` stands as the 15×15 champion.
 
+> **2026-06-15 CORRECTION:** `96×8 e499` is NOT the champion and is not even a
+> trained improvement over its own seed. See §9 (head-to-head overturns rankings)
+> and §10 (the silent self-play regression). The strongest preserved net as of
+> 2026-06-15 is `g15_128x10_bigbuf_eval502.pt`, with the caveat that the absolute
+> strength ranking awaits a fixed yardstick (#28) and a clean same-epoch capacity
+> ladder (#29). Do NOT use this line to choose a production checkpoint.
+
 **Methodological keeper:** a negative result ("more data didn't help") is a real
 finding when it's a clean, single-axis A/B with a trustworthy external metric. It
 *reallocates the search* — it told us to stop spending GPU on 96×8 data and move
@@ -565,3 +572,99 @@ it is **not** safe to rank with until then.
   force genuine search depth, swap2 balanced openings (#22), n≥40, fixed device.
 - Frozen artifacts: `g15_128x10_bigbuf_eval502.pt` (real strongest), `g15_champion_
   e909.pt` (64×4, tied), `g15_96x8_deepgen_searchspec_e621.pt` (the cautionary tale).
+
+## 10. The silent self-play regression — 400 epochs of training made it 40-0 worse (2026-06-15)
+
+§9 revealed the 96×8 "champion" was the weakest trained net. This section documents
+a deeper finding: it is weaker than its own **untrained** starting point. The crowned
+champion regressed *below the seed it was grown from*.
+
+### The result
+
+The 96×8 net2net seed (`g15_96x8_seed.pt`) is the function-preserving grow of the
+64×4 champion — output-equivalent to within <1e-4 before any training. After 400+
+epochs of v8 self-play, the trained "champion" (`g15_champion_96x8_e499.pt`) does
+not improve on that seed; it is catastrophically **worse**:
+
+| matchup (@100 sims, n=40) | result |
+|---|---|
+| seed vs champion-e499 | **seed wins, 40-0** |
+| seed vs 64×4-e909 | **50-50** (seed equals the 64×4) |
+| champion-e499 vs 64×4-e909 | **0-40** (champion loses) |
+| champion-e499 vs 128×10-e502 | **0-40** (champion loses) |
+
+400 epochs of self-play training on the v8 recipe left the 96×8 net 40-0 *worse*
+than its starting point. The seed ties the second-strongest net in the campaign;
+the trained "champion" loses to every other net, including its own untrained
+predecessor. Training ran — and by every observable signal, ran *well* — and
+produced a net less capable than what went in.
+
+### The deception: internal metrics stayed healthy throughout
+
+This is §3's "the loss lies" at its most extreme. Over the full 400-epoch run,
+every standard diagnostic signal pointed *up* or held steady:
+
+- **`plies_mean` 30–48.** Games were defended, non-trivial — no fast-attack collapse.
+- **Value-loss 0.17–0.25.** Steady, declining — a net fitting its self-play
+  distribution normally.
+- **Internal-ladder win-rates 85–100%.** The net beat internal heuristic/lookahead
+  opponents convincingly throughout.
+- **Rapfi yardstick (broken, §8):** the run was compared against a classical
+  (weightless) Rapfi that ignores its own search time; the yardstick showed no
+  regression. The external signal was also blind.
+
+Not one observable metric flagged the regression. With a broken external yardstick
+(§8) *and* deceptive internal metrics, the campaign crowned a net that had trained
+itself **backwards** — and had no way to know.
+
+This is the same pattern as the deepgen experiment (§8F): vl↓ + plies↑ + reasonable
+Rapfi score, while the net was actually getting worse for real deployment. It recurred
+across two independent runs, which makes it a **systematic hazard**, not a one-off.
+
+### The net2net grow was not the cause
+
+The grow step itself is validated: the seed's output deviation from the 64×4 source
+is <1e-4, and the seed *ties* the 64×4-e909 in head-to-head. The regression is not
+in the grow; it is in the **subsequent training**. Why the v8 recipe silently craters
+a 96×8 net via self-play is an open question. Candidates:
+
+- **Self-play distribution drift.** The 96×8 net's wider capacity may shift the
+  self-play distribution in a direction the training signal cannot self-correct.
+  The 64×4 and 128×10 (at different ends of the capacity spectrum) did not regress
+  below their seeds; the middle-capacity 96×8 did, twice.
+- **Recipe mismatch for this net size.** The v8 hyperparameters (buffer 400k,
+  SGD schedule, opponent mix) were tuned for a 64×4 net and extended unchanged to
+  96×8. The combination may be unstable for this parameter count.
+
+### The fix: head-to-head against the seed is a mandatory gate
+
+A head-to-head vs a **preserved reference** (the seed or current best) is not
+optional for AlphaZero training. It is the only signal that reliably detects this
+failure mode. The complete gate:
+
+1. **Champion-promotion gate.** Before declaring any net the new champion, run
+   a color-alternated match against the prior champion. A net that loses to
+   its predecessor is not a champion.
+2. **Regression-against-seed gate.** Before continuing a run past ~100 epochs,
+   run a spot-check vs the frozen seed. If the trained net is losing to an
+   untrained net, something is wrong — stop, diagnose, don't continue training.
+3. **Do not trust internal metrics alone.** plies/vl/internal-ladder can all be
+   healthy while head-to-head regresses. The external check is not a confirmation
+   of internal signals; it is a *different* measurement of a *different* quantity.
+
+### The G15-96x8-redo experiment
+
+The `G15-96x8-redo` cell (added to `scripts/run_sweep.py`, 2026-06-15) re-trains
+from `g15_96x8_seed.pt` with the **byte-identical v8 recipe** to test
+reproducibility. Two outcomes:
+
+- **Re-run beats the seed** → the original G15-96x8 run was an anomaly (unlucky
+  data-flow artifact, buffer pathology, or similar). Capacity monotonicity is
+  recoverable; the 96×8 is a valid step on the ladder.
+- **Re-run regresses again** → the v8 recipe systematically produces this failure
+  mode at the 96×8 capacity point. Recipe surgery is required before 96×8 can
+  contribute a clean capacity result.
+
+Evaluate the redo by head-to-head vs the frozen seed and vs 64×4-e909 at 100-epoch
+intervals, not by internal metrics. The Rapfi yardstick remains broken (#28) and
+should not be the gate.
