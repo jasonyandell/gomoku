@@ -391,25 +391,49 @@ bars we quoted — 69→75→96→100 on nominally one config. The honest readin
 champion beats *classical* Rapfi @5000ms somewhere ~85–95% (not 69%), and the
 19-point "reversal" gap (~1.4σ at n=16) was never powered enough to be load-bearing.
 
-### 8C. Honest re-baseline vs the strong NNUE yardstick
-With the NNUE Rapfi standing in, re-baselined on MPS (n=20), sims=100:
+### 8C. The biggest one: Rapfi never used its search time — the TC tiers were illusory
+With `message_mode="normal"` the engine prints its search. On a contested 15×15
+position, `timeout_turn 5000`:
+```
+MESSAGE OptiTime 4473ms | MaxTime 4970ms        <- time budget parsed correctly
+MESSAGE Speed 455K | Depth 10-11 | Eval 501 | Node 455 | Time 1ms   <- stops at 455 nodes / 1ms
+```
+Rapfi **budgets ~5 s and then self-terminates after ~500 nodes / ~1-2 ms / depth
+~10**, on every position type (opening, contested tangle, quiet) and every
+`timeout_turn` (200/1000/5000/15000ms — all return in ~0.08 s). The search
+*converges and stops* far under budget (≈0.1 % of it). Net effect: **the
+"1000 ms" and "5000 ms" tiers the whole campaign quoted were the SAME ~depth-10
+Rapfi.** The fast-TC/deep-TC distinction — and therefore the "capacity pays at
+*depth*" and "reversal at *depth*" stories built on it — was measuring **one
+shallow engine twice.** The 75/69 vs 75/88 vs 50 scatter was noise between
+identical conditions. (Cause not fully root-caused: not the time fields, not
+`timeout_match`, not the candidate range — Rapfi's iterative deepening just calls
+the position resolved at ~depth 10. A genuinely deep Rapfi would search millions
+of nodes in 5 s; ours searches hundreds.)
 
+### 8D. Honest re-baseline (vs the NNUE engine, MPS, n=20, sims=100)
 | net | vs NNUE Rapfi 1000ms | vs NNUE Rapfi 5000ms |
 |---|---|---|
-| 96×8 champion (e499) | **88%** (17-2-1) | _(eval in flight)_ |
-| 128×10 + 1.5M buffer | _(eval in flight)_ | _(eval in flight)_ |
+| 96×8 champion (e499) | **88%** (17-2-1) | **100%** (20-0-0) |
 
-(Table completed as evals land; deep-TC vs NNUE@5s is the number that matters for
-"is there training headroom" and whether the capacity reversal survives a *strong*
-opponent.)
+NNUE is confirmed loaded (`mix9svq nnue: load weight ... weight loaded in 15ms`).
+The champion beats even the NNUE engine ~90-100% — but read with 8C: this is vs a
+**shallow** (~depth-10) NNUE Rapfi, and freestyle gomoku is a **first-player win**,
+so ~half those wins are the black-side forced-win advantage. "Beats Rapfi" means
+"beats a shallow Rapfi, often while holding the first-move win." There is little
+clean headroom here to *measure training progress* — which reframes what a useful
+yardstick must be (next).
 
-### 8D. The transferable lesson
-The campaign's external metric — the thing every §2/§2a verdict was gated on — was
-itself **un-audited along two axes that both mattered**: opponent strength
-(classical vs NNUE) and measurement reliability (device + n). The capacity-arc
-*relative* conclusions may still hold (both nets measured the same weak way), but
-the *absolute* "75/69 vs a 2625 engine" framing was inflated, and "the reversal is
-real" deserves a re-test against the strong yardstick with n≥24. **Audit the
-yardstick before the yardstick audits your conclusions:** a fixed external metric
-is only trustworthy once you've verified the opponent is at full strength and the
-read is reproducible across device and seed. Cheaper to check than to relearn.
+### 8E. The transferable lesson — audit the yardstick first
+Every §2/§2a verdict was gated on an external metric that was **un-audited on three
+axes that all mattered**: opponent evaluator (classical vs NNUE, 8A), measurement
+reliability (device + n, 8B), and **whether the opponent actually searched** (8C).
+The *relative* capacity-arc shape may survive (all nets measured the same broken
+way), but the *absolute* "trades blows with a 2625 engine" framing was wrong on
+every axis, and "the reversal is real (at depth)" is unsupported once you know
+both tiers were the same shallow engine. **Audit the yardstick before it audits
+your conclusions:** verify the opponent is at full strength (NNUE *and* actually
+deep-searching), the read is reproducible across device and seed, and — for a
+first-player-win game — that openings are **balanced** (swap2, #22) so strength
+isn't dominated by who moved first. A fixed external metric is only as trustworthy
+as those checks; they are far cheaper than the conclusions they protect.
