@@ -341,3 +341,99 @@ step backed by evidence, every champion preserved, with two genuine bugs
 
 None of which dims the actual artifact: **we learned, concretely and on our own
 board, how AlphaZero teaches itself to defend — and how to grow that skill.**
+
+## 8. The yardstick was the weak link — §7's caveat, made concrete (2026-06-15)
+
+§7 flagged two soft spots in the Rapfi yardstick ("not stress-verified it gives
+Rapfi its best shot"; "short TC, our edge may shrink"). A fresh autonomous
+session pulled that thread and found **both the opponent and the measurement were
+weaker than the record implies.** This is the "should-have-worked-didn't" of the
+*evaluation itself*, and it partially re-opens §2a.
+
+### 8A. The Rapfi binary is the weightless *classical* build — not the rated ~2625 NNUE engine
+`engines/rapfi/build_rapfi.sh` builds `pbrain-rapfi` with Rapfi's **internal
+classical config, no NNUE weights** (the script says so outright; the strong
+NNUE evaluator needs the `Networks` submodule + `mix9svq` weights + `--config`).
+The "Rapfi (Gomocup freestyle ~2625)" provenance stamped on every eval row is the
+**NNUE** engine's rating; our yardstick was the much weaker weightless build.
+Symptom that exposed it: re-running the champion's *exact* recorded deep-TC config
+uncontended gave **~90–100%**, not 69% — and watching `top`, the classical Rapfi
+sat at low CPU and **moved fast** (it wasn't using its time budget), whereas the
+NNUE build pegs a core at ~97% and uses its full per-move time. So "trades blows
+with a Gomocup engine" overstated it: we were beating *weak* Rapfi.
+
+**The fix (no rebuild needed — done this session):** the `mix9svq` weights were
+already present locally and `pbrain-rapfi --config <toml>` works (COMMAND_MODULES
+is compiled in). A config pointing at the freestyle NNUE weights + a one-line
+wrapper stands up the **strong NNUE Rapfi** as the honest yardstick. Engine
+reports `Evaluator set to mix9svq` and actually searches (97% CPU).
+
+### 8B. A single n=16 deep-TC read is not a measurement — it's device- and load-dependent
+The §2a reversal verdict (96×8 = 69% deep > 128×10 = 50% deep) rests on **one
+n=16 read per net, never repeated.** §4 says "weight aggregates, never a single
+number" — the load-bearing reversal number violated our own rule. Re-measuring the
+champion (96×8 e499, sims=100, @5000ms vs the *classical* Rapfi) gave, across
+fresh runs:
+
+| condition | n | win-rate | wall |
+|---|---|---|---|
+| campaign record (device unknown) | 16 | **69%** (11-5) | 493s |
+| this session, MPS | 16 | **100%** (16-0) | 214s |
+| this session, MPS (sims=200) | 16 | 75% (12-4) | 327s |
+| this session, MPS | 24 | **96%** (23-1) | 323s |
+| this session, **CPU** | 24 | **79%** (19-5) | 429s |
+
+Two effects, both real: **(1) a device gap** — the same net/config scores
+**MPS 96% vs CPU 79%** (n=24). `ladder_eval` *defaults to `GOMOKU_DEVICE=cpu`*
+(chosen to dodge GPU contention during training); that default **systematically
+understated model strength.** **(2) run-to-run variance** larger than the binomial
+bars we quoted — 69→75→96→100 on nominally one config. The honest reading: the
+champion beats *classical* Rapfi @5000ms somewhere ~85–95% (not 69%), and the
+19-point "reversal" gap (~1.4σ at n=16) was never powered enough to be load-bearing.
+
+### 8C. The biggest one: Rapfi never used its search time — the TC tiers were illusory
+With `message_mode="normal"` the engine prints its search. On a contested 15×15
+position, `timeout_turn 5000`:
+```
+MESSAGE OptiTime 4473ms | MaxTime 4970ms        <- time budget parsed correctly
+MESSAGE Speed 455K | Depth 10-11 | Eval 501 | Node 455 | Time 1ms   <- stops at 455 nodes / 1ms
+```
+Rapfi **budgets ~5 s and then self-terminates after ~500 nodes / ~1-2 ms / depth
+~10**, on every position type (opening, contested tangle, quiet) and every
+`timeout_turn` (200/1000/5000/15000ms — all return in ~0.08 s). The search
+*converges and stops* far under budget (≈0.1 % of it). Net effect: **the
+"1000 ms" and "5000 ms" tiers the whole campaign quoted were the SAME ~depth-10
+Rapfi.** The fast-TC/deep-TC distinction — and therefore the "capacity pays at
+*depth*" and "reversal at *depth*" stories built on it — was measuring **one
+shallow engine twice.** The 75/69 vs 75/88 vs 50 scatter was noise between
+identical conditions. (Cause not fully root-caused: not the time fields, not
+`timeout_match`, not the candidate range — Rapfi's iterative deepening just calls
+the position resolved at ~depth 10. A genuinely deep Rapfi would search millions
+of nodes in 5 s; ours searches hundreds.)
+
+### 8D. Honest re-baseline (vs the NNUE engine, MPS, n=20, sims=100)
+| net | vs NNUE Rapfi 1000ms | vs NNUE Rapfi 5000ms |
+|---|---|---|
+| 96×8 champion (e499) | **88%** (17-2-1) | **100%** (20-0-0) |
+
+NNUE is confirmed loaded (`mix9svq nnue: load weight ... weight loaded in 15ms`).
+The champion beats even the NNUE engine ~90-100% — but read with 8C: this is vs a
+**shallow** (~depth-10) NNUE Rapfi, and freestyle gomoku is a **first-player win**,
+so ~half those wins are the black-side forced-win advantage. "Beats Rapfi" means
+"beats a shallow Rapfi, often while holding the first-move win." There is little
+clean headroom here to *measure training progress* — which reframes what a useful
+yardstick must be (next).
+
+### 8E. The transferable lesson — audit the yardstick first
+Every §2/§2a verdict was gated on an external metric that was **un-audited on three
+axes that all mattered**: opponent evaluator (classical vs NNUE, 8A), measurement
+reliability (device + n, 8B), and **whether the opponent actually searched** (8C).
+The *relative* capacity-arc shape may survive (all nets measured the same broken
+way), but the *absolute* "trades blows with a 2625 engine" framing was wrong on
+every axis, and "the reversal is real (at depth)" is unsupported once you know
+both tiers were the same shallow engine. **Audit the yardstick before it audits
+your conclusions:** verify the opponent is at full strength (NNUE *and* actually
+deep-searching), the read is reproducible across device and seed, and — for a
+first-player-win game — that openings are **balanced** (swap2, #22) so strength
+isn't dominated by who moved first. A fixed external metric is only as trustworthy
+as those checks; they are far cheaper than the conclusions they protect.
