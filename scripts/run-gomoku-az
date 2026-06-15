@@ -1,0 +1,17 @@
+#!/bin/bash
+# Gomocup engine wrapper: run-gomoku-az — OUR trained net as a brain-side
+# Gomocup/Piskvork engine (the mirror of the external run-* wrappers). Speaks the
+# protocol on stdin/stdout via gomoku.gomocup_brain. Register in gomoku.match as:
+#   external:cmd=run-gomoku-az --checkpoint <pt> --sims <N>,timeout_ms=T,size=15
+# (cmd= is comma-free; all engine flags are space-separated.)
+#
+# PYTHONPATH: an inherited value wins (a worktree checkout shadows main during
+# dev), else GOMOKU_REPO, else ~/code/gomoku.
+# Python: GOMOKU_PYTHON, else the repo venv, else PATH's python — so this is
+# drivable by GomocupJudge / cron / arena even without an activated venv.
+export GOMOKU_BOARD_SIZE="${GOMOKU_BOARD_SIZE:-15}"
+export GOMOKU_DEVICE="${GOMOKU_DEVICE:-mps}"
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}${GOMOKU_REPO:-$HOME/code/gomoku}"
+PYBIN="${GOMOKU_PYTHON:-$HOME/code/gomoku/.venv/bin/python}"
+[ -x "$PYBIN" ] || PYBIN="python"
+exec "$PYBIN" -m gomoku.gomocup_brain "$@"
