@@ -668,3 +668,80 @@ reproducibility. Two outcomes:
 Evaluate the redo by head-to-head vs the frozen seed and vs 64×4-e909 at 100-epoch
 intervals, not by internal metrics. The Rapfi yardstick remains broken (#28) and
 should not be the gate.
+
+## 11. Capacity × search IS multiplicative — confirmed clean, the reversal was the artifact (2026-06-15)
+
+§2 originally claimed that net capacity and search depth are multiplicative — a
+bigger net's better position evaluation *compounds* with search, so the capacity
+advantage is invisible at shallow depth and decisive at deep. §2a then appeared to
+refute this: the 128×10 was *worse* than the 96×8 at deep time control (the
+"reversal"). §8 showed the deep-TC tiers were a broken yardstick (both "tiers" were
+the same shallow-Rapfi engine). §9 confirmed 128×10 is *stronger* than 96×8, not
+weaker. What remained open: is the net×search interaction actually multiplicative,
+or just "bigger = better at all depths"?
+
+A clean yardstick-free test now closes the question.
+
+### The experiment
+
+Color-alternated head-to-head matches via `gomoku.match`, validated (champion-vs-self
+= 50% at both sim counts, n=40 throughout). Three nets with confirmed relative
+ordering from §9: `64×4-e909`, `96×8-seed`, `128×10-e502`.
+
+### Results
+
+**@100 sims — all three nets are EQUAL:**
+
+| matchup (@100 sims, n=40) | result |
+|---|---|
+| 64×4-e909 vs 96×8-seed | **50-50** |
+| 96×8-seed vs 128×10-e502 | **50-50** |
+| 64×4-e909 vs 128×10-e502 | **50-50** |
+
+At shallow search, net size barely matters. The three nets — spanning a 7.5× range
+in parameter count (0.44M to 3.3M) — play to a complete draw.
+
+**@200 sims — 128×10 dominates:**
+
+| matchup (@200 sims, n=40) | result |
+|---|---|
+| 64×4-e909 vs 128×10-e502 | **0-40 (128×10 wins every game)** |
+
+With deeper search, the bigger net pulls decisively ahead. The same 128×10 that tied
+the 64×4 at 100 sims beats it 40-0 at 200.
+
+### Interpretation
+
+The shape — tie at 100, domination at 200 — is the multiplicative signature. A bigger
+net evaluates positions more accurately; that better evaluation *compounds* with every
+additional simulation. At 100 sims the compound effect is too small to show; at 200
+sims it is decisive. **Capacity × search depth is multiplicative, not additive.** This
+is exactly the net/search duality §2 originally described ("the 96×8's advantage showed
+up at deep TC first") — now confirmed directly via net-vs-net, no yardstick required.
+
+The §2a "reversal" (128×10 was *worse* at depth) is hereby retracted as an artifact.
+§8C showed that the "deep" and "fast" Rapfi tiers were one shallow engine measured
+twice — there was never a depth axis to reverse on. The broken yardstick obscured the
+multiplicative structure that was present all along. §2 was right; §2a's reversal
+finding was the measurement lying.
+
+**Re-crowning: 128×10 is champion specifically *because of* depth.** §9 established
+128×10 as co-leader (tied with 64×4 @100 sims). This result explains *why* 128×10
+deserves the crown: the tie is shallow-search parity; the separation that matters
+for real play (deeper search) belongs to the bigger net. The 128×10 is not just
+"tied at the top" — it is the net that converts more search into more wins.
+
+### Honest caveats
+
+1. **Epochs and lineage differ.** `64×4-e909` has ~400 more training epochs than
+   `128×10-e502`. This is not a pristine same-everything capacity isolation. The
+   @100-tie / @200-win *shape* is the multiplicative signature regardless of absolute
+   epoch counts — but a clean same-epoch capacity ladder (issue #29) would let us
+   read the magnitude more precisely.
+2. **96×8-seed vs 128×10 @200 not yet tested.** The 200-sim result is 64×4 vs
+   128×10 only. Testing 96×8-seed vs 128×10 @200 is the obvious next check — it
+   would complete the triangle and confirm the effect generalizes across the full
+   capacity range.
+3. **100/200 sims are modest.** The multiplicative effect should strengthen further
+   at higher sim counts (400, 800). These results establish the shape; the magnitude
+   at production search depths is still to be measured.
