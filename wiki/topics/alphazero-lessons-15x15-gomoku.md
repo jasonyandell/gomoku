@@ -341,3 +341,75 @@ step backed by evidence, every champion preserved, with two genuine bugs
 
 None of which dims the actual artifact: **we learned, concretely and on our own
 board, how AlphaZero teaches itself to defend — and how to grow that skill.**
+
+## 8. The yardstick was the weak link — §7's caveat, made concrete (2026-06-15)
+
+§7 flagged two soft spots in the Rapfi yardstick ("not stress-verified it gives
+Rapfi its best shot"; "short TC, our edge may shrink"). A fresh autonomous
+session pulled that thread and found **both the opponent and the measurement were
+weaker than the record implies.** This is the "should-have-worked-didn't" of the
+*evaluation itself*, and it partially re-opens §2a.
+
+### 8A. The Rapfi binary is the weightless *classical* build — not the rated ~2625 NNUE engine
+`engines/rapfi/build_rapfi.sh` builds `pbrain-rapfi` with Rapfi's **internal
+classical config, no NNUE weights** (the script says so outright; the strong
+NNUE evaluator needs the `Networks` submodule + `mix9svq` weights + `--config`).
+The "Rapfi (Gomocup freestyle ~2625)" provenance stamped on every eval row is the
+**NNUE** engine's rating; our yardstick was the much weaker weightless build.
+Symptom that exposed it: re-running the champion's *exact* recorded deep-TC config
+uncontended gave **~90–100%**, not 69% — and watching `top`, the classical Rapfi
+sat at low CPU and **moved fast** (it wasn't using its time budget), whereas the
+NNUE build pegs a core at ~97% and uses its full per-move time. So "trades blows
+with a Gomocup engine" overstated it: we were beating *weak* Rapfi.
+
+**The fix (no rebuild needed — done this session):** the `mix9svq` weights were
+already present locally and `pbrain-rapfi --config <toml>` works (COMMAND_MODULES
+is compiled in). A config pointing at the freestyle NNUE weights + a one-line
+wrapper stands up the **strong NNUE Rapfi** as the honest yardstick. Engine
+reports `Evaluator set to mix9svq` and actually searches (97% CPU).
+
+### 8B. A single n=16 deep-TC read is not a measurement — it's device- and load-dependent
+The §2a reversal verdict (96×8 = 69% deep > 128×10 = 50% deep) rests on **one
+n=16 read per net, never repeated.** §4 says "weight aggregates, never a single
+number" — the load-bearing reversal number violated our own rule. Re-measuring the
+champion (96×8 e499, sims=100, @5000ms vs the *classical* Rapfi) gave, across
+fresh runs:
+
+| condition | n | win-rate | wall |
+|---|---|---|---|
+| campaign record (device unknown) | 16 | **69%** (11-5) | 493s |
+| this session, MPS | 16 | **100%** (16-0) | 214s |
+| this session, MPS (sims=200) | 16 | 75% (12-4) | 327s |
+| this session, MPS | 24 | **96%** (23-1) | 323s |
+| this session, **CPU** | 24 | **79%** (19-5) | 429s |
+
+Two effects, both real: **(1) a device gap** — the same net/config scores
+**MPS 96% vs CPU 79%** (n=24). `ladder_eval` *defaults to `GOMOKU_DEVICE=cpu`*
+(chosen to dodge GPU contention during training); that default **systematically
+understated model strength.** **(2) run-to-run variance** larger than the binomial
+bars we quoted — 69→75→96→100 on nominally one config. The honest reading: the
+champion beats *classical* Rapfi @5000ms somewhere ~85–95% (not 69%), and the
+19-point "reversal" gap (~1.4σ at n=16) was never powered enough to be load-bearing.
+
+### 8C. Honest re-baseline vs the strong NNUE yardstick
+With the NNUE Rapfi standing in, re-baselined on MPS (n=20), sims=100:
+
+| net | vs NNUE Rapfi 1000ms | vs NNUE Rapfi 5000ms |
+|---|---|---|
+| 96×8 champion (e499) | **88%** (17-2-1) | _(eval in flight)_ |
+| 128×10 + 1.5M buffer | _(eval in flight)_ | _(eval in flight)_ |
+
+(Table completed as evals land; deep-TC vs NNUE@5s is the number that matters for
+"is there training headroom" and whether the capacity reversal survives a *strong*
+opponent.)
+
+### 8D. The transferable lesson
+The campaign's external metric — the thing every §2/§2a verdict was gated on — was
+itself **un-audited along two axes that both mattered**: opponent strength
+(classical vs NNUE) and measurement reliability (device + n). The capacity-arc
+*relative* conclusions may still hold (both nets measured the same weak way), but
+the *absolute* "75/69 vs a 2625 engine" framing was inflated, and "the reversal is
+real" deserves a re-test against the strong yardstick with n≥24. **Audit the
+yardstick before the yardstick audits your conclusions:** a fixed external metric
+is only trustworthy once you've verified the opponent is at full strength and the
+read is reproducible across device and seed. Cheaper to check than to relearn.
