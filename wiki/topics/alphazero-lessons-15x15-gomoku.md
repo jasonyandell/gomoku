@@ -40,6 +40,14 @@ at 15×15, not a bug; warm-start is the remedy (see
 
 ## 2. Net capacity and search are multiplicative, not additive
 
+> ⚠️ **RETRACTED by §8–§9 (2026-06-15).** Every strength number below is vs a
+> *broken* Rapfi yardstick (weightless classical, ignores its own search time, so
+> the "tiers" are one shallow engine measured twice). Direct head-to-head reverses
+> the conclusions: 128×10 is **not** worse ("the reversal"), it *ties the strongest
+> and beats the 96×8 "champion" 40-0; the crowned 96×8-e499 is actually the
+> *weakest* trained net. Read §2/§2a as **evidence of how the metric misled**, not
+> as the capacity verdict. Real capacity curve = future same-epoch head-to-heads.
+
 We climbed a capacity ladder (64×4 → 96×8 → 128×10) via **function-preserving
 net2net** growth — each bigger net starts at the smaller one's *exact* function
 (output-equivalence ~1e-4), so it inherits strength and trains into the extra
@@ -495,3 +503,65 @@ yardstick-free signal there is (no engine, no NNUE config, no time-control bug,
 contention-unbiased). It is what exposed deepgen. Keep the external ladder for an
 *absolute* rating once it's fixed (NNUE + deep + swap2), but gate "did this change
 help?" on the direct head-to-head against the preserved champion.
+
+## 9. The reckoning — head-to-head RE-RANKS the campaign (the yardstick inverted it)
+
+§8 said the yardstick was broken. §9 is what that *cost*: we ran the preserved
+nets against each other directly (color-alternated, sims-matched, match.py
+validated: champion-vs-self = 50%). The result overturns the campaign's headline
+rankings.
+
+**The ladder (head-to-head, @100 sims, n=40):**
+
+| matchup | winner |
+|---|---|
+| 128×10 (e500) vs 96×8 **champion** (e400) | **128×10, 40-0** |
+| 64×4 (e900) vs 96×8 **champion** (e400) | **64×4, 40-0** |
+| 128×10 (e500) vs 64×4 (e900) | tied, 20-20 |
+| 96×8 champion (e400) vs deepgen (96×8, e620) | champion, 40-0 |
+
+**Order: {128×10, 64×4} ≫ 96×8-"champion" ≫ deepgen.** The two nets at the top
+both **beat the crowned champion 40-0**; 128×10 does it at 200 sims too (20-0).
+
+Two things the broken yardstick (§8) did to us:
+1. **It crowned the weakest trained net.** `96×8 e499` was declared the 15×15
+   champion (75/69 vs Rapfi). Head-to-head it is the *weakest* of the well-trained
+   nets — beaten 40-0 by both a bigger net *and a smaller one*. The Rapfi tiers
+   that "ranked" it were the same shallow engine twice (§8C); the ranking was noise
+   dressed as signal.
+2. **It made us abandon a tied-strongest net.** `128×10+bigbuf` was retired on the
+   "capacity reversed at depth, it's worse" verdict (§2a). Head-to-head it ties the
+   strongest net and crushes the champion. **The "reversal" never happened** — it
+   was the yardstick mis-ranking a *better* net as worse.
+
+**Honest caveat (don't over-read capacity):** epochs are confounded — 64×4 has
+e900, 128×10 e500, the champion only e400. A 64×4 (0.44M) tying a 128×10 (3.3M) is
+almost certainly the smaller net's *3× extra training* compensating for capacity,
+not "small = big." A clean capacity claim needs **same-epoch** head-to-heads
+(future work). What is *not* confounded and *is* the lesson: **the Rapfi-based
+ordering is wrong end-to-end, and a same-architecture continuation (cont100: 96×8
+e400→e673) stays 50% vs its own e400 — so the champion was a real plateau that the
+two stronger nets simply sit above.**
+
+### The meta-lesson (the whole night in one line)
+**A broken yardstick doesn't add noise — it can invert your ranking, so you crown
+the worst option and discard the best, with every internal signal applauding.**
+Across the night the same shape recurred five times: deep-TC tiers (§8C), the
+"88% ceiling" (§4), the capacity "reversal" (§2a/§9), the deepgen "improvement"
+(§8F), and the champion selection (§9) — *every one* was the measurement lying,
+and *every one* dissolved under a direct head-to-head. The cheap, robust insurance
+we should have had from day one: **a color-alternated match against the preserved
+champion gates every "did this help?" decision.** No engine, no config, no
+time-control, contention-unbiased. The external ladder is for an *absolute* rating
+once it's actually fixed (NNUE + genuinely deep search + balanced openings, #22/#28);
+it is **not** safe to rank with until then.
+
+### What this changes operationally
+- **`96×8 e499` is NOT the champion.** `128×10+bigbuf e502` (or `64×4 e909`) is the
+  strongest preserved net; both beat 96×8 40-0. Re-crown via head-to-head, not Rapfi.
+- **Re-run the capacity ladder at matched epochs**, head-to-head, to get the *real*
+  capacity curve (the inverted-U "reversal" is retracted; shape unknown until then).
+- **Fix the yardstick** (#28): NNUE evaluator (done, but it under-searches too),
+  force genuine search depth, swap2 balanced openings (#22), n≥40, fixed device.
+- Frozen artifacts: `g15_128x10_bigbuf_eval502.pt` (real strongest), `g15_champion_
+  e909.pt` (64×4, tied), `g15_96x8_deepgen_searchspec_e621.pt` (the cautionary tale).
