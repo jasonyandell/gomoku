@@ -654,20 +654,41 @@ failure mode. The complete gate:
 
 ### The G15-96x8-redo experiment
 
-The `G15-96x8-redo` cell (added to `scripts/run_sweep.py`, 2026-06-15) re-trains
-from `g15_96x8_seed.pt` with the **byte-identical v8 recipe** to test
-reproducibility. Two outcomes:
+The `G15-96x8-redo` cell re-trains from `g15_96x8_seed.pt` with the
+**byte-identical v8 recipe** to test reproducibility.
 
-- **Re-run beats the seed** → the original G15-96x8 run was an anomaly (unlucky
-  data-flow artifact, buffer pathology, or similar). Capacity monotonicity is
-  recoverable; the 96×8 is a valid step on the ladder.
-- **Re-run regresses again** → the v8 recipe systematically produces this failure
-  mode at the 96×8 capacity point. Recipe surgery is required before 96×8 can
-  contribute a clean capacity result.
+### Result (2026-06-15)
 
-Evaluate the redo by head-to-head vs the frozen seed and vs 64×4-e909 at 100-epoch
-intervals, not by internal metrics. The Rapfi yardstick remains broken (#28) and
-should not be the gate.
+**The redo reproduced the regression — this is a recipe-level hazard, not a
+one-off.**
+
+Head-to-head vs the frozen seed (`g15_96x8_seed.pt`), @100 sims, n=40:
+
+| checkpoint | vs seed | note |
+|---|---|---|
+| redo e127 | **40-0 (redo wins)** | trained up; better than seed |
+| redo e234 | **40-0 (redo wins)** | peak |
+| redo e377 | **50-50** | regressed back to seed level; also 50% vs 64×4-e909 |
+| (continuing) | dropping further | tracking toward original run's e499 = lost to seed 40-0 |
+
+The clean re-train from the good seed, with the byte-identical v8 recipe, peaked
+around e234 then trained backwards — the same arc as the original run.
+
+**Two reinforced lessons:**
+
+1. **Gate-and-freeze the peak live.** The e234 checkpoint (a genuinely strong 96×8,
+   beating its seed 40-0) was lost to `keep_last_n` pruning because it was not
+   frozen when the head-to-head gate flagged it. The gate must freeze the peak in
+   real time, not retrospectively.
+2. **Stop at the head-to-head peak, not a fixed epoch.** The campaign froze e499
+   (post-peak, regressed) as "champion." For a peak-then-regress recipe, training
+   to a fixed epoch guarantees you archive the wrong checkpoint.
+
+**Open question:** Why does the v8 recipe produce peak-then-regress specifically at
+the 96×8 capacity point when 64×4 and 128×10 did not visibly do this? Candidate:
+the recipe (buffer 400k / opponent-mix / SGD schedule) was tuned for 64×4 and is
+unstable at 96×8 capacity. Recipe surgery is the required follow-up before 96×8 can
+contribute a clean capacity result.
 
 ## 11. Capacity × search IS multiplicative — confirmed clean, the reversal was the artifact (2026-06-15)
 
