@@ -437,3 +437,61 @@ deep-searching), the read is reproducible across device and seed, and — for a
 first-player-win game — that openings are **balanced** (swap2, #22) so strength
 isn't dominated by who moved first. A fixed external metric is only as trustworthy
 as those checks; they are far cheaper than the conclusions they protect.
+
+### 8F. The deepgen experiment — deeper self-play SPECIALIZES, it doesn't strengthen
+The thing the broken yardstick was *meant* to measure: does deeper self-play
+search (n_simulations 100→200, warm-started from the champion) make a stronger
+net? Trained `G15-96x8-deepgen` ~200 epochs at 200 sims. Internal signals all said
+"improving": value-loss fell to fresh lows (0.19→0.15), plies stayed high (~42,
+defended). Vs the (shallow) NNUE Rapfi it scored **83% @5000ms — indistinguishable
+from the champion.** Looked fine. It was not. **Direct head-to-head, the only
+yardstick-free test** (match.py validated: champion-vs-self = 6-6 = 50%):
+
+| matchup (sims both sides) | deepgen win-rate |
+|---|---|
+| deepgen vs champion @100 | **0%** (0-40) |
+| deepgen vs champion @200 | **50%** (10-10) |
+
+The shape is the finding: deepgen is **search-specialized**, not stronger.
+- At its *training* search depth (200) it's merely *even* with the champion — the
+  deeper self-play bought **no strength**.
+- At the *standard* depth (100) it's **catastrophically worse** (0-40) — it
+  *lost the ability to play with shallow search.* Training on 200-sim MCTS policy
+  targets taught the net to **offload judgement to the search**; strip the search
+  and the raw policy/value can't stand alone. The champion (trained at 100) is
+  robust at both 100 and 200 sims; deepgen is brittle below its training depth.
+
+Two compounding lessons:
+1. **A net inherits the search budget it was trained under.** Deeper self-play
+   doesn't add free strength; it shifts the net's operating point and makes it
+   *depend* on that depth. (Practical: don't train at a sim count you won't deploy
+   at, and don't expect more self-play sims to be a strength lever — it's a
+   specialization lever.)
+2. **This is "the loss lies" (§3) in its sharpest form, and it proves §8C/8E.**
+   vl↓ + plies↑ + 83% vs Rapfi *all* pointed up while the net was getting *worse
+   for real deployment*. Three "improving" signals, one true one (head-to-head),
+   and only the true one was trustworthy. **The shallow Rapfi yardstick didn't
+   just mis-scale strength — it actively hid a regression.** Had we trusted it
+   (as the campaign trusted its tiers), we'd have shipped a strictly-worse net.
+
+### 8G. Eval mechanics that bit us chasing 8F (record so they don't bite again)
+- **Eval the EMA/published weights, not raw `epoch*.pt`.** Same deepgen epoch:
+  raw `epoch*.pt` = 35% vs NNUE Rapfi, EMA `worker_weights.pt` = 83% — a 48-pt
+  gap. `epoch*.pt`/`latest.pt` carry the *raw* training weights (transiently weak
+  mid-training); `worker_weights.pt` is the EMA that actually plays. A first
+  "deepgen cratered to 30%" alarm was purely this artifact.
+- **Eval-during-training contends** (suggestive): the champion scored 96-100%
+  uncontended vs 75% (n=12) eval'd concurrently with an 8-worker run. Partly noise,
+  but prefer uncontended evals — or, for net-vs-net, note that contention is
+  *unbiased* (both sides sims-limited and equally slowed), which is another reason
+  the **direct head-to-head is the robust measure**.
+
+### 8H. The net-vs-net head-to-head is the yardstick we should have had
+Every problem in 8A-8G traces to leaning on a weak, mis-scaled, sometimes-broken
+external engine. The campaign avoided sibling head-to-head as "non-transitive" —
+true for *ranking a pool*, but for the specific question **"is net B better than
+its parent A?"** a color-alternated A-vs-B match is the cleanest, cheapest,
+yardstick-free signal there is (no engine, no NNUE config, no time-control bug,
+contention-unbiased). It is what exposed deepgen. Keep the external ladder for an
+*absolute* rating once it's fixed (NNUE + deep + swap2), but gate "did this change
+help?" on the direct head-to-head against the preserved champion.
