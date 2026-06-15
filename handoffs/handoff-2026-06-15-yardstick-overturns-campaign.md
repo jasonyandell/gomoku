@@ -86,3 +86,16 @@ This is the "should've-worked-didn't — *why?*" jackpot, inverted into "the thi
 sitting in a discarded checkpoint — but the real artifact is the lesson, and it's a
 good one. Machine's still yours, buddy — 128×10's training keeps the GPU warm and
 everything's resumable. Holler when you're back. 🤝
+
+---
+
+## UPDATE (~06:30) — the abandoned net was still climbing *steeply*
+The open question above is answered: **128×10 is nowhere near plateaued.** Resumed
+e503→e588 (+85 epochs), it now beats its **own e502 self 40-0** (@100, n=40). For
+contrast, the saturated 96×8 (cont100) was flat 50% vs its own e400 after +178
+epochs. So the high-capacity net has the **headroom the 96×8 lacked**, and the
+broken yardstick made the campaign abandon it (at e560) *mid-climb*. New-best frozen:
+`sweep_runs/g15_128x10_bigbuf_e588_best.pt`. It's still training; the pacer now
+tracks current vs e588 (moving baseline). **This is real "better scores" — likely a
+much stronger 15×15 net than anything the campaign crowned, and rising.** Strongly
+consider letting 128×10 keep training and re-crowning from its trajectory (#29).
