@@ -209,6 +209,34 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # G15-96x8-deepgen (2026-06-14, #27): the SEARCH-DEPTH axis. Every closed
+    # 15x15 experiment (capacity 64x4->96x8->128x10, data 400k->1.5M, epochs
+    # ->e617) held n_simulations=100 FIXED. The deep-TC plateau (96x8 champion
+    # = 75 fast / 69 deep, n=16) is a SEARCH symptom: our fixed-100-sim net vs a
+    # far-deeper Rapfi@5000ms. BYTE-IDENTICAL to G15-96x8 EXCEPT n_simulations
+    # =200 (deeper self-play search -> richer policy/value targets). Warm-start:
+    #   --resume sweep_runs/g15_champion_96x8_e499.pt  (strongest 96x8, 400k buf)
+    # Q: does richer self-play search break the 69% deep-TC plateau? At 200 sims
+    # workers make ~half the games/epoch but the 400k buffer still turns over
+    # ~every ~22 epochs (trainer is train-bound ~25-30s/epoch, gen only ~2-3s, so
+    # epoch pace is ~unchanged). One lever changed (sims); eval n>=16 BOTH tiers.
+    "G15-96x8-deepgen": Cell("G15-96x8-deepgen-board15", sgd_per_game=1.0,
+                buffer_size=400_000, games_per_epoch=64,
+                size="96x8", stem_padding=1, n_simulations=200,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # G15-96x8-bigbuf: the DATA experiment (2026-06-13). The 128x10 capacity step
     # OVERSHOT — the 3.3M net got WORSE on the 400k buffer (overfit; aggregate
     # 37.5% @1000ms vs the 96x8's 75%). FINDING: capacity must be matched by
