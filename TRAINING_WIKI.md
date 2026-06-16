@@ -3732,3 +3732,54 @@ and quantified: the concrete next target. Reliability fixes queued in #35: per-e
 timeout, process-per-pair (no engine reuse), measure-don't-assume anchors. Full
 synthesis: §14 of `wiki/topics/alphazero-lessons-15x15-gomoku.md`; design-doc status
 updated in `wiki/topics/engine-panel-derby-design.md`.
+
+## 2026-06-15 — White-side defense is a TRAINING gap (search-invariant, not an eval flag)
+
+Followed the #33 white-side defense gap (§14 panel: champion `g15_128x10_bigbuf_eval502.pt`
+~94% as black / ~50% as white, **0–3 white = 100% loss** vs the *strong* attackers
+embryo26 + zetor17) into Step A of the defense plan — the cheap, eval-only branch —
+to test whether any eval lever fixes it before committing a training slice. **Verdict:
+it is a genuine TRAINING gap.** Both cheap fixes are FALSIFIED against the one
+reliable real attacker we can head-to-head cleanly, **zetor17** (white = champion
+defending):
+
+**FPU-reduction (the 9×9 wiki's claimed white-loss fix — c=0.45) changes NOTHING vs a
+real attacker:**
+- vs `lookahead:depth=4` (weak searcher): FPU=0.0 → white **88%**; FPU=0.45 → white
+  **100%** (closed a small residual tail that was nearly closed already).
+- vs **zetor17** (real strong attacker): FPU=0.0 → white **0–6 (100% loss)**;
+  FPU=0.45 → white **0–6 (100% loss)**. *Identical.* The 9×9 FPU-as-defense-fix does
+  **NOT transfer** to 15×15 real-engine defense — CORRECT the old claim (it looked
+  plausible because it worked on the weak searcher).
+
+**Search budget (H3, "search too shallow") — 4× more search changes nothing:**
+- vs zetor17: sims=200 → white **0–4 (0%)**; sims=800 → white **0–4 (0%)**.
+
+**The dissociation that names the cause:** at *every* FPU and sims setting the
+champion is **perfect as black** vs zetor17 (4–0 / 6–0) and **helpless as white**
+(0–4 / 0–6) — same net, same search, same opponent, only the color flips. A weakness
+immune to both eval-side levers (search prior AND search depth) lives in the
+**weights**, not the search: the policy/value cannot REPRESENT the saving defense; it
+must be TAUGHT (relabel the saving move).
+
+**Hypothesis ledger:** H3 (search too shallow) **RULED OUT** for real-engine defense.
+H1 (teaching gap, #18 — a lost white game is labeled only `z=−1` for the whole
+trajectory, never *which* move would have saved it) and H2 (value-target asymmetry —
+white wins → 0 at convergence, so the value head gets little gradient to split
+"drawable" from "lost" white positions) **STAND**.
+
+**Fix routes to training (#36 / #18 recipe):** clone the champion cell, turn on the
+value-only `--defense-teacher` (stamps proven-lost white positions `z=−1`, "defend
+earlier") paired with `--vct-teacher`. If value-only under-moves the **draw/loss
+boundary** (where "never lose as white" lives), escalate to **I2 — stamp the saving
+move** (one-hot policy on the unique defensive refutation).
+
+This is the project's "internal-looking-healthy ≠ actually-strong / be suspicious"
+ethos AGAIN, applied to the *fix*: the cheap eval fix looked plausible (worked on the
+weak searcher, as the 9×9 wiki promised) and was falsified on the real attacker. Had
+we trusted the depth-4 read we'd have shipped an FPU flag and declared defense solved
+while still losing 0–6 to every strong engine. Full synthesis: §15 of
+`wiki/topics/alphazero-lessons-15x15-gomoku.md`; plan updated (Step A FALSIFIED → Step
+B is the first real experiment, I0 demoted / I1 promoted) in
+`wiki/topics/white-side-defense-plan.md`. Tracked #33; fix #36 / #18. No code edited,
+no games run this session (numbers verified against the GPU runs on #33).

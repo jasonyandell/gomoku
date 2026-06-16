@@ -13,6 +13,55 @@ and the whole problem is asymmetric by construction.
 
 ---
 
+## Step A RESULTS (2026-06-15) — I0 (FPU) and H3 (search budget) are FALSIFIED vs a real engine
+
+Step A (the eval-only cheap branch) ran against the one reliable real attacker we
+can head-to-head cleanly, **zetor17** (champion = `g15_128x10_bigbuf_eval502.pt`,
+white = defending). The verdict is decisive: **both eval-side levers change NOTHING
+vs a strong attacker → white-side defense is a genuine TRAINING gap.** The plan's
+first *real* experiment is therefore **Step B (I1, the defense-teacher cell, #36)**;
+I0 is demoted, I1 promoted.
+
+**I0 — FPU-reduction (the UNCERTAIN §0 claim) is FALSIFIED for real-engine defense:**
+
+| opponent | FPU | white result |
+|---|---|---|
+| `lookahead:depth=4` (weak searcher) | 0.0 | 88% (small residual loss-tail) |
+| `lookahead:depth=4` (weak searcher) | 0.45 | **100%** (residual tail closed) |
+| **zetor17** (real strong attacker) | 0.0 | **0–6 (100% loss)** |
+| **zetor17** (real strong attacker) | 0.45 | **0–6 (100% loss)** |
+
+The 9×9 wiki claim ("FPU c=0.45 *alone* drives white-loss → 0; the white weakness is
+a search-prior miscalibration, not a training gap") **does NOT transfer to 15×15 real
+engines.** FPU=0.45 closed only a small residual gap vs the *weak* depth-4 searcher
+(88→100, a tail that was nearly closed already); vs the real attacker it is **0–6 at
+both FPU=0.0 and FPU=0.45 — identical, 100% loss.** The §0 UNCERTAIN flag is resolved:
+**the FPU eval-prior story is refuted.** It looked plausible because it worked on the
+weak searcher; the real attacker falsified it.
+
+**H3 — "search too shallow" (the search-budget hypothesis) is FALSIFIED:**
+
+| opponent | sims | white result |
+|---|---|---|
+| zetor17 | 200 | **0–4 (0%)** |
+| zetor17 | 800 | **0–4 (0%)** |
+
+4× more search → **0% white at both.** H3 is **ruled out for real-engine defense.**
+
+**The dissociation:** at *every* FPU and sims setting the champion is **perfect as
+black** vs zetor17 (4–0 / 6–0) and **helpless as white** (0–4 / 0–6) — same net, same
+search, same opponent, only the color flips. A weakness invariant to every search/eval
+knob lives in the **weights**, not the search. **H1 (#18, teaching gap) and H2
+(value-target asymmetry) STAND; H3 is RULED OUT.** Fix = relabeling, not a flag →
+**Step B / I1 / #36** (escalate to I2, stamp the saving move, if value-only under-moves
+the draw/loss boundary). Full synthesis: §15 of
+[alphazero-lessons-15x15-gomoku.md](alphazero-lessons-15x15-gomoku.md). Tracked under
+[#33](https://github.com/jasonyandell/gomoku/issues/33);
+fix [#36](https://github.com/jasonyandell/gomoku/issues/36) /
+[#18](https://github.com/jasonyandell/gomoku/issues/18).
+
+---
+
 ## 0. What the code actually does today (ground truth, file:line)
 
 These are the load-bearing facts the plan is built on. All verified by reading source.
@@ -59,15 +108,16 @@ These are the load-bearing facts the plan is built on. All verified by reading s
   `dist = Σ_baselines (1 − black_win_rate) + white_loss_rate`, color-split, over
   `{heuristic, lookahead2, lookahead4}`.
 
-**Wiki claim I could NOT re-verify (flag as UNCERTAIN):** the research-board
-synthesis says FPU-reduction c=0.45 *alone* drives white-loss from ~20-30% → 0%
-across lookahead:depth=4/6/8, i.e. "the white weakness is a search-prior
-miscalibration, not a training gap." That is an eval-only knob and the strongest
-single claim in the corpus. **The first thing the new instrument must do is
-re-confirm or refute it on the 15×15 nets vs the real-engine panel** — if true, it
-massively reorders the interventions below (cheap eval flag beats any retrain).
-All of this evidence is from the 9×9 era; **none of it has been re-measured at 15×15**,
-where openings are wider and the value head is younger.
+**Wiki claim I could NOT re-verify (flag as UNCERTAIN) — ❌ NOW REFUTED 2026-06-15:**
+the research-board synthesis said FPU-reduction c=0.45 *alone* drives white-loss from
+~20-30% → 0% across lookahead:depth=4/6/8, i.e. "the white weakness is a search-prior
+miscalibration, not a training gap." That is an eval-only knob and was the strongest
+single claim in the corpus. **Step A re-measured it at 15×15 vs the real attacker
+zetor17 and FALSIFIED it:** FPU=0.0 and FPU=0.45 both give **0–6 white (100% loss)**
+— identical. FPU closed only a small residual tail vs the *weak* depth-4 lookahead
+(88→100). The 9×9 claim **does NOT transfer to 15×15 real-engine defense.** The white
+weakness is a **training gap, not a search-prior miscalibration.** (See "Step A
+RESULTS" at the top.)
 
 ---
 
@@ -141,12 +191,14 @@ candidate, bump that pairing to 40-80 games (still cheap vs a training slice).
   means the rare *recoverable* white position is drowned. Defense teacher partly
   addresses this (stamps clear losses) but **does nothing for the
   draw-vs-loss boundary**, which is exactly where "never lose as white" lives.
-- **H3 — Search too shallow to see the opponent's threat (EVIDENCE-BACKED,
-  search-side).** Eval at 100-200 sims can miss a forcing line a depth-4
-  alpha-beta calculates exactly (#18's framing: "a sophomore-grade searcher
-  out-CALCULATES our net"). FPU/tree-reuse/proven-prop are the eval-side
-  compensators. The UNCERTAIN wiki claim (§0) says FPU c=0.45 alone closes the
-  white gap — if it replicates at 15×15, **H3 dominates and the fix is a flag.**
+- **H3 — Search too shallow to see the opponent's threat. ❌ RULED OUT 2026-06-15.**
+  Was: eval at 100-200 sims can miss a forcing line a depth-4 alpha-beta calculates
+  exactly (#18's "a sophomore-grade searcher out-CALCULATES our net"). **Step A
+  falsified it for real-engine defense:** vs zetor17, sims=200 → **0–4 white (0%)**
+  and sims=800 → **0–4 white (0%)** — 4× more search changes nothing. The UNCERTAIN
+  §0 FPU claim (the eval-prior compensator) is *also* refuted (FPU=0.0 and 0.45 both
+  0–6). H3 does **not** dominate and the fix is **not** a flag → the gap is in the
+  weights (H1/H2). See "Step A RESULTS" at the top.
 - **H4 — Opening-book / first-mover bias (SPECULATION).** Self-play converges to a
   narrow attack opening; white only ever defends *that* line, so it is brittle on
   the wider openings real engines and lookahead play. `--random-opening-moves` and
@@ -169,14 +221,18 @@ candidate, bump that pairing to 40-80 games (still cheap vs a training slice).
 Ranked best-first. "Cost" = engineering + GPU. Every training lever already has a
 flag → most are config-only cells.
 
-**I0 — Re-confirm FPU-reduction as the white fix (eval-only, ~0 cost). DO FIRST.**
-- Changes: just `--fpu-reduction-c 0.45` at eval (eval.py:199-203), no retrain.
-- Expected: if the 9×9 wiki claim holds at 15×15, white_loss → ~0 immediately.
-- Risk: may not transfer to 15×15 / real engines (wider trees). Falsifiable in one
-  CPU eval. **If it works, defense is largely an EVAL-CONFIG problem, not training**
-  — ship it on the arena harness and de-prioritize I1-I4 for *external* play.
+**I0 — FPU-reduction as the white fix (eval-only). ❌ FALSIFIED 2026-06-15 — DEMOTED.**
+- ~~DO FIRST.~~ **Done (Step A); the risk fired.** `--fpu-reduction-c 0.45` at eval
+  (eval.py:199-203), no retrain. The 9×9 wiki claim **did not transfer**: vs the real
+  attacker zetor17, FPU=0.0 → **0–6 white (100% loss)** and FPU=0.45 → **0–6 white
+  (100% loss)** — *identical*, no change (see "Step A RESULTS" at the top). It closed
+  only a small residual tail vs the *weak* depth-4 lookahead (88→100). **Defense is
+  NOT an eval-config problem; it is a training gap.** Do not re-chase FPU for
+  real-engine defense. (Eval compensators may still help *arena* play marginally — I5
+  — but that is orthogonal to the net's intrinsic defense.)
 
-**I1 — Defense teacher + VCT attack (the #18 recipe). HIGHEST training leverage.**
+**I1 — Defense teacher + VCT attack (the #18 recipe). ⭐ PROMOTED — NOW THE FIRST
+REAL EXPERIMENT (Step B, #36). HIGHEST training leverage.**
 - Changes: turn on `--defense-teacher` (already wired, self_play.py:292-363) so
   proven-lost white positions get `z=-1`, paired with `--vct-teacher` (forced-three
   attack, self_play.py:239-289) on the current champion base
@@ -238,16 +294,18 @@ off the white arm.
 
 Two-step, because the cheapest thing is eval-only and might solve it outright.
 
-**Step A (now, CPU, GPU-free): I0 — the FPU re-confirm.**
-- Spec: champion checkpoint, `play_match_parallel` vs `lookahead:depth=4` and
-  `:depth=6`, n=200, white-side `white_l` read out, at `fpu_reduction_c ∈
-  {0.0, 0.45}`. Plus §1A white-Elo reader over the *existing* panel JSONL.
-- Success: FPU=0.45 drives `white_loss_rate` to ≤ a few % vs lookahead and lifts
-  `white_elo` toward `black_elo` (`elo_gap` shrinks) vs the engine panel.
-- Falsified if: white_loss stays high with FPU at 15×15 → the wiki's eval-prior
-  story does **not** transfer; defense is a genuine training gap → go to Step B.
+**Step A — I0 — the FPU re-confirm. ✅ DONE 2026-06-15, ❌ FALSIFIED.**
+- Spec: champion checkpoint, white-side, vs the real attacker zetor17 *and* the
+  depth-4 lookahead, at `fpu_reduction_c ∈ {0.0, 0.45}` and (for H3) sims ∈
+  {200, 800}.
+- Result (the falsifying branch fired): vs zetor17, white stayed **0–6 (100% loss)
+  at FPU=0.0 AND FPU=0.45**, and **0–4 (0%) at sims=200 AND sims=800**. FPU only
+  closed a small residual tail vs the *weak* depth-4 lookahead (88→100). **The
+  eval-prior story does NOT transfer; defense is a genuine training gap → proceed to
+  Step B.** (Full tables: "Step A RESULTS" at the top; synthesis: §15 of the lessons
+  page.)
 
-**Step B (the training experiment): I1 — defense-teacher + VCT cell.**
+**Step B (the FIRST REAL EXPERIMENT, #36): I1 — defense-teacher + VCT cell.**
 - Knob: clone the reigning champion cell (`vcf + global-pool + value-discount 0.98`),
   flip on `--defense-teacher` and swap `--vcf-teacher`→`--vct-teacher`. **One lever
   family per cell** per derby rules (file as a `derby-idea` / #18 defense child).
