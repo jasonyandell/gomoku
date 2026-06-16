@@ -80,6 +80,36 @@ Rapfi). (7) cron + watchdog supervising. main @ `ad710a3`, all pushed.
 gate — plow forward. If the derby dies AND won't relaunch, check `sweep_logs/G15-defense-board15/`
 and the gen-cost lesson above. (This is a live overnight run, not a practice handoff — act on it.)
 
+## Protocol alignment (Jason pointed me to the ironed-out derby skills late — read them)
+Read `gomoku-derby-runner` (the worker), `gomoku-research-lab` (orchestrator), and
+`wiki/topics/research-loop.md` (the four roles: Researcher→Jason-gates→Orchestrator→Δelo/hr).
+My overnight apparatus maps cleanly onto the proven protocol — and the protocol already had
+answers I rediscovered the hard way:
+- **The gen-starvation I hit is documented VERBATIM** in derby-runner §0 line 77-83 ("a
+  per-move solver… generation STARVATION… no --max-depth/-nodes bound… bound the solve").
+  I converged on the exact documented fix. The skill knew; I learned it live (fine — that's
+  the ethos — but next time check §0 first on any new solver lane: confirm `buf` is FILLING).
+- **My H2H frozen-reference gate == the skill's "the round-robin is the only truth"** —
+  anchored elo can't be trusted (3× burned in v8: mish/wdl-max/vct topped anchored but lost
+  H2H). Watch the **fresh-start H2H lag**: a fresh/warm-restarted lane is undervalued by H2H
+  until it matures — **never retire a climbing fresh lane on an early H2H number** (so early
+  REVERTs on the defense cell are EXPECTED, not failure).
+- **Single-lane = "champion continuation" cadence** (derby-runner line 316): lighter per-tick
+  (health + one-line), no swap logic. My hourly heartbeat is right-sized.
+- **Clean-stop discipline (adopt going forward):** NEVER `kill -9` a trainer — SIGTERM lets it
+  self-save a resumable latest.pt; then reap orphaned `wandb-core`/`wandb-xpu` (else next resume
+  hits "run ID in use" crash-loop). I used `kill -9` once tonight (safe only because I was
+  re-warm-starting from eval502 + `--clean`); don't, in steady state.
+- **The clobber trap:** launching a derby on an existing cell with `wall_secs_total=0` silently
+  overwrites `latest.pt` with a seed-0 trainer. My runner avoids it by `--clean`+re-warm-start;
+  if you ever RESUME the defense cell instead, use `scripts/derby_safe_resume.py`.
+- **wandb is ON** for the defense cell (verified — Jason's "TV" is lit; trainer tracking a run).
+- **Crons armed:** `163915f1` (hourly :23 heartbeat/watchdog/push) + `81380641` (every 4h :41
+  RESEARCHER — spawns an agent that files 1-3 `deferred` derby-ideas for Jason's morning gate;
+  only proposes, never races). Both session-armed/durable; re-arm for the next long push.
+- **Morning TODO:** record the first gate verdict to `wiki/ops/research-board.md` (the verdict
+  ritual), and gate the researcher's `deferred` ideas (`gh issue list --label deferred`).
+
 ## Vibe snippets (paste verbatim)
 - "if you're unsure, that's a finding. if you're wrong, that's a finding. if you're right? well
   friggin great (and I suspect you will be -- I am trying to demonstrate how my eval of 'good
