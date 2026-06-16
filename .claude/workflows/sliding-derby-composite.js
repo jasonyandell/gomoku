@@ -48,6 +48,25 @@ const CELLDIR = `${REPO}/sweep_runs/${HYP.cell}-board15`
 const TLOG = `${REPO}/sweep_logs/${HYP.cell}-board15/trainer.log`
 const BOARD = `${REPO}/sweep_runs/composite_derby_board.jsonl`
 
+// --- Resilience helper (deterministic; #50) ---------------------------------
+// `agent()` returns null when a subagent dies on a terminal API error (or the
+// user skips it). agentTry re-spawns IDEMPOTENT, read-only agents up to `tries`
+// times (a fresh internal-retry budget) to ride out a transient API blip. Use it
+// ONLY for the SCORE agent (dry-run gate + log reads — no side effects). NEVER for
+// the train-LAUNCH agent: re-spawning it could double-launch a detached GPU slice.
+// On persistent failure it returns null and the caller degrades gracefully — and
+// because this workflow is built to be re-invoked (the dumb re-kicker re-adopts
+// running work from state), a clean abort here loses nothing.
+async function agentTry(prompt, opts, tries = 3) {
+  for (let i = 1; i <= tries; i++) {
+    const r = await agent(prompt, opts)
+    if (r) return r
+    log(`  agent ${(opts && opts.label) || '?'} returned null (attempt ${i}/${tries}) — API overload? re-spawning…`)
+  }
+  log(`  agent ${(opts && opts.label) || '?'} gave up after ${tries} attempts — degrading gracefully.`)
+  return null
+}
+
 phase('TrainCycle')
 const slice = await agent(
   `You run ONE measured-outcome TRAIN cycle for hypothesis "${HYP.id}" — ${HYP.title}. You ARE the train-supervisor; launching a GPU slice is your job (no other GPU tenant should be running — verify with pgrep first; if one is, wait/abort and say so). In ${REPO}:
@@ -66,8 +85,9 @@ Return: launched, pid, the LAST line of ${TLOG} (carries epoch/vl/plies/new/game
 )
 
 phase('Score')
+if (!slice) log(`Train-supervisor agent returned null (API overload?) — a detached slice may or may not have launched; scoring the cell's latest.pt by fallback path and flagging in notes.`)
 const candidate = slice && slice.latest_ckpt ? slice.latest_ckpt : `${CELLDIR}/checkpoints/latest.pt`
-const score = await agent(
+const score = await agentTry(
   `You SCORE the just-finished slice for hypothesis "${HYP.id}" against its PRE-STATED outcome — the heart of the measured-outcome derby. Do NOT launch any training. In ${REPO}:
 1. Run the 3-way gate in DRY-RUN (it must NOT auto-slide the peak — the derby decides promotion):
    GOMOKU_BOARD_SIZE=15 .venv/bin/python scripts/sliding_gate.py --dry-run --device mps --gate-on ${HYP.gate_on} --n-games ${HYP.gate_n} --sims 200 --seed 0 --candidate ${candidate} --peak ${HYP.peer} --verdict-log /tmp/composite_${HYP.id}_gate.jsonl --board /tmp/composite_${HYP.id}_gateboard.json
@@ -85,5 +105,9 @@ Return: gate_verdict, win_rate, vl, plies, measured_outcome, reasoning.`,
         reasoning:{type:'string'} } } }
 )
 
+if (!score) {
+  log(`Score agent unavailable after retries (API overload?) for ${HYP.id}. Aborting cleanly — the slice result stands; re-invoke to re-score (the gate is idempotent).`)
+  return { hypothesis: HYP.id, slice, score: null, aborted: true }
+}
 log(`Cycle done: ${HYP.id} → gate ${score.gate_verdict} → measured outcome ${score.measured_outcome}`)
 return { hypothesis: HYP.id, slice, score }
