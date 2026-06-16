@@ -18,11 +18,30 @@ from __future__ import annotations
 
 import numpy as np
 
-from gomoku import state_ops, vcf
+import pytest
+
+from gomoku import self_play, state_ops, vcf
 from gomoku.game import HISTORY_PLY, N_INPUT_PLANES
-from gomoku.self_play import _apply_defense_teacher
+from gomoku.self_play import (
+    _apply_defense_teacher,
+    _defense_budget,
+    _relabel_defense_game,
+    configure_defense_teacher,
+)
 
 N = state_ops.BOARD_SIZE
+
+
+@pytest.fixture
+def restore_defense_knobs():
+    """The #42 gentleness knobs are PROCESS-WIDE globals; any test that mutates
+    them via configure_defense_teacher must restore the defaults so it cannot
+    poison sibling tests (e.g. the byte-identical default-off assertions)."""
+    saved = (self_play._DEFENSE_SOFT_VALUE, self_play._DEFENSE_MAX_FRACTION)
+    try:
+        yield
+    finally:
+        self_play._DEFENSE_SOFT_VALUE, self_play._DEFENSE_MAX_FRACTION = saved
 
 
 def make_planes(me_cells, opp_cells):
@@ -228,3 +247,78 @@ def test_generate_games_defense_teacher_defaults_off():
         assert "defense_teacher" in sig.parameters, f"{name} missing defense_teacher"
         assert sig.parameters["defense_teacher"].default is False, \
             f"{name}.defense_teacher default is not False"
+
+
+# ---------------------------------------------------------------------------
+# #42 GENTLER defense teacher: soft value + bounded relabel fraction
+# ---------------------------------------------------------------------------
+
+_LOST_PLANES = make_planes(
+    me_cells=[(8, 8)],
+    opp_cells=[(2, 2), (2, 3), (2, 4), (2, 5)],
+)  # opponent open-four -> proven forced loss for the side to move.
+
+
+def test_42_module_defaults_are_hard_and_unbounded():
+    # The pristine module-level knobs must be the original hard/unbounded
+    # behavior so any cell that does not pass the #42 flags is byte-identical.
+    assert self_play._DEFENSE_SOFT_VALUE == -1.0
+    assert self_play._DEFENSE_MAX_FRACTION == 1.0
+    # configure_defense_teacher(None, None) is a no-op (leaves both untouched).
+    configure_defense_teacher(None, None)
+    assert self_play._DEFENSE_SOFT_VALUE == -1.0
+    assert self_play._DEFENSE_MAX_FRACTION == 1.0
+
+
+def test_42a_defaults_reproduce_hard_minus_one():
+    # (a) With the defaults, a proven-lost position is stamped the HARD -1.0 and
+    # the per-game cap never bites: budget(n) == n for every n (unbounded).
+    new_z, fired = _apply_defense_teacher(_LOST_PLANES, 0.5, vcf_already_fired=False)
+    assert fired is True
+    assert new_z == -1.0
+    for n in (0, 1, 5, 37, 225):
+        assert _defense_budget(n) == n  # frac 1.0 -> never caps -> identical
+    # An all-fired game keeps EVERY relabel under the default (byte-identical).
+    fires = [(i, -1.0) for i in range(10)]
+    kept = _relabel_defense_game(fires, n_positions=12)
+    assert kept == dict(fires)
+
+
+def test_42b_soft_value_minus_half_is_stamped(restore_defense_knobs):
+    # (b) --defense-soft-value -0.5 must stamp -0.5 (a softer "you are losing"),
+    # not the hard -1.0 — wired through configure_defense_teacher.
+    configure_defense_teacher(soft_value=-0.5)
+    new_z, fired = _apply_defense_teacher(_LOST_PLANES, 0.5, vcf_already_fired=False)
+    assert fired is True
+    assert new_z == -0.5
+    # A quiet position still does not fire (the soft value never applies).
+    quiet = make_planes(me_cells=[(4, 4)], opp_cells=[(0, 0), (8, 8)])
+    sz, sfired = _apply_defense_teacher(quiet, 0.3, vcf_already_fired=False)
+    assert sfired is False
+    assert sz == 0.3
+
+
+def test_42c_max_fraction_caps_relabel_count(restore_defense_knobs):
+    # (c) --defense-max-fraction 0.25 caps the relabel count to floor(0.25 * n).
+    configure_defense_teacher(max_fraction=0.25)
+    # 12 positions -> budget floor(0.25*12) == 3.
+    assert _defense_budget(12) == 3
+    # 8 firing plies in a 12-position game: only the LATEST 3 are kept
+    # (closest-to-the-mate = most informative "defend earlier" signal).
+    fires = [(i, -0.5) for i in range(2, 10)]  # plies 2..9, all fired
+    kept = _relabel_defense_game(fires, n_positions=12)
+    assert len(kept) == 3
+    assert set(kept) == {7, 8, 9}  # the latest 3 firing plies
+    assert all(v == -0.5 for v in kept.values())
+
+
+def test_42_budget_floor_and_zero(restore_defense_knobs):
+    # Deterministic edge behavior of the floor'd budget.
+    configure_defense_teacher(max_fraction=0.25)
+    assert _defense_budget(3) == 0   # floor(0.75) == 0 -> teacher fully off
+    assert _defense_budget(4) == 1   # floor(1.0)  == 1
+    # A 0 budget keeps nothing even when the game has fires.
+    assert _relabel_defense_game([(0, -0.5), (1, -0.5)], n_positions=3) == {}
+    # max_fraction >= 1.0 short-circuits to unbounded regardless of n.
+    configure_defense_teacher(max_fraction=1.0)
+    assert _defense_budget(225) == 225

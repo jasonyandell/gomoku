@@ -60,6 +60,7 @@ from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.self_play import (
+    configure_defense_teacher,
     configure_draw_value,
     configure_search_contempt,
     configure_vcf_teacher,
@@ -193,6 +194,21 @@ def parse_args() -> argparse.Namespace:
                         "cheap opponent-four-threat pre-scan before the solve so "
                         "quiet positions cost zero solver calls. Default OFF = "
                         "byte-identical self-play (solver never runs).")
+    p.add_argument("--defense-soft-value", type=float, default=None,
+                   help="Gentler defense teacher (#42): the VALUE target stamped on "
+                        "a proven-lost position. Default None/-1.0 = the hard 'dead "
+                        "lost' label (byte-identical). A softer value (e.g. -0.5) "
+                        "still teaches 'you are losing' without collapsing the value "
+                        "head to a delta at -1 (the #36 G15-defense -458 crash). "
+                        "Only matters with --defense-teacher.")
+    p.add_argument("--defense-max-fraction", type=float, default=None,
+                   help="Gentler defense teacher (#42): cap the FRACTION of one "
+                        "game's recorded to-move positions the defense teacher may "
+                        "relabel. Default None/1.0 = unbounded (byte-identical). A "
+                        "tighter cap (e.g. 0.25) stops a wide-open losing game from "
+                        "stamping the loss on dozens of positions; when it binds, the "
+                        "budget is spent on the LATEST firing plies (closest to the "
+                        "mate). Only matters with --defense-teacher.")
     p.add_argument("--vcf-max-depth", type=int, default=None,
                    help="VCF teacher solver depth cap (Derby v5 'vcf-deep' lever). "
                         "Default None = vcf.DEFAULT_MAX_DEPTH (16). Higher proves "
@@ -848,6 +864,9 @@ def main() -> None:
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
     configure_vct_teacher(args.vct_max_depth, args.vct_max_nodes)
+    # Gentler defense teacher (#42): no-op unless the flags are set; defaults
+    # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
+    configure_defense_teacher(args.defense_soft_value, args.defense_max_fraction)
     configure_value_discount(args.value_discount)
     # Derby 'x-draw-contempt' (bead derby-9q4): no-op when DELTA == 0.0 (default).
     configure_draw_value(args.draw_value)
