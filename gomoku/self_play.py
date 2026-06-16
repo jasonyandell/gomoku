@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import time
 from typing import MutableMapping
 
@@ -163,6 +164,140 @@ def configure_search_contempt(p: float | None = None) -> None:
         _CONTEMPT_P = float(p)
 
 
+# Defense-teacher GENTLENESS knobs (GitHub issue #42, the #36 course-correction).
+# The defense teacher (--defense-teacher) relabels the VALUE target of a position
+# the opponent has a proven forced win against. Two per-process knobs soften it so
+# it cannot saturate the value head ("white always loses") and corrupt the shared
+# trunk (the #36 G15-defense crash: Δelo -458, vl 0.16->0.06, pl 1.25->3.4):
+#
+#   _DEFENSE_SOFT_VALUE   the value target stamped on a proven-lost position.
+#                         -1.0 = hard "dead lost" (the original, byte-identical
+#                         default). A softer value (e.g. -0.5) still teaches "you
+#                         are losing" without collapsing the head to a delta at -1.
+#   _DEFENSE_MAX_FRACTION the cap on the FRACTION of one game's recorded to-move
+#                         positions the teacher may relabel. 1.0 = unbounded (the
+#                         original, byte-identical default). A tighter cap (e.g.
+#                         0.25) stops a wide-open losing game from stamping the
+#                         soft loss on dozens of positions. When the cap binds, the
+#                         budget is spent on the LATEST firing plies (closest to
+#                         the mate) — the most informative "defend earlier" signal.
+#
+# Per-process (set once by the worker via configure_defense_teacher). The defaults
+# (-1.0 / 1.0) reproduce the pre-#42 behavior bit-for-bit, so cells that do not
+# pass the new flags are unaffected.
+_DEFENSE_SOFT_VALUE = -1.0
+_DEFENSE_MAX_FRACTION = 1.0
+
+
+def configure_defense_teacher(soft_value: float | None = None,
+                              max_fraction: float | None = None) -> None:
+    """Set the process-wide defense-teacher gentleness knobs (issue #42). None
+    leaves a field at its current value. Call once before generation.
+
+    ``soft_value``  -> :data:`_DEFENSE_SOFT_VALUE` (default -1.0, the hard loss).
+    ``max_fraction`` -> :data:`_DEFENSE_MAX_FRACTION` (default 1.0, unbounded).
+    The defaults reproduce the original hard / unbounded behavior byte-for-byte.
+    """
+    global _DEFENSE_SOFT_VALUE, _DEFENSE_MAX_FRACTION
+    if soft_value is not None:
+        _DEFENSE_SOFT_VALUE = float(soft_value)
+    if max_fraction is not None:
+        _DEFENSE_MAX_FRACTION = float(max_fraction)
+
+
+def _defense_budget(n_positions: int) -> int:
+    """Max number of positions the defense teacher may relabel in ONE game, given
+    the game has ``n_positions`` recorded to-move positions. Derived from
+    :data:`_DEFENSE_MAX_FRACTION`: ``floor(frac * n_positions)``.
+
+    With the default frac == 1.0 this is ``n_positions`` (>= every possible firing
+    count), so NOTHING is ever capped — byte-identical to the pre-#42 behavior.
+    A tighter frac bounds the relabel count; the caller spends the budget on the
+    LATEST firing plies (closest to the loss). Floored, so a frac that rounds below
+    1 yields a 0 budget (the teacher is fully off for that game) — deterministic.
+    """
+    if _DEFENSE_MAX_FRACTION >= 1.0:
+        return n_positions
+    return int(math.floor(_DEFENSE_MAX_FRACTION * max(0, n_positions)))
+
+
+def _relabel_defense_game(
+    fired: list[tuple[int, float]],
+    n_positions: int,
+) -> dict[int, float]:
+    """Apply the per-game defense-teacher FRACTION cap (#42).
+
+    ``fired`` is ``[(ply_idx, new_z), ...]`` for every position in ONE game where
+    the defense teacher proved a forced loss (already in ascending ply order, as
+    produced by a forward pass). ``n_positions`` is the game's total recorded
+    to-move position count (the fraction denominator).
+
+    Returns ``{ply_idx: new_z}`` for the positions whose relabel is KEPT: at most
+    :func:`_defense_budget` of them, chosen as the LATEST firing plies (closest to
+    the loss — the most informative "defend earlier" signal). When the budget is
+    >= the firing count (the default, frac == 1.0), every fire is kept, so the
+    result is byte-identical to the pre-#42 unbounded behavior.
+    """
+    budget = _defense_budget(n_positions)
+    if budget >= len(fired):
+        return dict(fired)
+    if budget <= 0:
+        return {}
+    # Keep the LATEST `budget` firing plies (fired is ascending by ply_idx).
+    return dict(fired[len(fired) - budget:])
+
+
+def _apply_teachers_to_trajectory(
+    traj: list[tuple[np.ndarray, np.ndarray, int]],
+    outcome_for_black: float,
+    *,
+    vcf_teacher: bool,
+    vct_teacher: bool,
+    defense_teacher: bool,
+    profile: ProfileStats | None = None,
+) -> list[tuple[np.ndarray, float]]:
+    """Run the offensive (VCF/VCT) + defensive teachers over ONE game's
+    trajectory and return the finalized ``[(pi, z), ...]`` per ply.
+
+    Centralizes the record-build teacher seam shared by every discounted
+    generation path (native / native-Gumbel / Python-Gumbel / Python fallback) so
+    the #42 per-game defense FRACTION cap is applied in exactly one place. The
+    per-ply z base and the offensive-teacher behavior are byte-identical to the
+    prior inline code; the only change is that the defensive relabel is now
+    BUDGETED per game (latest firing plies first) rather than applied unbounded.
+
+    With the default knobs (soft_value -1.0, max_fraction 1.0) the output is
+    bit-for-bit identical to the prior inline loops.
+    """
+    n = len(traj)
+    out: list[tuple[np.ndarray, float]] = []
+    defense_fires: list[tuple[int, float]] = []
+    for ply_idx, (planes, pi, side) in enumerate(traj):
+        z = outcome_for_black if side == 0 else -outcome_for_black
+        z = _discount_z(z, n - 1 - ply_idx)
+        vcf_fired = False
+        if vct_teacher:
+            # VCT is a strict superset of VCF; the cell uses it INSTEAD of
+            # --vcf-teacher, so the deeper solver replaces the shallower.
+            pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
+                                                  profile=profile)
+        elif vcf_teacher:
+            pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
+                                                  profile=profile)
+        if defense_teacher:
+            d_z, fired = _apply_defense_teacher(
+                planes, z, vcf_already_fired=vcf_fired, profile=profile)
+            if fired:
+                defense_fires.append((ply_idx, d_z))
+        out.append((pi, z))
+    if defense_fires:
+        kept = _relabel_defense_game(defense_fires, n)
+        for ply_idx, d_z in kept.items():
+            pi, _ = out[ply_idx]
+            out[ply_idx] = (pi, d_z)
+    return out
+
+
 def _discount_z(z: float, plies_to_end: int) -> float:
     """Scale an outcome value target by gamma^plies_to_end.
 
@@ -302,7 +437,12 @@ def _apply_defense_teacher(
     :func:`_apply_vcf_teacher`. Where the offensive teacher proves a forced WIN
     for the side to move, this proves a forced win for the OPPONENT against the
     side to move — i.e. the recorded position is already lost — and relabels the
-    value target ``z = -1.0`` (teaches "you should have defended earlier").
+    value target to :data:`_DEFENSE_SOFT_VALUE` (default ``-1.0``; #42 allows a
+    softer target) — teaching "you should have defended earlier".
+
+    The per-game FRACTION cap (:data:`_DEFENSE_MAX_FRACTION`) is NOT enforced
+    here (this is a single-position solve); the per-game caller selects which of
+    the firing plies actually keep the relabel via :func:`_defense_budget`.
 
     Returns ``(new_z, fired)``. The POLICY target is never touched: defense is
     non-unique (many moves may equally delay the loss), so there is no single
@@ -356,11 +496,12 @@ def _apply_defense_teacher(
         return z, False
 
     # The opponent has a proven forced win against the side to move: this
-    # recorded position is lost. Value target = -1.0 (loss vertex). The recorded
-    # z is from the recorded side's perspective, matching the side-to-move of the
-    # un-swapped position, so a proven OPPONENT win maps directly to z = -1.0.
+    # recorded position is lost. Value target = _DEFENSE_SOFT_VALUE (default -1.0,
+    # the hard loss vertex; #42 allows a softer "you are losing" target). The
+    # recorded z is from the recorded side's perspective, matching the side-to-move
+    # of the un-swapped position, so a proven OPPONENT win maps directly to it.
     _profile_add(profile, "defense_fired", 1.0)
-    return -1.0, True
+    return _DEFENSE_SOFT_VALUE, True
 
 
 def _profile_add(profile: ProfileStats | None, key: str, value: float) -> None:
@@ -913,22 +1054,13 @@ def _generate_games_native_gumbel(
             if record_ownership:
                 fp, term_side = final_state.get(g_idx, (None, 0))
                 ownership = _ownership_target(fp, term_side, outcome_for_black)
-            for ply_idx, (planes, pi, side) in enumerate(traj):
-                z = outcome_for_black if side == 0 else -outcome_for_black
-                z = _discount_z(z, len(traj) - 1 - ply_idx)
+            finalized = _apply_teachers_to_trajectory(
+                traj, outcome_for_black, vcf_teacher=vcf_teacher,
+                vct_teacher=vct_teacher, defense_teacher=defense_teacher,
+                profile=profile)
+            for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
+                pi, z = finalized[ply_idx]
                 ply_at_capture = n_initial + ply_idx
-                vcf_fired = False
-                if vct_teacher:
-                    # VCT is a strict superset of VCF; the cell uses it INSTEAD of
-                    # --vcf-teacher, so the deeper solver replaces the shallower.
-                    pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
-                                                          profile=profile)
-                elif vcf_teacher:
-                    pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                                          profile=profile)
-                if defense_teacher:
-                    z, _ = _apply_defense_teacher(
-                        planes, z, vcf_already_fired=vcf_fired, profile=profile)
                 aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
                 examples.extend(_build_examples(
                     planes, pi, z, side, ply_at_capture, aux_pi,
@@ -1090,22 +1222,13 @@ def _generate_games_gumbel(
         if record_ownership:
             fp, term_side = final_state.get(g_idx, (None, 0))
             ownership = _ownership_target(fp, term_side, outcome_for_black)
-        for ply_idx, (planes, pi, side) in enumerate(traj):
-            z = outcome_for_black if side == 0 else -outcome_for_black
-            z = _discount_z(z, len(traj) - 1 - ply_idx)
+        finalized = _apply_teachers_to_trajectory(
+            traj, outcome_for_black, vcf_teacher=vcf_teacher,
+            vct_teacher=vct_teacher, defense_teacher=defense_teacher,
+            profile=profile)
+        for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
+            pi, z = finalized[ply_idx]
             ply_at_capture = n_initial + ply_idx
-            vcf_fired = False
-            if vct_teacher:
-                # VCT is a strict superset of VCF; the cell uses it INSTEAD of
-                # --vcf-teacher, so the deeper solver replaces the shallower.
-                pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
-                                                      profile=profile)
-            elif vcf_teacher:
-                pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                                      profile=profile)
-            if defense_teacher:
-                z, _ = _apply_defense_teacher(
-                    planes, z, vcf_already_fired=vcf_fired, profile=profile)
             aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
             examples.extend(_build_examples(
                 planes, pi, z, side, ply_at_capture, aux_pi,
@@ -1359,22 +1482,13 @@ def _generate_games_native(
             if record_ownership:
                 fp, term_side = final_state.get(g_idx, (None, 0))
                 ownership = _ownership_target(fp, term_side, outcome_for_black)
-            for ply_idx, (planes, pi, side) in enumerate(traj):
-                z = outcome_for_black if side == 0 else -outcome_for_black
-                z = _discount_z(z, len(traj) - 1 - ply_idx)
+            finalized = _apply_teachers_to_trajectory(
+                traj, outcome_for_black, vcf_teacher=vcf_teacher,
+                vct_teacher=vct_teacher, defense_teacher=defense_teacher,
+                profile=profile)
+            for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
+                pi, z = finalized[ply_idx]
                 ply_at_capture = n_initial + ply_idx
-                vcf_fired = False
-                if vct_teacher:
-                    # VCT is a strict superset of VCF; the cell uses it INSTEAD of
-                    # --vcf-teacher, so the deeper solver replaces the shallower.
-                    pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
-                                                          profile=profile)
-                elif vcf_teacher:
-                    pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                                          profile=profile)
-                if defense_teacher:
-                    z, _ = _apply_defense_teacher(
-                        planes, z, vcf_already_fired=vcf_fired, profile=profile)
                 aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
                 examples.extend(_build_examples(
                     planes, pi, z, side, ply_at_capture, aux_pi,
@@ -1664,22 +1778,13 @@ def generate_games(
         if record_ownership:
             fp, term_side = final_state.get(g_idx, (None, 0))
             ownership = _ownership_target(fp, term_side, outcome_for_black)
-        for ply_idx, (planes, pi, side) in enumerate(traj):
-            z = outcome_for_black if side == 0 else -outcome_for_black
-            z = _discount_z(z, len(traj) - 1 - ply_idx)
+        finalized = _apply_teachers_to_trajectory(
+            traj, outcome_for_black, vcf_teacher=vcf_teacher,
+            vct_teacher=vct_teacher, defense_teacher=defense_teacher,
+            profile=profile)
+        for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
+            pi, z = finalized[ply_idx]
             ply_at_capture = n_initial + ply_idx
-            vcf_fired = False
-            if vct_teacher:
-                # VCT is a strict superset of VCF; the cell uses it INSTEAD of
-                # --vcf-teacher, so the deeper solver replaces the shallower.
-                pi, z, vcf_fired = _apply_vct_teacher(planes, pi, z, side=int(side),
-                                                      profile=profile)
-            elif vcf_teacher:
-                pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
-                                                      profile=profile)
-            if defense_teacher:
-                z, _ = _apply_defense_teacher(
-                    planes, z, vcf_already_fired=vcf_fired, profile=profile)
             aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
             examples.extend(_build_examples(
                 planes, pi, z, side, ply_at_capture, aux_pi,
@@ -1820,7 +1925,12 @@ def generate_games_vs_baseline(
     for g_idx, outcome_for_model, plies in sorted(completed):
         examples: list[SelfPlayExample] = []
         side = int(model_side[g_idx])
-        for planes, pi, ply_at_capture in trajectories[g_idx]:
+        traj = trajectories[g_idx]
+        # First pass: offensive teacher + collect defense fires (so the #42
+        # per-game fraction cap can be applied before any example is emitted).
+        finalized: list[tuple[np.ndarray, np.ndarray, float, int]] = []
+        defense_fires: list[tuple[int, float]] = []
+        for ply_idx, (planes, pi, ply_at_capture) in enumerate(traj):
             # planes are canonical (plane 0 = side-to-move = model at the moment
             # the example was recorded), so z is directly outcome_for_model.
             z = outcome_for_model
@@ -1832,8 +1942,15 @@ def generate_games_vs_baseline(
             elif vcf_teacher:
                 pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=side)
             if defense_teacher:
-                z, _ = _apply_defense_teacher(
+                d_z, fired = _apply_defense_teacher(
                     planes, z, vcf_already_fired=vcf_fired)
+                if fired:
+                    defense_fires.append((ply_idx, d_z))
+            finalized.append((planes, pi, z, ply_at_capture))
+        kept = _relabel_defense_game(defense_fires, len(traj)) if defense_fires else {}
+        for ply_idx, (planes, pi, z, ply_at_capture) in enumerate(finalized):
+            if ply_idx in kept:
+                z = kept[ply_idx]
             if augment_symmetries:
                 for aug_planes, aug_pi in augment(planes, pi):
                     examples.append(SelfPlayExample(

@@ -438,24 +438,34 @@ CELLS: dict[str, Cell] = {
                 weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
                 epochs=1_000_000, random_opening_moves=0,
                 global_pool=True,
-                # 2026-06-16: champion + --defense-teacher ONLY (clean single
-                # variable — eval502/bigbuf had no offensive teacher), with the VCF
-                # solve budget HARD-CAPPED. --vct-teacher dropped (clean experiment;
-                # also the more expensive teacher). ROOT-CAUSE RESOLVED by controls:
-                # --defense-teacher at the DEFAULT 200k-node VCF budget STARVES 15x15
-                # generation — 0 games in 6 min, workers 100% CPU. Isolated decisively:
-                # a no-teacher control genned eval502 at ~2.6 s/game, and the SAME
-                # config + --vcf-max-nodes 2000 --vcf-max-depth 10 genned at ~3.1 s/game
-                # (gen rescued). So the per-move defense VCF solve, uncapped, is the
-                # gen-killer; the cap bounds it while still proving the SHORT forced
-                # losses "defend earlier" needs (deep 200k-node proofs are unnecessary
-                # for the draw/loss boundary). The 9x9 teachers' default budgets do NOT
-                # transfer to 15x15's wider branching — always cap the solve on the gen
-                # hot path here. (Evidence: /tmp/{noteacher,capdef}_ctrl.log, 2026-06-16.)
+                # 2026-06-16 (#42 COURSE-CORRECTION): the GENTLER defense teacher.
+                # History: the 2000/10-budget --defense-teacher run (below) DEGRADED
+                # catastrophically — Δelo -12/-199/-458 over 3 laps, white_loss
+                # 0.78->0.98. Diagnosed (issue #42, citing #41/#36): the teacher
+                # stamps a HARD z=-1.0 on EVERY proven-lost white-to-move position
+                # with NO fraction bound and NO softening; at the deepened 2000/10
+                # budget it over-fires -> value head SATURATES to "white always
+                # loses" (vl 0.16->0.06) -> contradicts the untouched attacking
+                # policy -> shared trunk corrupts (pl 1.25->3.4). The earlier comment
+                # only fixed GENERATION STARVATION (gen rescued at ~3.1 s/game); it
+                # did NOT prevent the LEARNING saturation. #42 adds two gentleness
+                # knobs (default-off / byte-identical elsewhere):
+                #   --defense-soft-value -0.5  : soft "you are losing" (not dead -1).
+                #   --defense-max-fraction 0.25: cap relabels to <=1/4 of a game's
+                #     to-move positions (latest/closest-to-mate kept) so a wide-open
+                #     losing game can't saturate the head.
+                # AND shallows the solve to 800/7 (from the over-firing 2000/10) so
+                # the teacher fires far LESS often. Champion + --defense-teacher only
+                # (clean single variable; --vct-teacher dropped). The 9x9 teachers'
+                # default budgets do NOT transfer to 15x15's wider branching — keep
+                # the solve capped on the gen hot path. (Evidence: #42; prior gen
+                # control /tmp/{noteacher,capdef}_ctrl.log, 2026-06-16.)
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98",
                                    "--defense-teacher",
-                                   "--vcf-max-nodes", "2000", "--vcf-max-depth", "10"],
+                                   "--defense-soft-value", "-0.5",
+                                   "--defense-max-fraction", "0.25",
+                                   "--vcf-max-nodes", "800", "--vcf-max-depth", "7"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-vcf: the planned 15x15-tuned vcf-teacher derby contestant (epic #21
     # readiness-audit S3). BYTE-IDENTICAL to G15-seed in every Cell field EXCEPT
