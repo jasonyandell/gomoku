@@ -122,6 +122,16 @@ def create_app(checkpoints_dir: str = "checkpoints") -> FastAPI:
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    @app.get("/api/config")
+    def config():
+        """Live board geometry so the JS canvas renders the active size (9, 15, ...).
+
+        BOARD_SIZE is a process-level constant resolved at import time from
+        `--board-size` / `GOMOKU_BOARD_SIZE` (see gomoku.board_config), so this
+        reflects whatever size the server process was started with.
+        """
+        return {"board_size": BOARD_SIZE, "n_actions": N_ACTIONS}
+
     @app.get("/api/checkpoints")
     def list_checkpoints():
         return {"dir": str(ckpt_root.resolve()), "checkpoints": _scan_checkpoints(ckpt_root)}

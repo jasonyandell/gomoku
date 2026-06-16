@@ -1,9 +1,49 @@
 // gomoku web UI
-const BOARD_SIZE = 9;
+// BOARD_SIZE is resolved from the server (/api/config) at startup so the canvas
+// renders whatever size the server process was started with (9, 15, ...). The
+// `9` here is only a pre-fetch fallback; loadConfig() overwrites it before the
+// first render. CELL and the star points derive from it (see recomputeGeometry).
+let BOARD_SIZE = 9;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const PAD = 30;             // viewBox padding for coords
 const VIEW = 540;           // viewBox size
-const CELL = (VIEW - 2 * PAD) / (BOARD_SIZE - 1);
+let CELL = (VIEW - 2 * PAD) / (BOARD_SIZE - 1);
+let MAX_PLIES = BOARD_SIZE * BOARD_SIZE;  // full board = forced draw
+
+// Derive everything that depends on BOARD_SIZE. Call after BOARD_SIZE changes.
+function recomputeGeometry() {
+  CELL = (VIEW - 2 * PAD) / (BOARD_SIZE - 1);
+  MAX_PLIES = BOARD_SIZE * BOARD_SIZE;
+}
+
+// Star points (hoshi) for the active board size. 9x9: corners of the inner 5x5
+// plus tengen; 15x15: the canonical 3-3 / center points. Other sizes: just the
+// center (or nothing if even-sized, which has no single center intersection).
+function starPoints() {
+  if (BOARD_SIZE === 9) return [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]];
+  if (BOARD_SIZE === 15) {
+    return [[3, 3], [3, 11], [11, 3], [11, 11], [7, 7], [3, 7], [11, 7], [7, 3], [7, 11]];
+  }
+  if (BOARD_SIZE % 2 === 1) {
+    const mid = (BOARD_SIZE - 1) / 2;
+    return [[mid, mid]];
+  }
+  return [];
+}
+
+// Fetch the live board size from the server before the first render.
+async function loadConfig() {
+  try {
+    const cfg = await api("/api/config");
+    if (cfg && Number.isInteger(cfg.board_size) && cfg.board_size > 1) {
+      BOARD_SIZE = cfg.board_size;
+    }
+  } catch (e) {
+    // Keep the fallback size; the board still renders something usable.
+    console.warn("could not load /api/config, using default board size", e);
+  }
+  recomputeGeometry();
+}
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -77,8 +117,8 @@ function renderBoard(stonesBySide, lastAction, hintMoves) {
   }
   svg.appendChild(grid);
 
-  // star points (9x9: corners of inner 5x5)
-  const stars = [[2,2],[2,6],[6,2],[6,6],[4,4]];
+  // star points (size-aware: see starPoints())
+  const stars = starPoints();
   for (const [r, c] of stars) {
     const dot = document.createElementNS(SVG_NS, "circle");
     dot.setAttribute("cx", colXY(c));
@@ -271,7 +311,7 @@ function checkPlayTerminal() {
     state.play.busy = true; // freeze
     return true;
   }
-  if (ply >= 81) {
+  if (ply >= MAX_PLIES) {
     $("#status").textContent = "draw";
     state.play.busy = true;
     return true;
@@ -451,6 +491,7 @@ function setupBoardClick() {
 
 // -------- wire up --------
 document.addEventListener("DOMContentLoaded", async () => {
+  await loadConfig();  // resolve BOARD_SIZE from the server before any render
   setupBoardClick();
   $$(".tab").forEach(t => t.addEventListener("click", () => setTab(t.dataset.tab)));
   $("#refresh-checkpoints").addEventListener("click", refreshCheckpoints);
