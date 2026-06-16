@@ -388,6 +388,62 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-defense (#36, sliding-derby Lap 1): the DEFENSE-TEACHER cell — the proven-
+    # needed white-side fix. Diagnosis (#33) is closed: the champion's white-side
+    # collapse vs strong attackers (eval502: 0-6 white vs zetor17 while 6-0 as black)
+    # is a TRAINING gap, not a search gap — FPU=0.45 and 4x search (sims 200->800)
+    # both did nothing (0-6 / 0-4 either way). No eval lever helps -> the net must be
+    # TAUGHT to defend. BYTE-IDENTICAL to the reigning champion G15-128x10-bigbuf
+    # (the eval502 lineage: 128x10 + global_pool + value-discount 0.98 + gumbel +
+    # 1.5M bit-packed buffer + fixed 64 SGD steps/epoch + n_workers=4) in EVERY Cell
+    # field, with the ONLY deltas on the offensive/defensive teacher seam:
+    #   (1) --vct-teacher REPLACES --vcf-teacher: VCT (Victory-by-Continuous-Threes)
+    #       is the strict SUPERSET of VCF (per #36/#18) — it proves every VCF forced
+    #       win PLUS wins that need forcing threes, stamping MORE positions with exact
+    #       mate labels. (Note bigbuf carries no offensive teacher today, the cold-
+    #       start lineage having dropped vcf, so this ADDS the offensive teacher in
+    #       its VCT/superset form.) The continuous-threes tree fans out on the
+    #       defender side, so the per-move solve MUST be aggressively capped on the
+    #       gen hot path: --vct-max-depth 4 / --vct-max-nodes 800 (the proven 9x9
+    #       derby-x-vct budget; the loose library defaults depth7/20k starved self-
+    #       play to ZERO games in ~50s, bead derby-b6r). A wide-open 15x15 position
+    #       bails to no-forced-win/hit_cap almost instantly while short tactical wins
+    #       (open-four mate, double-three fork) are still proven within the cap.
+    #   (2) --defense-teacher ADDED: the VALUE-ONLY mirror of the offensive teacher —
+    #       when the OPPONENT has a proven forced win against the side to move, relabel
+    #       the recorded value target to -1 ("you were already lost, defend earlier").
+    #       POLICY target untouched (defense is non-unique). Gen-cost-gated: skips
+    #       positions where the offensive teacher already fired + a cheap opponent-
+    #       four-threat pre-scan, so quiet positions cost zero extra solver calls.
+    # Teacher flags ride extra_worker_args (no Cell fields; same plumbing as the 9x9
+    # derby-x-vct / derby-x-defense pair). WARM-START from the champion at launch:
+    #   python scripts/run_sweep.py G15-defense \
+    #       --resume sweep_runs/g15_128x10_bigbuf_eval502.pt \
+    #       --max-wall-secs <one chunk> --final-eval
+    # (--resume is a CLI-time arg, like every G15 cell — not a Cell field; the wandb
+    # run id embedded in eval502 continues the same timeline.) JUDGE via the panel
+    # arena (#34), NOT training-time evals: success = white-loss-rate vs zetor17/
+    # lookahead:6 drops AND elo_gap shrinks with NO black regression (#18 acceptance).
+    "G15-defense": Cell("G15-defense-board15", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=4, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98",
+                                   "--vct-teacher",
+                                   "--vct-max-depth", "4", "--vct-max-nodes", "800",
+                                   "--defense-teacher"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-vcf: the planned 15x15-tuned vcf-teacher derby contestant (epic #21
     # readiness-audit S3). BYTE-IDENTICAL to G15-seed in every Cell field EXCEPT
     # it re-enables --vcf-teacher with a 15x15-appropriate per-move budget. This
