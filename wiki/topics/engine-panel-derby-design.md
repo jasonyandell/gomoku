@@ -1,8 +1,27 @@
 # Engine-Panel-Anchored Derby — Calibrated Strength Yardstick
 
 **Issue:** [#30](https://github.com/jasonyandell/gomoku/issues/30).
-**Status:** Design. Depends on harness fix (merged) and
+**Status:** Design → **tooling now BUILT.** Depends on harness fix (merged) and
 [gomocup-engines-catalog.md](gomocup-engines-catalog.md).
+
+> **BUILT (2026-06-15).** The two pieces this design needs now exist on `main`:
+> - **The cross-table runner** — `scripts/panel_tournament.py` (#32, commit
+>   `0fb7fc1`): calibrated round-robin cross-table (Bradley-Terry + affine
+>   calibration to real engines' published Gomocup Elos). This *is* the
+>   "Calibrated-Elo Architecture" below, implemented.
+> - **The brain wrapper** — `gomoku/gomocup_brain.py` (#31, commit `1834df0`):
+>   our net answers the Gomocup/Piskvork protocol on stdin/stdout, loadable by
+>   checkpoint path, registerable as a first-class panel engine via
+>   `external:cmd=run-gomoku-az --checkpoint X --sims N` (no zip packaging).
+>
+> **REQUIRED: register every net with `incremental=1`.** Our net is
+> history-conditioned (`HISTORY_PLY=8` recency planes). Driven by plain
+> BOARD-replay every move it rebuilds an **empty-history** input and silently
+> sandbags itself (measured 100% → 25% on a fixed checkpoint —
+> [lessons §13](alphazero-lessons-15x15-gomoku.md)). `incremental=1` drives it via
+> `TURN` so move history accumulates faithfully. So a panel registration is
+> `external:cmd=run-gomoku-az --checkpoint X --sims N,...,incremental=1`. Classical
+> engines (no history planes) keep the default BOARD path.
 
 ---
 

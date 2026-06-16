@@ -922,3 +922,74 @@ partway through (GPU contention while the tournament ran) and never produced for
 verdicts. Its primary target — the harness — was found and fixed manually. The
 white-defense weakness is already established from this bracket; a focused
 white-side failure-mode analysis is the clean follow-up.
+
+## 13. The brain wrapper & the empty-history trap — history-conditioned nets need faithful recency (2026-06-15)
+
+§12F hardened the **client** side of the Gomocup protocol (`external_engine.py`:
+RESTART before BOARD, bare `X,Y` move). This section is the **brain** side — we
+exposed our own net *as* a Gomocup engine (`gomoku/gomocup_brain.py`, #31 commit
+`1834df0`; shell wrapper `scripts/run-gomoku-az`, registerable via
+`external:cmd=run-gomoku-az --checkpoint X --sims N`) — and immediately hit a
+silent strength loss that is the §10/§8F "internal-looking-healthy ≠ actually-strong"
+theme in a new place: **the protocol itself can sandbag the net.**
+
+### The trap: a history-conditioned net through an order-free protocol
+
+Our input is **history-conditioned**: `gomoku/game.py` uses `HISTORY_PLY = 8`
+recency planes per side (`N_INPUT_PLANES = 17`). `to_planes()` reads the *current*
+board from `board[0]`/`board[1]` and the *older* recency frames from
+`state.history`. The net was trained on inputs where "full current board" and
+"populated recent frames" always co-occur.
+
+The classic Gomocup `BOARD` command **re-dumps the whole position every move** and
+is, by the protocol spec, **order-free** (it lists the stones, not the move
+sequence — move order is *unrecoverable* from a single dump). A naive brain rebuilds
+a fresh `GameState` from that dump, so its `history` is **empty**: `to_planes()`
+emits a full current board but **all-zero recency planes**. That is a
+self-contradictory, out-of-distribution input the net never saw in training — *"a
+full board now, but zero stones in every recent frame."* The net still answers, the
+harness looks healthy, and the net silently plays weaker.
+
+### The measurement (same checkpoint, vs heuristic, sims=100, seed=0)
+
+`g15_128x10_bigbuf_e588_best.pt`, 4 games unless noted:
+
+| driving path | history seen by `to_planes()` | result |
+|---|---|---|
+| Native in-process picker | full (real `GameState`) | **4-0 = 100%** |
+| Wrapped, BOARD-replay every move | **empty** (rebuilt each move) | 1-3 = 25% |
+| Wrapped, `incremental=1` TURN-mode | real (accumulates) | 5-1 (n=6) = **83%** |
+
+Re-dumping the board every move cost the net ~75 points (100% → 25%) against the
+same opponent — entirely from the empty-history OOD input, not from any change to
+the net or the search. Small-n (§4), but the gap is far larger than the noise band
+and it reproduced as a path difference, not a sample difference.
+
+### The fix: drive incrementally so move RECENCY is reconstructed
+
+`external_engine.py` gained an `incremental=1` mode (`incremental: bool = False`,
+default off). After a first `BOARD` sync, it feeds the opponent's single new move as
+`TURN x,y` — *not* `RESTART` (which would wipe history) — so a stateful brain
+accumulates real move history via `GameState.apply()`. `_can_turn()` gates it to
+**clean continuations** (our stones unchanged, opponent +1 stone) and falls back to a
+`BOARD` resync otherwise (game boundaries / desyncs / the opening). Only the
+game-opening first move keeps empty history (few stones, near-harmless). **Default
+off** so classical external engines (no history planes — Rapfi et al.) keep the
+robust BOARD path from §12F; only our own stateful brain opts into TURN-mode. Nets
+**must** therefore be registered with `incremental=1`.
+
+### The general lesson
+
+**When you expose a history-conditioned net through a stateless/order-free protocol,
+you must reconstruct move *recency*, not just the static position.** A single board
+dump is sufficient to rebuild *where the stones are* but not *when they arrived*, and
+a net that consumes recency planes treats the missing-order input as out-of-distribution
+and quietly underperforms. The Gomocup `BOARD` command is *explicitly* order-free for
+gomoku, so the only faithful drive is incremental (`TURN`), letting history accumulate
+move-by-move. This generalizes the project's recurring **silent self-play regression**
+theme (§10) and the deepgen specialization (§8F): *internal-looking-healthy ≠
+actually-strong; gate on real head-to-head.* Here the lie was not in the metric or
+the recipe but in the **I/O adapter** — the net was fine; the protocol bridge fed it
+garbage and nothing flagged it until a direct same-checkpoint comparison did. Cheap
+insurance, same as everywhere else in this campaign: A/B the new path against the
+known-good path on one fixed checkpoint before trusting it.

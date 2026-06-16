@@ -3633,3 +3633,50 @@ lesson.
 **Operational note:** `g15_96x8_seed.pt` is a GOOD checkpoint (ties 64×4-e909).
 Do NOT use `g15_champion_96x8_e499.pt` as a resume point or production net —
 it is weaker than its own seed. The seed is the right warm-start for the redo.
+
+## 2026-06-15 — The brain wrapper & the empty-history trap (history-conditioned net through an order-free protocol)
+
+We exposed our own net as a first-class Gomocup engine — `gomoku/gomocup_brain.py`
+(#31, commit `1834df0`; shell wrapper `scripts/run-gomoku-az`, registerable via
+`external:cmd=run-gomoku-az --checkpoint X --sims N`) — the brain-side mirror of the
+client-side `gomoku/external_engine.py`. Building it surfaced a **silent strength
+loss baked into the protocol bridge itself**, the §10-style "looks healthy, plays
+worse" failure in a new place.
+
+**Mechanism.** Our input is history-conditioned: `gomoku/game.py` uses
+`HISTORY_PLY = 8` recency planes per side. `to_planes()` reads the CURRENT board
+from `board[0]`/`board[1]` and the OLDER recency frames from `state.history`. The
+classic Gomocup `BOARD` command re-dumps the whole position every move and is
+order-free (move order is unrecoverable from a single dump). A naive brain rebuilds
+a fresh `GameState` each move with EMPTY `history`, so `to_planes()` emits a full
+current board but ALL-ZERO recency planes — a self-contradictory, OOD input the net
+never trained on.
+
+**Measured** (same checkpoint `g15_128x10_bigbuf_e588_best.pt`, vs the heuristic,
+sims=100, seed=0; 4 games unless noted):
+
+- Native in-process picker (full history): **4-0 = 100%**.
+- Wrapped, BOARD-replay every move (empty history): **1-3 = 25%**.
+- Wrapped, `incremental=1` TURN-mode (real history accumulates): **5-1 (n=6) = 83%**.
+
+The empty-history path cost ~75 points against the same opponent — purely an I/O
+artifact, not a net or search change. Small-n, but the gap dwarfs the noise band and
+reproduced as a path difference.
+
+**Fix.** `external_engine.py` gained an `incremental=1` mode (default off). After a
+first `BOARD` sync it feeds the opponent's single new move as `TURN x,y` (no
+`RESTART`, which would wipe history), so a stateful brain accumulates real move
+history via `GameState.apply()`. `_can_turn()` gates it to clean continuations (our
+stones unchanged, opponent +1 stone) and falls back to a `BOARD` resync at
+boundaries/desyncs/the opening. Default-off keeps classical external engines (no
+history planes — Rapfi et al.) on the robust BOARD path. **Nets must be registered
+with `incremental=1`.**
+
+**Lesson.** When exposing a history-conditioned net through a stateless/order-free
+protocol you must reconstruct move RECENCY, not just the static position; drive the
+engine incrementally (`TURN`) so history accumulates, or it silently sandbags
+itself. Generalizes the silent-self-play-regression theme: internal-looking-healthy
+≠ actually-strong; gate on a real same-checkpoint head-to-head. Full lesson: §13 of
+`wiki/topics/alphazero-lessons-15x15-gomoku.md`. Tooling also built this session:
+`scripts/panel_tournament.py` (#32, commit `0fb7fc1`), the calibrated panel
+cross-table runner for the #30 engine-panel-anchored derby.
