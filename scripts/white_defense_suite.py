@@ -122,6 +122,11 @@ def _mine_positions(
 def cmd_mine(args: argparse.Namespace) -> int:
     # Mix open-three and four-threat positions across a couple of attacker pairs
     # so the fixture isn't monocultured to one opponent's style. All CPU, seeded.
+    # DEFERRED (#49): the *harder* strong-attacker fixture — mining threats from
+    # games where a ckpt:<path> (champion) attacker beats the champion-as-white —
+    # uses a net attacker and so runs on MPS/GPU. That regen is the orchestrator's
+    # deferred GPU step (build_attacker now supports ckpt:<path>); this CPU `mine`
+    # stays baseline-vs-baseline (no net) and is the v1 fixture's generator.
     pairs = [
         ("heuristic", "defensive", False),
         ("lookahead:depth=2", "defensive", False),
@@ -185,7 +190,14 @@ def cmd_score(args: argparse.Namespace) -> int:
     defender = build_ckpt_defender(
         args.checkpoint, sims=args.sims, c_puct=args.c_puct, device=args.device
     )
-    attacker = build_attacker(args.attacker)
+    # A ckpt:<path> attacker's search strength is set by --attacker-sims,
+    # decoupled from the defender's --sims; the CPU baseline specs ignore these.
+    attacker = build_attacker(
+        args.attacker,
+        sims=args.attacker_sims,
+        c_puct=args.c_puct,
+        device="auto" if args.device is None else args.device,
+    )
 
     total = len(fixture) * n_seeds
     state = {"last": 0}
@@ -206,6 +218,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         "board_size": BOARD_SIZE,
         "attacker": args.attacker,
         "sims": args.sims,
+        "attacker_sims": args.attacker_sims,
         "n_positions": len(fixture),
         "n_seeds": n_seeds,
         "n": res.n,
@@ -251,8 +264,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     s.add_argument("--checkpoint", required=True)
     s.add_argument("--fixture", default=DEFAULT_FIXTURE)
     s.add_argument("--attacker", default="lookahead:depth=2",
-                   help="random|heuristic|defensive|lookahead|lookahead:depth=K")
+                   help="random|heuristic|defensive|lookahead|lookahead:depth=K|"
+                        "ckpt:<path> (net-as-attacker MCTS; the #49 strong attacker)")
     s.add_argument("--sims", type=int, default=200)
+    s.add_argument("--attacker-sims", type=int, default=200,
+                   help="MCTS sims for a ckpt:<path> attacker (search strength), "
+                        "independent of the defender's --sims; ignored by CPU baselines")
     s.add_argument("--c-puct", type=float, default=1.5)
     s.add_argument("--n-seeds", type=int, default=1,
                    help="replay the whole fixture under this many seeds (tightens the CI)")
