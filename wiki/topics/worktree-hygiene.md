@@ -45,7 +45,13 @@ Of 26 agent worktrees, lock-PID liveness explained everything:
 ## The fix: `scripts/reclaim_worktrees.py`
 
 A **liveness-aware janitor**, not a remembered procedure. It runs at session
-**start** (the robust trigger — session-end runs die with the session):
+**start** (the robust trigger — session-end runs die with the session). It is
+**wired** into the `SessionStart` + `PreCompact` hooks via the
+`scripts/session_janitor.sh` wrapper (issue #48 — before that the doctrine was
+documented but unwired, so the auto-janitor never fired and merged branches +
+stale siblings piled up across compactions). See *Wiring* below.
+
+The raw CLI: 
 
 ```
 python scripts/reclaim_worktrees.py            # dry-run preview (default, safe)
@@ -97,6 +103,32 @@ narrator never silently wedges. Bullet-proof I/O closes the four blocking
 surfaces — inherited stdin, credential prompt, implicit pager, stale lock
 — that wedged the gauge ~2min on 2026-05-28 (derby-o3s). The metric
 definition itself is unchanged; only the I/O is hardened.
+
+## Wiring (issue #48): `scripts/session_janitor.sh` in the hooks
+
+The doctrine "*the janitor runs at session start*" only holds if something
+**calls** it. That something is `scripts/session_janitor.sh`, a small wrapper
+mirroring `gh_prime.sh`: it `cd`s to `$CLAUDE_PROJECT_DIR` (falling back to its
+own repo root), picks `.venv/bin/python` if present else `python3`, runs
+`reclaim_worktrees.py --apply` then prints the `--gauge` line — and is
+**robust + non-fatal by design** (no `set -e`; every line `|| true`; always
+`exit 0`) so a janitor hiccup can never block session start. A failing
+interpreter still emits a `repo-hygiene: gauge unavailable …` sentinel.
+
+It is wired as a **second command** alongside `gh_prime.sh` in **both** the
+`SessionStart` and `PreCompact` hook arrays of `.claude/settings.json`.
+`PreCompact` matters specifically: compaction-resume re-fires `SessionStart`
+with `source=compact`, and that is the case that bit the workflow-master
+session (4 merged-undeleted branches + stale siblings accumulated across a
+compaction because nothing re-ran the janitor).
+
+**Caveat — `.claude/settings.json` is gitignored** (`.claude/*` allows only
+`skills/` + `workflows/`). It is machine-local and **does not ride a merge**.
+The *tracked, mergeable* deliverable is the wrapper + its test
+(`tests/test_session_janitor.py`); the settings edit (add the
+`session_janitor.sh` command to both arrays) must be applied to the live
+main-repo file by hand once. The test asserts the wiring **iff** that file is
+present (it `skip`s in fresh checkouts/worktrees where it is absent).
 
 ## The standing rule (generalizes beyond worktrees)
 
