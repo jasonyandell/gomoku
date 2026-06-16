@@ -70,6 +70,50 @@ turning skippable judgement into non-skippable structure. Worktree isolation per
 agent structurally prevents the edit-shared-`main` failure mode that the
 [worktree-hygiene](worktree-hygiene.md) janitor exists to clean up after.
 
+## The orchestrator session's discipline (the workflow-master)
+
+The cockpit move has a mirror image: if a Workflow turns skippable judgement into
+non-skippable structure, the **orchestrator session** must keep itself lean enough
+to *run* that structure indefinitely. The failure mode this prevents is concrete
+and was paid for: a session that holds all the work **in its own head** — building
+a parallel apparatus, debugging inline, growing a deep narrative — hits the
+context wall (~400k) and degrades into an instance attending poorly over its own
+history. That is the autopilot-eats-the-cockpit failure.
+
+> **The workflow-master runs and tunes the workflows; the *workflows* do the
+> work.** The session holds the decision thread (which hypothesis is top
+> priority, the verdicts, what to tune next) and **fans out everything
+> context-heavy** — broad reads, multi-file builds, scoring, GPU slices — to
+> subagents and workflows, keeping the conclusion, not the file dumps.
+
+Two verbs, concretely:
+
+- **Run** = kick a workflow and *watch*, not do. The GPU train-cycle
+  (`sliding-derby-composite`) and the code/everything-else drain
+  (`implement-backlog`) are the two standing lanes; the
+  [research-lab-charter](research-lab-charter.md) triage matrix is the concrete
+  rule for *what* each lane may touch.
+- **Tune** = between invocations, edit the workflow `.js` from friction. The
+  workflow file is the instrument; the master sharpens it rather than *becoming*
+  it. The self-check: catching yourself hand-coding or debugging *inline* for more
+  than a beat is the smell of holding work that should have been delegated.
+
+**An empty drain is a real signal, not a failure.** (Evidence, 2026-06-16: an
+`implement-backlog` run triaged all 15 ready issues and picked *zero* — the
+code-only backlog was drained; everything remaining was `needs-live-validation`,
+and even the white-defense eval suite (#45) turned out to need a *measurement*
+run to prove its positive control, so it isn't pure-code-auto-mergeable.) The
+"code is free, fan it out" lane has a floor: **it cannot manufacture code work
+that isn't there.** When the code drain returns empty, that *is* the finding — the
+single GPU / measurement lane is the binding constraint, and the master's job
+shifts from draining code to running bounded measured-outcome GPU cycles.
+
+Because the session's lifetime is bounded (context, or a crash), durability is not
+optional: **flush to the substrate before the session dies** — friction → skill,
+findings → wiki, work-state → issues, tacit feel → handoff — so a fresh
+workflow-master re-adopts running work from state and loses almost nothing. *The
+skill is the memory; the session is a cache.*
+
 ## The honest boundary the workflow keeps
 
 `reviewer-gated-fanout.js` deliberately **stops at "APPROVED, branch ready"**. The
