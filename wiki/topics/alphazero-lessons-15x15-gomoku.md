@@ -993,3 +993,109 @@ the recipe but in the **I/O adapter** — the net was fine; the protocol bridge 
 garbage and nothing flagged it until a direct same-checkpoint comparison did. Cheap
 insurance, same as everywhere else in this campaign: A/B the new path against the
 known-good path on one fixed checkpoint before trusting it.
+
+## 14. First panel tournament: the calibration broke (and that's the finding) (2026-06-15)
+
+§13 built the brain wrapper; this section runs the first **panel tournament** with
+it (the #30 "calibrated yardstick" epic) and reports an honest **partial failure**.
+The headline is not a strength number — it is that *we tried to produce one and the
+calibration came out backwards*. That refusal-to-print is the finding, and it is the
+project's "be suspicious / a failure that teaches is value" ethos (§3, §8E, §10, §13)
+doing exactly its job: the tooling **flagged its own broken output instead of
+laundering it into a confident Elo**.
+
+Data: `sweep_runs/panel_tournament_results.jsonl` (36 pair records). Reader:
+`scripts/panel_white_elo.py` — its §1 per-color **rates** are computed directly from
+the per-color arrays (ground truth, no model); its §2 Bradley-Terry Elo is a
+**flagged estimate** that, on this run, *refuses* to print a Gomocup-calibrated
+number. Tracked as [#35](https://github.com/jasonyandell/gomoku/issues/35).
+
+### What broke #1 — the engines, not our nets
+
+The full 9-player round-robin (3 nets + 6 opponents, n=6 each) is 36 pairs.
+**Only 19 played; 17 ERRORED.** The errors are *not random* and *not ours*:
+
+| failure mode | count | engine |
+|---|---|---|
+| `engine timed out after 30.0s` | 13 | mostly `embryo26 vs *` (Vulkan/GPU-contended) |
+| `engine process has exited` / `closed stdout (EOF)` | 4 | `* vs zetor17` (crashes on back-to-back reuse) |
+
+**Our brain-wrapped nets produced ZERO errors.** Every one of the 17 failures was an
+*opponent engine* dying — Embryo timing out under GPU contention, Zetor crashing when
+reused across consecutive pairs. The crashes cause **missing data, not fabricated
+losses** — a cross-table with holes, not a corrupted one. (Almost all the failures
+are wine-vs-wine pairs; our-net-vs-engine pairs mostly completed.)
+
+### What broke #2 — the calibration anchor (the real lesson)
+
+The affine fit of internal strength → published Gomocup Elo came out with a
+**NEGATIVE slope (~−0.071)**: internal strength *anti-correlated* with published
+rating. The smoking gun, straight from the completed games:
+
+- **yixin18** (published ~2310, a *top-tier* engine) went **0–30** — it lost *every
+  completed game*, including **0–6 to the heuristic**.
+- **pela23** (published ~1499, mid-pack) went **24–6**.
+
+The published Elos are *multi-thread tournament* ratings. Under **wine + a single
+thread + a 10s/move budget**, the engines do **not** play at those ratings — Yixin in
+particular is crippled. So the published numbers are **invalid anchors for our
+harness**, and any affine fit to them is garbage-in. `panel_white_elo.py` **correctly
+refuses** to emit a calibrated Gomocup Elo here: it detects the degenerate
+(non-positive) slope, falls back to a mean-0 *relative* internal scale, and **loudly
+flags** that the absolute scale is not trustworthy. The right design response is to
+**measure effective strength under our exact harness**, not to assume the ladder
+(#35).
+
+### What IS trustworthy (completed games only — holes are missing, not fake)
+
+Because the flakiness drops *whole pairs* rather than skewing scores within a pair,
+the games that *did* finish are clean reads (small-n per §4, so hints not verdicts):
+
+**(a) Net-vs-net** (n=6 each, mildly non-transitive = noise):
+
+| matchup | result (win rate, n=6) |
+|---|---|
+| az-champ-128x10 vs az-96x8 | champ **5–1 (83%)** |
+| az-96x8 vs az-128x10-e588 | 96×8 **4–2 (67%)** |
+| az-128x10-e588 vs az-champ-128x10 | e588 **4–2 (67%)** |
+
+A small rock-paper-scissors loop (champ > 96×8, 96×8 > e588, e588 > champ) — all
+close, consistent with sampling noise on n=6, *not* a stable strict ordering.
+
+**(b) Net-vs-heuristic** (the static-eval floor is non-trivial):
+
+| net | vs heuristic (n=6) |
+|---|---|
+| az-128x10-e588 | **6–0 (100%)** |
+| az-champ-128x10 | 5–1 (83%) |
+| az-96x8 | 5–1 (83%) |
+
+**(c) The white-side defense gap (the concrete next target,
+[#33](https://github.com/jasonyandell/gomoku/issues/33)).** Aggregated over external
+opponents, `az-champ-128x10` scores **94% as black (attacking)** but only **50% as
+white (defending)** — a **+44pp** gap, a **50% white-loss rate over 18 white games**.
+The collapse is opponent-specific and sharp: champion goes **0–3 white (100% loss)**
+vs **embryo26** *and* vs **zetor17** (and 0–3 white vs net e588), yet holds **3–0
+white** vs the *weaker* engines yixin18 and eulring16. Defense fails precisely
+against the opponents strong enough to punish it.
+
+**Caveat we do NOT hide:** the reader's own sanity check flags that **az-96x8 does
+NOT show the gap** — it scores 67% white and 67% black (white_loss 33%), i.e. white ≥
+black, *contradicting* the collapse on only n=12 white games. The gap is real and
+large for the champion; it is **not yet a universal law across nets** on this thin
+data. (e588 matches the champion's shape: 100% black, 67% white, +33pp, n=9.) Report
+the contradiction; do not massage it.
+
+### Conclusion — the yardstick is NOT yet achieved, but the tooling is sound
+
+The #30 "calibrated yardstick" is **not delivered**: a calibrated Elo needs
+**reliable engines** *and* **empirically measured effective strengths under our exact
+harness** (wine, single-thread, 10s/move) — not assumed published ladder ratings
+(#35). But the *machinery* worked flawlessly on our side: the brain wrapper (#31,
+§13), the cross-table runner (#32), and the reader (#33, `panel_white_elo.py`) each
+produced **zero errors and refused to over-claim**. And the white-side defense gap
+(#33) is now **confirmed and quantified** — the concrete, actionable next target. The
+honest one-liner: *the ruler is bent, the tool correctly told us so instead of lying,
+and the one number we can trust says our defense is the hole.* Same discipline as
+§10 and §13 — gate on real, harness-native head-to-head; never trust an anchor (here a
+*published Elo*) you have not validated under your own conditions.

@@ -3680,3 +3680,55 @@ itself. Generalizes the silent-self-play-regression theme: internal-looking-heal
 `wiki/topics/alphazero-lessons-15x15-gomoku.md`. Tooling also built this session:
 `scripts/panel_tournament.py` (#32, commit `0fb7fc1`), the calibrated panel
 cross-table runner for the #30 engine-panel-anchored derby.
+
+## 2026-06-15 — First panel tournament: the calibration broke (the failure IS the finding)
+
+Ran the first 9-player round-robin (3 of our nets + 6 opponents, n=6 each) via
+`scripts/panel_tournament.py` toward the #30 "calibrated yardstick." Raw records:
+`sweep_runs/panel_tournament_results.jsonl`. Reader: `scripts/panel_white_elo.py`
+(its §1 per-color rates are ground truth; §2 BT-Elo is a flagged estimate). The
+honest headline is a **partial failure** — we do NOT have a calibrated strength
+number, and that is the finding. Tracked as #35.
+
+**What broke #1 — the engines, not our nets.** Of 36 pairs, **only 19 played; 17
+ERRORED.** 13 = `engine timed out after 30s` (mostly `embryo26 vs *` — Embryo is
+GPU/Vulkan-contended); 4 = `engine process has exited` / `closed stdout (EOF)`
+(`* vs zetor17` — Zetor crashes on back-to-back reuse). **Our brain-wrapped nets
+produced ZERO errors** — every failure was an opponent engine dying. Crashes drop
+*whole pairs* → **missing data, not fabricated losses.**
+
+**What broke #2 — the anchor (the real lesson).** The affine fit internal-strength →
+published Gomocup Elo came out with a **NEGATIVE slope (~−0.071)**: internal strength
+*anti-correlated* with published rating. Smoking gun: **yixin18 (published ~2310,
+top-tier) went 0–30** — lost every completed game, including **0–6 to the
+heuristic**; **pela23 (published ~1499) went 24–6**. Under wine + single-thread +
+10s/move the engines do NOT play at their multi-thread tournament ratings, so the
+published Elos are **invalid anchors**. `panel_white_elo.py` §2 **correctly REFUSES**
+to print a calibrated Elo (detects the degenerate slope → mean-0 relative fallback,
+loudly flagged). Right fix: **measure effective strength under our exact harness**,
+don't assume the published ladder.
+
+**What IS trustworthy (completed games; small-n hints per the noise band):**
+- *Net-vs-net:* champ beats az-96x8 **5–1 (83%)**; az-96x8 beats e588 **4–2 (67%)**;
+  e588 beats champ **4–2 (67%)** — a close rock-paper-scissors loop = noise, not a
+  stable ordering.
+- *Net-vs-heuristic* (non-trivial floor): e588 **6–0 (100%)**, champ **5–1 (83%)**,
+  az-96x8 **5–1 (83%)**.
+- *White-side defense gap (#33, the concrete next target):* champion aggregates **94%
+  black (attack) vs 50% white (defend), +44pp**, a **50% white-loss over 18 white
+  games**. Opponent-specific: champion goes **0–3 white (100% loss)** vs **embryo26**
+  AND **zetor17** (and vs net e588), but holds **3–0 white** vs the *weaker* yixin18
+  and eulring16. **Caveat (not hidden):** the reader flags that **az-96x8 does NOT
+  show the gap** (67% white vs 67% black, n=12) — the gap is large for the champion
+  but not yet a universal law; e588 matches the champion's shape (100% black / 67%
+  white, +33pp, n=9).
+
+**Conclusion.** The #30 calibrated yardstick is **NOT yet achieved** — it needs
+reliable engines + empirically measured effective strengths under our exact harness,
+not assumed published Elos (#35). But the tooling worked flawlessly on our side:
+brain wrapper (#31), runner (#32), reader (#33 / `panel_white_elo.py`) — zero errors,
+and the reader refused to over-claim. The white-side defense gap (#33) is confirmed
+and quantified: the concrete next target. Reliability fixes queued in #35: per-engine
+timeout, process-per-pair (no engine reuse), measure-don't-assume anchors. Full
+synthesis: §14 of `wiki/topics/alphazero-lessons-15x15-gomoku.md`; design-doc status
+updated in `wiki/topics/engine-panel-derby-design.md`.
