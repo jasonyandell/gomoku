@@ -5,10 +5,22 @@ Catalog of competitor engines from the **Gomocup** gomoku/renju AI tournament
 for us: **which engines have PUBLIC SOURCE CODE** so they could be studied,
 built natively on Apple Silicon, or wrapped as honest fixed opponents.
 
-Snapshot date: **2026-06-15**. Sibling page:
-[external-engine-baselines.md](external-engine-baselines.md) (the Rapfi build +
-wrapper that's already wired into `gomoku.match`). Earlier source trail:
+Snapshot date: **2026-06-15** (wine-shelved update **2026-06-16**). Sibling pages:
+[reliable-eval-set.md](reliable-eval-set.md) (**read this first** — the post-nix
+eval definition) and [external-engine-baselines.md](external-engine-baselines.md)
+(the Rapfi build + wrapper). Earlier source trail:
 [../sources/gomocup-external-engines-2026-05-22.md](../sources/gomocup-external-engines-2026-05-22.md).
+
+> **⚠️ WINE ENGINES ARE SHELVED (2026-06-16; issue #35).** The five wine-run
+> Gomocup anchors (embryo26, yixin18, pela23, zetor17, eulring16) are **OPT-IN
+> ONLY** — they crashed ~17/36 panel pairs (wine segfaults/desyncs) and broke
+> the calibration. Jason: *"bail on wine evals — another wine crash. eval just
+> with reliable things."* The **reliable default eval set** is now net-vs-net
+> head-to-head (pure torch) + the pure-python `heuristic`/`lookahead` baselines —
+> see [reliable-eval-set.md](reliable-eval-set.md). Re-enable wine explicitly
+> with `GOMOKU_ENABLE_WINE_ENGINES=1` or `--wine` on `scripts/panel_tournament.py`
+> (default OFF). The catalog below is **kept as evidence**; an engine that proves
+> reliable (a **native** Rapfi, issue #40/#28) can be re-listed as an anchor.
 
 > **We now speak the Gomocup/Piskvork protocol on BOTH sides** (grounded in the
 > GomocupJudge protocol doc: `START`/`BEGIN`/`BOARD`/`TURN` over stdin/stdout).
@@ -96,16 +108,24 @@ research task, not a given.
 
 ## What's actually usable as an honest opponent
 
-Short list, in priority order:
+Short list, in priority order (post-nix, 2026-06-16):
 
-1. **Rapfi, natively** — already built (CMake `arm64-clang-NEON-DOTPROD`) and
-   wired into `gomoku.match` via `external:cmd=...`. The one strong, modern,
-   ARM-native, source-available engine. **This is the yardstick.**
-2. **The wine-run binaries we've already executed** (Pela23, Zetor17, Eulring16,
-   etc.) — these run as Windows `pbrain-*.exe` under wine. Source status is mostly
-   CLOSED (Pela's source exists bundled in Piskvork; Zetor/Eulring have none
-   found), but they still function as fixed opponents *via the binary*. They form
-   the measured real-engine bracket (see §12F in the training story).
+0. **Net-vs-net (pure torch) + pure-python `heuristic`/`lookahead`** — the
+   **reliable default eval set** ([reliable-eval-set.md](reliable-eval-set.md)).
+   No subprocess, no wine, never crashes; this is the sliding derby's eval and
+   the default `panel_tournament.py` field. Use this first.
+1. **Rapfi, natively** — the one strong, modern, ARM-native, source-available
+   engine, and the right path to a strength anchor past the ~1700 ceiling. The
+   build recipe is recorded (`engines/rapfi/build_rapfi.sh`, CMake preset
+   `arm64-clang-NEON-DOTPROD`, last `rapfi@6e0a132` 2026-05-24) and it speaks
+   Piskvork by default. **Bring-up gap on `main`:** no `run-rapfi` wrapper exists
+   in `~/.cache/gomocup/bin/` yet, and the stock build is weightless+TC-blind
+   (issue #28). Concrete plan = **issue #40** + `_NATIVE_ENGINES` slot in
+   `panel_tournament.py`. **This is the intended yardstick once #28/#40 land.**
+2. **The wine-run binaries** (embryo26, yixin18, pela23, zetor17, eulring16) —
+   Windows `pbrain-*.exe` under wine. **SHELVED — opt-in only** (`--wine` /
+   `GOMOKU_ENABLE_WINE_ENGINES=1`); unreliable (~17/36 panel pairs crash, #35).
+   Kept as evidence, not in the default path.
 3. **KataGomo / AlphaGomoku(MK)** — only if someone invests in an ARM-macOS build;
    strong and AlphaZero-flavored, but unproven on this hardware. Study targets
    more than drop-in opponents today.
