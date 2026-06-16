@@ -3825,7 +3825,7 @@ signal is more likely to move than the promote/revert verdict** — the defense 
 narrow capability the overall game may not surface. Watch the gate's secondary
 `white_loss_rate`, not just PROMOTE/REVERT.
 
-**OPEN PROBLEM — self-play gen stalled (honest, unresolved):** the trainer warm-starts
+**RESOLVED (same night) — gen stalled on the UNCAPPED defense-teacher VCF solve:** the trainer warm-starts
 cleanly (epoch 501+, buf=1.5M, vl≈0.156) but self-play produced ZERO games (`new=0`,
 0 record files, workers ~100% CPU) for ~6 min under TWO configs: first
 `--vct-teacher + --defense-teacher`, then (after I dropped VCT) `--defense-teacher`
@@ -3843,6 +3843,16 @@ drop still stands on experiment-cleanliness grounds (champion had no offensive t
 → defense-only is the clean single variable), independent of the gen cause. Ethos
 applied to my OWN diagnosis: be suspicious, don't harden a plausible cause into fact
 before the control runs.
+
+**RESOLUTION (controls ran the same night → H2 confirmed):** a no-teacher control genned
+eval502 at **~2.6 s/game**; the SAME config + `--defense-teacher` at the 200k-node VCF
+default stalled (0 games / 6 min); + `--vcf-max-nodes 2000 --vcf-max-depth 10` genned at
+**~3.1 s/game** (rescued). So the uncapped per-move defense VCF solve is the gen-killer,
+not VCT and not slow-warmstart. Cell capped (commit `054a5be`); derby relaunched and gen
+CONFIRMED flowing (epoch 504: `new=8`, `plies=42.5`). The cap still proves the SHORT
+forced losses "defend earlier" needs. **General lesson: 9×9 teacher default solver
+budgets do NOT transfer to 15×15 — always cap the per-move solve on the gen hot path.**
+Evidence: `/tmp/noteacher_ctrl.log`, `/tmp/capdef_ctrl.log`.
 
 Gate validation evidence: `/tmp/gate_validation_verdicts.jsonl`. Board:
 `sweep_runs/sliding_derby_board.json` (frozen peak = eval502). Verdict trail:
