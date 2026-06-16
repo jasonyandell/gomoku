@@ -3,6 +3,18 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-16] topics | workflow-orchestration § Resilience — workflows degrade, don't crash (#50)
+
+Added a Resilience section to
+[topics/workflow-orchestration.md](topics/workflow-orchestration.md): an
+API-overload window (529s) crashed `implement-backlog` dereferencing `triage.picks`
+on a `null` (a dead subagent). The synthesis: a workflow's resilience lives in its
+deterministic JS, not its agents — bounded re-spawn (`agentTry`) for idempotent
+chokepoints, graceful degradation everywhere else, and **never retry a
+side-effectful agent** (the composite's train-launch — double-launch risk). Gauge:
+`scripts/check_workflow_resilience.mjs` (verified red on the un-hardened code, green
+after). All four `.claude/workflows/*.js` hardened.
+
 ## [2026-06-16] wiki | Memory-vs-wiki reckoning — pruned agent memory to machine+user only, promoted 37 memories into the wiki
 
 Jason: "memories compete with the wiki." Pruned the agent's persistent memory

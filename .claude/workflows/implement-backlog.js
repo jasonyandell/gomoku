@@ -83,9 +83,26 @@ const VERDICT_SCHEMA = {
   },
 }
 
+// --- Resilience helper (deterministic; #50) ---------------------------------
+// `agent()` returns null when a subagent dies on a terminal API error (or the
+// user skips it). For IDEMPOTENT, read-only agents a fresh re-spawn gets a fresh
+// internal-retry budget, so a transient API/network blip rides out instead of
+// aborting the whole run. Use ONLY for side-effect-free agents (triage / review);
+// NEVER for a state-mutating agent (worktree implementer, a GPU launch). Bounded;
+// on persistent failure returns null and the caller degrades gracefully.
+async function agentTry(prompt, opts, tries = 3) {
+  for (let i = 1; i <= tries; i++) {
+    const r = await agent(prompt, opts)
+    if (r) return r
+    log(`  agent ${(opts && opts.label) || '?'} returned null (attempt ${i}/${tries}) — API overload? re-spawning…`)
+  }
+  log(`  agent ${(opts && opts.label) || '?'} gave up after ${tries} attempts — degrading gracefully.`)
+  return null
+}
+
 // ---------------------------------------------------------------- Triage
 phase('Triage')
-const triage = await agent(
+const triage = await agentTry(
   `You are the RUNNER for the gomoku research lab's autonomous backlog. Find the safest code-only GitHub issues to implement unsupervised tonight.
 
 Run (Bash):
@@ -103,6 +120,10 @@ Also exclude anything labeled gpu / needs-live-validation, anything that is an e
 For each pick give a concrete sketch: the file(s), the exact change, and the test that proves it. Everything in the ready queue you did NOT pick goes in \`skipped\` with a one-line reason. Be conservative: a smaller set of truly-safe picks beats a big risky list. Do NOT implement anything yet — triage only.`,
   { label: 'runner:triage', phase: 'Triage', schema: TRIAGE_SCHEMA },
 )
+if (!triage) {
+  log('Triage agent unavailable after retries (API overload?). Aborting cleanly — re-invoke when the API recovers.')
+  return { approved: [], blocked: [], reviseExhausted: [], triage: null, aborted: true }
+}
 
 const picks = (triage.picks || []).slice(0, MAX_PICKS)
 log(`Runner picked ${picks.length}: ${picks.map(p => `#${p.number}(${p.slug})`).join(', ') || 'none'}`)
@@ -131,7 +152,7 @@ Return a receipt: the issue, the exact change (files + what), the test you added
     if (!receipt) return { number: pick.number, slug: pick.slug, branch: `feat/gh-${pick.number}-${pick.slug}`, verdict: 'BLOCK', oneLine: 'implementer returned nothing (died/skipped)', details: 'No receipt produced.' }
     let verdict, attempt = 0
     while (true) {
-      verdict = await agent(
+      verdict = await agentTry(
         `You are a FRESH, read-only REVIEWER for GitHub issue #${pick.number} — "${pick.title}". You did not write this. Grade what was DELIVERED, not what was intended.
 
 RECEIPT:
@@ -140,6 +161,7 @@ ${receipt}
 Audit hard: Does the change actually close the issue? Is the test REAL (would it fail before the fix)? Any scope creep, broken logic, convention violation (worktree/branch discipline, GPU avoidance), or unsupported claim? If the receipt shows tests failing or no test, that is at most REVISE (or BLOCK if fundamentally misguided). Return APPROVE / REVISE / BLOCK.`,
         { label: `review:gh-${pick.number}`, phase: 'Review', schema: VERDICT_SCHEMA },
       )
+      if (!verdict) { verdict = { verdict: 'BLOCK', oneLine: 'reviewer agent unavailable (API overload?)', details: 'No verdict produced after retries — needs a human re-review.' }; break }
       if (verdict.verdict !== 'REVISE' || attempt++ >= MAX_REVISE) break
       log(`#${pick.number}: REVISE ${attempt}/${MAX_REVISE} — ${verdict.oneLine}`)
       receipt = await agent(
@@ -149,6 +171,7 @@ ${verdict.details}
 Fix it in your worktree and return an updated receipt (same format: change, test PASS/FAIL, caveats).`,
         { label: `revise:gh-${pick.number}`, phase: 'Implement', isolation: 'worktree' },
       )
+      if (!receipt) { verdict = { verdict: 'BLOCK', oneLine: 'revise agent unavailable (API overload?)', details: 'No updated receipt produced after a REVISE — needs a human.' }; break }
     }
     const exhausted = verdict.verdict === 'REVISE'
     return {

@@ -114,6 +114,45 @@ findings → wiki, work-state → issues, tacit feel → handoff — so a fresh
 workflow-master re-adopts running work from state and loses almost nothing. *The
 skill is the memory; the session is a cache.*
 
+## Resilience: the workflow degrades, it does not crash
+
+The autopilot is only trustworthy if it fails *gracefully*. The subagents a
+workflow orchestrates are remote LLM calls — they **will** die on a transient API
+overload (a 529) or a user-skip, and `agent()` is documented to return `null` in
+exactly that case (after its own internal retries). So a workflow's resilience is a
+property of its **deterministic JS**, not of the agents. The failure that taught
+this (2026-06-16, #50): an overload window killed `implement-backlog`'s triage
+agent, the script did `triage.picks` on `null`, and the whole run aborted with a
+`TypeError` — a network blip turned into a stack trace. Every workflow had the same
+shape: a bare `await agent(...)` whose result was dereferenced unguarded.
+
+The fix is two simple, deterministic layers (nothing fancy):
+
+1. **Bounded re-spawn for idempotent chokepoints.** A tiny `agentTry(prompt, opts,
+   tries=3)` re-calls `agent()` on `null` — a fresh spawn gets a fresh internal-retry
+   budget, so a brief blip rides out. Use it **only** for side-effect-free agents
+   (triage / review / score).
+2. **Graceful degradation everywhere else.** A null result is converted into a clean
+   structured outcome (`{aborted:true}`, a `BLOCK` verdict) plus a `log()` line —
+   never a dereference. `parallel`/`pipeline` results are `.filter(Boolean)`-ed.
+
+The load-bearing rule: **never retry a side-effectful agent.** The composite derby's
+train-*launch* agent stays a single bare `agent()` — re-spawning it could
+double-launch a detached GPU slice. It degrades and leans on the
+re-invocation/re-adoption model instead (a clean abort loses nothing because a later
+invocation re-adopts the running slice from state — see
+[`workflow-harness-capabilities`](workflow-harness-capabilities.md)). This is the
+same insight as "the session is a cache": **a clean exit is always safe when the
+state lives on disk.**
+
+The gauge for this class of entropy (per the lab's janitor+gauge rule) is
+[`scripts/check_workflow_resilience.mjs`](../../scripts/check_workflow_resilience.mjs):
+a no-network smoke test that runs every workflow under agent-death / happy /
+stage2-death stubs and asserts no-throw. It is verified **red** on the un-hardened
+code (`reading 'picks'`) and **green** after — so a future edit that reintroduces an
+unguarded `agent()` deref is caught deterministically, without waiting for the next
+real outage.
+
 ## The honest boundary the workflow keeps
 
 `reviewer-gated-fanout.js` deliberately **stops at "APPROVED, branch ready"**. The

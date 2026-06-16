@@ -48,6 +48,23 @@ const VERDICT_SCHEMA = {
   required: ['verdict', 'oneLine', 'details'],
 }
 
+// --- Resilience helper (deterministic; #50) ---------------------------------
+// `agent()` returns null when a subagent dies on a terminal API error (or the
+// user skips it). agentTry re-spawns IDEMPOTENT, read-only agents up to `tries`
+// times (a fresh internal-retry budget) to ride out a transient API blip. Use it
+// ONLY for side-effect-free agents (the Reviewer); NEVER for the worktree
+// implementer / revise agent. On persistent failure it returns null and the
+// caller degrades gracefully (a dead reviewer becomes a BLOCK for a human).
+async function agentTry(prompt, opts, tries = 3) {
+  for (let i = 1; i <= tries; i++) {
+    const r = await agent(prompt, opts)
+    if (r) return r
+    log(`  agent ${(opts && opts.label) || '?'} returned null (attempt ${i}/${tries}) — API overload? re-spawning…`)
+  }
+  log(`  agent ${(opts && opts.label) || '?'} gave up after ${tries} attempts — degrading gracefully.`)
+  return null
+}
+
 const lanes = Array.isArray(args) ? args.filter(l => l && l.id && l.task) : []
 if (!lanes.length) {
   throw new Error('reviewer-gated-fanout needs args: [{id, task}, ...] — one entry per CPU sub-lane. See the header for an example.')
@@ -65,18 +82,21 @@ const results = await pipeline(
   lanes,
   IMPLEMENT,
   async (receipt, lane) => {
+    if (!receipt) return { lane: lane.id, branch: `feat/${lane.id}`, verdict: 'BLOCK', oneLine: 'implementer agent returned nothing (died/skipped)', details: 'No receipt produced — needs a human.' }
     let verdict, attempt = 0
     while (true) {
-      verdict = await agent(
+      verdict = await agentTry(
         `You are a FRESH, read-only Reviewer for sub-lane "${lane.id}". You did not write this; grade what was DELIVERED, not what was intended.\n\nRECEIPT:\n${receipt}\n\nAudit: is the claim supported by the verification shown? Any premature promotion, confounded knobs, broken math, or charter/convention violation? Did it stay in its worktree and off the GPU? Return your verdict.`,
         { label: `review:${lane.id}`, phase: 'Review', schema: VERDICT_SCHEMA },
       )
+      if (!verdict) { verdict = { verdict: 'BLOCK', oneLine: 'reviewer agent unavailable (API overload?)', details: 'No verdict produced after retries — needs a human re-review.' }; break }
       if (verdict.verdict !== 'REVISE' || attempt++ >= MAX_REVISE) break
       log(`${lane.id}: REVISE (${attempt}/${MAX_REVISE}) — ${verdict.oneLine}`)
       receipt = await agent(
         `Reviewer returned REVISE on "${lane.id}":\n${verdict.details}\n\nFix it in your worktree (branch feat/${lane.id}) and return an updated receipt.`,
         { label: `revise:${lane.id}`, phase: 'Implement', isolation: 'worktree' },
       )
+      if (!receipt) { verdict = { verdict: 'BLOCK', oneLine: 'revise agent unavailable (API overload?)', details: 'No updated receipt produced after a REVISE — needs a human.' }; break }
     }
     const exhausted = verdict.verdict === 'REVISE' // hit the retry cap still asking for changes
     return { lane: lane.id, branch: `feat/${lane.id}`, verdict: exhausted ? 'REVISE_EXHAUSTED' : verdict.verdict, oneLine: verdict.oneLine, details: verdict.details }

@@ -79,7 +79,8 @@ Audit HARD, focusing on the correctness anchors:
 - Is binomial_ci reused (not a hand-rolled CI)? Scope creep? Convention violations (worktree/branch discipline, GPU avoidance, no 'Closes #45')?
 If tests are missing/failing or a correctness anchor is unproven -> REVISE (or BLOCK if fundamentally misguided). Also return the exact positive_control_cmd the orchestrator should run for the GPU gate.`,
   { label: 'review:gh-45', phase: 'Review', schema: VERDICT_SCHEMA },
-) : { verdict: 'BLOCK', oneLine: 'implementer returned nothing', details: 'No receipt produced.', positive_control_cmd: '' }
+) || { verdict: 'BLOCK', oneLine: 'reviewer agent unavailable (API overload?)', details: 'No verdict produced — needs a human re-review.', positive_control_cmd: '' }
+  : { verdict: 'BLOCK', oneLine: 'implementer returned nothing', details: 'No receipt produced.', positive_control_cmd: '' }
 
 log(`#45 build -> ${review.verdict}: ${review.oneLine}`)
 return { branch: 'feat/gh-45-white-defense-suite', receipt, review }
