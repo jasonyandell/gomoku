@@ -3909,3 +3909,28 @@ the `--defense-teacher` CAUSED the #42 collapse (the value-head saturation), not
 general. Caveat: SHORT window (13 epochs) — directional, not conclusive; a longer no-teacher control would
 firm it up. Board: `sweep_runs/composite_derby_board.jsonl`. This was ALSO the measured-outcome derby's
 first end-to-end self-test (it correctly scored this known-stable case `confirm`).
+
+## 2026-06-16 — #45 white-defense instrument: positive control PASSES; champion is at the FLOOR vs a weak attacker (defense is attacker-strength-gated)
+
+Built + merged the white-defense eval suite (#45, commit `eda147b`): a fixed 80-position
+white-to-move-threat fixture (`fixtures/white_defense_15x15_v1.json`) + `white_loss_rate`
+with Wilson CI + a `white_defense_tally` gate primitive (drop-in for
+`sliding_gate.run_gate`'s `white_loss_fn`, no `decide_verdict` change). The
+orchestrator-run **positive-control GATE** (the science verify-gate before merge, run on
+the GPU while a workflow built the code on CPU — the cockpit split): champion `eval502`
+`white_loss=0.0375` (3/80, CI [0.013, 0.105]) vs a random-init net `0.95` (76/80, CI
+[0.878, 0.980]), attacker `lookahead:depth=2`, sims=200, n=80/net — **CIs strictly
+non-overlapping → the metric DISCRIMINATES** defensive skill.
+
+**Science:** the champion defends 77/80 vs depth-2 — **SOLID at the weak-attacker end**,
+consistent with the 2026-06-15 Step A depth-4 result (88–100% white success) and with
+zetor17 0–6 (100% loss). The white-defense weakness is **attacker-strength-gated** (solid
+vs weak searchers, brittle vs strong engines), NOT a flat "brittle defender." Consequence:
+#45 v1 (weak attacker, weak-baseline-mined threats) sits at the champion's **floor** → no
+headroom to measure an I1/I2 (#43) gain. The *diagnostic* instrument needs a strong
+attacker → **#49** (depth-3/4 or champion-as-attacker over strong-attacker-derived
+threats). #45 v1 is the validated *primitive* (CI + gate seam + play-from-position); #49
+makes it diagnostic. Gate artifacts: `/tmp/wd_champ.json`, `/tmp/wd_weak.json`. The 3
+champion losses concentrate in the `_four` (strong-threat) provenance — where residual
+difficulty lives. See [white-side-defense-plan.md](wiki/topics/white-side-defense-plan.md)
+§1B.2 results block.
