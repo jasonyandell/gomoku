@@ -1099,3 +1099,104 @@ honest one-liner: *the ruler is bent, the tool correctly told us so instead of l
 and the one number we can trust says our defense is the hole.* Same discipline as
 §10 and §13 — gate on real, harness-native head-to-head; never trust an anchor (here a
 *published Elo*) you have not validated under your own conditions.
+
+## 15. White-side defense is a TRAINING gap (search-invariant, not an eval flag) (2026-06-15)
+
+**Verdict up front:** the champion's white-side (defending / second-player) collapse
+vs strong attackers is **immune to every eval-side lever we can pull** — neither the
+search prior (FPU-reduction) nor 4× more search budget moves it one game. A weakness
+that survives both the cheapest knobs *and* deeper search is not a search/eval
+miscalibration; it is a **genuine training gap**. The policy/value cannot *represent*
+the saving defense — it must be **taught**. This closes the cheap branch of the
+[#33](https://github.com/jasonyandell/gomoku/issues/33) defense investigation and
+routes the fix to training ([#36](https://github.com/jasonyandell/gomoku/issues/36) /
+the [#18](https://github.com/jasonyandell/gomoku/issues/18) recipe).
+
+Champion = `g15_128x10_bigbuf_eval502.pt` (128×10, 15×15 freestyle). White =
+champion **defending** (second player). The §14 panel surfaced the gap (94% as black,
+~50% as white, collapsing **0–3 / 100% loss** as white specifically vs the *strong*
+attackers embryo26 and zetor17, while holding white vs the weaker engines). §15 is
+the falsification of the cheap fixes against the one reliable real attacker we can
+run cleanly head-to-head, **zetor17**.
+
+### The eval-lever falsification (all white-side, vs zetor17 unless noted)
+
+**FPU-reduction — the 9×9 wiki's claimed white-loss fix — changes NOTHING vs a real
+attacker.** The 9×9 corpus (and §0/§I0 of the defense plan) held that
+`fpu_reduction_c = 0.45` *alone* drives white-loss to ~0 (the white weakness framed
+as a search-prior miscalibration, not a training gap):
+
+| opponent | FPU | white result |
+|---|---|---|
+| `lookahead:depth=4` (weak searcher) | 0.0 | 88% (small residual loss-tail) |
+| `lookahead:depth=4` (weak searcher) | 0.45 | **100%** (residual tail closed) |
+| **zetor17** (real strong attacker) | 0.0 | **0–6 (100% loss)** |
+| **zetor17** (real strong attacker) | 0.45 | **0–6 (100% loss)** |
+
+FPU=0.45 *did* close a small residual gap vs the depth-4 lookahead (88%→100%) — but
+that loss-tail was nearly closed already, and a weak searcher is not the threat. Vs a
+**real strong attacker**, FPU at 0.0 and at 0.45 both give **0–6, 100% loss** —
+identical. **The 9×9 FPU-as-defense-fix does NOT transfer to 15×15 real-engine
+defense.** This *corrects* the old 9×9 claim (§4 already flagged that the FPU
+ladder-sweep lever did not transfer; §15 nails it specifically for white-side
+defense vs a real engine): FPU is not the white fix here. It looked plausible because
+it worked on the weak searcher — and was falsified on the real attacker.
+
+**Search budget (H3, "search too shallow") — 4× more search changes nothing.**
+
+| opponent | sims | white result |
+|---|---|---|
+| zetor17 | 200 | **0–4 (0%)** |
+| zetor17 | 800 | **0–4 (0%)** |
+
+Quadrupling the simulation count leaves white at **0%**. H3 (the net just needs to
+see deeper) is **ruled out for real-engine defense.**
+
+**The dissociation that names the cause:** throughout *every* FPU and sims setting,
+the champion is **perfect as black** vs zetor17 (4–0 / 6–0) and **helpless as white**
+(0–4 / 0–6). The *same net, same search, same opponent* — only the color flips, and
+the result flips with it, at every eval setting. A weakness that tracks the
+**training-target asymmetry** (black = forced-win side the net learned to convert;
+white = the side whose saving moves were never labeled) and is **invariant to every
+search/eval knob** is, by elimination, in the **weights**, not the search.
+
+### Why this is the verdict (the ethos, again)
+
+This is the project's recurring *"internal-looking-healthy ≠ actually-strong / be
+suspicious"* discipline (§3, §8E, §10, §13, §14) applied to the **fix** rather than
+the metric: the cheap eval-side fix *looked* plausible (it worked on the weak
+searcher, exactly as the 9×9 wiki promised) and was **falsified on the real
+attacker**. Had we trusted the depth-4 read, we'd have shipped an FPU flag and
+declared defense solved while still losing 0–6 to every strong engine.
+
+The standing root-cause map (defense plan §2):
+- **H1 — teaching gap ([#18](https://github.com/jasonyandell/gomoku/issues/18)):**
+  a lost white game enters the buffer labeled only `z=−1` for the whole trajectory;
+  it never says *which move* would have saved it. The net is never taught the saving
+  move. **STANDS** (strongest hypothesis).
+- **H2 — value-target asymmetry:** at self-play convergence white wins → 0, so the
+  value head sees few white wins and little gradient to distinguish "drawable" from
+  "lost" white positions; uniform sampling drowns the rare recoverable one.
+  **STANDS.**
+- **H3 — search too shallow:** **RULED OUT** for real-engine defense (4× sims = 0
+  change).
+
+### The fix routes to training
+
+The defense must come from **relabeling**, not from any eval knob:
+[#36](https://github.com/jasonyandell/gomoku/issues/36) — the **defense-teacher +
+VCT training cell** (the [#18](https://github.com/jasonyandell/gomoku/issues/18)
+recipe): clone the champion cell and turn on the value-only `--defense-teacher`
+(stamps proven-lost white positions `z=−1`, "defend earlier") paired with
+`--vct-teacher`. If value-only under-moves the **draw/loss boundary** (exactly where
+"never lose as white" lives, and exactly the boundary the value-only teacher does not
+sharpen), escalate to **I2 — stamp the saving move** (a one-hot policy label on the
+unique defensive refutation: teach the move it *should* have played, the literal
+[#18](https://github.com/jasonyandell/gomoku/issues/18) ask for the second player).
+
+**Cross-links.** §14 — the panel tournament where this gap first surfaced and was
+quantified (champion 94% black / 50% white, 0–3 white vs the strong attackers). §13 —
+the brain wrapper that let our net play these real engines head-to-head at all. The
+operational plan and the falsified-vs-standing intervention ledger:
+[white-side-defense-plan.md](white-side-defense-plan.md) (Step A FALSIFIED → Step B
+is now the first real experiment).
