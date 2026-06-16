@@ -153,6 +153,11 @@ KEEP_LIVE = "keep:live-session"
 KEEP_EXTERNAL = "keep:external-tool"
 KEEP_MANUAL = "keep:manual-sibling"
 RECLAIM = "reclaim:orphaned"
+# A manual-sibling worktree whose work is provably already in main: clean tree
+# (no uncommitted *and* no untracked changes) AND its branch is an ancestor of
+# main. Removing it loses nothing. Distinct reason string so the report shows
+# it apart from orphaned agent worktrees. See GitHub issue #47.
+RECLAIM_STALE_SIBLING = "reclaim:stale-sibling"
 
 
 def classify_worktree(
@@ -213,9 +218,57 @@ def unique_nonmerge_commits(branch: str, cwd: str) -> list[str]:
          branch, "^main"], cwd)
 
 
+def worktree_is_clean(path: str, timeout: float = PER_CALL_TIMEOUT_S) -> bool:
+    """True iff `git status --porcelain` is empty in that worktree.
+
+    Empty porcelain means NO uncommitted tracked changes AND NO untracked
+    files (porcelain lists `??` lines for untracked). Either kind of dirt
+    makes the worktree unsafe to reclaim — its on-disk state is not provably
+    captured anywhere. Runs `git status` *inside* the worktree dir (cwd=path)
+    so it reports that worktree's own working tree."""
+    p = _git_run(["status", "--porcelain"], cwd=path, timeout=timeout)
+    return p.stdout.strip() == ""
+
+
+def branch_merged_into_main(branch: str, cwd: str,
+                            timeout: float = PER_CALL_TIMEOUT_S) -> bool:
+    """True iff `branch` is an ancestor of main (its work is fully in main).
+
+    Uses `git merge-base --is-ancestor <branch> main` (exit 0 => ancestor).
+    A branch that is an ancestor of main carries zero commits not already in
+    main, so the worktree's history is provably redundant with main."""
+    p = _git_run(["merge-base", "--is-ancestor", branch, "main"],
+                 cwd=cwd, timeout=timeout)
+    return p.returncode == 0
+
+
+def is_stale_sibling(wt: Worktree, repo_root: str,
+                     timeout: float = PER_CALL_TIMEOUT_S) -> bool:
+    """True iff this manual-sibling worktree is safe to reclaim: clean AND merged.
+
+    Conservative by construction — requires BOTH a clean working tree (no
+    uncommitted, no untracked) AND a branch fully merged into main. ANY dirt
+    OR ANY unmerged commit returns False (keep-by-hand). A detached-HEAD
+    worktree (branch is None) can never be proven merged here, so it is kept.
+    The merge-base check runs from repo_root (main's history lives there).
+    A worktree on `main` itself is never a stale sibling — `main` is trivially
+    its own ancestor, and the integration branch is not disposable scratch.
+    (The primary checkout is already filtered as KEEP_MAIN upstream; this guard
+    protects a *secondary* `main`-branch worktree too.)"""
+    if wt.branch is None or wt.branch == "main":
+        return False
+    if not worktree_is_clean(wt.path, timeout=timeout):
+        return False
+    return branch_merged_into_main(wt.branch, repo_root, timeout=timeout)
+
+
 @dataclass
 class Plan:
     reclaim: list[tuple[Worktree, str]] = field(default_factory=list)
+    # Stale manual-sibling worktrees (clean + merged) — tracked separately so
+    # the report and gauge can name them apart from orphaned agent worktrees,
+    # even though both are removed under --apply. See GitHub issue #47.
+    stale_siblings: list[tuple[Worktree, str]] = field(default_factory=list)
     keep: list[tuple[Worktree, str, str]] = field(default_factory=list)
 
 
@@ -230,6 +283,9 @@ def build_plan(repo_root: str, agent_subdir: str, external_prefixes,
         disp, why = classify_worktree(wt, repo_root, agent_subdir, external_prefixes)
         if disp == RECLAIM:
             plan.reclaim.append((wt, why))
+        elif disp == KEEP_MANUAL and is_stale_sibling(wt, repo_root, timeout=timeout):
+            plan.stale_siblings.append(
+                (wt, "clean working tree and branch fully merged into main"))
         else:
             plan.keep.append((wt, disp, why))
     return plan
@@ -257,6 +313,7 @@ def gauge(repo_root: str, agent_subdir: str, external_prefixes,
 
     wt_total: int | str = "?"
     orphaned: int | str = "?"
+    stale_siblings: int | str = "?"
     n_branches: int | str = "?"
     merged_undeleted: int | str = "?"
     degraded: list[str] = []
@@ -265,7 +322,8 @@ def gauge(repo_root: str, agent_subdir: str, external_prefixes,
         plan = build_plan(repo_root, agent_subdir, external_prefixes,
                           timeout=remaining())
         orphaned = len(plan.reclaim)
-        wt_total = len(plan.reclaim) + len(plan.keep)
+        stale_siblings = len(plan.stale_siblings)
+        wt_total = len(plan.reclaim) + len(plan.stale_siblings) + len(plan.keep)
     except GitTimeoutError as exc:
         degraded.append(f"worktree-list timed out at {exc.timeout:.1f}s")
 
@@ -291,13 +349,16 @@ def gauge(repo_root: str, agent_subdir: str, external_prefixes,
     # The flag fires on any RECLAIM-able state OR degraded I/O — the gauge
     # is the trip-wire; if it can't see, treat it as "needs a human look".
     numeric_orphaned = orphaned if isinstance(orphaned, int) else 0
+    numeric_stale = stale_siblings if isinstance(stale_siblings, int) else 0
     numeric_undeleted = merged_undeleted if isinstance(merged_undeleted, int) else 0
-    needs_action = numeric_orphaned > 0 or numeric_undeleted > 3 or degraded
+    needs_action = (numeric_orphaned > 0 or numeric_stale > 0
+                    or numeric_undeleted > 3 or degraded)
     flag = "⚠ run reclaim_worktrees --apply" if needs_action else "clean"
     suffix = ""
     if degraded:
         suffix = f" [partial: {'; '.join(degraded)}]"
-    return (f"repo-hygiene: worktrees={wt_total} (orphaned={orphaned}) "
+    return (f"repo-hygiene: worktrees={wt_total} (orphaned={orphaned}, "
+            f"stale-siblings={stale_siblings}) "
             f"branches={n_branches} (merged-undeleted={merged_undeleted}) — {flag}"
             f"{suffix}")
 
@@ -343,10 +404,27 @@ def main(argv=None) -> int:
     run(["git", "worktree", "prune"], repo_root, args.apply)
     print()
 
+    # Stale manual-sibling worktrees (clean + branch fully merged into main).
+    # Provably safe — the working tree is clean and the branch carries no
+    # commit not already in main. Single --force is enough (no harness lock to
+    # override; the clean check already guarantees nothing is lost).
+    print(f"RECLAIM stale sibling worktrees (clean + merged) "
+          f"({len(plan.stale_siblings)}):")
+    for wt, why in plan.stale_siblings:
+        rc, msg = run(["git", "worktree", "remove", "--force", wt.path],
+                      repo_root, args.apply)
+        status = "removed" if rc == 0 else f"FAILED: {msg}"
+        print(f"  - {wt.path}")
+        print(f"      branch {wt.branch or '(detached)'} | {why} | {status}")
+    if plan.stale_siblings:
+        run(["git", "worktree", "prune"], repo_root, args.apply)
+    print()
+
     # Branch sweep — only branches not checked out in a SURVIVING worktree.
     # Branches attached to reclaimed worktrees are now free, so the dry-run
     # preview must not count them as still-checked-out.
     reclaimed_branches = {wt.branch for wt, _ in plan.reclaim if wt.branch}
+    reclaimed_branches |= {wt.branch for wt, _ in plan.stale_siblings if wt.branch}
     checked_out = {
         ln.removeprefix("branch refs/heads/")
         for ln in git_lines(["worktree", "list", "--porcelain"], repo_root)

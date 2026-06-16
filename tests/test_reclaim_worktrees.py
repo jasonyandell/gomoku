@@ -249,3 +249,201 @@ def test_gauge_clean_path_does_not_degrade(monkeypatch):
     assert "clean" in line
     assert "worktrees=1" in line
     assert "branches=1" in line
+
+
+# ---------------------------------------------------------------------------
+# GitHub issue #47 — auto-reclaim clean+merged manual-sibling worktrees.
+#
+# A manual-sibling worktree (a sibling dir, NOT under .claude/worktrees/) is
+# safe to reclaim ONLY when its work is provably already in main: the working
+# tree is clean (no uncommitted AND no untracked changes) AND its branch is an
+# ancestor of main. ANY dirt OR ANY unmerged commit => keep-by-hand.
+#
+# These tests build a REAL throwaway git repo + sibling worktrees and exercise
+# the four cases from the issue against build_plan / is_stale_sibling / gauge.
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd, *args):
+    """Run a git command in cwd, raising on failure (test helper, not prod)."""
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True,
+        capture_output=True, text=True,
+    )
+
+
+def _make_repo(tmp_path):
+    """Create a real git repo with main + one commit; return its path (str)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    root = str(root)
+    _git(root, "init", "-b", "main")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "test")
+    (tmp_path / "repo" / "seed.txt").write_text("seed\n")
+    _git(root, "add", "seed.txt")
+    _git(root, "commit", "-m", "seed")
+    return root
+
+
+def _add_sibling(root, tmp_path, name, branch):
+    """Create a sibling worktree (NOT under .claude/worktrees) on a new branch."""
+    path = str(tmp_path / name)
+    _git(root, "worktree", "add", "-b", branch, path, "main")
+    return path
+
+
+def _build(root):
+    # agent_subdir set to the production token so a plain sibling dir (which
+    # does not contain it) is classified KEEP_MANUAL, then refined.
+    return rw.build_plan(root, "/.claude/worktrees/", ())
+
+
+def test_issue47_clean_merged_sibling_is_reclaimed(tmp_path):
+    """(a) clean + merged -> RECLAIM_STALE_SIBLING (new category)."""
+    root = _make_repo(tmp_path)
+    path = _add_sibling(root, tmp_path, "sib-clean-merged", "feat/clean-merged")
+    # branch == main's commit, no edits => clean and an ancestor of main.
+
+    wt = next(w for w in rw.parse_worktrees(
+        rw._git_run(["worktree", "list", "--porcelain"], cwd=root).stdout)
+        if w.path == path)
+    assert rw.is_stale_sibling(wt, root) is True
+
+    plan = _build(root)
+    paths = {w.path for w, _ in plan.stale_siblings}
+    assert path in paths, "clean+merged sibling must be a stale-sibling reclaim"
+    assert path not in {w.path for w, _, _ in plan.keep}
+
+
+def test_issue47_clean_unmerged_sibling_is_kept(tmp_path):
+    """(b) clean + UNMERGED (unique commit not in main) -> KEPT."""
+    root = _make_repo(tmp_path)
+    path = _add_sibling(root, tmp_path, "sib-clean-unmerged", "feat/clean-unmerged")
+    # Commit a unique change on the branch so it is NOT an ancestor of main.
+    (tmp_path / "sib-clean-unmerged" / "extra.txt").write_text("work\n")
+    _git(path, "add", "extra.txt")
+    _git(path, "commit", "-m", "unique work not in main")
+
+    wt = next(w for w in rw.parse_worktrees(
+        rw._git_run(["worktree", "list", "--porcelain"], cwd=root).stdout)
+        if w.path == path)
+    assert rw.is_stale_sibling(wt, root) is False
+
+    plan = _build(root)
+    assert path not in {w.path for w, _ in plan.stale_siblings}
+    assert path in {w.path for w, _, _ in plan.keep}
+
+
+def test_issue47_dirty_merged_sibling_is_kept(tmp_path):
+    """(c) DIRTY (uncommitted tracked change) + merged -> KEPT."""
+    root = _make_repo(tmp_path)
+    path = _add_sibling(root, tmp_path, "sib-dirty-merged", "feat/dirty-merged")
+    # Modify the tracked seed file but do NOT commit => dirty working tree.
+    (tmp_path / "sib-dirty-merged" / "seed.txt").write_text("seed\nlocal edit\n")
+
+    wt = next(w for w in rw.parse_worktrees(
+        rw._git_run(["worktree", "list", "--porcelain"], cwd=root).stdout)
+        if w.path == path)
+    assert rw.worktree_is_clean(path) is False
+    assert rw.is_stale_sibling(wt, root) is False
+
+    plan = _build(root)
+    assert path not in {w.path for w, _ in plan.stale_siblings}
+    assert path in {w.path for w, _, _ in plan.keep}
+
+
+def test_issue47_untracked_only_merged_sibling_is_kept(tmp_path):
+    """(d) untracked-only (a brand-new file) + merged -> KEPT."""
+    root = _make_repo(tmp_path)
+    path = _add_sibling(root, tmp_path, "sib-untracked", "feat/untracked")
+    # Branch tip == main (merged) but an untracked file makes porcelain non-empty.
+    (tmp_path / "sib-untracked" / "scratch.tmp").write_text("scratch\n")
+
+    wt = next(w for w in rw.parse_worktrees(
+        rw._git_run(["worktree", "list", "--porcelain"], cwd=root).stdout)
+        if w.path == path)
+    assert rw.worktree_is_clean(path) is False, "untracked file => not clean"
+    assert rw.is_stale_sibling(wt, root) is False
+
+    plan = _build(root)
+    assert path not in {w.path for w, _ in plan.stale_siblings}
+    assert path in {w.path for w, _, _ in plan.keep}
+
+
+def test_issue47_secondary_main_worktree_is_never_stale(tmp_path):
+    """Scope guard: a SECOND worktree checked out on `main` is never reclaimed.
+
+    `main` is trivially an ancestor of itself, so without the explicit guard a
+    clean secondary `main` checkout would be misread as a stale sibling. It
+    must always be kept — the integration branch is not disposable."""
+    root = _make_repo(tmp_path)
+    path = str(tmp_path / "sib-main")
+    # A linked worktree on main is unusual but legal via --force; assert the
+    # branch-level guard regardless of how it was created.
+    _git(root, "worktree", "add", "--force", path, "main")
+
+    wt = next(w for w in rw.parse_worktrees(
+        rw._git_run(["worktree", "list", "--porcelain"], cwd=root).stdout)
+        if w.path == path)
+    assert wt.branch == "main"
+    assert rw.is_stale_sibling(wt, root) is False
+
+    plan = _build(root)
+    assert path not in {w.path for w, _ in plan.stale_siblings}
+
+
+def test_issue47_gauge_counts_only_clean_merged_as_stale(tmp_path):
+    """Gauge surfaces stale-siblings=N: only (a) counts; (b)/(c)/(d) are kept."""
+    root = _make_repo(tmp_path)
+
+    # (a) clean + merged -> the one reclaimable stale sibling.
+    _add_sibling(root, tmp_path, "sib-a", "feat/a-clean-merged")
+
+    # (b) clean + unmerged.
+    pb = _add_sibling(root, tmp_path, "sib-b", "feat/b-unmerged")
+    (tmp_path / "sib-b" / "b.txt").write_text("b\n")
+    _git(pb, "add", "b.txt")
+    _git(pb, "commit", "-m", "b unique")
+
+    # (c) dirty + merged.
+    pc = _add_sibling(root, tmp_path, "sib-c", "feat/c-dirty")
+    (tmp_path / "sib-c" / "seed.txt").write_text("seed\ndirty\n")
+
+    # (d) untracked-only + merged.
+    pd = _add_sibling(root, tmp_path, "sib-d", "feat/d-untracked")
+    (tmp_path / "sib-d" / "new.tmp").write_text("x\n")
+
+    line = rw.gauge(root, "/.claude/worktrees/", (), budget_s=15.0)
+    assert "stale-siblings=1" in line, f"only (a) is reclaimable, got: {line}"
+    # Non-degraded run, and the stale sibling trips the action flag.
+    assert "[partial:" not in line
+    assert "⚠" in line, f"a stale sibling must flag for action, got: {line}"
+
+    # Cross-check the plan: exactly the (a) path is a stale sibling; b/c/d kept.
+    plan = _build(root)
+    stale_paths = {w.path for w, _ in plan.stale_siblings}
+    assert len(stale_paths) == 1
+    kept_paths = {w.path for w, _, _ in plan.keep}
+    assert pb in kept_paths and pc in kept_paths and pd in kept_paths
+
+
+def test_issue47_detached_head_sibling_is_kept(tmp_path):
+    """Scope guard: a detached-HEAD sibling (branch is None) is never reclaimed.
+
+    We cannot prove a detached worktree's HEAD is captured by name, so it stays
+    keep-by-hand even if its tree is clean and the commit is in main."""
+    root = _make_repo(tmp_path)
+    path = str(tmp_path / "sib-detached")
+    head = rw._git_run(["rev-parse", "HEAD"], cwd=root).stdout.strip()
+    _git(root, "worktree", "add", "--detach", path, head)
+
+    wt = next(w for w in rw.parse_worktrees(
+        rw._git_run(["worktree", "list", "--porcelain"], cwd=root).stdout)
+        if w.path == path)
+    assert wt.detached is True and wt.branch is None
+    assert rw.is_stale_sibling(wt, root) is False
+
+    plan = _build(root)
+    assert path not in {w.path for w, _ in plan.stale_siblings}
+    assert path in {w.path for w, _, _ in plan.keep}
