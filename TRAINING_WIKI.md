@@ -3783,3 +3783,68 @@ while still losing 0–6 to every strong engine. Full synthesis: §15 of
 B is the first real experiment, I0 demoted / I1 promoted) in
 `wiki/topics/white-side-defense-plan.md`. Tracked #33; fix #36 / #18. No code edited,
 no games run this session (numbers verified against the GPU runs on #33).
+
+---
+
+## 2026-06-16 — Sliding derby launched; the frozen-reference gate, validated against known truth
+
+**What shipped tonight (autonomous, Jason asleep — "plow forward, don't gate on me"):**
+the sliding derby's GPU producer (`scripts/sliding_derby_runner.sh`) is live on the
+**#36 G15-defense** cell, warm-started from `g15_128x10_bigbuf_eval502.pt`, trained in
+resumable 1-hour slices with the frozen-reference promotion gate
+(`scripts/sliding_gate.py`, #39) run between slices. **Reliable evals only** — wine
+engines NIXED per Jason (another wine crash; #35): the verdict is anchor-free
+net-vs-frozen-peak H2H (pure torch), secondary white-loss is net-vs-peak. The gate is
+calibration-immune (never reads absolute Elo).
+
+**The gate was validated against truth I was certain of before trusting it** (5 H2H
+dry-runs, sims=200, openings=4p, MPS):
+- NULL `eval502 vs eval502` → 12W-12L = **50%**, CI[.314,.686] → **REVERT** ✅ (refuses a tie — the load-bearing anti-noise property).
+- `eval502 vs eval146` → 46%, Δelo −29±136 → REVERT;  `eval146 vs eval502` → 54%, +29±136 → REVERT (mirror-consistent).
+- `eval502 vs 128x10_seed` → 57%, +51±98 → REVERT;  `eval502 vs 96x8_seed` → 52%, +17±106 → REVERT.
+- **POSITIVE CONTROL** `eval502 vs RANDOM-init net` (same arch, weights re-init) → **40W-0L = 100%**, CI[.912,1.0] → **PROMOTE** ✅.
+
+**Two findings fall out of this:**
+1. **The gate works in both directions** — it REVERTs ties/noise (5×, incl. an exact 50%
+   self-match) and PROMOTEs a genuine gap (champion crushes random 40-0 with a clean
+   CI). The PROMOTE path is not just unit-tested; it fired on a real eval.
+2. **The 128x10 bigbuf lineage is a tight ~50-elo plateau.** eval502, eval146,
+   128x10_seed (the 96x8-champion grown), and 96x8_seed all land within 50±7% H2H of each
+   other at n≤48. Because the champion-vs-random control proves the H2H instrument has
+   FULL dynamic range (0→100%), this clustering is **real, not a measurement artifact** —
+   502 epochs of warm-started bigbuf training added little absolute strength over the
+   grown seed. (Faint, n=24-noisy hint, NOT concluded: eval146 scored ≥50% vs eval502 in
+   both orientations — i.e. the *later* checkpoint is not stronger, mildly consistent with
+   the silent-regression thesis. ±136 elo — a hint, not evidence.)
+
+**Implication for the derby design (load-bearing):** a frozen-reference ratchet with
+underpowered `n` never ratchets. At n=24 the Δelo CI is ±136; resolving a ~70-elo
+per-lap gap needs **n≈120** (set as the runner's `GATE_N`). And for the *defense* arc
+specifically, lineage-sibling overall-H2H is compressed, so the targeted **white-loss
+signal is more likely to move than the promote/revert verdict** — the defense fix is a
+narrow capability the overall game may not surface. Watch the gate's secondary
+`white_loss_rate`, not just PROMOTE/REVERT.
+
+**OPEN PROBLEM — self-play gen stalled (honest, unresolved):** the trainer warm-starts
+cleanly (epoch 501+, buf=1.5M, vl≈0.156) but self-play produced ZERO games (`new=0`,
+0 record files, workers ~100% CPU) for ~6 min under TWO configs: first
+`--vct-teacher + --defense-teacher`, then (after I dropped VCT) `--defense-teacher`
+ONLY. **So my first instinct — "VCT starved gen" — is NOT proven**; the defense-only
+config stalls identically. A 15×15 game at 100 sims should take seconds, so 6 min to
+zero is anomalous for either config. Candidate causes, unranked: (H1) slow first batch
+because the strong eval502 warm-start plays long, well-defended games (Jason's own
+"defense learned = longer games = slower cycles" lesson); (H2) the `--defense-teacher`
+VCF solve (200k-node default) firing on the strong net's many tactical positions; (H3)
+a native-ext / MCTS config issue. **Decisive next step: a NO-TEACHER control run**
+(champion config, warm-start eval502) — if it gens fast, the teacher (H2) is the cost;
+if it also stalls, H1/H3. A `/tmp/gen_watch.sh` poller watches the live defense-only run
+for ≤14 min; if gen appears it was just slow (H1) and the experiment proceeds. The VCT
+drop still stands on experiment-cleanliness grounds (champion had no offensive teacher
+→ defense-only is the clean single variable), independent of the gen cause. Ethos
+applied to my OWN diagnosis: be suspicious, don't harden a plausible cause into fact
+before the control runs.
+
+Gate validation evidence: `/tmp/gate_validation_verdicts.jsonl`. Board:
+`sweep_runs/sliding_derby_board.json` (frozen peak = eval502). Verdict trail:
+`sweep_runs/sliding_derby_verdicts.jsonl`. Runner log:
+`sweep_logs/G15-defense-board15/sliding_runner.log`. Tracked #38/#39/#36.
