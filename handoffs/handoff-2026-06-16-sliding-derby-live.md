@@ -80,6 +80,28 @@ Rapfi). (7) cron + watchdog supervising. main @ `ad710a3`, all pushed.
 gate — plow forward. If the derby dies AND won't relaunch, check `sweep_logs/G15-defense-board15/`
 and the gen-cost lesson above. (This is a live overnight run, not a practice handoff — act on it.)
 
+## ⚠ OPERATING-MODEL CORRECTION — NO HUMAN GATE (Jason, 2026-06-16, last word before sleep)
+Jason **removed the human gate** from the research-loop. This OVERRIDES the `deferred`→
+"Jason gates" step in `wiki/topics/research-loop.md` (that doc is now stale on governance):
+- **"no gate only try. issues are fine, just grab em and have a worker work em. we have
+  measurement so we can grade things."** The GRADING is the measurement (reviewer APPROVE +
+  green tests for code; the H2H gate + white_loss for training), NOT Jason's approval.
+- **Researcher is a VIRTUOUS CYCLE:** propose ready ideas (NO `deferred`) → watch them get
+  worked + graded → refine/close/refile. Not a one-shot proposer.
+- **Worker autonomously merges** reviewer-approved + tests-green code to main. No staging for
+  review (I dropped the "stage the first verdict for Jason" hold — Jason lifted it explicitly).
+- **The ONLY thing that reaches Jason** is a genuine blocker: label `human-gated` + a
+  "tried it, can't fix it here, here's what I know" writeup. Everything else = just do it.
+- **Beads → gh:** any surviving non-closed bead gets migrated to a gh issue (reconciliation
+  agent ran 2026-06-16; `.beads/` had ~15 non-closed; migration script `migrate_beads_to_gh.py`).
+- **Crons now armed (durable):** `163915f1` hourly heartbeat/watchdog/push · `546b2d67` 4h
+  RESEARCHER (virtuous cycle, files READY ideas) · `0103a42b` 3h WORKER (drains ready
+  code-only issues → implement→review→**auto-merge on APPROVE+green** → escalate blockers).
+  The defense derby is the GPU lane (single tenant); the worker is CODE-only (no GPU contention).
+- **Morning:** do NOT reinstate the gate. Gate-free is the standing model now. Update
+  `research-loop.md`'s governance section to match (researcher proposes → worker works →
+  measurement grades → escalate-only-blockers). GPU-idea proposals queue until a GPU lane frees.
+
 ## Protocol alignment (Jason pointed me to the ironed-out derby skills late — read them)
 Read `gomoku-derby-runner` (the worker), `gomoku-research-lab` (orchestrator), and
 `wiki/topics/research-loop.md` (the four roles: Researcher→Jason-gates→Orchestrator→Δelo/hr).
