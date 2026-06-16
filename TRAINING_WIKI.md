@@ -3858,3 +3858,40 @@ Gate validation evidence: `/tmp/gate_validation_verdicts.jsonl`. Board:
 `sweep_runs/sliding_derby_board.json` (frozen peak = eval502). Verdict trail:
 `sweep_runs/sliding_derby_verdicts.jsonl`. Runner log:
 `sweep_logs/G15-defense-board15/sliding_runner.log`. Tracked #38/#39/#36.
+
+---
+
+## 2026-06-16 — Defense-teacher CRASHED the champion (-458), diagnosed + course-corrected (#42)
+
+The first real #36 defense experiment **failed catastrophically and was self-healed by the
+overnight loop**. G15-defense (eval502 warm-start + value-only `--defense-teacher`, hard
+`z=-1`, capped VCF nodes2000/depth10) degraded MONOTONICALLY over 3 gate laps:
+
+| lap | win_rate vs champ | white_loss | Δelo |
+|---|---|---|---|
+| 1 | 0.483 | 0.783 | −12 |
+| 2 | 0.242 | 0.917 | −199 |
+| 3 | 0.067 | 0.983 | −458 |
+
+value_loss collapsed 0.16→0.06, policy_loss ballooned 1.25→3.4, plies stayed HIGH (~40-50,
+so NOT fast-attack collapse). **Mechanism (researcher-diagnosed, cited):** the defense-teacher
+stamps a hard `-1.0` value on EVERY proven-lost white-to-move position with **no bound on the
+fraction relabeled** (`self_play._apply_defense_teacher`) — the deepened solve over-fires → the
+value head saturates to "white always loses" (vl→0.06) → that **contradicts the untouched
+attacking policy target** → the shared residual trunk corrupts → policy degrades. This
+**reproduced the exact `#18` "defense-blindness" trap** (value_loss→0.04) the teacher was
+meant to avoid: teaching "you already lost" (a value the net can't act on) instead of "here's
+the saving move" poisons the model. The gate **correctly REVERTed all 3 laps** — the frozen
+peak (eval502) was never promoted, so **nothing was damaged**; the cost was only wasted GPU,
+caught at lap 3.
+
+**Course-correction (#42, merged 6063c2b, relaunched):** opt-in `--defense-soft-value` (stamp
+−0.5 not −1) + `--defense-max-fraction` (cap the fraction of a game's positions relabeled,
+keeping the LATEST firing plies nearest the loss) + shallow solve (vcf 800/depth 7). Defaults
+byte-identical. The corrected run is training from eval502 (vl healthy 0.162); the gate grades
+whether the gentler teacher drives white_loss down WITHOUT the Δelo crash. If it still
+under-performs, the real fix is **#43 — stamp the SAVING MOVE on the policy head** (the #18 I2
+arm: teach the refutation, don't just crush value). Filed: #41 (escalation, resolved), #42
+(merged), #43/#44 (queued). General lesson banked: **a value-only "you're lost" teacher with no
+fire-rate bound saturates the value head and tears the policy apart — bound the fire-rate AND/OR
+teach the move, not just the value.** Broken-config evidence: `sweep_runs/_archive/sliding_derby_verdicts_BROKEN*`.
