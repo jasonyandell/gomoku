@@ -243,5 +243,43 @@ def test_match_spec_builds_external_player():
         assert prov["timeout_ms"] == 150
         assert prov["board_size"] == BOARD_SIZE
         assert prov["rule"] == 0
+        assert prov["incremental"] is False  # default: classic BOARD-replay mode
+    finally:
+        p.close()
+
+
+def test_incremental_flag_parsed_from_spec():
+    spec = parse_spec(f"external:cmd={_stub_cmd('lowest')},timeout_ms=150,incremental=1")
+    p = build_player(spec)
+    try:
+        assert p.config.incremental is True
+        assert p.provenance()["incremental"] is True
+    finally:
+        p.close()
+    # Absent / falsey values keep the robust default (BOARD-replay every move).
+    for falsey in ("0", "false", "no"):
+        s = parse_spec(f"external:cmd={_stub_cmd('lowest')},incremental={falsey}")
+        q = build_player(s)
+        try:
+            assert q.config.incremental is False
+        finally:
+            q.close()
+
+
+def test_can_turn_incremental_diff_logic():
+    """`_can_turn` gates the incremental TURN path: only a clean continuation
+    (our stones unchanged, opponent +1 stone) qualifies; everything else falls
+    back to a full BOARD resync."""
+    cfg = ExternalEngineConfig(cmd=_stub_cmd("lowest"), timeout_ms=200, incremental=True)
+    p = ExternalEnginePlayer(cfg)
+    try:
+        # No prior reply yet -> must BOARD-sync first.
+        assert p._can_turn({(0, 0)}, set()) is False
+        p._prev_own = {(0, 0)}
+        p._prev_opp = set()
+        assert p._can_turn({(0, 0)}, {(5, 5)}) is True  # opponent +1, ours same
+        assert p._can_turn({(0, 0), (1, 1)}, {(5, 5)}) is False  # our stones changed
+        assert p._can_turn({(0, 0)}, {(5, 5), (6, 6)}) is False  # opponent +2
+        assert p._can_turn({(0, 0)}, set()) is False  # not a superset (new game)
     finally:
         p.close()

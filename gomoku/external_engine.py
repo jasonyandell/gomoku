@@ -135,6 +135,17 @@ class ExternalEngineConfig:
     # Multiplier applied to the per-move budget (timeout_ms) to derive the read
     # deadline. 3x leaves room for wine startup jitter + GPU contention.
     read_timeout_slack: float = 3.0
+    # Incremental TURN-mode driving (default off). When True, after an initial
+    # BOARD sync we feed the opponent's single new move as `TURN x,y` rather than
+    # re-dumping the whole board every move. This lets a STATEFUL brain engine
+    # (our own `gomocup_brain`) accumulate real move history via `apply()`, which
+    # a history-conditioned net's recency input planes need. A full BOARD re-dump
+    # every move gives the brain EMPTY history — a self-contradictory, OOD input
+    # (full board, zero recency) that craters strength: measured 100% -> 25% vs
+    # the heuristic on the same checkpoint. Classical external engines don't use
+    # history planes, so they stay on the robust re-entrant BOARD path
+    # (incremental=False); only re-set this for our own brain wrapper.
+    incremental: bool = False
 
 
 class ExternalEnginePlayer:
@@ -148,6 +159,12 @@ class ExternalEnginePlayer:
 
     def __init__(self, config: ExternalEngineConfig):
         self.config = config
+        # Incremental-mode tracking: our believed board (sets of (x,y) cells) as
+        # of our last reply, so the next call can diff out the opponent's single
+        # new move and send it as `TURN x,y`. None until the first synced move.
+        self._incremental = config.incremental
+        self._prev_own: set[tuple[int, int]] | None = None
+        self._prev_opp: set[tuple[int, int]] | None = None
         argv = shlex.split(config.cmd)
         try:
             self._proc = subprocess.Popen(
@@ -275,48 +292,69 @@ class ExternalEnginePlayer:
         in the signature to satisfy the `Picker` protocol.
         """
         del rng
+        n = self.config.board_size
         own = state.board[0]  # side-to-move == this engine -> field 1
         opp = state.board[1]  # opponent -> field 2
         legal = set(int(a) for a in state.legal_actions())
+        own_cells = {(x, y) for y in range(n) for x in range(n) if own[y, x]}
+        opp_cells = {(x, y) for y in range(n) for x in range(n) if opp[y, x]}
 
-        # Reset the engine's internal board+history before replaying the full
-        # position. RESTART makes our "replay full board every move" strategy
-        # re-entrant (engines whose BOARD is one-shot otherwise desync) and stops
-        # them emitting stale "ERROR my move [..]" diagnostics. See module docstring.
-        self._send("RESTART")
-        self._expect_ok()
-
-        # Collect occupied cells once so we can branch on the empty-board case.
-        own_cells = [
-            (x, y)
-            for y in range(self.config.board_size)
-            for x in range(self.config.board_size)
-            if own[y, x]
-        ]
-        opp_cells = [
-            (x, y)
-            for y in range(self.config.board_size)
-            for x in range(self.config.board_size)
-            if opp[y, x]
-        ]
-
-        if not own_cells and not opp_cells:
-            # Truly empty board: the engine makes the opening move. Some engines
-            # (Zetor) resign on an empty BOARD/DONE; BEGIN is the correct command
-            # to ask for the first move. (With --random-opening-moves > 0 this
-            # branch never triggers, but the picker must still be correct for the
-            # cold-start path.)
-            self._send("BEGIN")
+        if self._incremental and self._can_turn(own_cells, opp_cells):
+            # Clean incremental continuation: the opponent added exactly one stone
+            # since our last reply and our stones are unchanged. Feed just that
+            # move as `TURN x,y` — NO RESTART (which would wipe the engine's
+            # history). A stateful brain applies it via apply() and keeps real
+            # move history (the whole point of incremental mode).
+            ox, oy = next(iter(opp_cells - self._prev_opp))
+            self._send(f"TURN {ox},{oy}")
+            x, y = self._read_move()
         else:
-            self._send("BOARD")
-            for x, y in own_cells:
-                self._send(f"{x},{y},1")
-            for x, y in opp_cells:
-                self._send(f"{x},{y},2")
-            self._send("DONE")
+            # (Re)sync via a full board replay. In BOARD mode this is every move;
+            # in incremental mode only the first move of a game or a detected
+            # desync (a fresh/smaller board). RESTART makes the replay re-entrant
+            # (engines whose BOARD is one-shot otherwise desync) and stops stale
+            # "ERROR my move [..]" diagnostics. See module docstring.
+            self._send("RESTART")
+            self._expect_ok()
+            if not own_cells and not opp_cells:
+                # Truly empty board: engine makes the opening move. Some engines
+                # (Zetor) resign on an empty BOARD/DONE; BEGIN is correct here.
+                self._send("BEGIN")
+            else:
+                self._send("BOARD")
+                for x, y in sorted(own_cells):
+                    self._send(f"{x},{y},1")
+                for x, y in sorted(opp_cells):
+                    self._send(f"{x},{y},2")
+                self._send("DONE")
+            x, y = self._read_move()
 
-        x, y = self._read_move()
-        return self._to_action(x, y, legal)
+        action = self._to_action(x, y, legal)
+        if self._incremental:
+            # Remember our believed board AFTER this reply: our stones now include
+            # the move we just played; the opponent's are unchanged until they
+            # reply. Next call diffs against this to recover their single move.
+            self._prev_own = set(own_cells) | {(x, y)}
+            self._prev_opp = set(opp_cells)
+        return action
+
+    def _can_turn(
+        self, own_cells: set[tuple[int, int]], opp_cells: set[tuple[int, int]]
+    ) -> bool:
+        """True iff this is a clean incremental continuation of the prior move.
+
+        Requires that since our last reply (a) our own stones are unchanged and
+        (b) the opponent added EXACTLY ONE stone (a superset by one). Anything
+        else — first move of a game, a new game (smaller board), or any
+        mismatch — returns False so `__call__` falls back to a full BOARD resync.
+        """
+        if self._prev_own is None or self._prev_opp is None:
+            return False
+        if own_cells != self._prev_own:
+            return False
+        if not self._prev_opp <= opp_cells:
+            return False
+        return len(opp_cells - self._prev_opp) == 1
 
     def _to_action(self, x: int, y: int, legal: set[int]) -> int:
         n = self.config.board_size
@@ -361,6 +399,7 @@ class ExternalEnginePlayer:
             "timeout_ms": self.config.timeout_ms,
             "board_size": self.config.board_size,
             "rule": self.config.rule,
+            "incremental": self.config.incremental,
             "wrapper_version": WRAPPER_VERSION,
         }
 
@@ -378,7 +417,11 @@ def build_external_player(kwargs: dict[str, str]) -> ExternalEnginePlayer:
     label = kwargs.get("label", "external")
     rule = int(kwargs.get("rule", "0"))
     size = int(kwargs.get("size", str(BOARD_SIZE)))
+    # incremental=1 drives a stateful brain via TURN (keeps move history); only
+    # set it for our own gomocup_brain wrapper, never for classical engines.
+    incremental = kwargs.get("incremental", "0").lower() not in ("0", "false", "no", "")
     cfg = ExternalEngineConfig(
-        cmd=cmd, timeout_ms=timeout_ms, label=label, rule=rule, board_size=size
+        cmd=cmd, timeout_ms=timeout_ms, label=label, rule=rule, board_size=size,
+        incremental=incremental,
     )
     return ExternalEnginePlayer(cfg)

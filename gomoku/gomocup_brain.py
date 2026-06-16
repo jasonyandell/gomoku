@@ -41,13 +41,18 @@ Two load-bearing invariants:
   We pre-parse `--board-size` from `sys.argv` at module top, before importing
   `gomoku.game` (the shell wrapper also exports `GOMOKU_BOARD_SIZE=15`).
 
-History note: under the harness, `external_engine.py` sends a full `BOARD` dump
-every move (board-scan order, NOT play order), so true move-order history is
-unrecoverable — we rebuild with empty history. `to_planes()` reads the CURRENT
-board straight from `board[0]`/`board[1]` (only the *older* recency planes come
-from history), so the net still sees a fully-correct position; only the recency
-cues are zeroed, and symmetrically across both engines. Under pure `TURN`
-incremental play (real piskvork) history accumulates naturally via `apply()`.
+History note (LOAD-BEARING — measured, not theoretical). A history-conditioned
+net needs real move-recency in its input planes. Re-dumping the whole board every
+move (the classic `external_engine.py` BOARD path) makes the brain rebuild with
+EMPTY history: `to_planes()` then shows a full current board (planes 0/H from
+`board[0]`/`board[1]`) but ALL-ZERO recency planes — a self-contradictory, OOD
+input ("full board now, zero stones in every recent frame") that craters
+strength: measured 100% -> 25% vs the heuristic on the SAME checkpoint. The fix
+is to drive this brain with `incremental=1` (the `external_engine.py` TURN mode):
+after a first BOARD sync, each opponent move arrives as `TURN x,y`, so the brain
+accumulates REAL history via `apply()` (recovered to ~83-100%). ALWAYS register
+our nets with `incremental=1`; only the game-opening first move keeps empty
+history (few stones, near-harmless). See wiki/topics/alphazero-lessons-15x15.
 """
 
 from __future__ import annotations

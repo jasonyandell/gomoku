@@ -220,3 +220,23 @@ def test_closed_loop_client_drives_brain_subprocess():
     finally:
         a.close()
         b.close()
+
+
+def test_closed_loop_incremental_mode_round_trips():
+    """incremental=1: after a first BOARD sync, external_engine.py drives the
+    brain via `TURN x,y` (no RESTART, so a real brain keeps move history). The
+    brain must still play a legal, terminating game both ways — proving the TURN
+    path round-trips and survives game boundaries (n_games=2 reuses the procs)."""
+    a = ExternalEnginePlayer(
+        ExternalEngineConfig(cmd=_brain_cmd(), timeout_ms=3000, label="inc-A", incremental=True)
+    )
+    b = ExternalEnginePlayer(
+        ExternalEngineConfig(cmd=_brain_cmd(), timeout_ms=3000, label="inc-B", incremental=True)
+    )
+    try:
+        res = play_match_pickers(a, b, n_games=2, seed=0, random_opening_moves=2)
+        assert res.n_games == 2
+        assert res.wins + res.losses + res.draws == 2
+    finally:
+        a.close()
+        b.close()
