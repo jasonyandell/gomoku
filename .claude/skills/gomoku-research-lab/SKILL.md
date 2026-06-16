@@ -476,6 +476,29 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 - Symptom/Fix: `kill -9`'d the trainer once during a restart. The protocol is **SIGTERM** (lets the trainer self-save a resumable `latest.pt`) + reap orphaned `wandb-core`/`wandb-xpu` (else the next resume hits "run ID in use"). Adopted after reading; safe only because I was re-warm-starting from eval502 anyway.
 - Lesson: **never `kill -9` a trainer in steady state** — SIGTERM + wandb-reap is in `gomoku-derby-runner`'s swap procedure; follow it from the first stop, not the second.
 
+### 2026-06-16 (composite measured-outcome derby — MVP self-test passed, two rough edges)
+
+**The known-answer self-test discipline paid off exactly as intended — it proved the machinery AND surfaced two rough edges cheaply, before trusting the loop on any unknown.**
+- The MVP composite workflow (`.claude/workflows/sliding-derby-composite.js`) ran its first cycle on
+  champion-continuation (a hypothesis whose answer we KNEW: no-teacher continuation of eval502 should
+  not degrade). It scored `confirm` correctly (gate AMBIGUOUS = can't-distinguish-from-eval502 = stable,
+  + vl 0.17 ≥ 0.10 + plies 37 ≥ 25). The launch-detached-slice → score-vs-pre-stated-outcome → record
+  cycle works end-to-end. The v2 gate was live-validated first (eval502-vs-eval502 → AMBIGUOUS).
+- **Rough edge 1 — the LAST line of `trainer.log` is the wandb shutdown line, not the epoch line.** After
+  a slice ends, `tail -1 trainer.log` returns `wandb: Find logs at: ...`, so a scorer that blind-tails for
+  vl/plies parses garbage. **Fix: `grep '^epoch ' trainer.log | tail -1`** — never blind-tail for metrics.
+  (The train agent caught it and passed the epoch line explicitly; the scorer used `tail -5` and found it,
+  but the cycle should be robust by construction.)
+- **Rough edge 2 — a `--max-wall-secs` slice OVERRUNS the wall by ~60s** (the cap is checked at epoch
+  boundaries + there's a final 2.1GB buffer-save tail). So when scheduling re-kicks / polling, budget
+  `slice_secs + ~120s`; never treat the wall as exact.
+- **Bonus finding (#37 death-spiral control):** eval502 with NO teacher, 13 epochs, stayed stable
+  (vl 0.16→0.17, plies ~37, AMBIGUOUS vs itself). A clean but SHORT-window directional control that the
+  champion does not spontaneously degrade without a teacher → supports "the defense-teacher CAUSED #42's
+  collapse, not training-instability-in-general." Short window — directional, not conclusive.
+- **Lesson: validate the loop on a known answer before racing real hypotheses** — same discipline as the
+  gate's champion-vs-random check. It costs one cheap cycle and buys both trust and a bug-sweep.
+
 ### < add new friction-smoothing entries here as they appear >
 
 ## Self-improvement clause
