@@ -408,7 +408,7 @@ def white_defense_tally(
     ``functools.partial`` before passing as ``white_loss_fn``.
     """
     defender = build_ckpt_defender(candidate, sims=sims, c_puct=c_puct, device=device)
-    attacker_picker = build_attacker(attacker)
+    attacker_picker = build_attacker(attacker, sims=sims, c_puct=c_puct, device=device)
     fixture = load_fixture(fixture_path)
     res = score_white_defense(
         defender, attacker_picker, fixture, n_seeds=n_seeds, base_seed=seed,
@@ -430,10 +430,27 @@ def build_ckpt_defender(checkpoint: str, *, sims: int, c_puct: float, device: st
     return _build_ckpt_picker(checkpoint, sims=sims, c_puct=c_puct, device=device)
 
 
-def build_attacker(spec: str) -> Picker:
-    """Build a fixed, reproducible CPU attacker from a spec string. NO wine —
-    only the project's own baselines (#35 panel-wine lesson):
+def build_attacker(
+    spec: str,
+    *,
+    sims: int = 200,
+    c_puct: float = 1.5,
+    device: str = "auto",
+) -> Picker:
+    """Build a fixed, reproducible attacker from a spec string. NO wine —
+    only the project's own baselines (#35 panel-wine lesson) plus a
+    checkpoint-as-attacker for the #49 harder-attacker instrument:
+
         random | heuristic | defensive | lookahead | lookahead:depth=K
+        ckpt:<path>   — a net-as-attacker MCTS picker (the strong attacker)
+
+    The CPU baseline specs ignore ``sims``/``c_puct``/``device`` entirely, so
+    every existing caller is behaviour-unchanged. Only the ``ckpt:<path>`` case
+    reads them — its search strength is set by ``sims`` (and ``c_puct``), and it
+    loads on ``device`` (``"auto"`` → MPS/CPU via ``pick_device``). The ckpt
+    attacker REUSES ``build_ckpt_defender`` / ``_build_ckpt_picker`` — the exact
+    same load/fuse/evaluator path as the net defender — so attacker and defender
+    are byte-identical checkpoint pickers.
     """
     from gomoku.baselines import (
         defensive_player,
@@ -455,9 +472,21 @@ def build_attacker(spec: str) -> Picker:
         kv = spec.split(":", 1)[1]
         if kv.startswith("depth="):
             return lookahead_player(depth=int(kv.split("=", 1)[1]))
+    if spec.startswith("ckpt:"):
+        path = spec.split(":", 1)[1]
+        if not path:
+            raise ValueError("ckpt attacker spec needs a path: ckpt:<path>")
+        dev = "auto" if device in (None, "auto") else device
+        # "auto" → let pick_device choose (MPS on Apple Silicon, else CPU); a
+        # concrete device string ("cpu"/"mps") is honoured as given. pick_device
+        # treats a falsy/None prefer as "choose for me".
+        return build_ckpt_defender(
+            path, sims=sims, c_puct=c_puct,
+            device=(None if dev == "auto" else dev),
+        )
     raise ValueError(
         f"unknown attacker spec {spec!r}; use one of "
-        f"random|heuristic|defensive|lookahead|lookahead:depth=K"
+        f"random|heuristic|defensive|lookahead|lookahead:depth=K|ckpt:<path>"
     )
 
 

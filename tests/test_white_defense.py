@@ -266,3 +266,102 @@ def test_checked_in_fixture_present_and_valid():
     for st in fx.states():
         assert st.move_count % 2 == 1
         assert black_threat_present(st)
+
+
+# --------------------------------------------------------------------------- #
+# 5. #49 harder-attacker instrument: the ckpt:<path> attacker dispatch.        #
+#    A net-as-attacker (the champion side) gives the instrument headroom.      #
+# --------------------------------------------------------------------------- #
+def _mint_tiny_ckpt(path: str) -> None:
+    """Mint a TINY random-init checkpoint at the active board size (CPU).
+
+    Tiny preset = n_filters=32, n_blocks=2, value_hidden=32 (model.py SIZE_PRESETS),
+    board_size + n_input_planes come from the active config — exactly the cheap
+    net the suite's other CPU tests use, so this stays light next to the live
+    flux tenant."""
+    from gomoku.model import build_model, save_checkpoint
+
+    save_checkpoint(path, build_model("tiny"))
+
+
+def test_ckpt_attacker_loads_and_plays_legal_move_cpu(tmp_path):
+    """build_attacker('ckpt:<path>', sims=8, device='cpu') loads a checkpoint and
+    returns an MCTS picker that, given a real GameState + rng, plays a LEGAL move.
+    This proves the new dispatch actually loads + searches a net on CPU."""
+    from gomoku.white_defense import build_attacker
+
+    ckpt = str(tmp_path / "tiny_attacker.pt")
+    _mint_tiny_ckpt(ckpt)
+
+    picker = build_attacker(f"ckpt:{ckpt}", sims=8, device="cpu")
+    assert callable(picker)
+
+    # A mid-game, non-terminal state with several legal moves.
+    state = _play_some([_a(7, 7), _a(7, 8), _a(8, 7), _a(6, 8), _a(9, 7)])
+    legal = set(int(a) for a in state.legal_actions())
+    assert len(legal) > 1
+
+    move = int(picker(state, np.random.default_rng(0)))
+    assert move in legal, "ckpt attacker must return a legal move"
+
+
+def test_existing_attacker_specs_unchanged(tmp_path):
+    """Signature widening must not break the baseline path: the CPU baseline
+    specs still build working pickers and ignore the new ckpt-only kwargs."""
+    from gomoku.white_defense import build_attacker
+
+    state = _play_some([_a(7, 7), _a(7, 8), _a(8, 7), _a(6, 8), _a(9, 7)])
+    legal = set(int(a) for a in state.legal_actions())
+
+    for spec in ("random", "heuristic", "defensive", "lookahead", "lookahead:depth=2"):
+        picker = build_attacker(spec)  # no kwargs — defaults must leave behaviour unchanged
+        assert callable(picker)
+        move = int(picker(state, np.random.default_rng(1)))
+        assert move in legal, f"{spec!r} attacker must return a legal move"
+
+    # An unknown spec still raises (and the message advertises ckpt:<path>).
+    with pytest.raises(ValueError, match="ckpt:<path>"):
+        build_attacker("nonsense-spec")
+    # ckpt: with an empty path is a clear error, not a silent miss.
+    with pytest.raises(ValueError):
+        build_attacker("ckpt:")
+
+
+def test_attacker_sims_reaches_build_attacker_for_ckpt(monkeypatch, tmp_path):
+    """--attacker-sims is parsed and threaded into build_attacker for a ckpt
+    spec, decoupled from the defender's --sims. Monkeypatch build_attacker to
+    capture kwargs so this stays CPU-cheap (no net is actually loaded/searched)."""
+    import scripts.white_defense_suite as suite
+
+    captured: dict = {}
+
+    def fake_build_attacker(spec, *, sims=200, c_puct=1.5, device="auto"):
+        captured["spec"] = spec
+        captured["sims"] = sims
+        captured["c_puct"] = c_puct
+        captured["device"] = device
+        # Return a trivial legal picker so cmd_score can run on the tiny fixture.
+        return lambda state, rng: int(state.legal_actions()[0])
+
+    # Tiny CPU defender + tiny fixture so cmd_score completes cheaply.
+    fixture = tmp_path / "sims_fixture.json"
+    suite.cmd_mine(suite.parse_args(
+        ["mine", "--out", str(fixture), "--target", "4", "--games", "20", "--seed", "0"]))
+    ckpt = str(tmp_path / "tiny_def.pt")
+    _mint_tiny_ckpt(ckpt)
+
+    monkeypatch.setattr(suite, "build_attacker", fake_build_attacker)
+
+    args = suite.parse_args([
+        "score", "--checkpoint", ckpt, "--fixture", str(fixture),
+        "--attacker", f"ckpt:{ckpt}", "--sims", "8", "--attacker-sims", "33",
+        "--device", "cpu", "--quick", "--quick-n", "2", "--quiet",
+    ])
+    assert args.attacker_sims == 33  # parsed off the CLI
+    rc = suite.cmd_score(args)
+    assert rc == 0
+
+    # The ckpt attacker received --attacker-sims (33), NOT the defender's --sims (8).
+    assert captured["spec"] == f"ckpt:{ckpt}"
+    assert captured["sims"] == 33
+    assert captured["device"] == "cpu"
