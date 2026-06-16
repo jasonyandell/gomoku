@@ -153,6 +153,15 @@ code (`reading 'picks'`) and **green** after — so a future edit that reintrodu
 unguarded `agent()` deref is caught deterministically, without waiting for the next
 real outage.
 
+The gauge is also **self-firing** (#51, the janitor+gauge rule's second half): an
+opt-in committed `pre-commit` hook (`scripts/hooks/pre-commit`) runs the checker
+automatically — but **only** when the commit stages a top-level
+`.claude/workflows/*.js`; any other commit short-circuits to exit 0 without
+spawning node. Enable it per clone/worktree with `git config core.hooksPath
+scripts/hooks` (it does not override anyone's existing hooks; see
+[`scripts/hooks/README.md`](../../scripts/hooks/README.md)). A non-zero checker
+exit blocks the commit; a missing `node` warns and lets it through.
+
 ## The honest boundary the workflow keeps
 
 `reviewer-gated-fanout.js` deliberately **stops at "APPROVED, branch ready"**. The

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# pre-commit (#51) — auto-fire the workflow resilience gauge ONLY when a staged
+# change touches `.claude/workflows/*.js`. This is the self-firing half of the
+# janitor+gauge rule for that class of entropy: #50 shipped the gauge
+# (scripts/check_workflow_resilience.mjs) and a wiki note, but it was run by
+# hand. Now an edit that reintroduces an unguarded agent() deref is caught at
+# commit time without anyone remembering to run the test.
+#
+# Opt-in by design (bounded blast radius — does NOT forcibly override anyone's
+# hooks). Enable per-clone/per-worktree with:
+#
+#     git config core.hooksPath scripts/hooks
+#
+# Behaviour:
+#   • No staged `.claude/workflows/*.js`  -> exit 0 immediately, no node spawned
+#     (normal commits are untouched).
+#   • A staged workflow file              -> run `node check_workflow_resilience.mjs`
+#     and propagate its exit code (non-zero blocks the commit).
+#   • node not installed                  -> warn and exit 0 (never wedge a commit
+#     on a missing dev tool; the deploy/CI path can still enforce it).
+#
+# Testability seam: the staged-file list is read from $GOMOKU_PRECOMMIT_STAGED
+# (newline-separated) when set, else from `git diff --cached --name-only`. The
+# test drives the seam directly so it never has to fabricate a real commit.
+
+set -euo pipefail
+
+# Resolve repo root from the hook's own location (scripts/hooks/pre-commit),
+# independent of CWD or which worktree invoked it.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${HOOK_DIR}/../.." && pwd)"
+CHECKER="${REPO_ROOT}/scripts/check_workflow_resilience.mjs"
+
+# Staged file list (override-able for tests; default = real staged set).
+if [[ -n "${GOMOKU_PRECOMMIT_STAGED:-}" ]]; then
+  staged="${GOMOKU_PRECOMMIT_STAGED}"
+else
+  staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+fi
+
+# Short-circuit: nothing under .claude/workflows/*.js -> let the commit through
+# untouched, without spawning node.
+if ! printf '%s\n' "${staged}" | grep -Eq '^\.claude/workflows/[^/]+\.js$'; then
+  exit 0
+fi
+
+# A workflow file changed: the gauge must fire.
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit (#51): node not found; skipping workflow resilience gauge." >&2
+  echo "  Install node and re-run: node scripts/check_workflow_resilience.mjs" >&2
+  exit 0
+fi
+
+echo "pre-commit (#51): .claude/workflows/*.js changed -> firing resilience gauge." >&2
+node "${CHECKER}"
