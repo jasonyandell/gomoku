@@ -1,8 +1,39 @@
 # Engine-Panel-Anchored Derby — Calibrated Strength Yardstick
 
 **Issue:** [#30](https://github.com/jasonyandell/gomoku/issues/30).
-**Status:** Design → **tooling now BUILT.** Depends on harness fix (merged) and
+**Status:** Design → tooling BUILT → **first run DONE (2026-06-15); calibration
+BLOCKED on engine reliability + anchor validity ([#35](https://github.com/jasonyandell/gomoku/issues/35)).**
+Depends on harness fix (merged) and
 [gomocup-engines-catalog.md](gomocup-engines-catalog.md).
+
+> **FIRST RUN — partial failure, and the failure is the finding (2026-06-15).**
+> The first 9-player round-robin ran via `scripts/panel_tournament.py`. Of 36 pairs,
+> **only 19 played; 17 ERRORED** — every failure an *opponent engine dying* (Embryo
+> timing out under GPU/Vulkan contention; Zetor crashing on back-to-back reuse). Our
+> brain-wrapped nets produced **zero errors**. Worse, the **calibration came out with
+> a NEGATIVE slope (~−0.07)**: under wine + single-thread + 10s/move the engines do
+> NOT play at their published multi-thread ratings — **yixin18 (published ~2310) went
+> 0–30, even 0–6 to the heuristic; pela23 (~1499) went 24–6** — so published Elos are
+> **invalid anchors** and the reader (`panel_white_elo.py`) correctly *refuses* to
+> print a calibrated Elo (degenerate-slope → relative fallback, loudly flagged).
+> **No calibrated yardstick yet; #35 tracks the fixes.** What IS trustworthy: the
+> completed games (net-vs-net, net-vs-heuristic) and the **white-side defense gap**
+> (champion 94% black vs 50% white, +44pp — the #33 next target). Full write-up:
+> [lessons §14](alphazero-lessons-15x15-gomoku.md).
+>
+> **Concrete reliability fixes before calibration (#35):**
+> - **Per-engine timeout** — a flat 30s budget killed Embryo (GPU-contended, slow to
+>   reply); set the move/reply timeout per engine, and schedule Embryo only in a
+>   GPU-idle window (or drop it from the calibration panel).
+> - **Process-per-pair (no engine reuse)** — Zetor crashes (`engine process has
+>   exited` / `EOF`) on back-to-back reuse across pairs; spawn a **fresh engine
+>   process for every pair** and tear it down after, so one pair's death can't
+>   poison the next.
+> - **Measure-don't-assume anchors** — do NOT fit to published Gomocup Elos; they are
+>   multi-thread tournament ratings invalid under our wine/single-thread/10s harness.
+>   **Empirically measure each engine's effective strength under our exact harness**
+>   (e.g. a dense internal round-robin) and anchor to *that*, or report **relative**
+>   internal Elo only and stop claiming a Gomocup-absolute scale.
 
 > **BUILT (2026-06-15).** The two pieces this design needs now exist on `main`:
 > - **The cross-table runner** — `scripts/panel_tournament.py` (#32, commit
@@ -66,7 +97,11 @@ Rapfi is weaker.
    (`--random-opening-moves 4`, #22) matches vs each panel member via `gomoku.match` /
    `external_engine.py` (hardened harness: RESTART before BOARD, bare `X,Y` move, merged).
 2. **BayesElo anchor.** Anchor the cross-table to known Gomocup ratings to produce a
-   **calibrated absolute Elo** per checkpoint (not just relative rank).
+   **calibrated absolute Elo** per checkpoint (not just relative rank). **⚠ The first
+   run (2026-06-15) proved published Gomocup ratings are INVALID anchors under our
+   wine/single-thread/10s harness** (negative-slope fit; yixin18 ~2310-published went
+   0–30). Anchor instead to **empirically measured effective strengths under our exact
+   harness**, or report relative-only Elo. See the FIRST RUN note above and #35.
 3. **Eval EMA weights.** Use `worker_weights.pt` — raw `epoch*.pt` ran 48 points weaker
    in the deepgen experiment (§8G).
 4. **n ≥ 20 per pair, uncontended.** Small-n is brutally noisy (§4, §8B).
@@ -122,9 +157,15 @@ finally given a job:
 ## Open Questions
 
 - KataGomo / AlphaGomoku ARM buildability (may need Eigen backend or source patches).
-- BayesElo anchoring: which Gomocup ratings to use; how to handle internal checkpoints not in the official ladder.
+- BayesElo anchoring: ~~which Gomocup ratings to use~~ — **RESOLVED (negatively):
+  published Gomocup Elos are invalid anchors under our harness (#35); measure
+  effective strength under our exact conditions instead.** How to handle internal
+  checkpoints not in the official ladder remains open.
 - Panel size vs wall-time: find the batch that completes inside a GPU training slice.
-- Embryo26 GPU contention policy; wine-engine hang reliability (Eulring16 observed to hang).
+- **Engine reliability (now the gating blocker, #35):** Embryo26 GPU/Vulkan
+  contention (timed out 30s in the first run); Zetor17 crashes on back-to-back reuse;
+  Eulring16 / wine-engine hang reliability. Per-engine timeouts + process-per-pair are
+  the planned fixes.
 
 ---
 
