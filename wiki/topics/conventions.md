@@ -52,8 +52,6 @@ See [research-lab-charter.md § Stop gates and escalation protocol](research-lab
 for the canonical 12-row triage matrix. Other autonomous-loop scopes
 should write their own matrices in the same shape.
 
-Mirrored in memory: [[feedback-lab-runs-forever]].
-
 ## Branch integration: merge-commit, never rebase
 
 The full lifecycle (worktree off `main` → `feat/<slug>` → merge `--no-ff` →
@@ -78,14 +76,12 @@ backstop is the **session-start janitor** `scripts/reclaim_worktrees.py`
 worktrees orphaned by dead sessions and deletes merged branches, and is
 safe to run while other sessions are live. Run it (and its `--gauge`) every
 session start. This is the "janitor + gauge, not a procedure" rule
-([[feedback-janitor-not-procedure]]).
+([worktree-hygiene](worktree-hygiene.md)).
 
 **Why:** Jason's words at lab kickoff — "embrace [worktrees], and merge
 commit them, it's safe every time and rebase bores me." Safety driven
 (merge commits preserve the experiment as a discrete event in `git log
 --graph`) and aesthetic (rebasing is tedious).
-
-Mirrored in memory: [[feedback-merge-commits]].
 
 ## Fan out to preserve context
 
@@ -102,7 +98,7 @@ without adding to the decision thread. Fan out to a subagent — **background
   message so they run concurrently);
 - a task will emit lots of intermediate tool output you won't need verbatim;
 - editing work can be isolated (pair with `isolation: worktree`,
-  [[feedback-worktree-per-unit-of-work]]).
+  [branch-and-worktree-workflow](branch-and-worktree-workflow.md)).
 
 The subagent does the noisy work in **its** context and returns only the
 distilled result; the orchestrator keeps the conclusion, **not** the file
@@ -114,9 +110,8 @@ running independent subtasks serially; pulling a whole log/file into context
 when a subagent could hand back the one line that matters.
 
 This is the general form of the lab's two-queue fan-out
-([[feedback-lab-scheduler]]); the `gomoku-research-lab` skill § Fan-out
-orchestration is its lab-specific instantiation. Mirrored in memory:
-[[feedback-fan-out-preserve-context]].
+([research-lab-charter](research-lab-charter.md)); the `gomoku-research-lab`
+skill § Fan-out orchestration is its lab-specific instantiation.
 
 ## Two native agent-instruction files
 
@@ -133,33 +128,40 @@ change.** Each file carries a "native twin — keep in sync" note at its top.
 Claude-Code-only bits (skills, the `~/.claude` memory system) stay prominent in
 `CLAUDE.md` and appear as a brief "Claude Code specifics" note in `AGENTS.md`.
 
-Mirrored in memory: [[feedback-two-native-agent-docs]].
+## What belongs in memory vs the wiki
 
-## Memories also go to the wiki
+**The wiki is the single source of truth for everything about the project.**
+The agent's persistent memory (`~/.claude/projects/-Users-jason-code-gomoku/memory/`,
+auto-loaded each session) is deliberately NARROW. It holds ONLY:
 
-When saving a memory under
-`~/.claude/projects/-Users-jason-code-gomoku/memory/`, **also write or
-update a corresponding wiki section** in the project repo. The memory
-points back to the wiki; the wiki is the canonical source.
+- **(a) local-machine facts** — this Mac's hardware, file paths on this machine,
+  keychain entries, locally-installed tools / MCP setup, the machine's
+  power/thermal/contention behavior; and
+- **(b) working-with-Jason facts** — who he is, his background, preferences,
+  relationship/communication register, autonomy/permission boundaries, and how he
+  wants to be worked with.
 
-**Why:** memories are agent-local and ephemeral — they don't survive
-host migrations, aren't visible to other agents, aren't reviewable by
-humans, aren't version-controlled. The wiki is project-durable.
+Everything else lives **in the wiki, and ONLY in the wiki** — the project itself,
+ML/training judgment and dynamics, how to operate the lab (procedures,
+conventions, scheduler, worktrees, janitor, fan-out, overnight ops), and the
+roadmap (epics, derby, 15×15, fleet, white-defense). Do **not** mirror project or
+process knowledge into memory. A memory that duplicates a wiki topic page is the
+anti-pattern this rule exists to kill — *"memories compete with the wiki"*
+(Jason, 2026-06-16).
 
-**How:**
-- Save the memory normally (slug, description, frontmatter, body).
-- Add or update a section in `wiki/topics/conventions.md` (cross-cutting
-  rules) or a more specific topic page (lab-specific rules → charter
-  or session-runbook).
-- The memory's `description` field should include a one-line pointer
-  to the wiki section.
-- The wiki section should include a "Mirrored in memory: [[slug]]"
-  footer so a wiki reader knows there's a personalized index.
+**Why the split:** memory is agent-local, auto-loaded, and unreviewable; the wiki
+is project-durable, versioned, and shared across agents (Codex too) and humans.
+Auto-loading a project fact into every session both spends the context budget and
+lets a stale memory silently contradict the maintained wiki. Keep memory to the
+two things the wiki genuinely can't hold — *this machine* and *this person* — and
+let the wiki carry the project.
 
-**Don't** save a memory without a wiki mirror unless it's strictly
-personal-to-current-Claude (rare; usually you want the rule durable).
-
-Mirrored in memory: [[feedback-memories-to-wiki]].
+**On save:** before writing a memory, ask "is this about THIS machine or THIS
+person?" If no, it's a wiki edit, not a memory. A genuine machine/user memory
+needs **no** wiki mirror (the wiki isn't about Jason or his Mac); a durable
+project/process lesson is a wiki edit with **no** memory at all. (This sharpens
+the older "every memory also gets a wiki section" rule, which over-mirrored
+project content into memory.)
 
 ## Estimate in Opus-minutes, not human-days
 
@@ -170,7 +172,8 @@ speed, context-switching, meeting overhead, or fear of unfamiliarity.
 This matters because **bad estimates change priorities**. If task A
 looks like "20 minutes" and task B looks like "2 days," B gets
 deferred. If they're actually 20 min and 60 min, the priority order
-flips entirely.
+flips entirely. (This rule sits alongside the broader scheduler
+philosophy in [research-lab-charter](research-lab-charter.md).)
 
 **Rule of thumb:** if past-Claude estimated "1-2 days" for a code task
 in this repo, the right re-estimate is "1-2 hours." If past-Claude said
@@ -180,9 +183,6 @@ in this repo, the right re-estimate is "1-2 hours." If past-Claude said
 estimate is likely 20 minutes. not 1-2 days. but if you look at tasks
 as 'this takes days and that takes minutes' then one of them sure looks
 faster! so basically coding time is approved, all the way. code away."
-
-Mirrored in memory: [[feedback-lab-scheduler]] (this rule lives there
-alongside the broader scheduler philosophy).
 
 ## Cross-refs
 

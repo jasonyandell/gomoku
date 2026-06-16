@@ -1200,3 +1200,56 @@ the brain wrapper that let our net play these real engines head-to-head at all. 
 operational plan and the falsified-vs-standing intervention ledger:
 [white-side-defense-plan.md](white-side-defense-plan.md) (Step A FALSIFIED → Step B
 is now the first real experiment).
+
+## 16. Threat semantics: the static eval is credit-correct — search structure is where the bug lives
+
+In free-style 9×9/15×15 gomoku the threat hierarchy is genuine, so the static
+evaluator's heavy weights on N-in-window patterns are **correct, not
+"over-crediting."** Do not pitch eval-credit-removal as a fix.
+
+- **Open-3** (3 stones in a 5-window, both ends open): forces a defensive
+  response — left unblocked, either-side extension makes an open-4 → mate-in-one.
+  *Must* be blocked. Heavy weight is right.
+- **Half-open-4** (4 stones, one end blocked, other open): immediate winning
+  threat; opponent must block the open end on the very next move.
+- **Open-4** (4 stones, both ends open): already mate — defender blocks one end,
+  the other completes 5 next move.
+
+**Diagnostic principle.** When a lookahead/MCTS search produces bad moves, the
+bug is in *search structure* (quiescence, move ordering, branching, horizon
+parity), **not** in the static evaluator's pattern credit. The static eval
+correctly says "this position is great *if you got to keep playing*"; the
+search's job is to make the opponent's forced response real before reading the
+leaf. (Same theme as [mcts-perf-ceiling.md](mcts-perf-ceiling.md): don't lazily
+blame the easy-to-rewrite layer when the bug is structural.)
+
+**Evidence — the lookahead-depth-3 investigation.** The hypothesis that the eval
+"over-credited" open-3 was *wrong*. Odd-depth weakness came from `depth=0` having
+no quiescence to apply the forced block of an immediate-win-completable-4 — a
+missing search step, not bad credit. **Shipped partial fix:**
+`gomoku/baselines.py:_negamax` depth=0 quiescence catches the case where the
+opponent just built a completable-4 and the leaf would otherwise credit an
+unblockable-looking threat. It does **not** close all odd-depth weakness; the
+residual is likely move-ordering + `_MAX_BRANCH=12` cutting necessary blocks from
+the tree at internal nodes — a separate investigation, not a static-eval fix.
+
+## 17. Founding design decisions (2026-05-17) and public artifacts
+
+The project started 2026-05-17 with these decisions, recorded here so the
+origin rationale isn't lost:
+
+- **Board:** 9×9 free-style (first-to-5, no opening restrictions) — chosen as the
+  smallest meaningful board for the fastest feedback loop before any 15×15 work.
+- **Architecture rationale:** gomoku is a perfect-information game, so use
+  **standard PUCT MCTS** — deliberately do **not** port the *determinized* MCTS of
+  zeb (`~/code/mk5-main/forge/zeb/`, Jason's prior AZ project); that machinery is
+  for imperfect-info games and buys nothing here. The 81-action space (9×9) is
+  handled by a **ConvNet/ResNet** policy+value net, **not a transformer**.
+- **Stack:** Python 3.12 + PyTorch 2.11 on MPS, `uv` for deps; W&B from day 1
+  (mirrors zeb, `~/code/mk5-main/forge/zeb/`). CLI play first, web UI later.
+- **Iteration stance:** "watch it work" over premature optimization — get a smoke
+  run green, then tune.
+
+**Public artifacts:** source [github.com/jasonyandell/gomoku](https://github.com/jasonyandell/gomoku) ·
+model snapshots [huggingface.co/jasonyandell/gomoku-9x9](https://huggingface.co/jasonyandell/gomoku-9x9) ·
+W&B [wandb.ai/jasonyandell-forge42/gomoku](https://wandb.ai/jasonyandell-forge42/gomoku).

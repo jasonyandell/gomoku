@@ -196,6 +196,83 @@ yaml with `eval/model_elo` as the primary metric, Δelo-per-wall-hour as
 the derived north-star, and a link to the wandb run for the epoch trace.
 Promotion rules and the Reviewer gate apply normally.
 
+#### Training slice — the resumable-without-cold-refill mechanism
+
+The slice is *resumable without a cold buffer refill* — this is the
+load-bearing design property, not an incidental one. The trainer self-caps
+cleanly:
+
+- `train.py --max-wall-secs N`: at the first epoch boundary past `N`
+  seconds (or on SIGTERM/SIGINT), the trainer finishes the current epoch,
+  **force-saves a fully-resumable `latest.pt` with the replay buffer
+  embedded** — overriding `--save-buffer-every` — then exits 0. So
+  `--resume latest.pt` continues *without* a cold buffer refill. This
+  closes the LF1 cold-refill trap (see
+  [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md)):
+  a re-launched slice that cold-refilled would burn its first minutes
+  filling the buffer and mis-measure Δelo.
+- `run_sweep.py --max-wall-secs N --final-eval` **supervises the whole
+  bundle** (1 trainer + 8 self-play workers + 1 eval_worker): it passes the
+  cap to the trainer, tears down workers + eval cleanly when the trainer
+  self-caps, and has a hard-deadline SIGTERM fallback
+  (`TRAINER_CAP_GRACE_SEC`) if the trainer is stuck in a long epoch.
+
+**Operating rule:** keep the cap **well above one epoch's wall**. The cap
+is checked only at epoch boundaries, so it rounds *up* to the next one — at
+a full 1.5M buffer an epoch is minutes. (A cap shorter than the first epoch
+is the stop-gate row-6 failure: zero epochs in the window, `epochs_per_sec=0`.)
+
+Verified 2026-05-24 across wall-cap, warm-resume, SIGTERM, and a full SMOKE
+bundle. First production user: the [Δelo Derby](../ops/research-board.md)
+v2 `run_sweep_wall_slice` engine (wall-native budget, honest Δelo/hr).
+
+### The three-tier redesign (epic #2, 2026-05-28)
+
+Jason's 2026-05-28 directive: refactor the lab so the **derby becomes ONE
+consumer of a general substrate, not the substrate itself.** Tracked as GitHub
+**epic #2** (phase issues #3–#6). Grounds the
+[cockpit-vs-autopilot](cockpit-vs-autopilot.md) split:
+autopilot = the GPU + games queues; cockpit = GitHub issues + a verify gate on
+every result.
+
+Three queues at three latency tiers (**do NOT collapse them**):
+
+1. **Human/idea layer → GitHub issues** (the taskmaster; the cockpit). Slow,
+   durable. This is the `gh`-CLI surface CLAUDE.md/AGENTS.md already document.
+2. **GPU-time lease queue → a fast local disk-state job queue** (autopilot).
+   Owns the ONE GPU. Cooperative ~5-min slices — **not preemption**: a job
+   self-caps via `run_sweep --max-wall-secs`, clean-yields a buffer-embedded
+   `latest.pt`, and re-queues to the back. **Not** GitHub issues (too heavyweight
+   for 5-min slices). This is the runtime under the [Two-queue scheduler](#two-queue-scheduler)'s
+   GPU-required lane.
+3. **Games-on-demand → a declarative request abstraction, NOT a 2nd GPU owner.**
+   "512 games of strategy X @ model version Y" → gen-jobs submitted to tier 2,
+   the same way the derby submits train-jobs.
+
+#### Locked decisions (2026-05-28)
+
+- **GPU worker = re-derive fresh** from the derby's proven chunk loop
+  (`scripts/gpu_worker.py`, issue #4). **REJECTED** reviving the parked
+  `feat/gpu-broker` daemon (967 LOC, never run; predates the derby's guards).
+  Reframes the legacy "GPU broker on the daemon" issues #19/#20.
+- **Start with the taskmaster** (beads → GitHub issues) to bootstrap — file the
+  rest of the redesign *as issues* and dogfood the new surface.
+
+#### Status
+
+- **Phase 1 DONE** (issue #3, merged `c7d0d3b`): beads retired → GitHub issues.
+  14 live beads migrated lossless → #7–#20; `CLAUDE.md` + `AGENTS.md` + 5 skills +
+  3 wiki docs flipped `bd`→`gh`; `scripts/gh_prime.sh` (replaces `bd prime`,
+  wired into the gitignored `.claude/settings.json` SessionStart/PreCompact
+  hooks); `scripts/gh_worktree.py N` for worktrees + `Closes #N` auto-close;
+  `scripts/migrate_beads_to_gh.py`. `.beads/` left dormant.
+- **OPEN:** #4 GPU lease worker (re-derive fresh); #5 games-on-demand declarative
+  queue; **#6 generator-lean** — the big lever: move the D4 ×8 augmentation from
+  generation-time to **train-time-on-sample** for a ~8× disk/ingest/RAM cut, and
+  drop dead file metadata. (Today, per [Vocabulary](#vocabulary), `augment()`
+  runs at record-write time in the workers — generator-lean is the deliberate
+  flip of exactly that.) Pairs with [buffer-bit-packing](buffer-bit-packing.md).
+
 ## Smoke-first doctrine
 
 A 60-90s cell at ~90% confidence beats a 5-min cell at 99.99%
@@ -222,6 +299,30 @@ the 17-min version would have shown clearly.
 clearly above the reference and clearly above noise, that's a promote
 candidate — file the receipt and let the Reviewer audit. Don't run 4
 more cells "for confidence" when the first one already settled it.
+
+### Run-cap discipline for training sweeps (baseline-relative fast filter)
+
+Smoke-first extended to fixed-epoch training sweeps (e.g. a 10-epoch
+canonical re-map). Two rules, applied together:
+
+1. **Hard per-cell wall cap.** Wrap each cell in `timeout 300` (or the
+   designed cap). A cell that can't reach the epoch target inside the cap
+   is killed and marked **OUT** — never let a runaway eat 20 min waiting
+   for it to finish.
+2. **Cull relative to the production baseline.** Run the production-default
+   cell first (e.g. `V=64` center); it sets the bar. Any config that is
+   slower-to-N-epochs than that baseline is also **OUT**. The sweep becomes
+   a *fast filter* — "which configs reach N epochs at-or-faster than
+   baseline" — not a patient measurement of every cell.
+
+**Why:** Jason 2026-05-24 — "cap the run at 5m. anything slower than the
+old baseline is out." Cheap hard caps also catch the runaways the
+cold-window R-TRAIN-* bench hides: pairs with the LF1 finding
+([perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md))
+where a "+152%" cold-window promote diverged once the buffer filled
+(per-epoch wall 20s→7.3min). The cap kills that class of cell before it
+costs the sweep; the baseline-relative cull keeps the filter honest about
+the production reference.
 
 ## Operating loop (autonomous)
 
@@ -432,6 +533,31 @@ training default.** Worktrees, merge commits, receipts, charter doc-
 syncs, lab follow-up queueing — all CONTINUE. Anything that affects
 shared state with humans (the WL release lineage, third-party services,
 the user's calendar) → ESCALATE.
+
+### A clean milestone is not a stop point
+
+The triage matrix above governs the formal stop *conditions*. A separate
+behavioral rule governs the loop's normal rhythm: **a tidy milestone is
+NOT a stop point.** A finished lane, a filed receipt, a Reviewer
+`APPROVE`, even a corrected error are the loop's normal beat — pull the
+next lane, don't hand back.
+
+Jason 2026-05-23 (L09i session-resume, said right after the orchestrator
+stopped at a clean milestone — L09i resolved + receipts filed + Reviewer
+APPROVE — and handed back): *"keep going autonomously... my preference is
+for you to keep working so long as there is work to do."*
+
+Operationalized:
+
+- **"Work to do" = any unblocked queue lane, any tier.** A lane that
+  needs code is CPU-queue work — fan out an Agent and keep going (don't
+  serialize behind the GPU). A lane that needs a cooled chip means run
+  something else meanwhile (or take a short cooldown) — not hand back.
+- **Only stop on a genuine charter HALT** (queue empty + no follow-up +
+  no compound mechanism, matrix rows #1/#2b) **or an ESCALATE.** A clean
+  milestone is none of those.
+- **Heuristic:** when tempted to write "good place to pause," pull the
+  next lane instead.
 
 ### Escalation format
 

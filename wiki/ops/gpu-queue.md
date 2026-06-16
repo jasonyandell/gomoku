@@ -15,7 +15,8 @@ training slice is a time-capped resumable run via
 receipts the slice like any perf cell. Eval stays inside the bundle.
 
 > **The serial GPU lane is becoming a daemon.** `scripts/gpu_daemon.py`
-> (see [gpu-daemon.md](../topics/gpu-daemon.md)) is the machine form of
+> (see [Historical: the serial GPU lane's daemon](#historical-the-serial-gpu-lane-once-had-a-daemon-superseded))
+> is the machine form of
 > this queue: submit jobs as config files, they queue in `lab_queue/`,
 > and run **serially** on MPS — train slices via `run_sweep`, anything
 > else (gen/eval/perf) via a raw command. It preflights for foreign MPS
@@ -593,3 +594,32 @@ The orchestrator pulls from both queues simultaneously:
 A cron tick is a degenerate orchestrator — it only advances the GPU
 queue. Live-conversation orchestration (you + me with Agent fan-out)
 is the real shape; cron is just for unattended drift.
+
+## Historical: the serial GPU lane once had a daemon (superseded)
+
+> **Historical: the serial GPU lane once had a daemon (superseded).**
+> `scripts/gpu_daemon.py` (built 2026-05-24, **never started** — derby v3 held
+> the box) was the machine form of this queue: submit jobs as config files,
+> they queue in `lab_queue/` (gitignored), and run **serially** on MPS.
+>
+> Design (for the record): maildir-style — a job's *directory* is its state
+> (`pending/ → running/ → done/|failed/|cancelled/`), moving the file is the
+> transition; `events.jsonl` is the append-only audit log; `daemon.pid` is
+> flock'd so only one daemon runs. Two job kinds: **train** builds the
+> clean-stop slice `run_sweep --cell C [--resume latest.pt] --max-wall-secs N
+> --final-eval` and reads final `eval/model_elo`; **raw** runs an arbitrary
+> argv (gen/eval/perf escape hatch). Serial (one tenant), **polite**
+> (preflights foreign MPS tenants via `pgrep` and *waits*, coexisting with a
+> hand-launched derby), **clean-stop** (SIGTERM forwards to the job's process
+> group; interrupted train jobs re-queue with `resume_from=auto`),
+> **crash-resumable** (`running/` jobs reconciled to `pending/` on restart).
+> CLI: `daemon` / `submit` / `status` / `show <id>` / `cancel <id>` / `stop`;
+> GPU-free tests in `tests/test_gpu_daemon.py`.
+>
+> **Status — SUPERSEDED 2026-05-28.** The lab redesign (#4) **re-derives the
+> GPU worker fresh from the derby loop** rather than reviving this daemon; it
+> was never run and nothing live was migrated. The script is **not on `main`**
+> — it survives only on the dead branches `feat/gpu-broker` /
+> `claude/gpu-daemon`. The serial GPU lane today is run by the
+> `sliding-derby-composite` workflow + derby-runner cron, not by this daemon.
+> Kept here as design provenance only.

@@ -148,6 +148,7 @@ read is:
 | [ops/perf-log.md](ops/perf-log.md) | Day-by-day narrative timeline for the M5 Max perf era. |
 | [ops/gpu-queue.md](ops/gpu-queue.md) | Live, ordered queue for GPU-required lab items (perf cells and training slices). Source of truth for the autonomous lab loop. |
 | [ops/best-cells.md](ops/best-cells.md) | Current best cell per quality reference point; promotion log. |
+| [topics/fleet-management.md](topics/fleet-management.md) | The agent-management toolchain north star (roadmap): land the too-many-sessions problem; log-based, append-only; cockpit not autopilot. |
 
 ## Layers
 

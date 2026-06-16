@@ -178,6 +178,38 @@ The sample overhead at batch=256 is ~25 ms — current train step is
 the current train step runs. Hides the unpack cost behind GPU
 compute. Standard PyTorch DataLoader pattern.
 
+## Why 3M is the next-cell default — turnover, not just RAM
+
+The bit-packing math above answers *can we afford a wider buffer*; the
+turnover argument answers *why we want one*. (Origin: Jason flagged this
+2026-05-22 after WL5 crossed 1M games.)
+
+- **WL5 residence + cycling.** 1.5M positions at ~42 avg plies (phase 2)
+  ≈ **~36k games resident**. By the 1M-games milestone (2026-05-22, e8048)
+  the buffer had been **recycled ~28×** — our generation rate ages positions
+  out fast.
+- **Mechanism.** High turnover means each position contributes to **few SGD
+  steps before eviction**, which caps how much any single *hard* position can
+  teach. This is the buffer-width face of the WL5 learning-gap-vs-
+  target-distribution-noise question: a hard target's influence is partly a
+  function of how long it persists in the training set, and aggressive
+  eviction works against retention. (Slice *selection* — what's in the slots —
+  is the orthogonal axis, see
+  [curated-buffer-and-curriculum-design.md](curated-buffer-and-curriculum-design.md).)
+- **Reference anchor.** AlphaZero's canonical scale is ~3M positions; AGZ used
+  "most recent 500k games" for Go. At 1.5M we sit at roughly **half the
+  AZ-canonical size**.
+- **Recommendation.** Default the next post-WL5 cell to a **3M-position
+  buffer** unless RAM forces smaller. Quick feasibility gauge: resident set
+  ≈ `latest.pt` size doubling (8.8 GB at 1.5M float32 → ~2× at 3M;
+  bit-packing collapses this — see the cost table above). Pair with Core ML /
+  ANE inference work and the "know the machine" framing — a wider buffer is a
+  **chip-load lever** (more archive-scoring inference + bigger optimizer state)
+  as well as a learning lever.
+- **15×15 caveat.** Longer games ⇒ more plies/game ⇒ worse buffer pressure;
+  revisit the position count for the 15×15 era (and bit-packing lands first —
+  a 3M planes store is ~45.9 GB unpacked, ~1.44 GB packed).
+
 ## When to do this
 
 After WL5 reports out. If WL5's archive-start absorption phase resolves

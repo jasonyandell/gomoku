@@ -3,6 +3,33 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-16] wiki | Memory-vs-wiki reckoning — pruned agent memory to machine+user only, promoted 37 memories into the wiki
+
+Jason: "memories compete with the wiki." Pruned the agent's persistent memory
+to **machine-only + working-with-Jason-only** (8 of 45 kept); promoted the
+remaining 37 project/process/roadmap memories into the wiki, the source of
+truth.
+
+New/updated synthesis:
+- **CREATED** [topics/fleet-management.md](topics/fleet-management.md).
+- Appended sections to [topics/research-lab-charter.md](topics/research-lab-charter.md)
+  (clean-milestone-not-stop, run-cap fast-filter, the three-tier redesign #2,
+  the training-slice resume-mechanism),
+  [topics/alphazero-lessons.md](topics/alphazero-lessons.md) (threat-semantics +
+  founding decisions),
+  [topics/perf-bench-vs-real-training-cost.md](topics/perf-bench-vs-real-training-cost.md)
+  (plies-ETA), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) (3M
+  turnover), [topics/white-side-defense-plan.md](topics/white-side-defense-plan.md)
+  (#42-failed / I2-fired update),
+  [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md)
+  (overnight workhorse + narrator), [ops/gpu-queue.md](ops/gpu-queue.md)
+  (gpu_daemon historical + fixed the dangling gpu-daemon.md link).
+- Rewrote [topics/conventions.md](topics/conventions.md) § "Memories also go to
+  the wiki" → "What belongs in memory vs the wiki": memory = machine + user
+  only; project/process/roadmap knowledge is **wiki-only, not mirrored**. Same
+  rule tightened in [../CLAUDE.md](../CLAUDE.md) and [../AGENTS.md](../AGENTS.md).
+- Cleaned dangling "Mirrored in memory" footers for the deleted slugs.
+
 ## [2026-06-12] topics | Added 15x15-era-feasibility-and-plan: the perf ceiling was the small model, not the Mac
 
 Filed [topics/15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md)

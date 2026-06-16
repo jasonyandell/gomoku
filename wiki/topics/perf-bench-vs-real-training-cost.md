@@ -90,7 +90,36 @@ In the real run, the runaway only becomes visible after the buffer approaches ca
 
 **The lesson is general: a perf cell that stops before the buffer fills — and before several post-fill epochs — measures a regime that real training never sits in.** The cold-buffer transient is a real measurement of a real thing (cold-buffer generation throughput), but it is *non-predictive* of steady-state training cost. The charter's existing calibration note ("R-TRAIN cells need a window that spans ≥3 of the trainer's actual epochs") is necessary but not sufficient: 3 epochs in the cold regime still misses a regime change that happens at epoch 27. The window has to span the regime change, not just a few epochs.
 
-This is the same family of trap as [feedback-self-play-eta](../topics/m5-max-fp16-and-throughput-regimes.md) (don't extrapolate wall-clock from a short cycle-time sample) and [mcts-perf-ceiling.md](mcts-perf-ceiling.md) (know what's already been optimized) — measured proxies that look like the thing you care about but aren't.
+This is the same family of trap as [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) (don't extrapolate wall-clock from a short cycle-time sample) and [mcts-perf-ceiling.md](mcts-perf-ceiling.md) (know what's already been optimized) — measured proxies that look like the thing you care about but aren't.
+
+## The other reason a short sample under-predicts: plies grow as the model learns to defend
+
+The buffer-fill runaway above is the *second* reason a short window misreads real
+training wall-clock. The first is more fundamental and applies even at WL5 settings:
+**self-play cycle time grows ~quadratically with mean plies, and plies grow as the
+model learns to defend — which is the actual training goal.** A "fast" cycle is the
+symptom of a *collapsed* model that races to win in ~12 plies; it is not a speed win.
+
+**Mechanism.** Each ply costs `n_simulations` MCTS sims to pick a move, so plies-per-game
+scales per-game cost linearly; on top of that, MCTS trees get deeper at higher plies, so
+per-sim cost rises too — gen time ends up super-linear (~quadratic) in plies. Evidence:
+`sync-gpe128-fasteval` epoch 122→125 showed plies 34.5→52.8 (**+53%**) but gen 48.5 s→102.5 s
+(**+111%**) — roughly the square. Counter-example trap: in the `az-recipe-160k` run, the
+e1 smoke showed plies≈32 (two untrained models can't end a game), by e51 plies had
+*collapsed* to ~15 (fast-attack mode), cycle time fell 11 s→2 s, and a naive extrapolation
+projected ~2.3 h for 3900 remaining epochs at 2 s/cycle. That projection was implicitly
+betting *against* the model learning defense: the moment it does, plies climb back toward
+real-game levels (~50–80 on 9×9) and the per-cycle cost blows out.
+
+**How to quote a mid-flight self-play ETA — give a range, never one number:**
+- **Lower bound:** current cycle time × remaining epochs (assumes no defense learned / plies stay collapsed).
+- **Upper bound:** assume plies grow to real-game levels and gen scales super-linearly — rule of thumb **3–5×** the lower-bound cycle time.
+- State the assumption explicitly. A run getting *slower* mid-flight is a **positive** signal (defense is being learned), not a problem; a tight single-number ETA is implicitly a bet that training fails. See also `selfplay/plies_mean` falling + concave buffer-fill = fast-attack collapse ([loss-floor-bouncing.md](loss-floor-bouncing.md)).
+
+**Net:** there are two independent reasons a short or mid-flight rate under-predicts real
+training wall-clock — **(1)** plies grow as defense is learned (this section), and **(2)** the
+replay buffer fills and SGD-steps/epoch climbs (the rest of this page). Always read the real
+`train=Xs` phase from `trainer.log` and check the plies trend before quoting a training ETA.
 
 ## The meta-point: the lab optimized the wrong objective
 
