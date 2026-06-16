@@ -438,25 +438,24 @@ CELLS: dict[str, Cell] = {
                 weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
                 epochs=1_000_000, random_opening_moves=0,
                 global_pool=True,
-                # 2026-06-16: --vct-teacher DROPPED, for TWO reasons — one solid,
-                # one UNPROVEN (kept honest):
-                #  (1) SOLID — experiment cleanliness: the champion (eval502/bigbuf)
-                #      was trained with NO offensive teacher, so the clean single-
-                #      variable #36 experiment is "champion + --defense-teacher ONLY".
-                #  (2) PRUDENCE (not yet proven): VCT (continuous-THREES) is the more
-                #      expensive teacher (the threes tree fans out, esp. on 15x15's
-                #      ~2.8x wider branching), so it is a gen-cost risk on the hot path.
-                # CAVEAT — do NOT over-read this: gen was observed STARVED (new=0, 0
-                # games in ~6 min, workers ~100% CPU) under BOTH the VCT config AND
-                # this defense-only config, so VCT is NOT confirmed as the cause. The
-                # stall is under investigation (slow strong-warmstart long games / an
-                # expensive defense-teacher VCF solve at the 200k default / native-ext
-                # or config issue); the decisive check is a NO-TEACHER control run.
-                # --defense-teacher is the VCF mirror (continuous-FOURS, narrow) +
-                # four-threat pre-scan gate; if IT is the cost, cap --vcf-max-nodes.
+                # 2026-06-16: champion + --defense-teacher ONLY (clean single
+                # variable — eval502/bigbuf had no offensive teacher), with the VCF
+                # solve budget HARD-CAPPED. --vct-teacher dropped (clean experiment;
+                # also the more expensive teacher). ROOT-CAUSE RESOLVED by controls:
+                # --defense-teacher at the DEFAULT 200k-node VCF budget STARVES 15x15
+                # generation — 0 games in 6 min, workers 100% CPU. Isolated decisively:
+                # a no-teacher control genned eval502 at ~2.6 s/game, and the SAME
+                # config + --vcf-max-nodes 2000 --vcf-max-depth 10 genned at ~3.1 s/game
+                # (gen rescued). So the per-move defense VCF solve, uncapped, is the
+                # gen-killer; the cap bounds it while still proving the SHORT forced
+                # losses "defend earlier" needs (deep 200k-node proofs are unnecessary
+                # for the draw/loss boundary). The 9x9 teachers' default budgets do NOT
+                # transfer to 15x15's wider branching — always cap the solve on the gen
+                # hot path here. (Evidence: /tmp/{noteacher,capdef}_ctrl.log, 2026-06-16.)
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98",
-                                   "--defense-teacher"],
+                                   "--defense-teacher",
+                                   "--vcf-max-nodes", "2000", "--vcf-max-depth", "10"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-vcf: the planned 15x15-tuned vcf-teacher derby contestant (epic #21
     # readiness-audit S3). BYTE-IDENTICAL to G15-seed in every Cell field EXCEPT
