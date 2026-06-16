@@ -56,6 +56,16 @@ WHAT THIS PRINTS (in order of trust)
 
 EVAL-ONLY ANALYSIS. Reads the JSONL line-by-line; skips malformed / partial /
 ``error`` records; handles a file that is still being appended to.
+
+NOTE (wine engines shelved, 2026-06-16; issue #35): the wine-run Gomocup engines
+are OFF by default in ``panel_tournament.py`` (they crashed ~17/36 panel pairs).
+This reader is unaffected — it consumes whatever players appear in the JSONL, so
+it reports correctly over the reliable default field (our nets + heuristic + any
+native engine). The ``GOMOCUP_ELO_ANCHORS`` it imports are still the calibration
+ruler IF a run opted wine engines back in; with the reliable-only default there
+may be <2 anchors, in which case the §2 calibration honestly reports RELATIVE Elo
+(the §1 per-color RATES remain the ground truth either way). See
+``wiki/topics/reliable-eval-set.md``.
 """
 
 from __future__ import annotations

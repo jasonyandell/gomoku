@@ -93,8 +93,25 @@ _NETS = [
     ("az-128x10-e588", f"{_SWEEP}/g15_128x10_bigbuf_e588_best.pt"),
 ]
 
-# Real external Gomocup engines (wine-run pbrain binaries / native wrappers).
-_REAL_ENGINES = [
+# ----------------------------------------------------------------------------
+# WINE ENGINES ARE OFF BY DEFAULT (Jason's nix directive, 2026-06-16; issue #35).
+# ----------------------------------------------------------------------------
+# The five "real engine" anchors below are Windows ``pbrain-*.exe`` binaries run
+# under wine. They are FLAKY: ~17/36 panel pairs crashed in the #35 calibration
+# attempt (wine segfaults / desyncs), which broke the affine anchor fit. Jason:
+# "bail on wine evals — another wine crash. eval just with reliable things."
+#
+# So this catalog is now GATED behind an explicit opt-in and DEFAULTS TO EMPTY.
+# The default reliable panel = our net checkpoints (pure-torch, via the
+# run-gomoku-az brain wrapper) + the pure-python ``heuristic`` floor — the same
+# torch-only / pure-python eval the sliding derby already uses reliably. See
+# ``wiki/topics/reliable-eval-set.md`` and ``wiki/topics/gomocup-engines-catalog.md``.
+#
+# The catalog is KEPT (not deleted) — it is evidence, and an engine that proves
+# reliable (e.g. a NATIVE non-wine Rapfi build, issue #28) can be re-listed. Opt
+# in with ``GOMOKU_ENABLE_WINE_ENGINES=1`` or the ``--wine`` CLI flag; both are
+# off by default. To add a reliable NATIVE engine, prefer ``_NATIVE_ENGINES``.
+_WINE_ENGINES = [
     ("embryo26", f"{_GOMOCUP_BIN}/run-embryo26"),
     ("yixin18", f"{_GOMOCUP_BIN}/run-yixin18"),
     ("pela23", f"{_GOMOCUP_BIN}/run-pela23"),
@@ -102,19 +119,62 @@ _REAL_ENGINES = [
     ("eulring16", f"{_GOMOCUP_BIN}/run-eulring16"),
 ]
 
+# Reliable NATIVE (non-wine) external engines — the future home of a real
+# strength anchor (e.g. a native ARM64 Rapfi, issue #28/#35). Empty until a
+# native binary + wrapper is brought online; populating this list does NOT
+# require the wine opt-in. Entries are (label, run-wrapper-path), same grammar
+# as the wine catalog.
+_NATIVE_ENGINES: list[tuple[str, str]] = []
+
+
+def wine_engines_enabled(cli_wine: bool = False) -> bool:
+    """Wine engines are opt-in only (issue #35; Jason's nix directive).
+
+    Enabled iff the ``--wine`` flag is passed OR ``GOMOKU_ENABLE_WINE_ENGINES``
+    is set to a truthy value (``1``/``true``/``yes``/``on``). Default: OFF.
+    """
+    if cli_wine:
+        return True
+    val = os.environ.get("GOMOKU_ENABLE_WINE_ENGINES", "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
+def real_engines(*, enable_wine: bool) -> list[tuple[str, str]]:
+    """The external-engine anchors for the field.
+
+    Always includes the reliable NATIVE engines; includes the flaky wine
+    catalog ONLY when explicitly opted in. Default (no opt-in) = native only,
+    which is currently empty -> a pure torch + pure-python reliable panel.
+    """
+    engines = list(_NATIVE_ENGINES)
+    if enable_wine:
+        engines += list(_WINE_ENGINES)
+    return engines
+
+
+# Back-compat alias: ``panel_white_elo.py`` and older callers import the anchor
+# catalog by this name. It now reflects the DEFAULT (reliable) field — native
+# engines only, no wine — so a default analysis never assumes wine players.
+_REAL_ENGINES = real_engines(enable_wine=False)
+
 # Default per-engine move budget (ms) for ALL external subprocesses (nets +
 # real engines). Generous because GPU-contended / wine engines need slack.
 _DEFAULT_TIMEOUT_MS = 10000
 _DEFAULT_SIMS = 200
 
 
-def _build_participants(sims: int, timeout_ms: int) -> list[tuple[str, str]]:
+def _build_participants(
+    sims: int, timeout_ms: int, *, enable_wine: bool = False
+) -> list[tuple[str, str]]:
     """Materialize the (label, spec) field for the given sims/timeout.
 
     Net specs put the checkpoint + sims inside the comma-free ``cmd=`` value
     (space-separated flags), then carry ``timeout_ms``/``label``/``size`` as
     spec kwargs after the first comma — exactly how ``run-gomoku-az`` documents
     its registration string.
+
+    Wine engines are EXCLUDED unless ``enable_wine`` (issue #35; default reliable
+    panel = nets + the pure-python heuristic floor + any native engines).
     """
     parts: list[tuple[str, str]] = []
     for label, pt in _NETS:
@@ -127,7 +187,7 @@ def _build_participants(sims: int, timeout_ms: int) -> list[tuple[str, str]]:
             (label,
              f"external:cmd={cmd},timeout_ms={timeout_ms},label={label},size=15,incremental=1")
         )
-    for label, cmd in _REAL_ENGINES:
+    for label, cmd in real_engines(enable_wine=enable_wine):
         parts.append(
             (label, f"external:cmd={cmd},timeout_ms={timeout_ms},label={label}")
         )
@@ -698,6 +758,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--print-table", action="store_true",
                    help="Recompute the cross-table + calibrated Elo from an "
                         "existing JSONL without playing any games.")
+    p.add_argument("--wine", action="store_true",
+                   help="Opt IN to the flaky wine-run Gomocup engines (OFF by "
+                        "default; issue #35 — 17/36 panel pairs crashed). Also "
+                        "enableable via GOMOKU_ENABLE_WINE_ENGINES=1. Without "
+                        "this the field is nets + heuristic + any native engine.")
     return p.parse_args()
 
 
@@ -727,8 +792,18 @@ def main() -> None:
         report(records)
         return
 
-    participants = _build_participants(sims=args.sims, timeout_ms=args.timeout_ms)
+    enable_wine = wine_engines_enabled(getattr(args, "wine", False))
+    participants = _build_participants(
+        sims=args.sims, timeout_ms=args.timeout_ms, enable_wine=enable_wine
+    )
     participants = select_field(participants, args.only)
+    if enable_wine:
+        print("[panel] WINE ENGINES ENABLED (opt-in) — expect flaky pairs (#35).",
+              flush=True)
+    else:
+        print("[panel] reliable panel: nets + heuristic + native engines only "
+              "(wine OFF; --wine or GOMOKU_ENABLE_WINE_ENGINES=1 to opt in, #35).",
+              flush=True)
     print(f"[panel] field ({len(participants)}): "
           f"{', '.join(lbl for lbl, _ in participants)}", flush=True)
     print(f"[panel] n_games={args.n_games} sims={args.sims} "
