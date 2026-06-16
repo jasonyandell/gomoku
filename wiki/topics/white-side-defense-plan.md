@@ -62,6 +62,39 @@ fix [#36](https://github.com/jasonyandell/gomoku/issues/36) /
 
 ---
 
+## §1B.2 INSTRUMENT BUILT + first measurement (2026-06-16) — the probe CONFIRMS attacker-strength-gating; it needs a STRONGER attacker for I1/I2 headroom (#45 done → #49 next)
+
+The §1B.2 forced-defense probe (Appendix item 3) is now **built and merged as #45**:
+`gomoku/white_defense.py` + `scripts/white_defense_suite.py` + a versioned fixture
+(`fixtures/white_defense_15x15_v1.json`, 80 white-to-move positions facing a live
+black threat) + a `white_loss_rate` metric with Wilson CI + a `white_defense_tally`
+gate primitive (drop-in for `sliding_gate.run_gate`'s `white_loss_fn`).
+
+**Positive control PASSES** (the instrument discriminates defensive skill): champion
+`eval502` `white_loss=0.0375` (3/80, CI [0.013, 0.105]) vs a random-init net `0.95`
+(76/80, CI [0.878, 0.980]) — CIs strictly non-overlapping, attacker `lookahead:depth=2`,
+sims=200, n=80/net. (random-init loses 54/54 `_three` positions → the spread is real,
+not a fixture artifact.)
+
+**The measurement does NOT contradict the training-gap thesis — it sharpens it.** This
+probe uses a *weak* attacker (`lookahead:depth=2`), so the champion sits at its **floor**
+(3.75% loss), fully consistent with Step A's depth-4 result (88–100% white success vs
+the weak searcher). The brittleness is **attacker-strength-gated**: solid vs weak
+searchers, **0–6 vs zetor17** (strong). The v1 fixture was mined from *weak-baseline*
+games, so its threat distribution is the easy end — **it has no headroom to measure an
+I1/I2 (#43) defense gain** (a better defender can only move ~3 losses). The champion's 3
+losses concentrate in the `_four` provenance — the residual difficulty lives in the
+strong-threat slice.
+
+**Implication → #49:** the diagnostic instrument the defense race needs is a
+**harder-attacker variant** — `lookahead:depth=3/4` or **champion-as-attacker** (our
+strongest no-wine attacker, the #37 "strong attacker" side) over **strong-attacker-derived**
+threat positions, so the champion posts a measurably-above-floor white_loss and a #43
+improvement is resolvable within CI. #45 v1 is the validated *primitive* (CI + gate seam +
+play-from-position); #49 makes it *diagnostic* for I1/I2.
+
+---
+
 ## 0. What the code actually does today (ground truth, file:line)
 
 These are the load-bearing facts the plan is built on. All verified by reading source.
@@ -358,7 +391,10 @@ The whole plan is worthless if a white gain is invisible in the dashboard, so th
    `white_loss_rate`) over the live JSONL. **Code-only, do now.**
 2. Run the §1B.1 color-split loss-tail (champion vs lookahead:4/6, n=200, CPU) and
    the §1B.3 FPU sweep — Step A of the first experiment. **CPU, do now.**
-3. Build the §1B.2 forced-defense probe set (VCF-swap, defensive-accuracy %).
+3. ~~Build the §1B.2 forced-defense probe set.~~ **✅ DONE (#45, 2026-06-16)** as the
+   white-defense suite (fixed white-to-move-threat fixture + `white_loss_rate` + Wilson
+   CI + gate primitive). v1 uses a *weak* attacker → at the champion's floor; **#49** adds
+   the strong-attacker variant that makes it diagnostic for I1/I2. (See the §1B.2 results block above.)
 4. File the #18 **defense-arm child issue** for I2 (stamp the saving move) and a
    `derby-idea` cell for I1 (defense-teacher + VCT), per the one-lever-per-cell rule.
 5. When a GPU lane frees: run the I1 slice; re-read white-Elo to judge.
