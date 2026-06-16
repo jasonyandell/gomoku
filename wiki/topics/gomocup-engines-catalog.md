@@ -10,6 +10,17 @@ Snapshot date: **2026-06-15**. Sibling page:
 wrapper that's already wired into `gomoku.match`). Earlier source trail:
 [../sources/gomocup-external-engines-2026-05-22.md](../sources/gomocup-external-engines-2026-05-22.md).
 
+> **We now speak the Gomocup/Piskvork protocol on BOTH sides** (grounded in the
+> GomocupJudge protocol doc: `START`/`BEGIN`/`BOARD`/`TURN` over stdin/stdout).
+> The **client** side is `gomoku/external_engine.py` (drives external `pbrain-*`
+> engines into `gomoku.match`); the **brain** side is `gomoku/gomocup_brain.py`
+> (#31) — our own net answers the protocol, so it is a first-class, path-registerable
+> Gomocup engine (`scripts/run-gomoku-az`). One caveat for the brain side: our net
+> is history-conditioned, so it must be driven with `incremental=1` (`TURN`-mode)
+> or it sandbags itself on empty history — see
+> [engine-panel-derby-design.md](engine-panel-derby-design.md) and
+> [alphazero-lessons-15x15-gomoku.md](alphazero-lessons-15x15-gomoku.md) §13.
+
 ## The honest headline
 
 **Most Gomocup engines are CLOSED source** — distributed only as precompiled
