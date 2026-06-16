@@ -95,6 +95,17 @@ play-from-position); #49 makes it *diagnostic* for I1/I2.
 
 ---
 
+## §1B.2 → Step B UPDATE (2026-06-16) — the value-only teacher (#36/#42) was RUN and FAILED; I1→I2 escalation has FIRED → fix is now #43 (stamp the saving move on the policy)
+
+The conditional in Step B / §15 ("escalate to I2 *if* value-only under-moves the draw/loss boundary") has resolved: **it fired.**
+
+- **#36/#42 (value-only `--defense-teacher`, relabel proven-lost white positions `z=−1`) FAILED.** The hard value relabel **with no fire-rate bound saturates the value head** — `vl 0.16→0.06` with plies HELD (40–50), the canonical value-poisoning death-tell (see [sliding-derby-measured-outcomes-design-v2.md](sliding-derby-measured-outcomes-design-v2.md) §CHANGE 1). The over-pessimized value head then **contradicts the untouched attacking policy → the shared trunk corrupts → policy degrades.** The gentler #42 variant still bled. **#42 is closed.**
+- **Structural verdict:** value-only defense teaching is **structurally wrong for "never lose as white."** It teaches *"you were already lost"* (the `z=−1` relabel) — it does **not** teach *how* to defend, i.e. it never sharpens the **draw/loss boundary** where the white job actually lives. Stamping value alone, against an untouched attacking policy, poisons the value head before it can move that boundary.
+- **Committed fix = #43 (I2): stamp the unique SAVING MOVE on the POLICY head** — one-hot the unique refutation when the opponent has a proven forced win *only if* white plays the wrong move (the literal [#18](https://github.com/jasonyandell/gomoku/issues/18) "teach the move it should have played" for the second player). This is now the **active** white-defense arm, not a contingency. Cap the refutation solve hard; fall through to no-op when ambiguous (sound: only ever skips).
+- **Instrument status for #43:** the #45 white-defense suite is the validated *primitive* but its v1 fixture (weak depth-2 attacker) puts the champion at its **floor** (3.75% white_loss) → no headroom to resolve a #43 gain. **#49** (strong-attacker / champion-as-attacker variant over strong-threat positions) is the diagnostic the #43 race needs.
+
+---
+
 ## 0. What the code actually does today (ground truth, file:line)
 
 These are the load-bearing facts the plan is built on. All verified by reading source.

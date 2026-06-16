@@ -202,6 +202,39 @@ Critical points the WL5 era proved out:
   again in 15 min; if the operator is around they'll see the report,
   and if not, only the real alerts wake them.
 
+### 5c — The overnight operating contract (workhorse + narrator split)
+
+For multi-hour / overnight autonomous pushes Jason's standing contract is
+**work to a stated horizon, not to the next clean milestone** ("work until
+tomorrow" = keep the lab turning, file receipts, spawn Reviewers; don't park at
+a green checkpoint). He wants to leave — movie, sleep — and trust the lab runs
+itself and reports back. (First established 2026-05-24 at the Δelo Derby v1
+launch; the dispatch-and-verify framing is [cockpit-vs-autopilot](cockpit-vs-autopilot.md).)
+
+The architecture that survives a Claude session restart is a **two-part split**,
+not one in-context loop:
+
+- **Workhorse** — a standalone, crash-resumable python scheduler launched via
+  `nohup` so it outlives the Claude session. Build `--resume` into it from the
+  start (reconcile from on-disk state, no cold refill). Example: `delo_derby.py`
+  (crash-resumable, per-chunk failure isolation).
+- **Narrator** — a lightweight cron (the `7,22,37,52 * * * *` cadence of §5b)
+  that **reports from disk state, never from in-context orchestration**. Each
+  fire is a fresh context (§5b), so it must read run state off disk, not hold it.
+  The narrator **doubles as a watchdog**: if the workhorse PID is gone (and the
+  run isn't at its cap), **relaunch it with `--resume`** rather than just
+  alerting. PushNotify on transitions only (per the §5b tight-list); on
+  completion it files the results receipt and `CronDelete`s itself.
+
+Two more parts of the overnight contract:
+
+- **Fan out** the build across background `Agent`s, **grouped by file** to avoid
+  edit conflicts (pair edits with `isolation: worktree`).
+- **Improve the skills as friction appears** — the self-improvement clause is
+  expected, not optional; a remembered procedure that keeps re-surfacing becomes
+  a janitor + gauge ([worktree-hygiene](worktree-hygiene.md) pattern), and a recurring narration a
+  cron.
+
 ### Per-check actions (both modes)
 
 - `tail` trainer.log for last 3-8 epoch lines + most recent eval line

@@ -78,8 +78,13 @@ Prefer MPS over CPU. W&B project: `gomoku` (pull exact run histories, don't gues
 
 ## Persistent memory
 `~/.claude/projects/-Users-jason-code-gomoku/memory/` (indexed by `MEMORY.md`),
-auto-loaded each session. Every durable lesson also gets a wiki section — memory
-points back to the wiki (the source of truth).
+auto-loaded each session. Memory holds **only** (a) local-machine facts (this
+Mac's hardware, paths, keychain, MCP/tool setup, thermal/contention behavior) and
+(b) working-with-Jason facts (background, preferences, autonomy boundaries, how he
+wants to be worked with). **Everything about the project, ML/training judgment,
+lab operation, or roadmap lives in the wiki, NOT memory** — do not mirror
+project/process knowledge into memory ("memories compete with the wiki", Jason
+2026-06-16). See `wiki/topics/conventions.md` § What belongs in memory vs the wiki.
 
 
 ## GitHub Issues — task tracking

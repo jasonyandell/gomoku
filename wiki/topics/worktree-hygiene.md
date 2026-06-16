@@ -3,7 +3,7 @@
 **Status:** canonical (the janitor's deep-dive). The overall branch/worktree
 workflow lives in
 [branch-and-worktree-workflow.md](branch-and-worktree-workflow.md); this page
-is its cleanup half. Mirrored in memory [[feedback-janitor-not-procedure]].
+is its cleanup half.
 Established 2026-05-25 after the repo had silently grown to **26 worktrees /
 57 branches**.
 
