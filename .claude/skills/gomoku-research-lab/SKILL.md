@@ -449,6 +449,33 @@ Things that bit us before, with their fixes. **Read this on session start; appen
 - Fix: (a) launch order — start the derby, confirm `pgrep`=1, THEN start the watchdog; (b) hardened `scripts/derby_watchdog.sh` with a startup grace (`sleep ${WATCHDOG_STARTUP_GRACE:-20}` before the first check) so it can't race a fresh derby — important because every restart path (manual or cron) launches derby+watchdog together. Detection: after any launch, assert exactly one `delo_derby.py --board <board>` PID.
 - Lesson: any "launch process + launch its watchdog" pair needs the watchdog to grace-wait, or you get a duplicate the moment the watchdog wins the race. Always assert a single orchestrator after launch.
 
+### 2026-06-16 (overnight sliding-derby launch + the defense-teacher −458 crash — process, read late)
+
+**I built a PARALLEL apparatus instead of using the documented derby tooling (the load-bearing methodology miss).**
+- Symptom: stood up the "sliding derby" as `scripts/sliding_derby_runner.sh` + `scripts/sliding_gate.py` + a bespoke `sliding_derby_board.json`, and only READ `gomoku-derby-runner` / `gomoku-research-lab` / `research-loop.md` *after* it was running. The new stack re-implements pieces the skill already owns (`delo_derby.py`, `derby_vN_board.json`, `round_robin.py`, `derby_safe_resume.py`) and SKIPPED the skill's codepath-independent rituals: no **title card** per launch (research-lab: "every run starts with one"), no **receipts** to the 5 ops surfaces (only TRAINING_WIKI), and `--clean`+re-warm-start instead of the `derby_safe_resume.py` clobber-guard.
+- Root cause: built first, read the skill second. The sliding derby IS a genuinely different shape (single-lane *async frozen-reference ratchet* vs multi-lane Δelo-rate race), so a new codepath was partly justified — but "partly justified" was assumed, not checked, and the rituals are justified regardless of codepath.
+- Fix/Lesson: **when an established skill+tooling exists, READ IT FIRST, then default to EXTENDING it.** If a parallel apparatus is genuinely warranted, you owe three things: (1) state WHY in the design doc, (2) reuse the rituals that are codepath-independent — title card, receipts, SIGTERM clean-stop, the clobber-guard, and (3) REGISTER the new tooling in the skill ecosystem so the ground stays legible (the sliding derby still needs its own skill entry / a `gomoku-derby-runner` section documenting `sliding_derby_runner.sh`+`sliding_gate.py` as the single-lane variant, so the next session knows which to run). The harness is the ground under our feet; a parallel un-registered stack quietly erodes it.
+
+**Rediscovered a failure mode the skill already documents, because I read it late — and the budget was board-size-dependent.**
+- Symptom: launched the #36 defense-teacher cell; self-play produced ZERO games for ~6 min (4 workers pegged 100% CPU, `buf`/`games` flat).
+- Root cause: the per-move VCF defense solve at the 200k-node default starved generation on 15×15 — the EXACT thing `gomoku-derby-runner` §0 documents ("a per-move solver … generation STARVATION … no `--max-depth/-nodes` bound … bound the solve", from the 9×9 `derby-x-vct` zero-games episode). Had I read §0 before launching I'd have capped the solve and watched `buf` fill from the start.
+- Fix: capped the solve; isolated it with controls (no-teacher 2.6 s/game, uncapped-defense 0 games, capped-defense 3.1 s/game). The 9×9 cap (vct depth4/nodes800) did NOT transfer — 15×15's ~2.8× wider branching needs its own (vcf nodes 800/depth 7 here).
+- Lesson: **read the derby-runner "Infrastructure failure modes" + §0 BEFORE launching any new solver/teacher lane, and confirm `buf`/`games` is FILLING (not just that epoch-wall is flat) on the first peek.** Solver budgets are BOARD-SIZE-DEPENDENT — re-derive the cap per board; never carry a 9×9 budget to 15×15. (Janitor/gauge upgrade of "remember to check gen": the overnight heartbeat now emits a `gen=ok|STARVED:new=0` gauge every tick, so a starve surfaces the same cycle instead of hours later.)
+
+**Premature attribution — I hardened "VCT starved gen" into a commit + wiki before running the control.**
+- Symptom: first blamed `--vct-teacher` for the stall and wrote it into a commit message + TRAINING_WIKI; the defense-only config then stalled identically, so VCT was not the (sole) cause.
+- Fix: ran the cheap control (lever OFF → no-teacher genned fine; capped-defense genned fine) → isolated the cause to the uncapped *defense* VCF solve; corrected the commit/wiki same session.
+- Lesson: **attribute via a control before hardening a cause into the record** — a fresh instance of the L09i-fix lesson ("attribute the collapse to gen-vs-train BEFORE concluding"). For a new lever the control is trivial: turn it OFF and re-measure. Don't write the mechanism down until the control confirms it.
+
+**"Absorption phase" called on one datapoint, retracted on the next.**
+- Symptom: at lap 2 of the broken defense run (Δelo −199) I narrated "likely absorption-phase of a new lever" (citing the absorption-phase memory); at lap 3 (−458, accelerating) I had to retract — it was a monotonic crash.
+- Root cause: absorption (temporary, recovers) and degradation (monotonic) are indistinguishable at ONE post-onset datapoint; high-plies alone doesn't certify absorption.
+- Lesson: **distinguish absorption from degradation by the TREND across ≥2–3 gate datapoints, not one.** The absorption rule ("don't panic on the FIRST baseline-regression dip") still holds; a SECOND larger same-direction dip is degradation. State a one-datapoint read as a hypothesis, not a conclusion.
+
+**Clean-stop slip: `kill -9` on a trainer (before I'd read the skill).**
+- Symptom/Fix: `kill -9`'d the trainer once during a restart. The protocol is **SIGTERM** (lets the trainer self-save a resumable `latest.pt`) + reap orphaned `wandb-core`/`wandb-xpu` (else the next resume hits "run ID in use"). Adopted after reading; safe only because I was re-warm-starting from eval502 anyway.
+- Lesson: **never `kill -9` a trainer in steady state** — SIGTERM + wandb-reap is in `gomoku-derby-runner`'s swap procedure; follow it from the first stop, not the second.
+
 ### < add new friction-smoothing entries here as they appear >
 
 ## Self-improvement clause
