@@ -3895,3 +3895,17 @@ arm: teach the refutation, don't just crush value). Filed: #41 (escalation, reso
 (merged), #43/#44 (queued). General lesson banked: **a value-only "you're lost" teacher with no
 fire-rate bound saturates the value head and tears the policy apart — bound the fire-rate AND/OR
 teach the move, not just the value.** Broken-config evidence: `sweep_runs/_archive/sliding_derby_verdicts_BROKEN*`.
+
+---
+
+## 2026-06-16 — #37 death-spiral CONTROL (champion-continuation, no teacher): eval502 stable
+
+First cycle of the measured-outcome composite derby (`.claude/workflows/sliding-derby-composite.js`,
+the known-answer self-test) doubled as a clean **#37 control**: eval502 continued with **NO teacher**
+for 13 epochs (501→513, `G15-128x10-bigbuf`) stayed **STABLE** — vl 0.162→0.170, plies ~33-46 (mean 37),
+gate vs eval502 = AMBIGUOUS (win_rate 0.45, CI [0.307,0.602] straddles, Δelo −35±106), no gen-starvation,
+no NaN. So the champion does **NOT spontaneously degrade without a teacher** — directional support that
+the `--defense-teacher` CAUSED the #42 collapse (the value-head saturation), not training-instability-in-
+general. Caveat: SHORT window (13 epochs) — directional, not conclusive; a longer no-teacher control would
+firm it up. Board: `sweep_runs/composite_derby_board.jsonl`. This was ALSO the measured-outcome derby's
+first end-to-end self-test (it correctly scored this known-stable case `confirm`).
