@@ -146,9 +146,12 @@ def test_picker_falls_back_to_python3_when_no_venv(tmp_path):
 
 @pytest.mark.parametrize("array_key", ["SessionStart", "PreCompact"])
 def test_live_settings_wires_janitor_if_present(array_key):
-    """If the machine-local .claude/settings.json exists, it must be valid JSON
-    and must reference session_janitor.sh in BOTH hook arrays. Skipped when the
-    file is absent (it's gitignored and not present in CI/worktrees)."""
+    """Once the janitor has been ACTIVATED (the manual, gitignored
+    .claude/settings.json edit — #48's human step), it must be wired into BOTH
+    hook arrays. This test does NOT assert that activation has happened — merging
+    this branch lands only the wrapper, not the settings edit — so it SKIPS until
+    session_janitor.sh is referenced anywhere in settings, then enforces both-hook
+    correctness. Also skipped when the file is absent (gitignored; CI/worktrees)."""
     repo = os.path.realpath(os.path.join(SCRIPTS, ".."))
     settings_path = os.path.join(repo, ".claude", "settings.json")
     if not os.path.isfile(settings_path):
@@ -156,12 +159,23 @@ def test_live_settings_wires_janitor_if_present(array_key):
     with open(settings_path) as f:
         cfg = json.load(f)  # asserts valid JSON
     hooks = cfg.get("hooks", {})
-    arr = hooks.get(array_key, [])
+    all_commands = [
+        h.get("command", "")
+        for ak in ("SessionStart", "PreCompact")
+        for group in hooks.get(ak, [])
+        for h in group.get("hooks", [])
+    ]
+    if not any("session_janitor.sh" in c for c in all_commands):
+        pytest.skip(
+            "session_janitor.sh not yet wired into .claude/settings.json — "
+            "manual activation step pending (#48)"
+        )
+    # Activated somewhere → it must be in THIS hook array too (both required).
     commands = [
         h.get("command", "")
-        for group in arr
+        for group in hooks.get(array_key, [])
         for h in group.get("hooks", [])
     ]
     assert any("session_janitor.sh" in c for c in commands), (
-        f"session_janitor.sh not wired into {array_key}: {commands}"
+        f"session_janitor.sh is activated but not wired into {array_key}: {commands}"
     )
