@@ -24,6 +24,7 @@ gomoku-play = "gomoku.cli:main"
 gomoku-web = "web.server:main"
 gomoku-brain = "gomoku.gomocup_brain:main"
 gomoku-lab-train = "gomoku.lab.trainer:main"
+gomoku-lab-arena = "gomoku.lab.arena:main"
 gomoku-lab-status = "gomoku.lab.status:main"
 
 [build-system]
