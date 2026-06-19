@@ -196,6 +196,54 @@ moderate value — the expected signature is `white_loss ↓` AND `pl` bounded-o
 healthy (~0.10–0.16). **The gate is the Rapfi TC-tier calibration above**: re-run `eval_vs_rapfi.py
 --jobs 8` after a policy-stamp training slice and watch the white W-L-D column move off the floor.
 
+## §1B.2 → #43 (I2) LIVE RACE RAN, then KILLED (2026-06-19) — lever SOUND, but the 1.5M warm-buffer DILUTION is the binding constraint; gen cost (#60) + buffer freshness are the unlock
+
+The I2 policy-stamp lever was **run live** against the warm-started 128×10 champion
+(cell `G15-defense-i2`, warm-start `g15_128x10_bigbuf_eval502.pt`, board 15, 1.5M
+bit-packed buffer, wandb `zrjfwny2`). Resumed e585 → ran to **e1286**, then
+**deliberately killed** — not because it broke, but because it cannot produce a
+*readable* answer at this configuration's pace.
+
+**The lever is HEALTHY (the positive finding).** Over ~700 epochs the I2 signature
+held: `pl` plateaued **~1.19–1.22** (bounded — NOT the #36/#42 shared-trunk corruption
+that ran `pl→3.4`), `vl` clean **~0.13–0.14** (NOT the value-only `vl→0.06` saturation),
+`plies` stable ~30–47 (no fast-attack collapse). Stamping the saving move on the POLICY
+head and leaving value at the natural outcome does exactly what #43 designed: it injects
+hard defensive policy targets **without** poisoning the value head. **I2 is vindicated as
+a training mechanism** — the §1B.2 "why this should work where #36/#42 didn't" prediction
+held in production.
+
+**But the signal is un-readable — the 1.5M WARM BUFFER drowns the stamps.** Fresh stamped
+games accumulate at only ~**0.16–0.3 % of the buffer per hour** even at 16 generators
+(~**1,100 games/hr** sustained), and only the *forced-loss* plies inside those games get a
+saving-move stamp. The Rapfi white-column gate needs a non-trivial fraction of the buffer
+to carry the new lesson before it can leave the 0/12 floor — so "wait longer" was never
+going to resolve it. **Gen *rate* is not the lever; buffer *freshness* (stamp density vs
+the warm-start attacker-biased mass) is.** Killed at e1286 (clean SIGTERM; checkpoint +
+wandb preserved) rather than burn the GPU on an unreadable run.
+
+**Two levers built this session attack exactly this:**
+- **#69 (merged) — `run_sweep --n-workers N`**, a launch-time generator-count knob.
+  Generation is CPU-bound on the python VCF refutation (trainer is MPS-bound ~6 % CPU), so
+  generator count is the throughput knob. **16 generators ≈ the 18-core M5 ceiling**; a
+  10-min A/B *looked* like 16 beat 12 by ~25 %, but **sustained** rates were within noise
+  (~1,100 vs ~1,300 /hr) — a short/cold measurement window does not predict steady state
+  (the same trap as the LEAN-fp16 perf benchmark; cf. `TRAINING_WIKI.md` § LF1). Generator
+  count alone does not break the dilution.
+- **#60 — refute only the budget-kept plies.** The policy teacher was paying the expensive
+  `vcf_refutations` enumeration (~83 % of gen wall) on *every* firing ply, then
+  `--defense-max-fraction 0.25` discarded ~75 %. The fix detects fire-candidates cheaply
+  forward, then refutes **latest-ply-first only until the budget of stamps is filled** —
+  deterministic-equivalence-proven to yield the identical kept-stamp set, with a measured
+  **4× fewer refutation solves** (8 candidates → 2 at frac 0.25). Cuts the dominant gen
+  cost and should kill the 90–137 s/game dense-board tail.
+
+**Next frontier:** the I2 mechanism is sound — the open work is making its signal
+*readable*. Pair #60 (cheaper, denser stamps per gen-second) with a **buffer-freshness
+rethink** (smaller or recency-weighted buffer, or a higher stamp fraction, so the defensive
+lesson is not diluted into the champion's 1.5M attacker-biased mass) before the next live
+race. Gate unchanged: `eval_vs_rapfi.py --jobs 8`, watch the white W-L-D column leave 0/12.
+
 ---
 
 ## 0. What the code actually does today (ground truth, file:line)
