@@ -188,21 +188,35 @@ def configure_search_contempt(p: float | None = None) -> None:
 _DEFENSE_SOFT_VALUE = -1.0
 _DEFENSE_MAX_FRACTION = 1.0
 
+# Issue #43 (defense-teacher I2): when True, the defensive teacher stamps the
+# SAVING (refutation) move(s) on the POLICY head and LEAVES the value target
+# untouched, instead of the value-only -1.0 crush. The two modes share the same
+# --defense-teacher gate + danger pre-scan; this flag only switches WHICH target
+# is rewritten. Default False = the original value-only behavior (byte-identical).
+_DEFENSE_POLICY_MODE = False
+
 
 def configure_defense_teacher(soft_value: float | None = None,
-                              max_fraction: float | None = None) -> None:
-    """Set the process-wide defense-teacher gentleness knobs (issue #42). None
-    leaves a field at its current value. Call once before generation.
+                              max_fraction: float | None = None,
+                              policy_mode: bool | None = None) -> None:
+    """Set the process-wide defense-teacher knobs (issues #42, #43). None leaves a
+    field at its current value. Call once before generation.
 
     ``soft_value``  -> :data:`_DEFENSE_SOFT_VALUE` (default -1.0, the hard loss).
     ``max_fraction`` -> :data:`_DEFENSE_MAX_FRACTION` (default 1.0, unbounded).
-    The defaults reproduce the original hard / unbounded behavior byte-for-byte.
+    ``policy_mode``  -> :data:`_DEFENSE_POLICY_MODE` (default False, value-only).
+    The defaults reproduce the original hard / unbounded value-only behavior
+    byte-for-byte. ``policy_mode=True`` is the #43 saving-move-on-policy lever
+    (``soft_value`` is then unused — the value target is left at the natural
+    game outcome; ``max_fraction`` still bounds the per-game stamp count).
     """
-    global _DEFENSE_SOFT_VALUE, _DEFENSE_MAX_FRACTION
+    global _DEFENSE_SOFT_VALUE, _DEFENSE_MAX_FRACTION, _DEFENSE_POLICY_MODE
     if soft_value is not None:
         _DEFENSE_SOFT_VALUE = float(soft_value)
     if max_fraction is not None:
         _DEFENSE_MAX_FRACTION = float(max_fraction)
+    if policy_mode is not None:
+        _DEFENSE_POLICY_MODE = bool(policy_mode)
 
 
 def _defense_budget(n_positions: int) -> int:
@@ -247,6 +261,27 @@ def _relabel_defense_game(
     return dict(fired[len(fired) - budget:])
 
 
+def _relabel_defense_policy_game(
+    fired: list[tuple[int, np.ndarray]],
+    n_positions: int,
+) -> dict[int, np.ndarray]:
+    """#43 mirror of :func:`_relabel_defense_game` for the POLICY-stamp teacher.
+
+    ``fired`` is ``[(ply_idx, new_pi), ...]`` (ascending ply order) for every
+    position where the policy teacher proved a refutable forced loss and built a
+    saving-move policy target. Applies the same per-game FRACTION budget
+    (:func:`_defense_budget`), keeping the LATEST firing plies (closest to the
+    loss, where the defensive lesson is sharpest). With the default frac == 1.0
+    every fire is kept.
+    """
+    budget = _defense_budget(n_positions)
+    if budget >= len(fired):
+        return dict(fired)
+    if budget <= 0:
+        return {}
+    return dict(fired[len(fired) - budget:])
+
+
 def _apply_teachers_to_trajectory(
     traj: list[tuple[np.ndarray, np.ndarray, int]],
     outcome_for_black: float,
@@ -272,6 +307,7 @@ def _apply_teachers_to_trajectory(
     n = len(traj)
     out: list[tuple[np.ndarray, float]] = []
     defense_fires: list[tuple[int, float]] = []
+    defense_policy_fires: list[tuple[int, np.ndarray]] = []
     for ply_idx, (planes, pi, side) in enumerate(traj):
         z = outcome_for_black if side == 0 else -outcome_for_black
         z = _discount_z(z, n - 1 - ply_idx)
@@ -285,16 +321,31 @@ def _apply_teachers_to_trajectory(
             pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                   profile=profile)
         if defense_teacher:
-            d_z, fired = _apply_defense_teacher(
-                planes, z, vcf_already_fired=vcf_fired, profile=profile)
-            if fired:
-                defense_fires.append((ply_idx, d_z))
+            if _DEFENSE_POLICY_MODE:
+                # #43: stamp the SAVING move on the policy head, value untouched.
+                new_pi, _z, fired = _apply_defense_teacher_policy(
+                    planes, pi, z, vcf_already_fired=vcf_fired, profile=profile)
+                if fired:
+                    defense_policy_fires.append((ply_idx, new_pi))
+            else:
+                d_z, fired = _apply_defense_teacher(
+                    planes, z, vcf_already_fired=vcf_fired, profile=profile)
+                if fired:
+                    defense_fires.append((ply_idx, d_z))
         out.append((pi, z))
     if defense_fires:
         kept = _relabel_defense_game(defense_fires, n)
         for ply_idx, d_z in kept.items():
             pi, _ = out[ply_idx]
             out[ply_idx] = (pi, d_z)
+    if defense_policy_fires:
+        # Same per-game FRACTION budget as the value teacher (latest firing plies
+        # first), but the kept positions get their POLICY rewritten; z is left as
+        # the natural discounted outcome (the #43 pure-policy lever).
+        kept_pi = _relabel_defense_policy_game(defense_policy_fires, n)
+        for ply_idx, new_pi in kept_pi.items():
+            _, z = out[ply_idx]
+            out[ply_idx] = (new_pi, z)
     return out
 
 
@@ -502,6 +553,80 @@ def _apply_defense_teacher(
     # of the un-swapped position, so a proven OPPONENT win maps directly to it.
     _profile_add(profile, "defense_fired", 1.0)
     return _DEFENSE_SOFT_VALUE, True
+
+
+def _apply_defense_teacher_policy(
+    planes: np.ndarray,
+    pi: np.ndarray,
+    z: float,
+    *,
+    vcf_already_fired: bool,
+    profile: ProfileStats | None = None,
+    max_depth: int | None = None,
+    max_nodes: int | None = None,
+) -> tuple[np.ndarray, float, bool]:
+    """Opt-in EXACT *defensive* teacher (POLICY mode, issue #43): the I2 arm of
+    #18's defense decomposition. Where :func:`_apply_defense_teacher` only crushes
+    the VALUE to -1.0 ("you already lost" — a signal the net cannot act on, and
+    which on a shared trunk contradicts the still-attacking policy, #41), this
+    teaches the REFUTATION on the POLICY head and leaves the value at its natural
+    discounted outcome.
+
+    Detection is identical to the value teacher: swap planes so the OPPONENT is
+    the attacker and confirm a proven forced VCF win against the side-to-move. The
+    NEW step: because the side-to-move actually moves FIRST (one tempo before the
+    attacker), enumerate the defender moves that BREAK that forced win
+    (:func:`vcf.vcf_refutations`). If one or more SAVING moves exist, stamp a soft
+    (uniform) policy target over them; the value is left untouched.
+
+    Returns ``(new_pi, new_z, fired)``. ``fired`` is True only when (a) the
+    opponent has a proven forced VCF win AND (b) at least one refutation exists —
+    a TRULY lost position (no saving move) returns ``(pi, z, False)`` and is left
+    entirely untouched, keeping this a PURE policy lever (no value crushing). The
+    same two gen-cost gates as the value teacher apply: skip when the offensive
+    VCF teacher already fired, and a cheap opponent-four-threat pre-scan before the
+    solve. Only ever called when ``--defense-teacher`` is set with policy mode on.
+    """
+    if vcf_already_fired:
+        return pi, z, False
+    if max_depth is None:
+        max_depth = _VCF_MAX_DEPTH
+    if max_nodes is None:
+        max_nodes = _VCF_MAX_NODES
+
+    planes = np.asarray(planes)
+    opp = planes[HISTORY_PLY].astype(bool)
+    me = planes[0].astype(bool)
+    swapped_board = np.stack([opp, me], axis=0)
+
+    _profile_add(profile, "defense_calls", 1.0)
+    with _profile_timer(profile, "defense_prescan_s"):
+        danger = vcf.has_four_threat(swapped_board)
+    if not danger:
+        return pi, z, False
+
+    with _profile_timer(profile, "defense_solve_s"):
+        res = vcf.solve_vcf(swapped_board, max_depth=max_depth, max_nodes=max_nodes)
+    _profile_add(profile, "defense_solves", 1.0)
+    if not res.has_forced_win:
+        return pi, z, False
+
+    # The opponent has a proven forced win — but we move first, so look for the
+    # saving move(s) that refute it. No refutation => genuinely lost; leave the
+    # record untouched (pure policy lever: never crush value here).
+    with _profile_timer(profile, "defense_refute_s"):
+        saving = vcf.vcf_refutations(
+            swapped_board, max_depth=max_depth, max_nodes=max_nodes)
+    if not saving:
+        return pi, z, False
+
+    new_pi = np.zeros_like(pi)
+    weight = 1.0 / len(saving)
+    for mv in saving:
+        new_pi[mv] = weight
+    _profile_add(profile, "defense_fired", 1.0)
+    _profile_add(profile, "defense_policy_fired", 1.0)
+    return new_pi, z, True
 
 
 def _profile_add(profile: ProfileStats | None, key: str, value: float) -> None:

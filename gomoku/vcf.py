@@ -239,6 +239,59 @@ def solve_vcf(
                      hit_cap=counter["hit_cap"])
 
 
+def vcf_refutations(
+    board: np.ndarray,
+    *,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_nodes: int = DEFAULT_MAX_NODES,
+    max_candidates: int | None = None,
+) -> list[int]:
+    """Defender refutation moves that BREAK a forced VCF win (issue #43).
+
+    ``board`` is a ``(2, N, N)`` position where plane 0 (attacker) has a proven
+    forced VCF win *as the side to move* but, in the real game, plane 1 (the
+    DEFENDER) moves FIRST — one tempo before the attacker. Return the sorted flat
+    indices of defender moves ``d`` such that, after the defender plays ``d``, the
+    attacker (now to move) NO LONGER has a proven forced VCF win. An empty list
+    means no refutation exists within budget (the position is genuinely lost).
+
+    This is the "saving move" the defensive teacher stamps on the policy head: it
+    is the generalizable lesson ("here is the move that refuses the forced four")
+    rather than the value-only "you already lost" signal.
+
+    SOUNDNESS: a refutation is only reported when an explicit re-solve proves the
+    attacker has *no* forced VCF after the defender's move — so a reported move is
+    a real escape from the detected VCF (no false saving moves). Candidate moves
+    are restricted to the near-stone set (a four/block can only be made adjacent
+    to existing stones), which cannot miss a real refutation (an isolated stone
+    neither blocks a four nor makes one). Each candidate costs one full
+    :func:`solve_vcf`; firing is rare and gen-cost-gated upstream, but
+    ``max_candidates`` (None = all) bounds the worst case. Never mutates ``board``.
+    """
+    board = np.ascontiguousarray(board, dtype=bool)
+    attacker = board[0].copy()
+    defender = board[1].copy()
+    empty_plane = ~(attacker | defender)
+    empty_idx = _empties_from_plane(empty_plane)
+    if len(empty_idx) == 0:
+        return []
+    candidates = _candidate_cells_from_planes(attacker, defender, empty_idx)
+    if max_candidates is not None and len(candidates) > max_candidates:
+        candidates = candidates[:max_candidates]
+    saving: list[int] = []
+    for d in candidates:
+        dr, dc = int(d) // BOARD_SIZE, int(d) % BOARD_SIZE
+        defender[dr, dc] = True
+        try:
+            test = np.stack([attacker, defender], axis=0)
+            res = solve_vcf(test, max_depth=max_depth, max_nodes=max_nodes)
+        finally:
+            defender[dr, dc] = False
+        if not res.has_forced_win:
+            saving.append(int(d))
+    return sorted(saving)
+
+
 def _attack(
     attacker: np.ndarray,
     defender: np.ndarray,
