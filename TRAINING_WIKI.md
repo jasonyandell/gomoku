@@ -3934,3 +3934,31 @@ makes it diagnostic. Gate artifacts: `/tmp/wd_champ.json`, `/tmp/wd_weak.json`. 
 champion losses concentrate in the `_four` (strong-threat) provenance — where residual
 difficulty lives. See [white-side-defense-plan.md](wiki/topics/white-side-defense-plan.md)
 §1B.2 results block.
+
+## 2026-06-18 — FIRST contact vs REAL Rapfi-NNUE: champion 21% @ 5s, and white-defense gap is the WHOLE story (0/12 white)
+
+First-ever measurement of our champion against the **real native Rapfi-NNUE** engine —
+the #28 "weightless / under-search" yardstick bug is fixed (NNUE config loads, searches to
+budget; see wiki/topics/external-engine-baselines.md), and Rapfi is now a registered
+`_NATIVE_ENGINES` panel participant (#40, no wine). Run via the #30 panel harness:
+`scripts/panel_tournament.py --only az-champ-128x10,rapfi --n-games 24 --sims 400
+--timeout-ms 5000 --seed 7` (GOMOKU_BOARD_SIZE=15, GOMOKU_DEVICE=mps, 4-stone random
+openings, color-alternated). Out: `sweep_logs/panel_champ_vs_rapfi_5s_n24_20260618.jsonl`.
+Champion = `sweep_runs/g15_128x10_bigbuf_eval502.pt` (the frozen sliding-derby reference).
+
+**Result: 5W-19L-0D = 20.8%** (relative Elo gap ≈ -232). Color split is the finding:
+- **black (attacking): 5-7-0 = 42%** — competitive with the #1 Gomocup engine.
+- **white (defending): 0-12-0 = 0%** — swept.
+
+ALL of the strength shortfall is the **white-side defense gap** (#33/#37/#18). This is the
+strong-attacker diagnostic that #45 v1 lacked (#45 v1 sat at the champion's floor vs a weak
+attacker, 77/80; real Rapfi as a strong attacker exposes the gap completely, 0/12). It is
+the most direct evidence yet for the **#37 hypothesis** (white-side defense weakness drives
+degeneration) and a far sharper probe than self-play. **Caveat (do not over-read the 21%):**
+NOT compute-matched — Rapfi got 5s/move single-thread, our net ~0.3-0.5s @ sims=400; and
+this is freestyle (first-player-favored) with only 4-stone random openings, n=24 (white
+0/12 is conclusive for the gap; the overall rate has a wide CI). Absolute Gomocup-Elo
+calibration still pending (effective single-thread Rapfi strength under our harness must be
+measured, not assumed = published ~2625; #35/#30). Next probes: compute-matched rematch
+(net sims → ~1-2s/move), a TC sweep, and using Rapfi-as-attacker to drive the #43/#44/#49
+white-defense interventions.
