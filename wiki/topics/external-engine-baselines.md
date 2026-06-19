@@ -9,6 +9,54 @@ broader Gomoku engine ecosystem.
 
 Source trail: [../sources/gomocup-external-engines-2026-05-22.md](../sources/gomocup-external-engines-2026-05-22.md).
 
+## Status: Rapfi-NNUE NATIVE ANCHOR ONLINE — #28 under-search RESOLVED (2026-06-18)
+
+The native (non-wine) Rapfi-NNUE engine is now a **default reliable anchor** in
+the panel — wine stays off (#35). This closes the #28 "broken yardstick" wound
+and delivers #40.
+
+- **The #28 under-search was the WEIGHTLESS build, not Rapfi.** #28 found Rapfi
+  "stops at ~depth 10 / ~500 nodes, ignores its time budget" → the fast/deep TC
+  tiers measured the *same shallow engine*. Root cause: that was the internal
+  classical config (no `--config`). **With the mix9svq NNUE config it searches to
+  its full budget** — verified live: a 5s move reached **Depth 32, 2.0M nodes,
+  4105ms of a 4970ms budget**, found a forced mate (+M25), **single-threaded**
+  (`default_thread_num = 1`, Gomocup-legal), ~487K nps. Time-control tiers are
+  now REAL.
+- **NNUE loads natively, no wine:** `mix9svq nnue: weight loaded in 15ms` from
+  `engines/rapfi/config.toml` (the committed NNUE config). Pure arm64 Mach-O.
+- **Weights = Rapfi's `Networks` submodule**, byte-identical (sha256-verified):
+  `mix9svq/{freestyle_bsmix,standard_bs15,renju_bs15_black,renju_bs15_white}.bin.lz4`
+  + `classical/model210901.bin`. `build_rapfi.sh` now inits the submodule and
+  copies them next to the binary. Weights (~50MB `.lz4`) are **gitignored** like
+  the binary; **`config.toml` IS committed** (it defines the anchor).
+- **Wrapper:** `scripts/run-rapfi` (tracked) → installed to
+  `~/.cache/gomocup/bin/run-rapfi`; `exec pbrain-rapfi --config <abs config> gomocup`.
+  Rapfi resolves weights relative to the **config-file dir**, so the absolute
+  `--config` path is cwd-independent. The wrapper hard-errors (exit 9) if the
+  binary or config is missing (so a weightless run can't silently masquerade as
+  the anchor).
+- **Registered:** `scripts/panel_tournament.py::_NATIVE_ENGINES`
+  `= [("rapfi", …/run-rapfi)]` — joins the default field with NO wine opt-in.
+- **Coord orientation verified UNMIRRORED:** the staged config uses
+  `coord_conversion_mode = "X_flipY"` (stock Piskvork default is `none`), but the
+  flip round-trips symmetrically on read+write, so the external frame is
+  preserved — confirmed on a forced-block tactic (opponent four, one end blocked
+  → Rapfi plays the unique saving block at the correct cell `8,4`, not its
+  mirror). Guarded by `tests/test_rapfi_native.py` (skips when the artifact is
+  absent).
+- **Driven through our own client:** `gomoku/external_engine.py` (`START`/`INFO
+  timeout_turn`/`RESTART`+`BOARD`) drives it unchanged; Rapfi honors
+  `timeout_turn` (used 4105ms of 5000ms). End-to-end smoke returns a legal move.
+
+Still open (do not over-claim the absolute number yet): balanced openings
+(swap2, #22) — freestyle is a first-player win, so half of "wins" are the
+black-side forced win; and the *effective* single-thread strength under our
+exact harness must be MEASURED, not assumed equal to the published ~2625
+(multi-thread, tournament-condition) rating (#35). Rapfi is now a TRUSTWORTHY
+RELATIVE anchor past the ~1700 ladder ceiling; absolute calibration is the next
+step. Refs #40, #28, #35.
+
 ## Status: Rapfi BUILT + RUNS + accepts START 9 (2026-05-24)
 
 PRACTICALITY VERDICT: **YES**. Rapfi builds and runs as a 9x9 freestyle

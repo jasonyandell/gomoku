@@ -3,6 +3,22 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-18] topics | external-engine-baselines + reliable-eval-set + gomocup-engines-catalog — native Rapfi-NNUE anchor ONLINE (#40, resolves #28 under-search)
+
+Brought the first hard EXTERNAL eval online natively (no wine, per Jason's nix
+directive). Native arm64 **Rapfi-NNUE** is now a default reliable anchor in
+`panel_tournament.py::_NATIVE_ENGINES`. Key finding: the #28 "Rapfi ignores its
+time budget / illusory TC tiers" wound was the **weightless classical build**
+(no `--config`); with the committed `engines/rapfi/config.toml` + mix9svq NNUE
+weights it searches to its full budget (verified: depth 32 / 2.0M nodes / 4105ms
+of a 4970ms budget / forced mate), single-threaded (Gomocup-legal). Added
+`scripts/run-rapfi` wrapper (hard-errors if binary/config missing), extended
+`build_rapfi.sh` to fetch the `Networks` submodule weights (sha256-verified
+byte-identical; weights gitignored, config committed), and `tests/test_rapfi_native.py`
+(skips when artifact absent; pins handshake + unmirrored coords via a forced-block
+tactic). Still open before trusting an ABSOLUTE number: balanced openings (#22) +
+measuring effective single-thread strength under our harness (#35).
+
 ## [2026-06-16] topics | workflow-orchestration § Resilience — workflows degrade, don't crash (#50)
 
 Added a Resilience section to

@@ -48,6 +48,8 @@ app/dist/
 # the binary is reproducible via engines/rapfi/build_rapfi.sh.
 .rapfi-build/
 engines/rapfi/pbrain-rapfi
+engines/rapfi/*.bin.lz4
+engines/rapfi/model210901.bin
 
 # Beads / Dolt files (added by bd init)
 .dolt/

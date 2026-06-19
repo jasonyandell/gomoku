@@ -124,7 +124,14 @@ _WINE_ENGINES = [
 # native binary + wrapper is brought online; populating this list does NOT
 # require the wine opt-in. Entries are (label, run-wrapper-path), same grammar
 # as the wine catalog.
-_NATIVE_ENGINES: list[tuple[str, str]] = []
+_NATIVE_ENGINES: list[tuple[str, str]] = [
+    # Native arm64 Rapfi-NNUE (issues #40/#28/#35) — the real strength anchor.
+    # The `run-rapfi` wrapper passes `--config engines/rapfi/config.toml`, which
+    # loads the mix9svq NNUE weights and makes Rapfi actually search to its time
+    # budget (the weightless default was the #28 "depth-10 / illusory-TC" bug).
+    # Single-threaded (Gomocup-legal). No wine opt-in needed.
+    ("rapfi", f"{_GOMOCUP_BIN}/run-rapfi"),
+]
 
 
 def wine_engines_enabled(cli_wine: bool = False) -> bool:
