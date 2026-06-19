@@ -137,6 +137,30 @@ defense weakness is the engine of degeneration), and a far sharper probe than se
   favored; n=24 (white 0/12 is conclusive for the gap, the overall rate has a wide CI).
   Absolute Gomocup-Elo calibration still pending (#35/#30).
 
+**TC-tier calibration (2026-06-18, same day) — a CLIFF then a white-defense PLATEAU.**
+Ran the champion across Rapfi thinking-time tiers via the new parallel `--jobs` path (#52,
+8 workers / 18-core M5, 200 games in 7.6 min; `eval_vs_rapfi.py --jobs 8`, n=40/tier,
+4-stone openings). Evidence + table: `TRAINING_WIKI.md` 2026-06-18, out
+`sweep_logs/calib_champ_vs_rapfi_tctiers_20260618.jsonl`.
+
+| Rapfi TC | win% | white W-L-D | black W-L-D |
+|---|---|---|---|
+| 10ms | 100% | 20-0-0 | 20-0-0 |
+| 100ms | 27.5% | **0-20-0** | 11-9-0 |
+| 250ms | 37.5% | 2-18-0 | 13-7-0 |
+| 500ms | 27.5% | 2-18-0 | 9-11-0 |
+| 1000ms | 27.5% | 3-17-0 | 8-12-0 |
+
+Two readings: (1) **cliff not ramp** — 10ms is below Rapfi's useful search threshold (no time
+→ raw NNUE move, swept 40-0); from 100ms the result PLATEAUS ~27% (250ms 37.5% is n=40 noise),
+so 10× more Rapfi time barely moves it — it already exploits the one hole at 100ms. (2) **the
+plateau is a white plateau** — black stays competitive at every real tier (40-65%, declining as
+Rapfi deepens), white is pinned at the floor (0-15%, nowhere to fall). **The champion's entire
+deficit vs the #1 engine is white-side defense, now confirmed across 5 independent measurements**
+(the n=24 first-contact + these 4 real tiers = 160 games). This is the strongest mandate yet for
+**#43**; real Rapfi is the before/after gate — re-run this exact calibration after the policy-stamp
+and watch the white column move.
+
 ---
 
 ## 0. What the code actually does today (ground truth, file:line)

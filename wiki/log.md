@@ -3,6 +3,16 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-18] white-side-defense-plan + reliable-eval-set — SYNTHESIZE the TC-tier calibration + the parallel --jobs eval (#52)
+
+Promoted the champion-vs-Rapfi TC-tier calibration (TRAINING_WIKI evidence) into synthesis.
+`white-side-defense-plan.md` §1B.2: added the tier table + the two readings — **cliff** (10ms
+below Rapfi's search threshold, swept 40-0) then a **white-defense plateau** (~27% flat from
+100ms-1s; black competitive 40-65%, white pinned 0-15%). The deficit vs the #1 engine is 100%
+white-side, now 5× confirmed → strongest mandate for #43 (Rapfi = the before/after gate).
+`reliable-eval-set.md`: documented the parallel `--jobs` eval path (#52, spawn-pool, pass the
+run-rapfi WRAPPER so NNUE loads; 200 games in 7.6 min).
+
 ## [2026-06-18] index + white-side-defense-plan + external-engine-baselines — SYNTHESIZE first real-Rapfi result; de-stale the "broken yardstick" reckoning
 
 The first champion-vs-real-Rapfi result (eval502 20.8% @5s, n=24; **black 42% / white

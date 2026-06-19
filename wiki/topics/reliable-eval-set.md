@@ -53,6 +53,14 @@ details: [external-engine-baselines.md](external-engine-baselines.md) §
 *Rapfi-NNUE NATIVE ANCHOR ONLINE*. Absolute calibration (effective single-thread
 strength under our harness + balanced openings) is still pending (#35/#22).
 
+**Parallel eval (#52):** `scripts/eval_vs_rapfi.py --jobs J` saturates the M5 Max —
+a spawn-pool of J workers (each loads the model once + its own single-thread
+Rapfi), shards color-balanced pairs, aggregates per tier incl. the black/white
+split. Pass the `run-rapfi` WRAPPER as `--rapfi` (not the bare binary) so NNUE
+loads. Rapfi is single-thread, so concurrency = many games at once; 200 games /
+5 tiers ran in 7.6 min on 8 workers. First use = the champion TC-tier calibration
+([white-side-defense-plan.md](white-side-defense-plan.md) §1B.2, 2026-06-18).
+
 ## What's enforced in code
 
 - `scripts/panel_tournament.py`
