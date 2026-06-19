@@ -111,15 +111,39 @@ class ArenaRole:
 
     # ---- model + champion resolution ------------------------------------
 
+    @staticmethod
+    def _parse_hf_ref(ref: str | None) -> tuple[str, str | None] | None:
+        """Parse an HF artifact ref into ``(repo_id, revision)``, else ``None``.
+
+        Accepts BOTH the explicit ``hf://owner/repo@rev`` form and the BARE
+        ``owner/repo@rev`` form that the trainer actually emits (``_deliver`` ->
+        ``hf.push_slice`` -> ``f"{repo_id}@{revision}"``, no scheme). ``local://``
+        and existing local filesystem paths are not HF. This tolerance is what
+        lets the arena resolve the trainer's per-slice artifact (issue #67).
+        """
+        if not ref:
+            return None
+        if ref.startswith("local://"):
+            return None
+        if ref.startswith("hf://"):
+            ref = ref[len("hf://"):]
+        elif Path(ref).exists():
+            return None  # a real local checkpoint path
+        # bare "owner/repo@rev" (or a de-schemed hf://): org-qualified repo id
+        repo, sep, rev = ref.partition("@")
+        if "/" in repo:
+            return repo, (rev if sep and rev else None)
+        return None
+
     def _resolve_model(self, ref: str | None) -> str | None:
         if not ref:
             return None
         if ref.startswith("local://"):
             return ref[len("local://"):]
-        if ref.startswith("hf://"):
-            repo, _, rev = ref[len("hf://"):].partition("@")
+        parsed = self._parse_hf_ref(ref)
+        if parsed:
             from huggingface_hub import hf_hub_download
-            return hf_hub_download(repo, "model.pt", revision=rev or None)
+            return hf_hub_download(parsed[0], "model.pt", revision=parsed[1])
         return ref
 
     def _default_resolve_champion(self):
@@ -135,8 +159,9 @@ class ArenaRole:
         """Move the `champion` tag to the candidate's revision (or push+tag a local)."""
         from huggingface_hub import HfApi
         api = HfApi()
-        if cand_ref and cand_ref.startswith("hf://"):
-            repo, _, rev = cand_ref[len("hf://"):].partition("@")
+        parsed = self._parse_hf_ref(cand_ref)
+        if parsed:
+            repo, rev = parsed
             try:
                 api.delete_tag(repo, tag=CHAMPION_TAG, repo_type="model")
             except Exception:
