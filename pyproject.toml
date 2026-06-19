@@ -26,6 +26,8 @@ gomoku-brain = "gomoku.gomocup_brain:main"
 gomoku-lab-train = "gomoku.lab.trainer:main"
 gomoku-lab-arena = "gomoku.lab.arena:main"
 gomoku-lab-status = "gomoku.lab.status:main"
+gomoku-lab = "gomoku.lab.up:main"
+gomoku-lab-research = "gomoku.lab.research:main"
 
 [build-system]
 requires = ["setuptools>=69", "wheel", "numpy>=2.0"]

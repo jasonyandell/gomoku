@@ -182,6 +182,13 @@ re-dumps crater the history-conditioned net to ~25% OOD) is a follow-up on top o
 the H2H gate. The live gate proof (candidate vs a real champion) is deferred until
 the box is free + a real model exists.
 
+> **Operating contract (P5–P7, shipped in [#64]).** This page is the *design*;
+> the *running* unattended-overnight contract — the four launchd jobs, the seed
+> row, the monitor digest, and the research-lite priority invariant, all with
+> absolute paths and literal config — lives in
+> [autolab-supervisor-and-monitor.md](autolab-supervisor-and-monitor.md). Read
+> that page to bring the lab up / down and read the morning digest.
+
 ## Research + worker lanes (the agent loops)
 
 - **Research** — not a daemon; a Claude workflow on a long `ScheduleWakeup`/cron.
@@ -244,10 +251,11 @@ Each loop ships three instruments before it runs unattended:
 |---|---|---|---|
 | **P1** spine | #54 | ledger reducer + corrections + priority pick + tests | **DONE** |
 | **P2** daemon | #56 | flock singleton (no-claim re-pick) + `run_daemon` + `autolab status` | **DONE** |
-| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **DONE** (proven live) |
+| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **CODE DONE** (ran once attended on 2026-06-19; artifacts since cleaned — `~/data/autolab` empty, HF mvp revisions gone — see [#58]) |
 | **P4** arena | #59 | `ArenaRole`: `run_gate` (dry_run) vs the HF champion + `eval`/`verdict` rows + champion-tag bump + co-tenancy guard | **DONE** (live gate proof deferred — needs real models) |
-| P5 research | (file) | ideate→append→wait loop + the wall-clock-to-elo gate (`delta_e_harness` 5-gap list) | next |
-| P6 cockpit | (file) | status into `gh_prime.sh` + escalation + retire the fragmented queue surfaces | |
+| **P5** research-lite | #61 (partial) | deterministic `gomoku/lab/research.py` ideate→append-≤2-rows-below-seed→note loop (proxy-ranked; anchored gate still unbuilt) | **SHIPPED in [#64]** (pending live launch) |
+| **P6** cockpit / monitor | #64 | `scripts/autolab_monitor.py` digest + `gomoku/lab/status.py` lane board + notify-on-change | **SHIPPED in [#64]** (pending live launch) |
+| **P7** supervisor | #64 | `gomoku/lab/up.py` (up/down/status/restart) + four launchd plists + ledger seed | **SHIPPED in [#64]** (pending live launch) |
 
 ## Contradictions & risks (the honest tensions)
 

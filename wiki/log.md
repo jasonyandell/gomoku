@@ -3,6 +3,27 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-19] autolab P5–P7 operating contract — new page: supervisor + monitor + research-lite (unattended overnight)
+
+New canonical page [topics/autolab-supervisor-and-monitor.md](topics/autolab-supervisor-and-monitor.md):
+the contract that turns the tested autolab library into a running overnight lab.
+Synthesizes four P-reports into one buildable spec — (a) `~/data/autolab/` home
+layout with the monitor↔research path-ownership rule (research owns `research/`,
+monitor owns `monitor/`); (b) the process tree + literal launchd plist XML for
+**four** jobs — `train`/`arena` (`KeepAlive{SuccessfulExit:false}`, run the
+daemons directly; the flock singleton + ledger re-pick is the whole recovery
+story, no parent respawn) and `monitor`/`research` (`StartInterval` 600/1800) —
+with the full env table (`HOME` for HF token, `PATH` for homebrew git,
+`WANDB_MODE=offline`); (c) the one-row seed — **base=scratch, cell=derby-v9-small
+(fresh 9×9 v8-champion recipe), max_wall_secs=3600**, p10 seed band, ~6–7 slices
+by morning, with the `GOMOKU_BOARD_SIZE`-only-9×9 rationale; (d) the monitor
+digest spec (latest.md template + notify-on-change + empty-state degradation);
+(e) the research-lite deterministic tick + the `priority < P_seed` starvation
+guard; (f) the `autolab up`/`down` runbook incl. the attended `--no-hf`→real-push
+PROD-slice proof to run BEFORE unattended launch; + a ranked risk list. Index
+gets a doorway row under the autolab/ops route. Did NOT touch
+`autolab-architecture.md` (the build step de-stales it).
+
 ## [2026-06-19] autolab P4 arena built (#59) — architecture page: arena section + phases
 
 `gomoku/lab/arena.py` `ArenaRole` shipped: gates a candidate vs the HF `champion`
