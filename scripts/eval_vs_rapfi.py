@@ -238,6 +238,162 @@ def run_rapfi_eval(
     return records
 
 
+# ---------------------------------------------------------------------------
+# Parallel (--jobs) path (issue #52): saturate the M5 Max. Rapfi is single-thread,
+# so concurrency comes from running many games at once. A persistent spawn-pool
+# of `jobs` workers each loads the model ONCE on its own device (MPS is shared
+# safely across processes) + builds its own Rapfi subprocess per task, and plays
+# a SHARD of color-balanced pairs. We shard at the PAIR level so every shard is
+# self-color-balanced; distinct per-shard seeds give independent openings.
+# EVAL-ONLY — never touches training. Spawn (macOS default) is required: fork +
+# MPS/torch is unsafe.
+# ---------------------------------------------------------------------------
+_WORKER: dict = {}  # per-process state, populated by _worker_init
+
+
+def _shard_pairs(total_pairs: int, jobs: int) -> list[int]:
+    """Split ``total_pairs`` color-balanced pairs across up to ``jobs`` shards as
+    evenly as possible. Returns the pair-count per shard (no zero shards). Pure +
+    unit-testable: by construction ``sum(_shard_pairs(p, j)) == p`` for p>=1."""
+    shards = max(1, min(jobs, total_pairs))
+    base, rem = divmod(total_pairs, shards)
+    return [base + (1 if s < rem else 0) for s in range(shards)]
+
+
+def _worker_init(checkpoint, sims, c_puct, fpu_reduction_c, reuse_tree, proven_prop):
+    """Load the model + build the eval picker ONCE per worker process."""
+    import os as _os
+
+    from gomoku.eval import mcts_picker
+    from gomoku.mcts import make_torch_evaluator
+    from gomoku.model import fuse_model_for_inference, load_checkpoint
+    from gomoku.util import pick_device
+
+    device = pick_device(_os.environ.get("GOMOKU_DEVICE"))
+    model, _ = load_checkpoint(checkpoint, device=device)
+    model = fuse_model_for_inference(model)
+    evaluator = make_torch_evaluator(model, device)
+    _WORKER["picker"] = mcts_picker(
+        evaluator, n_simulations=sims, c_puct=c_puct,
+        fpu_reduction_c=fpu_reduction_c, reuse_tree=reuse_tree,
+        proven_prop=proven_prop,
+    )
+
+
+def _worker_play(task: dict) -> dict:
+    """Play one shard (a slice of color-balanced pairs) at one timeout tier."""
+    from gomoku.eval import play_match_pickers
+    from gomoku.external_engine import ExternalEngineConfig, ExternalEnginePlayer
+
+    engine = ExternalEnginePlayer(
+        ExternalEngineConfig(
+            cmd=task["rapfi_abs"], timeout_ms=task["timeout_ms"],
+            label=f"rapfi{task['timeout_ms']}", rule=task["rule"],
+            board_size=task["size"],
+        )
+    )
+    try:
+        res = play_match_pickers(
+            _WORKER["picker"], engine, n_games=task["n_games"],
+            seed=task["seed"], random_opening_moves=task["random_opening_moves"],
+        )
+    finally:
+        engine.close()
+    return {
+        "timeout_ms": task["timeout_ms"], "n_games": res.n_games,
+        "wins": res.wins, "losses": res.losses, "draws": res.draws,
+        "black": [res.black_w, res.black_l, res.black_d],
+        "white": [res.white_w, res.white_l, res.white_d],
+    }
+
+
+def run_rapfi_eval_parallel(
+    *, checkpoint, rapfi, timeouts, sims=100, c_puct=1.5, n_games=20, seed=0,
+    rule=0, size=9, fpu_reduction_c=0.0, reuse_tree=False, proven_prop=False,
+    random_opening_moves=0, jobs=4, out=None, extra_fields=None,
+    print_progress=True,
+) -> list[dict]:
+    """Parallel sibling of ``run_rapfi_eval``: same JSONL schema, sharded across
+    ``jobs`` worker processes. ``n_games`` must be even (pair color-balance)."""
+    import multiprocessing as mp
+
+    from gomoku.board_config import BOARD_SIZE
+    from gomoku.external_engine import WRAPPER_VERSION
+
+    if int(size) != int(BOARD_SIZE):
+        raise SystemExit(
+            f"--size {size} conflicts with active board size {BOARD_SIZE} "
+            f"(set GOMOKU_BOARD_SIZE={size} and start a new process)."
+        )
+    if n_games % 2 != 0:
+        raise SystemExit("--n-games must be even for color balance under --jobs.")
+    rapfi_abs = os.path.abspath(rapfi)
+    if not os.path.exists(rapfi_abs):
+        raise SystemExit(f"rapfi binary not found: {rapfi_abs}")
+
+    total_pairs = n_games // 2
+    # Build the task list: shard each tier's pairs across up to `jobs` shards.
+    tasks: list[dict] = []
+    for ti, t in enumerate(timeouts):
+        for s, sp in enumerate(_shard_pairs(total_pairs, jobs)):
+            if sp == 0:
+                continue
+            tasks.append({
+                "timeout_ms": t, "rapfi_abs": rapfi_abs, "rule": rule, "size": size,
+                "n_games": 2 * sp,
+                "seed": seed + ti * 100003 + s * 101,  # distinct independent openings
+                "random_opening_moves": random_opening_moves,
+            })
+
+    ctx = mp.get_context("spawn")
+    init_args = (checkpoint, sims, c_puct, fpu_reduction_c, reuse_tree, proven_prop)
+    agg: dict = {}
+    t0 = time.time()
+    with ctx.Pool(processes=jobs, initializer=_worker_init, initargs=init_args) as pool:
+        for r in pool.imap_unordered(_worker_play, tasks):
+            a = agg.setdefault(r["timeout_ms"], {
+                "n_games": 0, "wins": 0, "losses": 0, "draws": 0,
+                "black": [0, 0, 0], "white": [0, 0, 0],
+            })
+            a["n_games"] += r["n_games"]; a["wins"] += r["wins"]
+            a["losses"] += r["losses"]; a["draws"] += r["draws"]
+            for i in range(3):
+                a["black"][i] += r["black"][i]; a["white"][i] += r["white"][i]
+    batch_wall = time.time() - t0
+
+    build_ref = _build_ref(rapfi_abs)
+    records: list[dict] = []
+    for t in timeouts:  # stable, requested order
+        a = agg.get(t)
+        if not a:
+            continue
+        wr = (a["wins"] + 0.5 * a["draws"]) / max(a["n_games"], 1)
+        ef = dict(extra_fields or {})
+        ef.update({"black": a["black"], "white": a["white"], "jobs": jobs,
+                   "parallel": True, "batch_wall_secs": round(batch_wall, 2)})
+        rec = make_eval_record(
+            checkpoint=checkpoint, sims=sims, c_puct=c_puct,
+            fpu_reduction_c=fpu_reduction_c, reuse_tree=reuse_tree,
+            proven_prop=proven_prop, timeout_ms=t, board_size=size, rule=rule,
+            wrapper_version=WRAPPER_VERSION, build_ref=build_ref,
+            n_games=a["n_games"], wins=a["wins"], losses=a["losses"],
+            draws=a["draws"], win_rate=wr, wall_secs=batch_wall, extra_fields=ef,
+        )
+        records.append(rec)
+        if print_progress:
+            bw = a["white"]
+            print(
+                f"rapfi{t}: {a['wins']}W-{a['losses']}L-{a['draws']}D / "
+                f"{a['n_games']} games  win_rate={wr:.2%}  "
+                f"| white {bw[0]}-{bw[1]}-{bw[2]} black {a['black'][0]}-{a['black'][1]}-{a['black'][2]}"
+            )
+        if out:
+            append_jsonl(out, rec)
+    if print_progress:
+        print(f"[parallel] {len(tasks)} shards over {jobs} workers in {batch_wall:.1f}s")
+    return records
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", required=True, help="Model checkpoint path.")
@@ -260,6 +416,15 @@ def main() -> None:
                     help="Proven win/loss propagation (derby-b3n eval lever).")
     ap.add_argument("--out", default=None, help="JSONL output path (append).")
     ap.add_argument(
+        "--jobs", type=int, default=1, metavar="J",
+        help=(
+            "Parallel worker processes (issue #52). 1 = serial (default). J>1 "
+            "shards color-balanced pairs across J spawn-workers (each loads the "
+            "model once + its own single-thread Rapfi) to saturate the M5 Max. "
+            "Requires even --n-games."
+        ),
+    )
+    ap.add_argument(
         "--random-opening-moves", type=int, default=0, metavar="N",
         help=(
             "Start each game pair from an identical N-stone random opening. "
@@ -269,7 +434,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    records = run_rapfi_eval(
+    runner = run_rapfi_eval_parallel if args.jobs > 1 else run_rapfi_eval
+    kwargs = dict(
         checkpoint=args.checkpoint,
         rapfi=args.rapfi,
         timeouts=args.timeouts,
@@ -285,6 +451,9 @@ def main() -> None:
         random_opening_moves=args.random_opening_moves,
         out=args.out,
     )
+    if args.jobs > 1:
+        kwargs["jobs"] = args.jobs
+    records = runner(**kwargs)
 
     if args.out:
         print(f"wrote {len(records)} record(s) to {args.out}")
