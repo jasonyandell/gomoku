@@ -291,10 +291,13 @@ class LedgerState:
 
 
 def default_priority(e: dict):
-    """Default policy: highest ``priority``, then never-attempted (starvation
-    floor), then oldest (lowest ``seq``). The clean seam for P5's Δelo/hr
-    ``pick_priority`` is just passing a different ``priority_fn`` to ``pick``."""
-    return (e.get("priority", 0) or 0, 1 if e.get("_claims", 0) == 0 else 0, -e.get("seq", 0))
+    """Default policy: highest ``priority``, then never-*completed* (starvation
+    floor — a lane that has produced no result yet outranks one that has), then
+    oldest (lowest ``seq``). Keys on ``_results`` not ``_claims`` because the
+    daemon no longer writes claim rows (singleton via flock; recovery via
+    re-pick). The clean seam for P5's Δelo/hr ``pick_priority`` is just passing a
+    different ``priority_fn`` to ``pick``."""
+    return (e.get("priority", 0) or 0, 1 if e.get("_results", 0) == 0 else 0, -e.get("seq", 0))
 
 
 def fold(rows: Iterable[dict]) -> LedgerState:
