@@ -316,7 +316,7 @@ def _apply_teachers_to_trajectory(
     n = len(traj)
     out: list[tuple[np.ndarray, float]] = []
     defense_fires: list[tuple[int, float]] = []
-    defense_policy_fires: list[tuple[int, np.ndarray]] = []
+    defense_policy_candidates: list[tuple[int, tuple]] = []
     for ply_idx, (planes, pi, side) in enumerate(traj):
         z = outcome_for_black if side == 0 else -outcome_for_black
         z = _discount_z(z, n - 1 - ply_idx)
@@ -331,11 +331,14 @@ def _apply_teachers_to_trajectory(
                                                   profile=profile)
         if defense_teacher:
             if _DEFENSE_POLICY_MODE:
-                # #43: stamp the SAVING move on the policy head, value untouched.
-                new_pi, _z, fired = _apply_defense_teacher_policy(
-                    planes, pi, z, vcf_already_fired=vcf_fired, profile=profile)
-                if fired:
-                    defense_policy_fires.append((ply_idx, new_pi))
+                # #43/#60: detect the refutation CANDIDATE cheaply now (prescan +
+                # detection/own-win solves, NO refutation); the expensive saving-move
+                # enumeration is deferred to the budgeted reverse pass below, so we
+                # never refute plies the FRACTION budget would discard.
+                cand = _defense_detect_candidate(
+                    planes, vcf_already_fired=vcf_fired, profile=profile)
+                if cand is not None:
+                    defense_policy_candidates.append((ply_idx, cand))
             else:
                 d_z, fired = _apply_defense_teacher(
                     planes, z, vcf_already_fired=vcf_fired, profile=profile)
@@ -347,14 +350,25 @@ def _apply_teachers_to_trajectory(
         for ply_idx, d_z in kept.items():
             pi, _ = out[ply_idx]
             out[ply_idx] = (pi, d_z)
-    if defense_policy_fires:
-        # Same per-game FRACTION budget as the value teacher (latest firing plies
-        # first), but the kept positions get their POLICY rewritten; z is left as
-        # the natural discounted outcome (the #43 pure-policy lever).
-        kept_pi = _relabel_defense_policy_game(defense_policy_fires, n)
-        for ply_idx, new_pi in kept_pi.items():
-            _, z = out[ply_idx]
-            out[ply_idx] = (new_pi, z)
+    if defense_policy_candidates:
+        # #60: realize the per-game FRACTION budget (latest firing plies first) as a
+        # LAZY reverse pass — refute candidates newest-ply-first and stamp until the
+        # budget of FIRES is filled, so the expensive refutation runs ONLY on kept
+        # plies (it is ~83% of the teacher's gen cost and the budget discards most
+        # fires). The kept set is identical to the eager form — refute every
+        # candidate, then keep the latest `budget` fires (see
+        # _relabel_defense_policy_game) — and z is left as the natural outcome.
+        budget = _defense_budget(n)
+        kept = 0
+        for ply_idx, (swapped_board, winning_move) in reversed(defense_policy_candidates):
+            if kept >= budget:
+                break
+            new_pi = _defense_refute_stamp(
+                swapped_board, winning_move, out[ply_idx][0], profile=profile)
+            if new_pi is None:
+                continue  # candidate had no saving move — genuinely lost, not a fire
+            out[ply_idx] = (new_pi, out[ply_idx][1])
+            kept += 1
     return out
 
 
@@ -564,6 +578,112 @@ def _apply_defense_teacher(
     return _DEFENSE_SOFT_VALUE, True
 
 
+def _defense_detect_candidate(
+    planes: np.ndarray,
+    *,
+    vcf_already_fired: bool,
+    profile: ProfileStats | None = None,
+    max_depth: int | None = None,
+    max_nodes: int | None = None,
+) -> tuple[np.ndarray, object] | None:
+    """#43/#60 — the CHEAP first phase of the policy defense teacher: decide
+    whether a ply is a refutation CANDIDATE WITHOUT paying for the (expensive)
+    refutation enumeration.
+
+    A ply is a candidate when (a) the offensive VCF teacher has not already fired,
+    (b) the OPPONENT has a proven forced VCF win against the side to move (detection
+    solve on the swapped board), and (c) the side to move does NOT itself have a
+    forced win (the #43 self-contained "convert, don't defend" guard). Returns
+    ``(swapped_board, winning_move)`` — the inputs the refutation needs — for a
+    candidate, else ``None``. Whether a candidate actually FIRES (has a saving move)
+    is known only after :func:`_defense_refute_stamp`; #60 defers that to the
+    budgeted reverse pass so we never refute plies the budget would discard.
+
+    The two cheap gen-cost gates (offensive-already-fired short-circuit, opponent
+    four-threat pre-scan) are unchanged from the pre-#60 inline teacher. Increments
+    ``defense_policy_candidates`` per candidate (the detection-level count, now
+    decoupled from the budget-limited ``defense_policy_fired`` stamp count).
+    """
+    if vcf_already_fired:
+        return None
+    if max_depth is None:
+        max_depth = _VCF_MAX_DEPTH
+    if max_nodes is None:
+        max_nodes = _VCF_MAX_NODES
+
+    planes = np.asarray(planes)
+    opp = planes[HISTORY_PLY].astype(bool)
+    me = planes[0].astype(bool)
+    swapped_board = np.stack([opp, me], axis=0)
+
+    _profile_add(profile, "defense_calls", 1.0)
+    with _profile_timer(profile, "defense_prescan_s"):
+        danger = vcf.has_four_threat(swapped_board)
+    if not danger:
+        return None
+
+    with _profile_timer(profile, "defense_solve_s"):
+        res = vcf.solve_vcf(swapped_board, max_depth=max_depth, max_nodes=max_nodes)
+    _profile_add(profile, "defense_solves", 1.0)
+    if not res.has_forced_win:
+        return None
+
+    # SELF-CONTAINED guard: if the side-to-move ITSELF has a proven forced win,
+    # this is a position to CONVERT, not defend — do not overwrite its winning
+    # policy. (Replaces the dead vcf_already_fired plumbing when --vcf-teacher is
+    # off; also short-circuits before the expensive refutation on these positions.)
+    own_board = np.stack([me, opp], axis=0)
+    with _profile_timer(profile, "defense_solve_s"):
+        own = vcf.solve_vcf(own_board, max_depth=max_depth, max_nodes=max_nodes)
+    if own.has_forced_win:
+        _profile_add(profile, "defense_own_win_skips", 1.0)
+        return None
+
+    _profile_add(profile, "defense_policy_candidates", 1.0)
+    return swapped_board, res.winning_move
+
+
+def _defense_refute_stamp(
+    swapped_board: np.ndarray,
+    winning_move: object,
+    pi: np.ndarray,
+    *,
+    profile: ProfileStats | None = None,
+    max_depth: int | None = None,
+    max_nodes: int | None = None,
+) -> np.ndarray | None:
+    """#43/#60 — the EXPENSIVE second phase: enumerate the defender moves that
+    BREAK the opponent's proven forced win and, if any exist, build the soft
+    (uniform) saving-move policy target. Returns the new policy vector, or ``None``
+    when the position is genuinely lost (no saving move) — the caller then leaves
+    the record untouched (pure policy lever; value never crushed).
+
+    Split out from :func:`_defense_detect_candidate` so the per-game caller can run
+    it ONLY on the plies the FRACTION budget keeps (#60): the refutation is ~83% of
+    the teacher's gen cost, and the budget discarded most fires, so refuting every
+    candidate paid for work that was then thrown away. ``max_candidates`` bounds the
+    per-fire re-solve count on pathologically dense boards.
+    """
+    if max_depth is None:
+        max_depth = _VCF_MAX_DEPTH
+    if max_nodes is None:
+        max_nodes = _VCF_MAX_NODES
+    with _profile_timer(profile, "defense_refute_s"):
+        saving = vcf.vcf_refutations(
+            swapped_board, winning_move=winning_move,
+            max_depth=max_depth, max_nodes=max_nodes,
+            max_candidates=_DEFENSE_REFUTE_MAX_CANDIDATES)
+    if not saving:
+        return None
+    new_pi = np.zeros_like(pi)
+    weight = 1.0 / len(saving)
+    for mv in saving:
+        new_pi[mv] = weight
+    _profile_add(profile, "defense_fired", 1.0)
+    _profile_add(profile, "defense_policy_fired", 1.0)
+    return new_pi
+
+
 def _apply_defense_teacher_policy(
     planes: np.ndarray,
     pi: np.ndarray,
@@ -612,60 +732,22 @@ def _apply_defense_teacher_policy(
     net keeps learning to convert. This also short-circuits before the expensive
     refutation enumeration on exactly those positions.
     """
-    if vcf_already_fired:
+    # (#60) Thin wrapper over the two-phase split — cheap detection then expensive
+    # refutation. Single-position behavior and every profile counter are unchanged
+    # (detection adds only the new additive `defense_policy_candidates` count); the
+    # per-game caller in _apply_teachers_to_trajectory instead calls the two phases
+    # directly so it refutes ONLY the budget-kept plies.
+    cand = _defense_detect_candidate(
+        planes, vcf_already_fired=vcf_already_fired, profile=profile,
+        max_depth=max_depth, max_nodes=max_nodes)
+    if cand is None:
         return pi, z, False
-    if max_depth is None:
-        max_depth = _VCF_MAX_DEPTH
-    if max_nodes is None:
-        max_nodes = _VCF_MAX_NODES
-
-    planes = np.asarray(planes)
-    opp = planes[HISTORY_PLY].astype(bool)
-    me = planes[0].astype(bool)
-    swapped_board = np.stack([opp, me], axis=0)
-
-    _profile_add(profile, "defense_calls", 1.0)
-    with _profile_timer(profile, "defense_prescan_s"):
-        danger = vcf.has_four_threat(swapped_board)
-    if not danger:
+    swapped_board, winning_move = cand
+    new_pi = _defense_refute_stamp(
+        swapped_board, winning_move, pi, profile=profile,
+        max_depth=max_depth, max_nodes=max_nodes)
+    if new_pi is None:
         return pi, z, False
-
-    with _profile_timer(profile, "defense_solve_s"):
-        res = vcf.solve_vcf(swapped_board, max_depth=max_depth, max_nodes=max_nodes)
-    _profile_add(profile, "defense_solves", 1.0)
-    if not res.has_forced_win:
-        return pi, z, False
-
-    # SELF-CONTAINED guard: if the side-to-move ITSELF has a proven forced win,
-    # this is a position to CONVERT, not defend — do not overwrite its winning
-    # policy. (Replaces the dead vcf_already_fired plumbing when --vcf-teacher is
-    # off; also skips the expensive refutation below on these positions.)
-    own_board = np.stack([me, opp], axis=0)
-    with _profile_timer(profile, "defense_solve_s"):
-        own = vcf.solve_vcf(own_board, max_depth=max_depth, max_nodes=max_nodes)
-    if own.has_forced_win:
-        _profile_add(profile, "defense_own_win_skips", 1.0)
-        return pi, z, False
-
-    # The opponent has a proven forced win — but we move first, so look for the
-    # saving move(s) that refute it. No refutation => genuinely lost; leave the
-    # record untouched (pure policy lever: never crush value here). ``max_candidates``
-    # bounds the per-fire re-solve count on pathologically dense boards (the targeted
-    # candidate set is usually <10 but scales with defender four-making moves).
-    with _profile_timer(profile, "defense_refute_s"):
-        saving = vcf.vcf_refutations(
-            swapped_board, winning_move=res.winning_move,
-            max_depth=max_depth, max_nodes=max_nodes,
-            max_candidates=_DEFENSE_REFUTE_MAX_CANDIDATES)
-    if not saving:
-        return pi, z, False
-
-    new_pi = np.zeros_like(pi)
-    weight = 1.0 / len(saving)
-    for mv in saving:
-        new_pi[mv] = weight
-    _profile_add(profile, "defense_fired", 1.0)
-    _profile_add(profile, "defense_policy_fired", 1.0)
     return new_pi, z, True
 
 
