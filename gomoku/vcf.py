@@ -260,13 +260,20 @@ def vcf_refutations(
     rather than the value-only "you already lost" signal.
 
     SOUNDNESS: a refutation is only reported when an explicit re-solve proves the
-    attacker has *no* forced VCF after the defender's move — so a reported move is
-    a real escape from the detected VCF (no false saving moves). Candidate moves
-    are restricted to the near-stone set (a four/block can only be made adjacent
-    to existing stones), which cannot miss a real refutation (an isolated stone
-    neither blocks a four nor makes one). Each candidate costs one full
-    :func:`solve_vcf`; firing is rare and gen-cost-gated upstream, but
-    ``max_candidates`` (None = all) bounds the worst case. Never mutates ``board``.
+    attacker has *no* forced VCF after the defender's move AND that re-solve
+    COMPLETED within budget (``hit_cap`` False). The cap guard is essential at the
+    tight gen-time budgets self-play uses: a cap-hit ``has_forced_win=False`` is
+    "unproven", NOT "proven safe", so trusting it as a refutation could stamp a
+    move that does not actually escape — the unsound direction. Requiring a
+    completed search means a reported move is a genuine escape from the detected
+    VCF (no false saving moves) regardless of budget; the only cost is occasionally
+    MISSING a real refutation under a tight cap (then the teacher simply does not
+    fire on that position — the safe failure). Candidate moves are restricted to
+    the near-stone set (a four/block can only be made adjacent to existing stones),
+    which cannot miss a real refutation (an isolated stone neither blocks a four
+    nor makes one). Each candidate costs one full :func:`solve_vcf`; firing is rare
+    and gen-cost-gated upstream, but ``max_candidates`` (None = all) bounds the
+    worst case. Never mutates ``board``.
     """
     board = np.ascontiguousarray(board, dtype=bool)
     attacker = board[0].copy()
@@ -287,7 +294,9 @@ def vcf_refutations(
             res = solve_vcf(test, max_depth=max_depth, max_nodes=max_nodes)
         finally:
             defender[dr, dc] = False
-        if not res.has_forced_win:
+        # PROVEN escape only: no forced win AND the search completed (a cap-hit
+        # "no win" is unproven and must NOT be trusted as a refutation).
+        if not res.has_forced_win and not res.hit_cap:
             saving.append(int(d))
     return sorted(saving)
 

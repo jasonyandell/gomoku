@@ -467,6 +467,56 @@ CELLS: dict[str, Cell] = {
                                    "--defense-max-fraction", "0.25",
                                    "--vcf-max-nodes", "800", "--vcf-max-depth", "7"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-defense-i2 (#43, sliding-derby): the I2 DEFENSE-TEACHER cell — stamp the
+    # SAVING MOVE on the POLICY head instead of the value-only z=-1 crush that the
+    # G15-defense (#36/#42) cell above tried and which FAILED (value saturation
+    # vl 0.16->0.06, shared-trunk corruption pl 1.25->3.4; the value-only signal is
+    # structurally wrong for "never lose as white" — it teaches "you already lost",
+    # not HOW to defend). #43 supersedes it: the defensive teacher fires on the same
+    # proven-forced-loss positions, but because the side-to-move actually moves
+    # FIRST (one tempo), it extracts the SAVING move(s) that break the opponent's
+    # forced VCF (gomoku/vcf.vcf_refutations — sound: a move is only stamped when a
+    # COMPLETED re-solve proves the win is gone) and one-hots/soft-maxes them on the
+    # POLICY target, LEAVING the value at the natural game outcome. A truly-lost
+    # position (no refutation) is left untouched — a pure policy lever, no value
+    # crush. Expected signature (vs the #36/#42 failure): white_loss DOWN, pl bounded
+    # or improving (a real, consistent policy target — not contradiction), vl healthy
+    # (~0.10-0.16, NOT saturated). GATE = the champion-vs-Rapfi white-column TC-tier
+    # calibration (eval_vs_rapfi.py --jobs 8, white currently 0-15% across all real
+    # tiers); re-run after a slice and watch the white column move off the floor.
+    #
+    # BYTE-IDENTICAL to G15-defense in EVERY Cell field except the teacher flag:
+    # --defense-teacher-policy REPLACES the value-only trio (--defense-teacher +
+    # --defense-soft-value + --defense-max-fraction). --defense-max-fraction 0.25 is
+    # KEPT — in policy mode soft-value is unused but the fraction still bounds the
+    # per-game policy-stamp count (latest/closest-to-mate kept), the same anti-over-
+    # firing guard. Solve caps held at 800/7 for gen-cost parity. NOTE: the
+    # refutation enumeration (K candidate re-solves per fire) is the new gen cost —
+    # smoke measured ~0.85 s/game added on the champion at these caps (~25% over the
+    # base ~3.1 s/game); acceptable for a slice. WARM-START from the champion:
+    #   python scripts/run_sweep.py G15-defense-i2 \
+    #       --resume sweep_runs/g15_128x10_bigbuf_eval502.pt \
+    #       --max-wall-secs <slice> --final-eval
+    "G15-defense-i2": Cell("G15-defense-i2-board15", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=4, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98",
+                                   "--defense-teacher-policy",
+                                   "--defense-max-fraction", "0.25",
+                                   "--vcf-max-nodes", "800", "--vcf-max-depth", "7"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-vcf: the planned 15x15-tuned vcf-teacher derby contestant (epic #21
     # readiness-audit S3). BYTE-IDENTICAL to G15-seed in every Cell field EXCEPT
     # it re-enables --vcf-teacher with a 15x15-appropriate per-move budget. This

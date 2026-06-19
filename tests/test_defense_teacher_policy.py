@@ -121,6 +121,28 @@ def test_refutations_actually_break_the_vcf():
         assert not vcf.solve_vcf(after).has_forced_win
 
 
+def test_cap_hit_no_win_is_not_trusted_as_refutation(monkeypatch):
+    # SOUNDNESS at tight budgets: a post-move re-solve that returns
+    # has_forced_win=False ONLY because it hit its node/depth cap is "unproven",
+    # not "proven safe" — it must NOT be reported as a saving move. Stub solve_vcf
+    # so every post-move re-solve is a cap-hit no-win; the refutation set must be
+    # empty (otherwise we'd stamp moves that may not actually escape).
+    board = _swapped(_REFUTABLE)
+    real_solve = vcf.solve_vcf
+
+    def cap_hit_solve(b, **kw):
+        # The candidate re-solves carry an extra defender stone vs the input board;
+        # force those to look like an exhausted-budget "no win".
+        return vcf.VCFResult(False, None, None, nodes=1, hit_cap=True)
+
+    monkeypatch.setattr(vcf, "solve_vcf", cap_hit_solve)
+    assert vcf.vcf_refutations(board) == []
+    # Sanity: with the real solver (generous default caps) the block IS found,
+    # proving the empty result above is the cap guard, not a broken candidate set.
+    monkeypatch.setattr(vcf, "solve_vcf", real_solve)
+    assert vcf.vcf_refutations(board) == [_flat(2, 6)]
+
+
 # ---------------------------------------------------------------------------
 # _apply_defense_teacher_policy — stamp the saving move on the policy head
 # ---------------------------------------------------------------------------
