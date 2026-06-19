@@ -3962,3 +3962,33 @@ calibration still pending (effective single-thread Rapfi strength under our harn
 measured, not assumed = published ~2625; #35/#30). Next probes: compute-matched rematch
 (net sims → ~1-2s/move), a TC sweep, and using Rapfi-as-attacker to drive the #43/#44/#49
 white-defense interventions.
+
+## 2026-06-18 — TC-tier CALIBRATION vs real Rapfi-NNUE: a CLIFF then a white-defense PLATEAU (the deficit is 100% white-side)
+
+Parallel calibration via the new `--jobs` path (#52, `eval_vs_rapfi.py --jobs 8`, 8 spawn-workers
+saturating the 18-core M5; 200 games in 7.6 min). Champion `g15_128x10_bigbuf_eval502.pt`,
+sims=400, vs native Rapfi-NNUE (run-rapfi wrapper → NNUE config), 5 thinking-time tiers, n=40/tier,
+4-stone balanced openings, seed 7. Out: `sweep_logs/calib_champ_vs_rapfi_tctiers_20260618.jsonl`.
+
+| Rapfi TC | win% | W-L-D | white W-L-D | black W-L-D |
+|---|---|---|---|---|
+| 10ms | 100.0% | 40-0-0 | 20-0-0 | 20-0-0 |
+| 100ms | 27.5% | 11-29-0 | 0-20-0 | 11-9-0 |
+| 250ms | 37.5% | 15-25-0 | 2-18-0 | 13-7-0 |
+| 500ms | 27.5% | 11-29-0 | 2-18-0 | 9-11-0 |
+| 1000ms | 27.5% | 11-29-0 | 3-17-0 | 8-12-0 |
+
+**Two findings.** (1) **CLIFF, not ramp:** at 10ms Rapfi has no search time — it plays its raw NNUE
+move and our MCTS champion sweeps 40-0; the instant Rapfi gets real search (100ms) it drops to ~27%
+and then PLATEAUS (100/500/1000ms all ~27%; the 250ms 37.5% is n=40 noise). 10× more Rapfi time
+(100ms→1s) barely moves the result → Rapfi is already strong enough to exploit us at 100ms. So
+10ms is below Rapfi's useful threshold (a degenerate tier); the real opponent starts ~100ms.
+(2) **The plateau is a WHITE-defense plateau:** as black the champion is competitive at every real
+tier (40-65%); as white it is pinned at the floor (0-15%) regardless of Rapfi time. The shapes
+differ — black declines as Rapfi deepens (55→65→45→40%: Rapfi defends our attack better with more
+time), white is already at zero with nowhere to fall. **The champion's entire deficit vs the #1
+engine is white-side defense**, now confirmed across 5 independent measurements (n=24 first-contact
++ these 4 real tiers, 160 games). Strongest mandate yet for #43 (stamp the saving move on the
+policy). Caveat: not compute-matched (Rapfi 100ms-1s vs our net ~0.4s @ sims=400); freestyle,
+4-stone openings; n=40/tier (white-side signal is conclusive, per-tier overall rate has CI ~±15%).
+Next: a compute-matched rematch + finer tiers (25/50ms) to locate Rapfi's activation threshold.
