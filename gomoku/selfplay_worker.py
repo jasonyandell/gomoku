@@ -194,6 +194,15 @@ def parse_args() -> argparse.Namespace:
                         "cheap opponent-four-threat pre-scan before the solve so "
                         "quiet positions cost zero solver calls. Default OFF = "
                         "byte-identical self-play (solver never runs).")
+    p.add_argument("--defense-teacher-policy", action="store_true", default=False,
+                   help="Defense teacher I2 (#43): instead of crushing the VALUE "
+                        "to -1.0, stamp the SAVING (refutation) move(s) on the "
+                        "POLICY head and leave the value at the natural game "
+                        "outcome. When the opponent has a proven forced VCF win "
+                        "but the side-to-move (moving first) has a move that "
+                        "breaks it, that move is the target; a truly-lost position "
+                        "(no refutation) is left untouched (pure policy lever, no "
+                        "value crush). Implies --defense-teacher. Default OFF.")
     p.add_argument("--defense-soft-value", type=float, default=None,
                    help="Gentler defense teacher (#42): the VALUE target stamped on "
                         "a proven-lost position. Default None/-1.0 = the hard 'dead "
@@ -860,13 +869,19 @@ def _write_profile(
 def main() -> None:
     args = parse_args()
     board_config.require_board_size(args.board_size)
+    # --defense-teacher-policy (#43) implies the defense teacher is on; it only
+    # switches WHICH target gets rewritten (policy saving-move vs value crush).
+    if args.defense_teacher_policy:
+        args.defense_teacher = True
     # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
     configure_vct_teacher(args.vct_max_depth, args.vct_max_nodes)
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
-    configure_defense_teacher(args.defense_soft_value, args.defense_max_fraction)
+    # policy_mode (#43): switch to stamping the saving move on the policy head.
+    configure_defense_teacher(args.defense_soft_value, args.defense_max_fraction,
+                              policy_mode=args.defense_teacher_policy)
     configure_value_discount(args.value_discount)
     # Derby 'x-draw-contempt' (bead derby-9q4): no-op when DELTA == 0.0 (default).
     configure_draw_value(args.draw_value)
