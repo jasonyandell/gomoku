@@ -3992,3 +3992,51 @@ engine is white-side defense**, now confirmed across 5 independent measurements 
 policy). Caveat: not compute-matched (Rapfi 100ms-1s vs our net ~0.4s @ sims=400); freestyle,
 4-stone openings; n=40/tier (white-side signal is conclusive, per-tier overall rate has CI ~±15%).
 Next: a compute-matched rematch + finer tiers (25/50ms) to locate Rapfi's activation threshold.
+
+## 2026-06-19 — Autolab went LIVE (the self-driving lab; #64, epic #53)
+
+First night of the autolab driving itself. The lab is now a **launchd-supervised
+self-driving loop**, not a hand-kicked library (the vision-gap audit had put us at
+~31%: every part built + unit-tested but nothing kept it alive). `python -m
+gomoku.lab.up up` seeds one lane, renders + loads four LaunchAgents, and lets
+launchd be the supervisor.
+
+**Live run config (this night):**
+- Lane `9x9-champ-recipe`, cell **`derby-v9-small`** (the v8/v9-champion 96×6
+  recipe, vcf-teacher, gumbel, 8 selfplay workers), base **scratch**, commit
+  pinned `71feebd`. Per-slice cap **3600 s** (the vision's hard max; "no minimum"
+  holds — the trainer self-caps on the next epoch boundary). Expected **~6 slices
+  by morning**.
+- **wandb OFFLINE** (`WANDB_MODE=offline`) for the unattended daemon — avoids the
+  first-ever-slice interactive-auth blocking failure. So **no W&B run ID this run**;
+  read progress from the **ledger** (`~/data/autolab/ledger.jsonl` result rows:
+  `eval/model_elo`, epochs, wall_s) + run_sweep logs under
+  `~/data/autolab/runs/9x9-champ-recipe/sweep_logs/derby-v9-small/`.
+- HF: each slice pushes a per-slice revision to `jasonyandell/gomoku-9x9`
+  (revision `9x9-champ-recipe-9x9-champ-recipe@N`, slimmed weights + provenance in
+  `training_state.json`); the arena moves the `champion` tag on PROMOTE.
+
+**What was proven before unattended launch (the never-recently-run path):** an
+attended SMOKE slice with a **real HF push** in a throwaway `AUTOLAB_HOME` —
+`run_sweep`→checkpoint→`--final-eval`(model_elo 388.6)→`hf.push_slice`→real Hub
+revision→result row + flywheel followups→clean worktree teardown. Then deleted the
+throwaway branch. So the trainer prod chain incl. HF delivery is validated; the
+**1h prod slice and the first real arena gate are still unproven until morning**.
+
+**Cockpit:** launchd `monitor` agent writes `~/data/autolab/monitor/latest.md` +
+macOS notification every 600 s (always-on, survives session/reboot); a deterministic
+`research` lane (every 1800 s) writes an honest "current thinking" note
+(`~/data/autolab/research/latest.md`) that **ranks on PROXIES** (per-slice Δelo/hr
+secant), NOT a real wall-clock-to-Δelo gate — that gate is the open core of #61.
+On night-1 the researcher does **continuity over thrash**: it proposes ≤2 lanes
+strictly *below* the seed priority and refuses to propose anything until the first
+slice produces signal (cold-start refusal).
+
+**Stop it:** `python -m gomoku.lab.up down` (cooperative stop-file + launchctl
+bootout). **Watch what it's about to do, never barge a tenant:** the trainer
+preflight pgreps `selfplay_worker|gomoku.train|run_sweep|eval_worker` and defers to
+any *foreign* tenant (excludes the autolab's own home), so the derby/IDE training
+still own the box if they want it. Operating contract:
+`wiki/topics/autolab-supervisor-and-monitor.md`. Follow-ups: #61 (the real gate),
+#63 (first live arena gate, verifiable in the morning), #65 (GOMOKU_BOARD_SIZE
+passthrough — blocks 15×15 via autolab), #66 (P7 polish nits).
