@@ -3,6 +3,19 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-18] NEW topic/autolab-architecture.md — formalize the autolab (epic #53, P1 spine #54 built)
+
+New canonical design page for Jason's self-driving-lab spec: one external, out-of-git,
+append-only ledger (`gomoku/lab/ledger.py`, financial-journal corrections, reducer +
+priority-pick — built + 21 tests green this session) read by four same-shape loops
+(trainer 1h-singleton-slices→HF · mac-native arena · ideate-and-wait research · GitHub
+worker). Captures the ~80%-there finding (every load-bearing mechanism already exists; the
+spine was the gap), the 8-point code-shape contract, the **measured** M5 co-tenancy envelope
+(one heavy SGD trainer max; arena concurrent under a guard), the per-loop cockpit overlay, the
+locked decisions (ledger in `~/code`; buffer local + HF slimmed; per-slice HF revision +
+champion tag; 1h cap, MVP at 1-epoch), and the P1–P6 plan. **Supersedes the framing of #2**
+(three-tier queue) and folds in #19. Added an index doorway row + Page Catalog entry.
+
 ## [2026-06-18] white-side-defense-plan — #43 (I2) LEVER BUILT: stamp the saving move on the policy head
 
 Recorded that the #43 defense-teacher I2 arm is code-complete + merged (`Closes #43`). New
