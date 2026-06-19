@@ -38,16 +38,38 @@ and delivers #40.
   the anchor).
 - **Registered:** `scripts/panel_tournament.py::_NATIVE_ENGINES`
   `= [("rapfi", …/run-rapfi)]` — joins the default field with NO wine opt-in.
-- **Coord orientation verified UNMIRRORED:** the staged config uses
-  `coord_conversion_mode = "X_flipY"` (stock Piskvork default is `none`), but the
-  flip round-trips symmetrically on read+write, so the external frame is
-  preserved — confirmed on a forced-block tactic (opponent four, one end blocked
-  → Rapfi plays the unique saving block at the correct cell `8,4`, not its
-  mirror). Guarded by `tests/test_rapfi_native.py` (skips when the artifact is
-  absent).
+- **Coord orientation verified UNMIRRORED:** `coord_conversion_mode = "none"`
+  (the Piskvork-correct value — see *Official tournament config* below). Confirmed
+  on a forced-block tactic both horizontally (opponent four, left end blocked →
+  saving block `8,4`) and vertically (`4,8`), so neither axis is mirrored.
+  Guarded by `tests/test_rapfi_native.py` (skips when the artifact is absent).
 - **Driven through our own client:** `gomoku/external_engine.py` (`START`/`INFO
   timeout_turn`/`RESTART`+`BOARD`) drives it unchanged; Rapfi honors
   `timeout_turn` (used 4105ms of 5000ms). End-to-end smoke returns a legal move.
+
+### Official tournament config (faithfulness audit, 2026-06-18)
+
+We run Rapfi as faithfully to the real Gomocup competition engine as possible
+WITHOUT modifying it (verified against the upstream repo + Networks submodule):
+- **Net:** `mix9svq` is the LATEST and sole NNUE (upstream deleted the older
+  mix9/mix9lite weights); it is the net Rapfi **won Gomocup 2024 AND 2025** with.
+  The `freestyle` weight is the right one for our freestyle game. No stronger net
+  exists to add.
+- **No opening book / database:** Rapfi competes as a PURE search+NNUE engine.
+  The `yixindb` database is an off-by-default Yixin-GUI analysis feature; no `.db`
+  ships and competition play uses none. `enable_by_default = false` — correct.
+- **Single-thread + 32MB TT** (`default_thread_num = 1`, `default_tt_size_kb =
+  32768`) are Rapfi's own shipped defaults and satisfy the Gomocup single-core
+  rule. Not enlarged (faithful).
+- **Config = canonical tournament config**, not the gomocalc web-GUI preset. The
+  committed `config.toml` previously matched `gomocalc-mix9svq.toml`; the only two
+  strength/protocol-relevant differences from Rapfi's canonical `config.toml` were
+  switched to the tournament values: `coord_conversion_mode = "none"`
+  (Piskvork-correct, vs gomocalc's display flip) and `advanced_stop_ratio = 0.9`
+  (vs gomocalc's earlier-stopping 0.75). The 0.9 ratio lets the engine use ~90%
+  of its turn budget like the competition engine does — verified: a 5s move now
+  uses 4971ms / 2.4M nodes (was 4105ms / 2.0M at 0.75). Both are dhbloo's own
+  official values; the engine binary/weights are untouched.
 
 Still open (do not over-claim the absolute number yet): balanced openings
 (swap2, #22) — freestyle is a first-player win, so half of "wins" are the
