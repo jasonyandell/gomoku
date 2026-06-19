@@ -2013,14 +2013,24 @@ CELLS: dict[str, Cell] = {
 }
 
 
+def run_base() -> Path:
+    """Root under which sweep_runs/ and sweep_logs/ live. Defaults to REPO_ROOT
+    (so the derby and every existing caller are unchanged); the autolab sets
+    GOMOKU_RUN_DIR (or --run-base) to e.g. ~/data/autolab/runs/<lane> so the run
+    DATA lives outside the ephemeral code worktree it checked out to run."""
+    rb = os.environ.get("GOMOKU_RUN_DIR")
+    return Path(rb).expanduser() if rb else REPO_ROOT
+
+
 def cell_dirs(cell: Cell) -> dict:
-    base = REPO_ROOT / "sweep_runs" / cell.name
+    root = run_base()
+    base = root / "sweep_runs" / cell.name
     return {
         "base": base,
         "checkpoint_dir": base / "checkpoints",
         "records_dir": base / "checkpoints" / "_records",
         "worker_weights": base / "checkpoints" / "worker_weights.pt",
-        "log_dir": REPO_ROOT / "sweep_logs" / cell.name,
+        "log_dir": root / "sweep_logs" / cell.name,
     }
 
 
@@ -2338,7 +2348,13 @@ def main() -> None:
                         "noise for mature nets, and the ~200-320s/cycle lookahead "
                         "games steal CPU from the Rapfi ladder. Turn ON for "
                         "cold-start runs where the baseline ladder tracks the climb.")
+    p.add_argument("--run-base", type=str, default=None,
+                   help="Root for sweep_runs/ and sweep_logs/ (default: the repo "
+                        "root). The autolab points this at ~/data so run DATA lives "
+                        "outside the ephemeral code worktree. Sets GOMOKU_RUN_DIR.")
     args = p.parse_args()
+    if args.run_base:
+        os.environ["GOMOKU_RUN_DIR"] = args.run_base
 
     if args.list or not args.cell:
         list_cells()

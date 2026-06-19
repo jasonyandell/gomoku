@@ -23,6 +23,8 @@ gomoku-train = "gomoku.train:main"
 gomoku-play = "gomoku.cli:main"
 gomoku-web = "web.server:main"
 gomoku-brain = "gomoku.gomocup_brain:main"
+gomoku-lab-train = "gomoku.lab.trainer:main"
+gomoku-lab-status = "gomoku.lab.status:main"
 
 [build-system]
 requires = ["setuptools>=69", "wheel", "numpy>=2.0"]

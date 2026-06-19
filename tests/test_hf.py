@@ -10,6 +10,9 @@ that a slimmed checkpoint:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import torch
 
 from gomoku.game import GameState
@@ -96,3 +99,59 @@ def test_slim_rejects_missing_required_keys(tmp_path):
     except KeyError:
         return
     raise AssertionError("expected KeyError for malformed checkpoint")
+
+
+# --- push_slice: per-slice revision + provenance + champion tag -------------
+
+
+class _FakeApi:
+    def __init__(self, rec):
+        self._rec = rec
+
+    def create_repo(self, **k):
+        self._rec.setdefault("repo", []).append(k)
+
+    def create_branch(self, **k):
+        self._rec.setdefault("branch", []).append(k)
+
+    def create_tag(self, **k):
+        self._rec.setdefault("tag", []).append(k)
+
+    def upload_folder(self, **k):
+        state = json.loads((Path(k["folder_path"]) / "training_state.json").read_text())
+        self._rec.setdefault("upload", []).append({"revision": k.get("revision"),
+                                                   "state": state})
+
+
+def test_push_slice_creates_revision_with_provenance_and_tag(tmp_path, monkeypatch):
+    import huggingface_hub
+    from gomoku import hf
+
+    src = tmp_path / "fat.pt"
+    _make_fat_checkpoint(src)
+    rec = {}
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda *a, **k: _FakeApi(rec))
+
+    ref = hf.push_slice(src, repo_id="acme/gomoku", revision="mvp-mvp_0",
+                        provenance={"git_sha": "abc123", "model_elo": 1500},
+                        tag="champion")
+
+    assert ref == "acme/gomoku@mvp-mvp_0"
+    assert rec["branch"][0]["branch"] == "mvp-mvp_0"
+    assert rec["upload"][0]["revision"] == "mvp-mvp_0"
+    assert rec["upload"][0]["state"]["provenance"]["git_sha"] == "abc123"
+    assert rec["tag"][0]["tag"] == "champion" and rec["tag"][0]["revision"] == "mvp-mvp_0"
+
+
+def test_push_slice_without_tag_does_not_tag(tmp_path, monkeypatch):
+    import huggingface_hub
+    from gomoku import hf
+
+    src = tmp_path / "fat.pt"
+    _make_fat_checkpoint(src)
+    rec = {}
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda *a, **k: _FakeApi(rec))
+
+    hf.push_slice(src, repo_id="acme/gomoku", revision="r1")
+    assert "tag" not in rec
+    assert rec["upload"][0]["state"].get("provenance") is None

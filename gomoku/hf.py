@@ -227,6 +227,78 @@ def push_checkpoint(
     return f"https://huggingface.co/{repo_id}"
 
 
+def push_slice(
+    ckpt_path: str | Path,
+    repo_id: str = DEFAULT_REPO,
+    *,
+    revision: str,
+    provenance: dict | None = None,
+    tag: str | None = None,
+    filename: str | None = None,
+    create_if_missing: bool = True,
+) -> str:
+    """Slim ``ckpt_path`` and upload it to a per-slice REVISION (an HF branch).
+
+    Unlike ``push_checkpoint`` (which overwrites ``main``), each autolab slice
+    gets its own revision so the ledger's ``base_model`` refs stay durable over
+    time. ``provenance`` (git_sha, ledger_row_id, base, lane, model_elo, Δelo) is
+    recorded in ``training_state.json``. If ``tag`` is given (e.g. ``"champion"``)
+    it is (re)pointed at this revision — that's how the arena bumps the champion
+    on PROMOTE. Idempotent (``exist_ok``) so a re-picked slice can overwrite its
+    own revision safely. Returns ``"repo_id@revision"``.
+    """
+    _require_hf()
+    from huggingface_hub import HfApi
+
+    ckpt_path = Path(ckpt_path)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(ckpt_path)
+    filename = filename or "model.pt"
+
+    api = HfApi()
+    if create_if_missing:
+        api.create_repo(repo_id=repo_id, repo_type="model", private=False, exist_ok=True)
+    api.create_branch(repo_id=repo_id, branch=revision, repo_type="model", exist_ok=True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        slim_path = tmp_dir / filename
+        snapshot = slim_checkpoint(ckpt_path, slim_path)
+
+        model_config = snapshot["model_config"]
+        epoch = int(snapshot.get("epoch", 0))
+        total_games = int(snapshot.get("total_games", 0))
+        wandb_run_id = snapshot.get("wandb_run_id")
+
+        (tmp_dir / "config.json").write_text(json.dumps(model_config, indent=2))
+
+        state: dict = {"epoch": epoch, "total_games": total_games}
+        if wandb_run_id:
+            state["wandb_run_id"] = wandb_run_id
+        if provenance:
+            state["provenance"] = provenance
+        (tmp_dir / "training_state.json").write_text(json.dumps(state, indent=2))
+
+        _write_model_card(tmp_dir / "README.md")
+
+        commit_msg = f"slice {revision}: epoch {epoch} ({total_games} games)"
+        if provenance and provenance.get("model_elo") is not None:
+            commit_msg += f" elo={provenance['model_elo']}"
+        api.upload_folder(
+            folder_path=str(tmp_dir),
+            repo_id=repo_id,
+            repo_type="model",
+            revision=revision,
+            commit_message=commit_msg,
+        )
+
+    if tag:
+        api.create_tag(repo_id=repo_id, tag=tag, revision=revision,
+                       repo_type="model", exist_ok=True)
+
+    return f"{repo_id}@{revision}"
+
+
 # --- CLI --------------------------------------------------------------------
 
 

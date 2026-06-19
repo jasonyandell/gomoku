@@ -33,19 +33,37 @@ collapse into one shared shape. Everything else is wiring, not invention.
 
 ## The spine: the ledger (`gomoku/lab/ledger.py`)
 
-### Where it lives — out of git
+### Where it lives — the `~/data/autolab/` home (out of git)
 
-Default a flatfile under `~/code` (e.g. `~/code/gomoku-autolab/ledger.jsonl`),
-**configurable as the `--ledger` argument** to every loop. It is **never
-git-tracked**, so worktree merges, branch switches, and `reclaim_worktrees` can
-never clobber it — Jason's "flatfile so git doesn't stomp it", literally. The Mac
-is the mainframe and 10 MB is nothing, so the reducer reads the **whole file**
-every tick: no index, no DB, nothing to get stale.
+Everything autolab lives under **`~/data/autolab/`** (env `AUTOLAB_HOME`):
 
-Config that benefits from review (slice cap, panel, patience) stays a small
-git-tracked file. Only the high-frequency work+result stream goes out-of-tree.
-This resolves the doctrine tension head-on: *"git is the durability"* was right
-for human receipts (the wiki), and wrong for a machine writing every hour.
+```
+~/data/autolab/
+  ledger.jsonl              # the spine (--ledger arg defaults here)
+  runs/<lane>/sweep_runs/<cell>/checkpoints/{latest.pt, …}   # the DATA, incl. the buffer
+  worktrees/<row_id>/       # ephemeral CODE checkout for one slice (removed after)
+  daemon-<role>.lock        # the flock singleton + its metadata
+```
+
+It is **never git-tracked**, so worktree merges, branch switches, and
+`reclaim_worktrees` can never clobber it — Jason's "flatfile so git doesn't stomp
+it", literally. The Mac is the mainframe and 10 MB is nothing, so the reducer
+reads the **whole file** every tick: no index, no DB, nothing to get stale.
+
+The **`~/data` convention** is the answer to "we need to handle buffers": big
+artifacts (the buffer-embedded `latest.pt`, worker records) live under
+`~/data/autolab/runs/<lane>/` — local, fast on this machine, easy to inspect or
+copy. HuggingFace only ever gets the *slimmed* per-slice weights; buffers never go
+to HF. Config that benefits from review stays a small git-tracked file. This
+resolves the doctrine tension head-on: *"git is the durability"* was right for
+human receipts (the wiki), and wrong for a machine writing every hour.
+
+The lane's run DATA is decoupled from the **ephemeral code worktree** the trainer
+checks out per `commit`: `run_sweep` takes a backward-compatible
+`--run-base`/`GOMOKU_RUN_DIR` (default `REPO_ROOT`, so the derby is untouched) and
+the trainer points it at `~/data/autolab/runs/<lane>/`. Teardown deletes only the
+code worktree; the checkpoints persist. That is what makes per-commit checkout
+clean instead of a symlink dance.
 
 ### Row types (one JSON object per line)
 
@@ -68,41 +86,47 @@ auto-assigned monotonic `seq` (its file ordinal, assigned under an flock) + `ts`
 `append()` is flock-guarded and `fsync`s; it **never edits or deletes** a prior
 line. To change anything, append a `correction` row that supersedes fields of a
 prior entity by `ref` (last-writer-wins in the reducer). Setting
-`{"status": "open"}` via a correction is how a crashed/dead-lease lane is
-reclaimed. The history *is* the audit trail.
+`{"status": "open"}` via a correction is how a failed lane is reopened (e.g. by
+the research loop). The history *is* the audit trail.
 
 ### The reducer + priority pick
 
 `fold(read_all(path)) → LedgerState` replays every row in order into current
-state. `LedgerState.claimable(role, now)` returns work a role may take — `open`,
-or `claimed` with an **expired lease and no result** (crash recovery).
-`pick(role, now, priority_fn=None)` returns the first-priority claimable item; the
-default policy is `priority` desc → never-attempted (starvation floor) → oldest
-(FIFO). Passing a different `priority_fn` is the clean seam for porting
-`delo_derby.pick_priority` (Δelo/hr) in P5 once eval rows feed it.
+state. `LedgerState.pick(role, now, priority_fn=None)` returns the first-priority
+**open** item for a role; the default policy is `priority` desc → never-*completed*
+(starvation floor, keyed on `_results`) → oldest (FIFO). Passing a different
+`priority_fn` is the clean seam for porting `delo_derby.pick_priority` (Δelo/hr) in
+P5 once eval rows feed it.
 
 ## The shared loop (trainer + arena are the same shape)
 
+**No `claim` rows.** Mutual exclusion is the OS flock (auto-frees on death);
+recovery is just *re-pick* (the in-flight lane's progress is safe in its
+`latest.pt`). The flocked lockfile carries `{pid, role, item, started_at}` so
+`autolab status` is legible without a claim. (Implemented in `gomoku/lab/daemon.py`,
+P2.)
+
 ```
-loop forever (holding a singleton flock):
-  rows  = ledger.read_all(path)            # whole file; 10MB is nothing
-  state = ledger.fold(rows)                # append-only → current view
-  item  = state.pick(my_role, now)         # first-priority open/lease-expired
-  if not item: sleep; continue
-  ledger.append(claim(item, lease=slice_budget))   # singleton made legible
-  workdir = git worktree-checkout <item.commit> into my own dir
-  base    = hf.fetch(item.base)  if item.base != scratch else None
-  artifact, metrics = run_chunk(workdir, base, item.config, deadline)
-  ref     = hf.push(artifact, item.id)             # per-slice revision
-  ledger.append(result(item, ref, metrics))
-  ledger.append_followups(...)             # the flywheel: next slice + eval
-  teardown worktree
+acquire flock singleton (role)           # exit if another daemon holds it
+loop until stop:
+  state = ledger.fold(ledger.read_all(path))
+  item  = state.pick(my_role, now)       # first-priority OPEN for my role
+  if not item: write lockfile{idle}; sleep; continue
+  write lockfile{item, started_at}
+  preflight()                            # foreign-tenant guard (PreflightDeferred → re-poll)
+  try:
+    res = run_chunk(item)                # checkout commit → run_sweep → HF → ChunkResult
+    ledger.append(result(item, res.artifact_ref, res.metrics))
+    for f in res.followups: ledger.append(f)   # flywheel: continuation + arena eval
+  except: ledger.append(result(item, status=FAILED, error=…))   # terminal unless reopened
 ```
 
-Trainer and arena differ only in `run_chunk()` / `followups()`. A finished
-training slice auto-enqueues its continuation **and** an arena eval — the flywheel
-— which is why **one shared ledger** beats one-per-role: the arena watches the
-trainer's `result` rows with zero glue, and the cockpit is a single `fold()`.
+Trainer and arena differ only in `run_chunk()`. A finished training slice
+auto-enqueues its continuation **and** an arena eval — the flywheel — which is why
+**one shared ledger** beats one-per-role: the arena picks up the trainer's enqueued
+eval rows with zero glue, and the cockpit is a single `fold()`. On a crash the
+flock auto-frees and a fresh daemon re-picks the now-first-priority item; nothing to
+reclaim.
 
 ## Code-shape contract (so a 1h slice never wastes a cycle)
 
@@ -124,12 +148,15 @@ The trained code is already mostly shaped for this; the contract makes it explic
    continuation; reserve HF-base for genuinely new lanes.
 5. **Embed provenance** into the checkpoint (`git_sha`, `recipe_flags`,
    `ledger_row_id`, `parent`, Δelo) so resume is self-checking.
-6. **Idempotent restart** — a crash after `claim` before `result` leaves an
-   orphaned claim whose lease expires; the loop reclaims via a **correction**
-   (never edits the claim row) and resumes from the lane's last `latest.pt`.
-7. **Guaranteed singleton** via a real OS flock + PID file (not `pgrep`
-   convention) that self-reclaims on a dead PID (else a SIGKILL deadlocks the
-   lab). Preflight for foreign-MPS tenants before any GPU dispatch — *constantly*
+6. **Idempotent restart = re-pick** (no claim rows) — a crash leaves the lane
+   `open` (no result was appended), so a fresh daemon simply re-picks the
+   now-first-priority item and resumes from the lane's last `latest.pt`. Nothing
+   to reclaim; no orphaned claim to clean up.
+7. **Guaranteed singleton** via an OS `flock` that **auto-releases on death** (the
+   fd closes) — so a SIGKILL needs no stale-lock cleanup, the failure mode a
+   PID-file has. `FD_CLOEXEC` keeps `run_chunk`'s subprocesses from inheriting and
+   pinning the lock. Preflight for foreign-MPS tenants before any GPU dispatch
+   (`PreflightDeferred` → log an event + re-poll, never FAIL the lane) — *constantly*
    means "whenever the box is the lab's", not "unconditionally".
 8. **Clean exit only** — every slice exits via the wandb-clean path, never
    SIGKILL, or it poisons the run id for the next `--resume`.
@@ -182,11 +209,17 @@ Each loop ships three instruments before it runs unattended:
 - **Escalation** — the existing `human-gated`/`deferred` labels + a `needs:jason`
   status that floats to the top of `autolab status`.
 
-## Locked decisions (2026-06-18)
+## Locked decisions (2026-06-18 / 19)
 
-- Ledger: local flatfile in `~/code`, `--ledger` arg. Cross-machine fork (→ HF
-  dataset repo) deferred — single-machine mainframe for now.
-- Buffer stays **local** (`latest.pt` = true resume); HF carries slimmed weights.
+- Home: everything out-of-git under **`~/data/autolab/`** (`AUTOLAB_HOME`), `--ledger`
+  arg. Cross-machine fork (→ HF dataset repo + leases) deferred — single-machine
+  mainframe for now.
+- **No claim/lease rows.** Singleton = flock (auto-frees on death); recovery =
+  re-pick. (The `claim` primitive stays in the ledger lib unused.)
+- Buffer stays **local** in `~/data` (`latest.pt` = true resume); HF carries slimmed
+  weights only.
+- Data↔code decoupled: `run_sweep --run-base`/`GOMOKU_RUN_DIR` (default `REPO_ROOT`);
+  per-commit checkout into an ephemeral code worktree.
 - Arena: **concurrent + co-tenancy guard**; measure concurrent at 15×15 as P4.
 - HF delivery: **per-slice revision + a moving `champion` tag** (arena bumps on
   PROMOTE).
@@ -198,11 +231,11 @@ Each loop ships three instruments before it runs unattended:
 | Phase | Issue | Goal | Status |
 |---|---|---|---|
 | **P1** spine | #54 | ledger reducer + corrections + priority pick + tests | **DONE** |
-| P2 daemon | (file) | shared loop contract (flock+lease, claim/run/deliver/record) + `autolab status` | next |
-| P3 trainer | (file) | wire ledger + HF push + per-slice checkout → **prove a 1-epoch slice end-to-end** | |
-| P4 arena | (file) | gomocup_brain + panel + gate + HF-pull, co-tenancy guard | |
+| **P2** daemon | #56 | flock singleton (no-claim re-pick) + `run_daemon` + `autolab status` | **DONE** |
+| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **DONE** |
+| P4 arena | (file) | gomocup_brain + panel + gate + champion tag, co-tenancy guard | next |
 | P5 research | (file) | ideate→append→wait loop + the wall-clock-to-elo gate (`delta_e_harness` 5-gap list) | |
-| P6 cockpit | (file) | status surface + escalation + retire the fragmented queue surfaces | |
+| P6 cockpit | (file) | status into `gh_prime.sh` + escalation + retire the fragmented queue surfaces | |
 
 ## Contradictions & risks (the honest tensions)
 

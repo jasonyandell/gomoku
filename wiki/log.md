@@ -3,6 +3,20 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-19] autolab-architecture.md — de-stale to the SHIPPED P2/P3 design (no-claim flock, ~/data home, run-base)
+
+Reconciled the design page with what's built (P1 #54, P2 #56, P3 #57 all merged).
+Dropped the `claim`/lease path from the shared-loop pseudocode + code-shape items
+6–7 (singleton is now an OS flock that auto-frees on death — `FD_CLOEXEC` so
+subprocesses can't pin it — and recovery is plain re-pick; nothing to reclaim). New
+**`~/data/autolab/` home** section (ledger + `runs/<lane>/` + `worktrees/<row>` +
+`daemon-<role>.lock`) with the **`~/data` buffer convention** (big artifacts local;
+HF gets slimmed weights only) and the **data↔code decoupling** via
+`run_sweep --run-base`/`GOMOKU_RUN_DIR` (default REPO_ROOT) + per-commit ephemeral
+code worktree. Updated Locked decisions + the phases table (P1–P3 DONE). Built this
+session: `gomoku/lab/{daemon,status,trainer}.py`, `hf.push_slice`, `run_sweep`
+run-base, entry points `gomoku-lab-{train,status}`.
+
 ## [2026-06-18] NEW topic/autolab-architecture.md — formalize the autolab (epic #53, P1 spine #54 built)
 
 New canonical design page for Jason's self-driving-lab spec: one external, out-of-git,
