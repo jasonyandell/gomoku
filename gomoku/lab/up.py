@@ -120,8 +120,12 @@ def _env(template: dict) -> dict:
     return {k: (v() if callable(v) else v) for k, v in template.items()}
 
 
-def _daemon_plist(label: str, program_args: list[str], log_stem: str) -> dict:
+def _daemon_plist(label: str, program_args: list[str], log_stem: str,
+                  board_size: int | None = None) -> dict:
     """A KeepAlive(SuccessfulExit=false) long-running daemon (train/arena)."""
+    env = _env(_DAEMON_ENV)
+    if board_size is not None:
+        env["GOMOKU_BOARD_SIZE"] = str(board_size)
     return {
         "Label": label,
         "ProgramArguments": list(program_args),
@@ -129,7 +133,7 @@ def _daemon_plist(label: str, program_args: list[str], log_stem: str) -> dict:
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 30,
         "WorkingDirectory": WORKDIR,
-        "EnvironmentVariables": _env(_DAEMON_ENV),
+        "EnvironmentVariables": env,
         "StandardOutPath": _logs(log_stem, "out.log"),
         "StandardErrorPath": _logs(log_stem, "err.log"),
         "ProcessType": "Standard",
@@ -152,18 +156,22 @@ def _periodic_plist(label: str, program_args: list[str], interval: int,
     }
 
 
-def render_plists() -> dict[str, dict]:
-    """The four plist dicts keyed by label (§b literal config). Pure — no I/O."""
+def render_plists(*, board_size: int | None = None) -> dict[str, dict]:
+    """The four plist dicts keyed by label (§b literal config). Pure — no I/O.
+
+    ``board_size`` (when set) bakes ``GOMOKU_BOARD_SIZE`` into the train + arena
+    daemon env so the long-running daemons gate at the requested board size; None
+    means native 9x9 (no key)."""
     stop = stop_file_path()
     return {
         "com.gomoku.autolab.train": _daemon_plist(
             "com.gomoku.autolab.train",
             [VENV_PY, "-m", "gomoku.lab.trainer", "--prod", "--stop-file", stop],
-            "train"),
+            "train", board_size=board_size),
         "com.gomoku.autolab.arena": _daemon_plist(
             "com.gomoku.autolab.arena",
             [VENV_PY, "-m", "gomoku.lab.arena", "--stop-file", stop],
-            "arena"),
+            "arena", board_size=board_size),
         "com.gomoku.autolab.monitor": _periodic_plist(
             "com.gomoku.autolab.monitor",
             [VENV_PY, MONITOR_SCRIPT],
@@ -175,12 +183,13 @@ def render_plists() -> dict[str, dict]:
     }
 
 
-def write_plists(*, launchd_dir_path: str | None = None) -> dict[str, str]:
+def write_plists(*, launchd_dir_path: str | None = None,
+                 board_size: int | None = None) -> dict[str, str]:
     """Render + write all four plists; returns label → written path."""
     d = launchd_dir(launchd_dir_path)
     os.makedirs(d, exist_ok=True)
     written = {}
-    for label, doc in render_plists().items():
+    for label, doc in render_plists(board_size=board_size).items():
         p = os.path.join(d, f"{label}.plist")
         with open(p, "wb") as f:
             plistlib.dump(doc, f)
@@ -310,7 +319,8 @@ def cmd_up(args) -> int:
     else:
         print("seed: an open train lane already exists — not double-seeding")
     # (4) render + write the four plists
-    written = write_plists(launchd_dir_path=args.launchd_dir)
+    written = write_plists(launchd_dir_path=args.launchd_dir,
+                           board_size=args.board_size)
     # (5) load each idempotently (bootout-before-bootstrap)
     for label in LABELS:
         load_agent(label, runner=runner, launchd_dir_path=args.launchd_dir)
@@ -367,6 +377,10 @@ def main(argv=None) -> int:
                          "~/Library/LaunchAgents)")
     ap.add_argument("--commit", default=None,
                     help="pin the seed SHA (default: git rev-parse HEAD of main)")
+    ap.add_argument("--board-size", type=int, default=None,
+                    help="bake GOMOKU_BOARD_SIZE into the train + arena daemon "
+                         "plists (default: None = native 9x9). Must precede the "
+                         "subcommand, e.g. `--board-size 15 up`")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the launchctl argv instead of executing it")
     ap.add_argument("--force", action="store_true",

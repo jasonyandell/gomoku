@@ -49,7 +49,7 @@ def _args(cmd, **kw):
     bind by passing our own runner where the cmd reads it)."""
     import types
     base = dict(cmd=cmd, ledger=None, launchd_dir=None, commit="cafef00d",
-                dry_run=False, force=False)
+                dry_run=False, force=False, board_size=None)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -110,6 +110,27 @@ def test_plist_env_has_home_autolab_wandb(home):
         assert env["HOME"] == "/Users/jason"
         assert env["AUTOLAB_HOME"] == str(home)
         assert "WANDB_MODE" not in env
+
+
+def test_board_size_bakes_into_train_and_arena_env(home):
+    """render_plists(board_size=15) → GOMOKU_BOARD_SIZE=15 in train + arena env;
+    default omits it (native 9x9)."""
+    plists = U.render_plists(board_size=15)
+    for label in ("com.gomoku.autolab.train", "com.gomoku.autolab.arena"):
+        assert plists[label]["EnvironmentVariables"]["GOMOKU_BOARD_SIZE"] == "15"
+    # default: no key anywhere
+    default = U.render_plists()
+    for label in U.LABELS:
+        assert "GOMOKU_BOARD_SIZE" not in default[label]["EnvironmentVariables"]
+
+
+def test_write_plists_board_size_roundtrips(home):
+    """write_plists(board_size=15) writes the key into the train + arena plists."""
+    written = U.write_plists(board_size=15)
+    for label in ("com.gomoku.autolab.train", "com.gomoku.autolab.arena"):
+        with open(written[label], "rb") as f:
+            doc = plistlib.load(f)
+        assert doc["EnvironmentVariables"]["GOMOKU_BOARD_SIZE"] == "15"
 
 
 def test_write_plists_are_valid_and_roundtrip(home):

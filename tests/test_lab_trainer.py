@@ -89,6 +89,27 @@ def test_run_sweep_argv_and_env(tmp_path, monkeypatch):
     assert kw["env"]["GOMOKU_RUN_DIR"].endswith("/runs/mvp")
 
 
+def test_board_size_threads_into_sweep_env(tmp_path, monkeypatch):
+    """config board_size=15 → GOMOKU_BOARD_SIZE=15 in the run_sweep subprocess env."""
+    role = _role(tmp_path, monkeypatch, dry_run=True)
+    fake = _fake_run()
+    monkeypatch.setattr(T.subprocess, "run", fake)
+    role.run_chunk(_item(config={"cell": "SMOKE", "lane": "mvp", "board_size": 15}))
+    sweep = next(c for c in fake.calls if any(x.endswith("run_sweep.py") for x in c[0]))
+    assert sweep[1]["env"]["GOMOKU_BOARD_SIZE"] == "15"
+
+
+def test_no_board_size_does_not_force_env(tmp_path, monkeypatch):
+    """Without board_size, GOMOKU_BOARD_SIZE is not forced (native 9x9)."""
+    monkeypatch.delenv("GOMOKU_BOARD_SIZE", raising=False)
+    role = _role(tmp_path, monkeypatch, dry_run=True)
+    fake = _fake_run()
+    monkeypatch.setattr(T.subprocess, "run", fake)
+    role.run_chunk(_item())  # default config has no board_size
+    sweep = next(c for c in fake.calls if any(x.endswith("run_sweep.py") for x in c[0]))
+    assert "GOMOKU_BOARD_SIZE" not in sweep[1]["env"]
+
+
 def test_prod_mode_uses_1h_cap(tmp_path, monkeypatch):
     role = _role(tmp_path, monkeypatch, dry_run=True, mvp_mode=False)
     fake = _fake_run()
