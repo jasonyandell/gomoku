@@ -71,6 +71,14 @@ WITHOUT modifying it (verified against the upstream repo + Networks submodule):
   uses 4971ms / 2.4M nodes (was 4105ms / 2.0M at 0.75). Both are dhbloo's own
   official values; the engine binary/weights are untouched.
 
+**First champion contact (2026-06-18):** `eval502` vs Rapfi @5s/move single-thread,
+n=24, via the #30 panel harness → **5W-19L-0D (20.8%)**; **black 5-7 (42%), white
+0-12 (0%)** — the whole shortfall is the white-side defense gap (#33/#37), the
+strongest evidence yet for the #37 degeneration hypothesis and the strong-attacker
+diagnostic the #49 instrument needed. NOT compute-matched (Rapfi 5s vs our net
+~0.4s @ sims=400). Full provenance: `TRAINING_WIKI.md` 2026-06-18; synthesis:
+[white-side-defense-plan.md](white-side-defense-plan.md) §1B.2 (2026-06-18).
+
 Still open (do not over-claim the absolute number yet): balanced openings
 (swap2, #22) — freestyle is a first-player win, so half of "wins" are the
 black-side forced win; and the *effective* single-thread strength under our

@@ -106,6 +106,39 @@ The conditional in Step B / §15 ("escalate to I2 *if* value-only under-moves th
 
 ---
 
+## §1B.2 → STRONG-ATTACKER MEASUREMENT ARRIVED (2026-06-18) — real Rapfi-NNUE confirms the gap is the WHOLE shortfall: champion white 0/12 vs #1 engine
+
+The "harder attacker" §1B.2/#49 has been reaching for is now **online for real**: native
+Rapfi-NNUE (the engine that won Gomocup 2024+2025) is a registered no-wine panel anchor —
+the #28 "weightless yardstick" bug is fixed (it now loads NNUE and searches to its time
+budget). See [external-engine-baselines.md](external-engine-baselines.md) § *Rapfi-NNUE
+NATIVE ANCHOR ONLINE* and [reliable-eval-set.md](reliable-eval-set.md). First champion
+contact (full provenance in `TRAINING_WIKI.md` 2026-06-18):
+
+**Champion `eval502` vs Rapfi, 5s/move single-thread, n=24, #30 panel harness → 5W-19L-0D (20.8%).**
+The color split IS the finding:
+- **black (attacking): 5-7-0 = 42%** — competitive with the #1 engine even at a ~10×
+  compute disadvantage (Rapfi 5s/move vs our net ~0.4s @ sims=400).
+- **white (defending): 0-12-0 = 0%** — swept. **The entire strength shortfall is the
+  white-side defense gap.**
+
+This is the strong-attacker reading #45 v1 could not produce (it sat at the floor, 77/80
+vs depth-2). Rapfi punishes the defensive lapse **every** game → the cleanest evidence yet
+for the **[#37](https://github.com/jasonyandell/gomoku/issues/37) hypothesis** (white-side
+defense weakness is the engine of degeneration), and a far sharper probe than self-play.
+**Implications:**
+- **#49 has a live strong attacker now** — Rapfi-as-attacker over white-to-defend
+  positions is the diagnostic the #43 race needs; the floor problem is solved (0/12 is the
+  opposite of a floor).
+- **#43 (stamp the saving move on the policy) is validated as the target** — value-only
+  teaching (#36/#42, above) was structurally wrong; the 0/12 says the *policy* never learns
+  the refutation against a real attacker.
+- **Caveat (don't over-read the 21%):** not compute-matched; freestyle is first-player-
+  favored; n=24 (white 0/12 is conclusive for the gap, the overall rate has a wide CI).
+  Absolute Gomocup-Elo calibration still pending (#35/#30).
+
+---
+
 ## 0. What the code actually does today (ground truth, file:line)
 
 These are the load-bearing facts the plan is built on. All verified by reading source.
