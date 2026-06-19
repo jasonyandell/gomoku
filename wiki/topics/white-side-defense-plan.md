@@ -163,6 +163,41 @@ and watch the white column move.
 
 ---
 
+## §1B.2 → #43 (I2) LEVER IS BUILT (2026-06-18) — saving-move-on-policy lands; awaiting the live race
+
+The I2 arm is now **code-complete and merged** (`Closes #43`, commit on `main`
+2026-06-18); the live training race + the Rapfi white-column re-measurement is the remaining
+(GPU, `needs-live-validation`) step. What shipped:
+
+- **New solver primitive `vcf.vcf_refutations(board)`** — the piece the value-only teacher
+  lacked. The defense teacher fires when the OPPONENT has a proven forced VCF win *as if to
+  move*, but the recorded side **moves first** (one tempo), so there is usually a SAVING move.
+  `vcf_refutations` enumerates the defender moves that, once played, leave the opponent with
+  **no** forced VCF (near-stone candidate prune + per-move re-solve). **Sound:** a move is only
+  reported when an explicit re-solve proves the win is gone (no false saving moves); complete
+  within solver depth (an isolated move can neither block a four nor make one). Returns `[]` for
+  a genuinely lost position (e.g. an open four / disjoint double-four).
+- **`self_play._apply_defense_teacher_policy`** stamps a soft (uniform) policy target over the
+  saving move(s) and **leaves the value at the natural game outcome** — a *pure* policy lever.
+  A truly-lost position (no refutation) is left **entirely untouched** (no value crush), so this
+  is cleanly separable from the failed #36/#42 value path. Mode is a process-wide switch
+  `_DEFENSE_POLICY_MODE` (mirrors the #42 knob pattern); same per-game FRACTION budget applies.
+- **Worker flag `--defense-teacher-policy`** (implies `--defense-teacher`). Default OFF =
+  byte-identical self-play.
+- **Tests:** `tests/test_defense_teacher_policy.py` — refutation soundness (incl. a 300-position
+  fuzz: every stamped move provably breaks the VCF), one-hot/soft stamp, value-untouched,
+  truly-lost skip, quiet/already-fired gates, trajectory integration (policy vs value mode), and
+  the budget cap. Full suite green.
+
+**Why this should work where #36/#42 didn't:** the value-only teacher poisoned the value head
+against an untouched attacking policy (shared-trunk contradiction, #41: `vl→0.06`, `pl→3.4`). The
+I2 target is a *real, consistent* policy label (the move that refuses the forced four) with a
+moderate value — the expected signature is `white_loss ↓` AND `pl` bounded-or-improving AND `vl`
+healthy (~0.10–0.16). **The gate is the Rapfi TC-tier calibration above**: re-run `eval_vs_rapfi.py
+--jobs 8` after a policy-stamp training slice and watch the white W-L-D column move off the floor.
+
+---
+
 ## 0. What the code actually does today (ground truth, file:line)
 
 These are the load-bearing facts the plan is built on. All verified by reading source.

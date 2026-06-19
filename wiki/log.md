@@ -3,6 +3,17 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-18] white-side-defense-plan — #43 (I2) LEVER BUILT: stamp the saving move on the policy head
+
+Recorded that the #43 defense-teacher I2 arm is code-complete + merged (`Closes #43`). New
+`vcf.vcf_refutations` primitive (the defender moves that break the opponent's forced VCF, since
+the recorded side moves first — sound, re-solve-confirmed); `self_play._apply_defense_teacher_policy`
+stamps a soft saving-move policy target and leaves value untouched (pure policy lever, no value
+crush on truly-lost positions); `--defense-teacher-policy` worker flag; full test file incl. a
+300-position soundness fuzz. Added a "#43 (I2) LEVER IS BUILT" subsection to §1B.2 with the why
+(vs the failed value-only #36/#42) and the gate (re-run the Rapfi TC-tier white-column calibration
+after a training slice). Remaining = the live GPU race (`needs-live-validation`).
+
 ## [2026-06-18] white-side-defense-plan + reliable-eval-set — SYNTHESIZE the TC-tier calibration + the parallel --jobs eval (#52)
 
 Promoted the champion-vs-Rapfi TC-tier calibration (TRAINING_WIKI evidence) into synthesis.
