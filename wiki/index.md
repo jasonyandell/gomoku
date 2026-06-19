@@ -17,6 +17,17 @@ history.
 > handoff `handoffs/handoff-2026-06-15-yardstick-overturns-campaign.md`, issues
 > **#28** (fix yardstick) and **#29** (re-crown + matched-epoch capacity ladder).
 > **Gate every "did this help?" on head-to-head vs the preserved champion, not Rapfi.**
+>
+> ✅ **2026-06-18 UPDATE — the yardstick is FIXED (#40 closed, #28 root-caused).**
+> The "broken Rapfi" above was the **weightless classical build**; native **Rapfi-NNUE**
+> (Gomocup 2024+2025 winner) now loads its NNUE config and searches to its full time
+> budget (depth 32 / 2M nodes / full budget), single-thread, **no wine** — a registered
+> default panel anchor. First champion contact: **`eval502` vs Rapfi @5s, n=24 → 20.8%**,
+> and the whole shortfall is the white-defense gap (**black 42% / white 0/12**). See
+> [external-engine-baselines.md](topics/external-engine-baselines.md) § *Rapfi-NNUE NATIVE
+> ANCHOR ONLINE*, [white-side-defense-plan.md](topics/white-side-defense-plan.md) §1B.2
+> (2026-06-18), and `TRAINING_WIKI.md`. Absolute Gomocup-Elo calibration still pending
+> (#35/#30); the champion-not-Rapfi gating rule above still stands until then.
 
 Pick the doorway that matches the task. The big training notebook is still the
 source of chronological evidence; these routes keep future sessions from
@@ -39,8 +50,8 @@ reading it front-to-back unless the work actually needs that.
 | Add or interpret external engine baselines | [topics/external-engine-baselines.md](topics/external-engine-baselines.md) | [sources/gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md), then `gomoku.match` / `gomoku.eval_worker`. |
 | Find/run external gomoku engines to test against (which have open source?) | [topics/gomocup-engines-catalog.md](topics/gomocup-engines-catalog.md) | [topics/external-engine-baselines.md](topics/external-engine-baselines.md). |
 | **What's a RELIABLE eval?** (wine engines SHELVED 2026-06-16 — opt-in only, #35; default = net-vs-net pure-torch + pure-python `heuristic`/`lookahead`; native Rapfi anchor = #40/#28) | [topics/reliable-eval-set.md](topics/reliable-eval-set.md) | [topics/gomocup-engines-catalog.md](topics/gomocup-engines-catalog.md), issues #35 / #40 / #28. |
-| **Build the calibrated engine-panel derby / eval ladder** (fix the broken-yardstick wound; runner + brain wrapper BUILT — register nets with `incremental=1`; **first run DONE — calibration BROKE: engines unreliable + published Elos invalid anchors, #35**) | [topics/engine-panel-derby-design.md](topics/engine-panel-derby-design.md) | [topics/alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) §8–§14, issues #30 / #35. |
-| **Quantify / fix white-side (defense) weakness** (the #33/#18 "never lose as white" arm — pure-analysis reader over the panel JSONL: `scripts/panel_white_elo.py`) | [topics/white-side-defense-plan.md](topics/white-side-defense-plan.md) | [topics/engine-panel-derby-design.md](topics/engine-panel-derby-design.md), issues #33 / #18. |
+| **Build the calibrated engine-panel derby / eval ladder** (fix the broken-yardstick wound; runner + brain wrapper BUILT — register nets with `incremental=1`; **wine run BROKE calibration (#35); 2026-06-18: native Rapfi-NNUE anchor now ONLINE (#40) + first champion-vs-Rapfi run DONE (eval502 20.8% @5s, n=24) — relative Elo works, absolute calibration still pending #35/#30**) | [topics/engine-panel-derby-design.md](topics/engine-panel-derby-design.md) | [topics/alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) §8–§14, [topics/external-engine-baselines.md](topics/external-engine-baselines.md), issues #30 / #35 / #40. |
+| **Quantify / fix white-side (defense) weakness** (the #33/#18 "never lose as white" arm — pure-analysis reader over the panel JSONL: `scripts/panel_white_elo.py`; **2026-06-18: real Rapfi-NNUE confirms it — champion white 0/12 vs the #1 engine, the whole shortfall**) | [topics/white-side-defense-plan.md](topics/white-side-defense-plan.md) | [topics/engine-panel-derby-design.md](topics/engine-panel-derby-design.md), [topics/external-engine-baselines.md](topics/external-engine-baselines.md), issues #33 / #18 / #37 / #43 / #49. |
 | Mine or use validation archives | [topics/mining-validation-archives.md](topics/mining-validation-archives.md) | [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) and [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md). |
 | Play a checkpoint | [topics/playing-the-model.md](topics/playing-the-model.md) | Latest plateau/run-end notes in [topics/training-run-lineage.md](topics/training-run-lineage.md). |
 | Maintain the wiki | [topics/wiki-operating-model.md](topics/wiki-operating-model.md) | [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) and [log.md](log.md). |

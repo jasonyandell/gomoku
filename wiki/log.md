@@ -3,6 +3,19 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-18] index + white-side-defense-plan + external-engine-baselines — SYNTHESIZE first real-Rapfi result; de-stale the "broken yardstick" reckoning
+
+The first champion-vs-real-Rapfi result (eval502 20.8% @5s, n=24; **black 42% / white
+0/12**) was recorded only in `TRAINING_WIKI.md` (evidence) — promoted it into the synthesis
+layer. (1) `white-side-defense-plan.md`: new §1B.2 (2026-06-18) "STRONG-ATTACKER
+MEASUREMENT ARRIVED" — real Rapfi is the harder attacker #45/#49 was reaching for; 0/12 is
+the opposite of the #45-v1 floor, the cleanest #37 evidence, and validates #43 as the
+target. (2) `index.md`: added a ✅ 2026-06-18 UPDATE to the 2026-06-15 RECKONING banner (the
+"broken Rapfi" was the weightless build; native NNUE Rapfi is fixed + online, #40) and
+de-staled the reliable-eval / panel-derby / white-defense table rows. (3)
+`external-engine-baselines.md`: first-contact result line under the anchor-online section.
+Cross-refs wired: white-defense ↔ external-engine-baselines ↔ #37/#43/#49 ↔ TRAINING_WIKI.
+
 ## [2026-06-18] topics | external-engine-baselines + reliable-eval-set + gomocup-engines-catalog — native Rapfi-NNUE anchor ONLINE (#40, resolves #28 under-search)
 
 Brought the first hard EXTERNAL eval online natively (no wine, per Jason's nix
