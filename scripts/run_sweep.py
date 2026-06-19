@@ -493,14 +493,29 @@ CELLS: dict[str, Cell] = {
     # firing guard. Solve caps held at 800/7 for gen-cost parity. NOTE: the
     # refutation enumeration (K candidate re-solves per fire) is the new gen cost —
     # smoke measured ~0.85 s/game added on the champion at these caps (~25% over the
-    # base ~3.1 s/game); acceptable for a slice. WARM-START from the champion:
+    # base ~3.1 s/game); acceptable for a slice.
+    #
+    # AUDIT FIX (2026-06-19, adversarial soundness audit of the live slice): the
+    # teacher has a SELF-CONTAINED "side-to-move already winning" guard. This cell
+    # runs --defense-teacher-policy WITHOUT --vcf-teacher, so the vcf_already_fired
+    # plumbing is dead and the teacher would otherwise fire on ~5% of positions where
+    # the side-to-move has its OWN forced win, overwriting the sharp winning policy
+    # with a defensive blend (policy=defend / value=winning contradiction). The
+    # teacher now re-solves the un-swapped board and bails if StM has a forced win.
+    # The audit also confirmed ZERO false saves over 302 positions at these caps and
+    # added a max_candidates bound on the refutation density tail. WARM-START:
     #   python scripts/run_sweep.py G15-defense-i2 \
     #       --resume sweep_runs/g15_128x10_bigbuf_eval502.pt \
     #       --max-wall-secs <slice> --final-eval
+    # n_workers=8 (vs G15-defense's 4): generation here is CPU-bound on the
+    # pure-python VCF refutation (not MPS-bound — net eval is ~6% of gen wall), and
+    # the M5 Max has 18 cores, so 8 generators ~2x the fresh stamped-game rate and
+    # de-dilute the warm buffer faster. Measured live: 4->8 workers took worker CPU
+    # 397%->792% with the trainer epoch only nudging 17->22s (2026-06-19).
     "G15-defense-i2": Cell("G15-defense-i2-board15", sgd_per_game=1.0,
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="large", stem_padding=1, n_simulations=100,
-                n_workers=4, wave_size=64, games_per_batch=8, wave_mode=False,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
                 c_puct=1.25, c_puct_base=19652.0,
                 dirichlet_alpha=0.13, dirichlet_eps=0.25,
                 temperature_moves=30, temperature_final=0.1,

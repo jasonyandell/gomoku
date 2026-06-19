@@ -195,6 +195,15 @@ _DEFENSE_MAX_FRACTION = 1.0
 # is rewritten. Default False = the original value-only behavior (byte-identical).
 _DEFENSE_POLICY_MODE = False
 
+# Issue #43 audit (MINOR): hard cap on the number of refutation candidates the
+# policy teacher re-solves per fire. The targeted candidate set is usually <10 but
+# its size scales with the defender's four-making moves (K~60-75 on adversarial
+# dense boards), and each candidate is a full (capped) solve_vcf. Bounding it keeps
+# a pathological position from costing seconds; dropping a candidate only reduces
+# recall (the safe direction — a missed refutation just means the teacher fires on
+# fewer of that position's saving moves, never a false save).
+_DEFENSE_REFUTE_MAX_CANDIDATES = 24
+
 
 def configure_defense_teacher(soft_value: float | None = None,
                               max_fraction: float | None = None,
@@ -580,12 +589,28 @@ def _apply_defense_teacher_policy(
     (uniform) policy target over them; the value is left untouched.
 
     Returns ``(new_pi, new_z, fired)``. ``fired`` is True only when (a) the
-    opponent has a proven forced VCF win AND (b) at least one refutation exists —
-    a TRULY lost position (no saving move) returns ``(pi, z, False)`` and is left
-    entirely untouched, keeping this a PURE policy lever (no value crushing). The
-    same two gen-cost gates as the value teacher apply: skip when the offensive
-    VCF teacher already fired, and a cheap opponent-four-threat pre-scan before the
-    solve. Only ever called when ``--defense-teacher`` is set with policy mode on.
+    opponent has a proven forced VCF win, (b) the side-to-move does NOT itself have
+    a forced win (else it should CONVERT, not defend — see the self-contained guard
+    below), AND (c) at least one refutation exists — a TRULY lost position (no
+    saving move) returns ``(pi, z, False)`` and is left entirely untouched, keeping
+    this a PURE policy lever (no value crushing). The gen-cost gates: skip when the
+    offensive VCF teacher already fired, and a cheap opponent-four-threat pre-scan
+    before the solve. Only ever called when ``--defense-teacher`` is set with policy
+    mode on.
+
+    SELF-CONTAINED "side-to-move already winning" guard (issue #43 audit fix): the
+    ``vcf_already_fired`` parameter is the offensive teacher's signal that the
+    side-to-move has a proven win — but that plumbing is DEAD whenever the cell runs
+    ``--defense-teacher-policy`` WITHOUT ``--vcf-teacher`` (the actual G15-defense-i2
+    configuration), so ``vcf_already_fired`` is always False there. Without an
+    independent check the teacher would fire on positions where the side-to-move has
+    its OWN forced win and OVERWRITE the correct sharp winning-move policy with a
+    diluted defensive blend (policy says "defend" while value says "winning" — a
+    contradictory target on a shared trunk). We therefore re-derive the condition
+    HERE by solving the UN-swapped board (side-to-move as attacker); if the
+    side-to-move has a forced win we bail and leave the record untouched, so the
+    net keeps learning to convert. This also short-circuits before the expensive
+    refutation enumeration on exactly those positions.
     """
     if vcf_already_fired:
         return pi, z, False
@@ -611,13 +636,27 @@ def _apply_defense_teacher_policy(
     if not res.has_forced_win:
         return pi, z, False
 
+    # SELF-CONTAINED guard: if the side-to-move ITSELF has a proven forced win,
+    # this is a position to CONVERT, not defend — do not overwrite its winning
+    # policy. (Replaces the dead vcf_already_fired plumbing when --vcf-teacher is
+    # off; also skips the expensive refutation below on these positions.)
+    own_board = np.stack([me, opp], axis=0)
+    with _profile_timer(profile, "defense_solve_s"):
+        own = vcf.solve_vcf(own_board, max_depth=max_depth, max_nodes=max_nodes)
+    if own.has_forced_win:
+        _profile_add(profile, "defense_own_win_skips", 1.0)
+        return pi, z, False
+
     # The opponent has a proven forced win — but we move first, so look for the
     # saving move(s) that refute it. No refutation => genuinely lost; leave the
-    # record untouched (pure policy lever: never crush value here).
+    # record untouched (pure policy lever: never crush value here). ``max_candidates``
+    # bounds the per-fire re-solve count on pathologically dense boards (the targeted
+    # candidate set is usually <10 but scales with defender four-making moves).
     with _profile_timer(profile, "defense_refute_s"):
         saving = vcf.vcf_refutations(
             swapped_board, winning_move=res.winning_move,
-            max_depth=max_depth, max_nodes=max_nodes)
+            max_depth=max_depth, max_nodes=max_nodes,
+            max_candidates=_DEFENSE_REFUTE_MAX_CANDIDATES)
     if not saving:
         return pi, z, False
 

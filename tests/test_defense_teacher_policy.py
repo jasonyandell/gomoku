@@ -189,6 +189,54 @@ def test_policy_teacher_skips_when_vcf_already_fired():
     assert new_pi is pi
 
 
+# StM open four (its OWN forced win) AND opponent open four (so detection fires).
+_STM_ALSO_WINS = make_planes(
+    me_cells=[(2, 2), (2, 3), (2, 4), (2, 5)],
+    opp_cells=[(6, 2), (6, 3), (6, 4), (6, 5)],
+)
+
+
+def test_policy_teacher_skips_when_side_to_move_has_own_win():
+    # #43 AUDIT FIX (the confirmed MAJOR): when the side-to-move ITSELF has a proven
+    # forced win, the teacher must NOT overwrite its correct winning policy with a
+    # defensive blend — even though the opponent ALSO has a forced four (detection
+    # fires). This guard is SELF-CONTAINED: it re-solves the un-swapped board rather
+    # than relying on vcf_already_fired, which is dead when --vcf-teacher is off (the
+    # live G15-defense-i2 configuration).
+    detect = _swapped(_STM_ALSO_WINS)
+    assert vcf.solve_vcf(detect).has_forced_win  # opponent has a forced win
+    own = np.stack([_STM_ALSO_WINS[0].astype(bool),
+                    _STM_ALSO_WINS[HISTORY_PLY].astype(bool)], axis=0)
+    assert vcf.solve_vcf(own).has_forced_win      # side-to-move ALSO has its own win
+    pi = np.full(N * N, 1.0 / (N * N), dtype=np.float32)
+    new_pi, new_z, fired = _apply_defense_teacher_policy(
+        _STM_ALSO_WINS, pi, 0.7, vcf_already_fired=False)
+    assert fired is False   # bailed — keep the winning policy, do not stamp defense
+    assert new_pi is pi     # policy untouched
+    assert new_z == 0.7     # value untouched
+
+
+def test_own_win_guard_does_not_oversuppress_pure_defense():
+    # The guard must ONLY suppress when the side-to-move has its own win. A pure
+    # defensive position (StM has no four of its own) must still fire normally.
+    own = np.stack([_REFUTABLE[0].astype(bool),
+                    _REFUTABLE[HISTORY_PLY].astype(bool)], axis=0)
+    assert not vcf.solve_vcf(own).has_forced_win   # StM has no own win here
+    pi = np.full(N * N, 1.0 / (N * N), dtype=np.float32)
+    _new_pi, _new_z, fired = _apply_defense_teacher_policy(
+        _REFUTABLE, pi, 0.5, vcf_already_fired=False)
+    assert fired is True
+
+
+def test_vcf_refutations_honors_max_candidates_cap():
+    # The MINOR density-tail bound: max_candidates limits how many candidate
+    # defender moves are re-solved. max_candidates=0 -> no candidate tested -> [].
+    board = _swapped(_REFUTABLE)
+    full = vcf.vcf_refutations(board)
+    assert full == [_flat(2, 6)]
+    assert vcf.vcf_refutations(board, max_candidates=0) == []
+
+
 def test_soft_target_over_multiple_refutations():
     # Two independent simple fours, each with a single (distinct) completion the
     # defender must block. Neither block alone refutes BOTH fours, so there is no
