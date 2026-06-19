@@ -1,0 +1,28 @@
+#!/bin/bash
+# Gomocup engine wrapper: run-rapfi — NATIVE (non-wine) Rapfi, the strength
+# anchor past the ~1700 anchor-ladder ceiling (issues #40 / #28 / #35). Speaks
+# the Piskvork/Gomocup protocol on stdin/stdout (Rapfi's default mode), so
+# `gomoku/external_engine.py` drives it unchanged. NO wine — pure arm64 Mach-O.
+#
+# Register in panel_tournament.py::_NATIVE_ENGINES (no wine opt-in needed) or
+# directly in gomoku.match as:
+#   external:cmd=run-rapfi,timeout_ms=T,size=15
+#
+# CRITICAL: pass `--config <engines/rapfi/config.toml>`. Without it Rapfi runs
+# its WEIGHTLESS classical build, which resolves positions at ~depth 10 / ~500
+# nodes and ignores its time budget — the #28 "illusory TC tiers" bug. WITH the
+# config it loads the mix9svq NNUE weights and actually searches to its time
+# budget (depth ~32 / ~2M nodes / full timeout_turn), single-threaded
+# (default_thread_num = 1, Gomocup-legal). Rapfi resolves the weight files
+# relative to the CONFIG FILE's directory, so an absolute --config path is
+# self-contained — no cwd assumptions.
+#
+# Repo location: an inherited GOMOKU_REPO wins (a worktree checkout shadows main
+# during dev), else ~/code/gomoku.
+GOMOKU_REPO="${GOMOKU_REPO:-$HOME/code/gomoku}"
+RAPFI_DIR="$GOMOKU_REPO/engines/rapfi"
+BIN="$RAPFI_DIR/pbrain-rapfi"
+CFG="$RAPFI_DIR/config.toml"
+[ -x "$BIN" ] || { echo "ERROR run-rapfi: missing pbrain-rapfi at $BIN (run engines/rapfi/build_rapfi.sh)"; exit 9; }
+[ -f "$CFG" ] || { echo "ERROR run-rapfi: missing config.toml at $CFG (NNUE config; engine would run weightless)"; exit 9; }
+exec "$BIN" --config "$CFG" gomocup "$@"

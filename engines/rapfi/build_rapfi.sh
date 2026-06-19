@@ -42,4 +42,29 @@ cp "build/$PRESET/pbrain-rapfi" "$REPO_ROOT/engines/rapfi/pbrain-rapfi"
 } > "$REPO_ROOT/engines/rapfi/BUILD_COMMIT.txt"
 
 echo "Built engines/rapfi/pbrain-rapfi from rapfi@$COMMIT"
-printf 'START 9\nINFO rule 0\nINFO timeout_turn 200\nBEGIN\nEND\n' | "$REPO_ROOT/engines/rapfi/pbrain-rapfi"
+
+# --- NNUE weights (issues #40/#28): the WEIGHTLESS classical build under-searches
+# (stops ~depth 10 / ~500 nodes, ignores its time budget — the "illusory TC
+# tiers" bug). The mix9svq NNUE evaluator fixes that: it searches to its full
+# time budget (depth ~32 / ~2M nodes). Weights + the classical fallback model
+# live in Rapfi's `Networks` submodule; copy them next to the binary so the
+# committed engines/rapfi/config.toml (which references them by bare filename,
+# resolved relative to the config dir) loads them. Weights are gitignored
+# (~50MB of .lz4); config.toml IS committed (it defines the anchor).
+NET_SRC="$BUILD_DIR/rapfi/Networks"
+if [ ! -f "$NET_SRC/mix9svq/mix9svqfreestyle_bsmix.bin.lz4" ]; then
+  git -C "$BUILD_DIR/rapfi" submodule update --init --depth 1 Networks || true
+fi
+if [ -d "$NET_SRC/mix9svq" ]; then
+  cp "$NET_SRC"/mix9svq/mix9svq{freestyle_bsmix,standard_bs15,renju_bs15_black,renju_bs15_white}.bin.lz4 \
+     "$REPO_ROOT/engines/rapfi/"
+  cp "$NET_SRC/classical/model210901.bin" "$REPO_ROOT/engines/rapfi/"
+  echo "Copied mix9svq NNUE weights + classical fallback into engines/rapfi/"
+else
+  echo "WARN: Networks submodule missing — engine will run WEIGHTLESS (under-searches; see #28)." >&2
+fi
+
+# Smoke: the NNUE config must load and actually search to its budget.
+printf 'START 15\nINFO timeout_turn 500\nBOARD\n7,7,1\n7,8,2\nDONE\n' \
+  | "$REPO_ROOT/engines/rapfi/pbrain-rapfi" --config "$REPO_ROOT/engines/rapfi/config.toml" gomocup \
+  | grep -E 'load weight|^[0-9]+,[0-9]+' || true

@@ -41,7 +41,17 @@ Two pillars, both **pure** (no wine, no flaky subprocess):
 
 The default `panel_tournament.py` field is therefore: **our nets (via the
 `run-gomoku-az` brain wrapper, pure torch) + the `heuristic` floor + any NATIVE
-engine** in `_NATIVE_ENGINES` (currently empty). Zero wine.
+engine** in `_NATIVE_ENGINES`. Zero wine.
+
+**`_NATIVE_ENGINES` is no longer empty (2026-06-18, #40):** native arm64
+**Rapfi-NNUE** (`run-rapfi` → `pbrain-rapfi --config config.toml`) is now a
+default reliable anchor — the first honest strength reference past the ~1700
+ladder ceiling. It loads the mix9svq NNUE weights and searches to its full time
+budget (the #28 "weightless / under-search" yardstick bug is resolved), runs
+single-threaded (Gomocup-legal), and never touches wine. Build/wrapper/coord
+details: [external-engine-baselines.md](external-engine-baselines.md) §
+*Rapfi-NNUE NATIVE ANCHOR ONLINE*. Absolute calibration (effective single-thread
+strength under our harness + balanced openings) is still pending (#35/#22).
 
 ## What's enforced in code
 

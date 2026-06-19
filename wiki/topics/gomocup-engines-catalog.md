@@ -118,10 +118,13 @@ Short list, in priority order (post-nix, 2026-06-16):
    engine, and the right path to a strength anchor past the ~1700 ceiling. The
    build recipe is recorded (`engines/rapfi/build_rapfi.sh`, CMake preset
    `arm64-clang-NEON-DOTPROD`, last `rapfi@6e0a132` 2026-05-24) and it speaks
-   Piskvork by default. **Bring-up gap on `main`:** no `run-rapfi` wrapper exists
-   in `~/.cache/gomocup/bin/` yet, and the stock build is weightless+TC-blind
-   (issue #28). Concrete plan = **issue #40** + `_NATIVE_ENGINES` slot in
-   `panel_tournament.py`. **This is the intended yardstick once #28/#40 land.**
+   Piskvork by default. **ONLINE as of 2026-06-18 (#40):** `scripts/run-rapfi`
+   (installed to `~/.cache/gomocup/bin/`) runs `pbrain-rapfi --config config.toml`,
+   loading the mix9svq NNUE weights so it actually searches to its time budget —
+   the #28 "weightless + TC-blind" bug was the no-config build, now resolved.
+   Registered in `_NATIVE_ENGINES`; default reliable anchor, no wine. Absolute
+   calibration (single-thread effective strength + balanced openings) still
+   pending (#35/#22). Details: [external-engine-baselines.md](external-engine-baselines.md).
 2. **The wine-run binaries** (embryo26, yixin18, pela23, zetor17, eulring16) —
    Windows `pbrain-*.exe` under wine. **SHELVED — opt-in only** (`--wine` /
    `GOMOKU_ENABLE_WINE_ENGINES=1`); unreliable (~17/36 panel pairs crash, #35).
