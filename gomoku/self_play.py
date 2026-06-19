@@ -616,7 +616,8 @@ def _apply_defense_teacher_policy(
     # record untouched (pure policy lever: never crush value here).
     with _profile_timer(profile, "defense_refute_s"):
         saving = vcf.vcf_refutations(
-            swapped_board, max_depth=max_depth, max_nodes=max_nodes)
+            swapped_board, winning_move=res.winning_move,
+            max_depth=max_depth, max_nodes=max_nodes)
     if not saving:
         return pi, z, False
 
