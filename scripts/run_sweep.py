@@ -2341,6 +2341,8 @@ def main() -> None:
     p.add_argument("--clean", action="store_true",
                    help="delete the cell's checkpoint+log dirs (does not stop a running cell)")
     p.add_argument("--epochs", type=int, default=None, help="override cell.epochs")
+    p.add_argument("--n-workers", type=int, default=None,
+                   help="override cell.n_workers (parallel self-play generator count)")
     p.add_argument("--resume", type=str, default=None,
                    help="Path to a checkpoint (.pt) to resume the trainer from. "
                         "Passes through as --resume to gomoku.train. wandb run id "
@@ -2380,6 +2382,8 @@ def main() -> None:
     cell = CELLS[args.cell]
     if args.epochs:
         cell.epochs = args.epochs
+    if args.n_workers is not None:
+        cell.n_workers = args.n_workers
 
     if args.clean:
         clean_cell(cell)
