@@ -160,14 +160,19 @@ def test_pick_fifo_tiebreak_on_equal_priority(tmp_path):
     assert L.fold(L.read_all(p)).pick("train", _now(0))["id"] == "first"
 
 
-def test_pick_starvation_floor_prefers_never_attempted(tmp_path):
-    """Same priority: a never-claimed lane outranks one already attempted."""
+def test_pick_starvation_floor_prefers_never_completed(tmp_path):
+    """Same priority: a lane that has produced NO result outranks one that has.
+
+    The daemon writes no claim rows (singleton via flock, recovery via re-pick),
+    so the starvation signal is `_results` (completed slices), not `_claims`.
+    Here 'attempted' ran once (a FAILED result) and was reopened by a correction;
+    'fresh' has never produced a result, so it wins despite the same priority.
+    """
     p = tmp_path / "l.jsonl"
     L.append(p, L.experiment("attempted", "train", priority=50), ts=_ts(0))
-    L.append(p, L.claim("attempted", "t", L.lease_until(60, now=_now(0))), ts=_ts(1))
-    L.append(p, L.correction("attempted", {"status": L.OPEN}, reason="reclaim"), ts=_ts(2))
+    L.append(p, L.result("attempted", status=L.FAILED, error="x"), ts=_ts(1))
+    L.append(p, L.correction("attempted", {"status": L.OPEN}, reason="reopen"), ts=_ts(2))
     L.append(p, L.experiment("fresh", "train", priority=50), ts=_ts(3))
-    # both are open & same priority, but 'attempted' has a claim in its history
     assert L.fold(L.read_all(p)).pick("train", _now(999))["id"] == "fresh"
 
 
