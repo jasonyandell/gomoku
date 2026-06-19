@@ -4040,3 +4040,80 @@ still own the box if they want it. Operating contract:
 `wiki/topics/autolab-supervisor-and-monitor.md`. Follow-ups: #61 (the real gate),
 #63 (first live arena gate, verifiable in the morning), #65 (GOMOKU_BOARD_SIZE
 passthrough — blocks 15×15 via autolab), #66 (P7 polish nits).
+
+## 2026-06-19 — 15×15 era: first self-driving 15×15 run (#65, #67, first champion)
+
+The autolab proved itself overnight (the 9×9-launch entry above), then **pivoted to
+15×15 and ran the full loop again from scratch — seed → train → collapse →
+self-recover → eval → HF push → gate → crown → re-pick — with zero hand-holding.**
+This is the first 15×15 run driven end-to-end by the lab, not a hand-kicked slice.
+Three things had to land first; then the science arrived.
+
+**9×9 proof recap (don't re-log — see the entry above).** The 9×9 lane
+`9x9-champ-recipe` ran 6 slices (elo @0 1531, @1 1519, @2 1567), the arena did one
+definitional PROMOTE then two contested **AMBIGUOUS** n=12 gates (co-tenancy shrank
+n 40→12), crowned `9x9-champ-recipe@0` as the first champion, and pushed a per-slice
+HF revision each slice. **0 failures.** The 9×9 lane is now retired below the 15×15
+lane.
+
+**#67 — the arena artifact-ref contract bug (the only real defect of the night).**
+The first *live* arena gate crashed with `FileNotFoundError`. Root cause: the
+trainer's `_deliver`/`hf.push_slice` returns a **bare** `"repo_id@revision"`
+artifact ref (no scheme), but `arena._resolve_model` only understood `hf://…`. A
+producer/consumer **artifact-contract scheme mismatch** — the push side and the gate
+side were each unit-tested *separately*, so it survived the whole suite and only
+surfaced on the first real end-to-end gate. Fixed with a shared
+`ArenaRole._parse_hf_ref` that accepts **both** `hf://owner/repo@rev` and bare
+`owner/repo@rev` (and rejects local paths), used by `_resolve_model` +
+`_default_set_champion`. Merged; arena daemon restarted; the failed eval was
+re-opened via a **ledger correction** and then crowned the champion (the financial-
+journal recovery path working as designed — nothing was lost). **Lesson banked: an
+artifact contract between two daemons needs an end-to-end smoke of the trainer→arena
+handoff; per-side unit tests can't catch a scheme mismatch across the seam.**
+
+**#65 — the 15×15 pivot (merged).** Board size is a **process-start constant**
+resolved by `gomoku/board_config.py` from `GOMOKU_BOARD_SIZE`, which **must be set
+before any `import gomoku.*`**. Two-part enablement:
+- (a) `trainer._run_slice` now threads `config["board_size"]` into the `run_sweep`
+  subprocess env (closes #65) — so a 15×15 cell actually runs at 15×15.
+- (b) `autolab up --board-size N` bakes `GOMOKU_BOARD_SIZE` into **both** the train
+  **and arena** daemon plists. The arena daemon is **long-running and imports
+  `gomoku` at startup**, so it can only gate a 15×15 candidate if the env is set
+  *before the process starts* — a plist var, not a per-slice env.
+
+The HF `champion` tag was **RESET for the 15×15 era** (a 9×9 net can't be loaded to
+gate a 15×15 candidate — shape mismatch). The three 9×9 revisions are kept as
+branches (evidence preserved). Seeded lane **`15x15-wdl`**, cell **`G15-wdl`** (v8
+recipe + **WDL value head**, **FROM SCRATCH**, **no vcf-teacher / no defense
+teacher**), priority above the retired 9×9 lane.
+
+**The science — from-scratch G15-wdl SURVIVED the cold-start collapse (the key
+finding; full dated correction in
+[15x15-training-campaign.md](wiki/topics/15x15-training-campaign.md)).** With **no
+warm-start and no teacher**, the run went *through* the documented cold-start
+fast-attack collapse — plies **69.5** (epoch ~21) → **9.2** trough (epoch ~65) —
+and then **self-recovered to a stable ~35–40 plies** (epochs ~260–670) on its own.
+Health signatures during recovery: WDL value-loss held **~0.81–0.89 the whole way**
+(never collapsed toward zero = the healthy-maturation signature, **not** the
+terminal "confident-in-bad-fast-attack" death-tell); policy-loss fell monotonically
+**5.4 → 1.6** (initial 5.42 ≈ ln(225), confirming a genuine 15×15 policy).
+**Conclusion: with the v8 recipe + WDL head, the cold-start collapse is a
+SURVIVABLE TRANSIENT, not a terminal trap** — the warm-start "remedy" may not be
+strictly required for this recipe. **Critical caveat:** "survived the collapse /
+recovered mid-game richness" is **NOT** "learned white-side defense." The decisive
+open question is this net's **white W-L-D vs Rapfi** — does it reproduce the
+warm-started champion's **0/12-white** hole (⇒ the deficit is representational/
+recipe-deep) or defend better (⇒ warm-start was baking in the attacker bias)? That
+probe is the next frontier read.
+
+**First 15×15 champion.** `15x15-wdl@0` completed (internal eval **elo 1918** — the
+**first 15×15 number, NOT comparable to the 9×9 elo scale**; from scratch). The
+arena did a definitional **PROMOTE** → first 15×15 champion crowned (HF revision
+`15x15-wdl-15x15-wdl@0` + the reset `champion` tag). The flywheel rolled to
+continuation **`15x15-wdl@1`** (resumed from the lane's own `latest.pt`). The full
+loop ran at 15×15 with zero hand-holding: seed → from-scratch train → collapse →
+self-recover → 1918 → HF push → gate → crown → re-pick. Issues: #65 (board-size
+passthrough, merged), #67 (arena artifact-ref fix, merged), epic #53. The
+arena-yardstick gap (no absolute Rapfi readout wired into the arena yet) is captured
+in [autolab-architecture.md](wiki/topics/autolab-architecture.md) § Arena-yardstick
+gap.

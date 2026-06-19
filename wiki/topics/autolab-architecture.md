@@ -179,8 +179,21 @@ GPU-free testable.
 The richer **native Rapfi-NNUE panel** (logged-but-not-gated, via
 `eval_vs_rapfi.run_rapfi_eval` + `gomocup_brain.py` with **`incremental=1`** — board
 re-dumps crater the history-conditioned net to ~25% OOD) is a follow-up on top of
-the H2H gate. The live gate proof (candidate vs a real champion) is deferred until
-the box is free + a real model exists.
+the H2H gate. See § Arena-yardstick gap below for the plan to wire it as a
+non-gating absolute readout.
+
+> **The first live gate exposed an artifact-contract bug (#67, fixed 2026-06-19).**
+> The trainer's `_deliver`/`hf.push_slice` returns a **bare** `"repo_id@revision"`
+> artifact ref (no scheme), but `arena._resolve_model` only understood `hf://…` — so
+> the first real end-to-end gate crashed with `FileNotFoundError`. Fixed via a shared
+> `ArenaRole._parse_hf_ref` that accepts **both** `hf://owner/repo@rev` and bare
+> `owner/repo@rev` (and rejects local paths), used by `_resolve_model` +
+> `_default_set_champion`. The failed eval was reopened via a **ledger correction**
+> and then crowned the champion (the financial-journal recovery path working as
+> designed). **Lesson: a producer/consumer artifact-contract scheme mismatch survived
+> the whole unit suite (push side and gate side were tested separately) and only
+> surfaced on the first real handoff — the trainer→arena handoff needs an end-to-end
+> smoke, not just per-side unit tests.**
 
 > **Operating contract (P5–P7, shipped in [#64]).** This page is the *design*;
 > the *running* unattended-overnight contract — the four launchd jobs, the seed
@@ -244,6 +257,59 @@ Each loop ships three instruments before it runs unattended:
   PROMOTE).
 - Priority: keep Δelo/hr `pick_priority` + starvation floor (port in P5).
 - 1h hard cap is production; **MVP uses a 1-epoch cap**.
+- **Board size is a process-start constant (#65, 2026-06-19).** `board_config.py`
+  resolves `GOMOKU_BOARD_SIZE` and it **must be set before any `import gomoku.*`**.
+  So the autolab carries it two ways: `trainer._run_slice` threads
+  `config["board_size"]` into the per-slice `run_sweep` subprocess env, **and**
+  `autolab up --board-size N` bakes `GOMOKU_BOARD_SIZE` into **both** the train and
+  **arena** daemon plists — the arena daemon is long-running and imports `gomoku` at
+  startup, so it can only gate at 15×15 if the env is set *before the process
+  starts*. Crossing eras **resets the HF `champion` tag** (a 9×9 net can't be loaded
+  to gate a 15×15 candidate — shape mismatch); prior-era revisions stay as HF
+  branches (evidence preserved). This closed the supervisor page's
+  [#1 HIGH risk](autolab-supervisor-and-monitor.md) (no board-size passthrough).
+
+## 15×15 capability — proven live 2026-06-19 (#65)
+
+The autolab is no longer 9×9-only. After the 9×9 proof night it **pivoted to 15×15
+and ran the whole loop again from scratch with zero hand-holding** — seed → train →
+collapse → self-recover → eval → HF push → gate → crown → re-pick. Lane
+`15x15-wdl`, cell `G15-wdl` (v8 recipe + WDL value head, from scratch, no teacher).
+The first 15×15 champion `15x15-wdl@0` was crowned at internal eval **elo 1918**
+(the first 15×15 number — **not** comparable to the 9×9 elo scale), and the flywheel
+rolled to continuation `15x15-wdl@1`. The scientific payload (from-scratch run
+*survived* the cold-start collapse with no warm-start and no teacher) is the
+[15x15-training-campaign.md](15x15-training-campaign.md) 2026-06-19 dated correction.
+Mechanism = the board-size passthrough in Locked decisions above.
+
+## Arena-yardstick gap — relative gate works, no absolute readout wired in (frontier)
+
+The arena gates **only relatively**: a 3-way Wilson H2H vs the current champion,
+**calibration-immune by design** (PROMOTE/REVERT/AMBIGUOUS, never an absolute Elo).
+That is the right gate — but it means the arena has **no absolute yardstick**, so it
+can crown a champion (e.g. 15×15 elo 1918) with no idea where that sits against a
+real engine. Meanwhile a proven **native arm64 Rapfi-NNUE 15×15 anchor already
+exists** (`scripts/eval_vs_rapfi.py`: 21% @5s, white **0/12** at first contact — see
+[external-engine-baselines.md](external-engine-baselines.md) and `TRAINING_WIKI.md`
+2026-06-18). The one load-bearing hole is `delta_e_harness.ExternalAnchor.play()` =
+`NotImplementedError`.
+
+**Plan (a non-gating absolute readout, not a new gate):**
+1. Implement `ExternalAnchor.play()` by lifting `eval_vs_rapfi`'s loop (with the
+   **per-color split** — white/black W-L-D separately, since white-side defense is the
+   whole story).
+2. Pin a **measured operating point** — `rapfi-100ms-1thread` — **NOT** a published
+   Gomocup Elo. Issue #35 proved the published numbers invalid under our harness
+   (17/36 wine pairs crash; negative-slope fit). The anchor's strength is whatever we
+   *measure* at a fixed TC, not what the tournament tables claim.
+3. Add a **NON-GATING absolute readout** (overall / white / black W-L-D) to the arena
+   alongside the H2H verdict — surfaced, never decisive.
+4. Surface **Δwhite-elo/Δt** — the #34 north-star — so the cockpit shows defense
+   progress against a real attacker over wall-clock.
+
+Engine-panel calibration (#30/#35) stays **shelved** (the published-Elo path is
+dead). The binding constraint remains **white-side defense** on the ~50-elo plateau
+(#46/#43/#37) — the absolute readout exists to *measure* movement on it, not to gate.
 
 ## Phased plan
 
@@ -251,8 +317,8 @@ Each loop ships three instruments before it runs unattended:
 |---|---|---|---|
 | **P1** spine | #54 | ledger reducer + corrections + priority pick + tests | **DONE** |
 | **P2** daemon | #56 | flock singleton (no-claim re-pick) + `run_daemon` + `autolab status` | **DONE** |
-| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **CODE DONE** (ran once attended on 2026-06-19; artifacts since cleaned — `~/data/autolab` empty, HF mvp revisions gone — see [#58]) |
-| **P4** arena | #59 | `ArenaRole`: `run_gate` (dry_run) vs the HF champion + `eval`/`verdict` rows + champion-tag bump + co-tenancy guard | **DONE** (live gate proof deferred — needs real models) |
+| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **LIVE** (ran 6 real 9×9 slices then a full 15×15 lane unattended 2026-06-19; 0 failures — `TRAINING_WIKI.md` 2026-06-19) |
+| **P4** arena | #59 | `ArenaRole`: `run_gate` (dry_run) vs the HF champion + `eval`/`verdict` rows + champion-tag bump + co-tenancy guard | **LIVE** (crowned the first 9×9 **and** first 15×15 champion 2026-06-19; the first live gate exposed the #67 artifact-ref bug — see Arena section) |
 | **P5** research-lite | #61 (partial) | deterministic `gomoku/lab/research.py` ideate→append-≤2-rows-below-seed→note loop (proxy-ranked; anchored gate still unbuilt) | **SHIPPED in [#64]** (pending live launch) |
 | **P6** cockpit / monitor | #64 | `scripts/autolab_monitor.py` digest + `gomoku/lab/status.py` lane board + notify-on-change | **SHIPPED in [#64]** (pending live launch) |
 | **P7** supervisor | #64 | `gomoku/lab/up.py` (up/down/status/restart) + four launchd plists + ledger seed | **SHIPPED in [#64]** (pending live launch) |

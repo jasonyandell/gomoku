@@ -145,3 +145,58 @@ Cadence ~5 min (use 270s wakeups to stay cache-warm). Order:
   net2net warm-starts to avoid cold-start collapse), then a GPU-serial derby
   (swapped contestants, never 2 concurrent runs). Base keeps training as the
   control meanwhile (healthy, not regressing).
+
+## DATED CORRECTION (2026-06-19) — cold-start collapse is a SURVIVABLE TRANSIENT for the v8+WDL recipe, not a terminal trap (warm-start may not be strictly required)
+
+> Annotates — does **not** delete — the 2026-06-13 conclusion "**cold-start
+> fast-attack collapse is real at 15×15; warm-start is the remedy**" (campaign log,
+> 2026-06-13 warm-start entry). That conclusion stands **as observed on its run**
+> (the cold `G15-seed` cell with the v8 recipe but **no WDL head**: plies 68→11, VL
+> rising, no recovery seen in the window before we swapped to warm-start). What the
+> autolab's first 15×15 run shows is that a *different* recipe **survives the same
+> collapse without intervention** — so "warm-start is required" was over-general; it
+> was the fastest fix we tried, not the only path through.
+
+**Evidence (autolab `15x15-wdl` lane, cell `G15-wdl`, board 15, from scratch, no
+warm-start, no vcf/defense teacher; first self-driving 15×15 run — see
+`TRAINING_WIKI.md` 2026-06-19 "15×15 era").** The from-scratch run went **through**
+the documented cold-start fast-attack collapse and then **self-recovered**, with no
+teacher and no warm-start:
+
+| phase | epoch | plies | read |
+|---|---|---|---|
+| pre-collapse | ~21 | **69.5** | defended, random-ish opening play |
+| collapse trough | ~65 | **9.2** | the fast-attack collapse (exactly as documented) |
+| self-recovery | ~260–670 | **~35–40** (stable) | mid-game richness regrown — *without any teacher* |
+
+**Why this is healthy recovery, not the death-tell** (the signatures that distinguish
+survivable absorption from terminal fast-attack collapse — cf.
+[loss-floor-bouncing.md](loss-floor-bouncing.md), the HALT conditions above):
+- **WDL value-loss held ~0.81–0.89 the whole way** — it **never collapsed toward
+  zero**. A value head saturating to ~0 is the terminal "confident-in-a-bad-fast-
+  attack" tell (the #18/#42 white-defense death-spiral, vl→0.04–0.06); a value-loss
+  that *stays up* through the plies trough is healthy maturation on hard positions.
+- **Policy-loss fell monotonically 5.4 → 1.6** (initial **5.42 ≈ ln(225)** confirms a
+  genuine 15×15 policy over 225 cells, not a degenerate head).
+
+**Conclusion (revised, recipe-scoped):** with the **v8 recipe + WDL value head**, the
+cold-start collapse is a **survivable transient**, not a terminal trap. The
+warm-start "remedy" of 2026-06-13 **may not be strictly required for this recipe** —
+the WDL head appears to carry the run through the trough that crashed the
+no-WDL cold seed. (Open: is it the WDL head specifically, or simply a longer
+patience window than the 2026-06-13 cold run got before we swapped it?)
+
+**CRITICAL CAVEAT — survival ≠ defense.** "Survived the collapse / recovered
+mid-game richness" is **NOT** the same as "learned white-side defense." The decisive
+open question is this from-scratch net's **white W-L-D vs Rapfi** (the strong-attacker
+diagnostic; see [white-side-defense-plan.md](white-side-defense-plan.md) §1B.2 and
+the 2026-06-18 Rapfi entries in `TRAINING_WIKI.md`):
+- if it reproduces the warm-started champion's **0/12-white** hole ⇒ the white deficit
+  is **representational / recipe-deep** (warm-start never fixed it; it's the recipe);
+- if it defends **better** ⇒ **warm-start was baking in the attacker bias** (the 9×9
+  champion tower transferred its first-mover-win habits, and from-scratch avoids them).
+
+**That probe is the next frontier read** — it decides whether the white-defense work
+(#43/#37) is fighting the recipe or fighting the warm-start. First 15×15 champion from
+this run: `15x15-wdl@0`, internal eval **elo 1918** (first 15×15 number, **not**
+comparable to the 9×9 scale).

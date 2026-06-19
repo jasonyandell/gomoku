@@ -3,6 +3,37 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-19] autolab WENT LIVE → 15×15 era → first 15×15 champion (#64/#65/#67, epic #53)
+
+The night the self-driving lab proved itself, then pivoted to 15×15 — synthesized
+across `TRAINING_WIKI.md` (evidence, two new dated entries) and three synthesis pages.
+**Arc:** autolab launched (#64) → ran **6 real 9×9 slices** unattended (crowned the
+first champion `9x9-champ-recipe@0`, 0 failures) → **pivoted to 15×15** (#65: board
+size is a process-start `GOMOKU_BOARD_SIZE` constant; trainer threads it into the
+`run_sweep` env + `autolab up --board-size` bakes it into both the train **and**
+arena plists; HF `champion` tag reset for the new era) → ran the whole loop again from
+scratch (lane `15x15-wdl`, cell `G15-wdl` = v8 + WDL head, no warm-start, no teacher)
+→ **crowned the first 15×15 champion `15x15-wdl@0` at internal elo 1918** (not
+comparable to the 9×9 scale). Updates: (1) `TRAINING_WIKI.md` — new 2026-06-19 entry
+"15×15 era: first self-driving 15×15 run" (the #67 arena artifact-ref bug + ledger-
+correction recovery, the #65 pivot, the science, the first champion). (2)
+[topics/15x15-training-campaign.md](topics/15x15-training-campaign.md) — **DATED
+CORRECTION**: the from-scratch run went **through** the cold-start fast-attack collapse
+(plies 69.5→9.2) and **self-recovered** to ~35-40 plies with **no teacher / no
+warm-start** (WDL value-loss held ~0.81-0.89 = healthy maturation, not the death-tell)
+→ cold-start collapse is a **survivable transient** for v8+WDL, the warm-start
+"remedy" may not be strictly required; preserves the original 2026-06-13 conclusion,
+annotates it. Decisive open probe: this net's **white W-L-D vs Rapfi** (recipe-deep
+deficit vs warm-start attacker-bias). (3)
+[topics/autolab-architecture.md](topics/autolab-architecture.md) — 15×15-capability
+section, P3/P4 phases marked **LIVE**, the **#67 lesson** (artifact-contract scheme
+mismatch survived per-side unit tests; needs an end-to-end trainer→arena smoke), and a
+new **Arena-yardstick gap** section (the arena gates only *relatively*; wire
+`ExternalAnchor.play()` from `eval_vs_rapfi`, pin a *measured* rapfi-100ms point not a
+published Gomocup Elo, add a non-gating absolute W-L-D readout, surface Δwhite-elo/Δt).
+(4) `index.md` — autolab doorway + Page Catalog row marked LIVE/15×15. Issues:
+#64/#65/#67/#68, epic #53.
+
 ## [2026-06-19] autolab P5–P7 operating contract — new page: supervisor + monitor + research-lite (unattended overnight)
 
 New canonical page [topics/autolab-supervisor-and-monitor.md](topics/autolab-supervisor-and-monitor.md):
