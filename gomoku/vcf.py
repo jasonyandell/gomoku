@@ -239,9 +239,62 @@ def solve_vcf(
                      hit_cap=counter["hit_cap"])
 
 
+def _refutation_candidates(attacker: np.ndarray, defender: np.ndarray,
+                           winning_move: int | None) -> list[int]:
+    """The small, THREAT-RELEVANT set of defender moves that could break the
+    attacker's forced VCF (issue #43, gen-cost bound).
+
+    A defender (moving first, one tempo before the attacker) can only refute a
+    continuous-four win by interfering with its OPENING four or by seizing the
+    initiative with a counter-threat. So the only moves worth testing are:
+
+      1. ``winning_move`` itself — deny the attacker its first forcing move.
+      2. the completion square(s) of the four that ``winning_move`` makes — the
+         literal block of that four (pre-occupying a completion makes the
+         attacker's move no longer forcing).
+      3. the defender's OWN four/five-making moves — a counter-four forces the
+         attacker to respond, breaking the VCF line (and a five just wins).
+
+    This replaces the old "all near-stone empties" candidate set, which on a dense
+    mid-game 15x15 board is ~40 cells × a full re-solve each PER FIRE PER PLY — the
+    measured throughput blowup (8 self-play games did not finish in 120 s). The
+    targeted set is typically <10 cells. It can MISS a refutation that works only
+    by disrupting a LATER move in the forcing line (rare); that is the safe
+    direction — the teacher then simply does not fire (no false saving move, since
+    every candidate is still re-solve-verified by the caller). Never mutates planes.
+    """
+    cand: set[int] = set()
+    occupied = attacker | defender
+    if winning_move is not None:
+        wr, wc = winning_move // BOARD_SIZE, winning_move % BOARD_SIZE
+        if not occupied[wr, wc]:
+            cand.add(int(winning_move))
+        # The four that winning_move makes: block its completion square(s).
+        atk2 = attacker.copy()
+        atk2[wr, wc] = True
+        occ2 = atk2 | defender
+        for comp in _completions_through(atk2, int(winning_move), occ2):
+            cr, cc = comp // BOARD_SIZE, comp % BOARD_SIZE
+            if not occupied[cr, cc]:
+                cand.add(int(comp))
+    # Defender counter-threats: any move giving the defender a four/five.
+    empty_idx = _empties_from_plane(~occupied)
+    for m in _candidate_cells_from_planes(attacker, defender, empty_idx):
+        mr, mc = int(m) // BOARD_SIZE, int(m) % BOARD_SIZE
+        defender[mr, mc] = True
+        occupied[mr, mc] = True
+        comps = _completions_through(defender, int(m), occupied)
+        defender[mr, mc] = False
+        occupied[mr, mc] = False
+        if comps:
+            cand.add(int(m))
+    return sorted(cand)
+
+
 def vcf_refutations(
     board: np.ndarray,
     *,
+    winning_move: int | None = None,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_nodes: int = DEFAULT_MAX_NODES,
     max_candidates: int | None = None,
@@ -259,6 +312,18 @@ def vcf_refutations(
     is the generalizable lesson ("here is the move that refuses the forced four")
     rather than the value-only "you already lost" signal.
 
+    ``winning_move`` is the attacker's first forcing move (from the detection
+    :func:`solve_vcf`); pass it to avoid a redundant solve. When ``None`` it is
+    recovered with one internal solve (and an empty result if there is no win).
+
+    CANDIDATE SET: only the THREAT-RELEVANT moves (:func:`_refutation_candidates`)
+    are tested — the opening four's block squares + the defender's own
+    four/five-making moves — NOT every near-stone empty. This is the gen-cost
+    bound (see that helper); it trades a little recall (may miss a refutation that
+    only disrupts a later move in the line) for ~8x fewer re-solves on dense
+    boards. The safe direction: a missed refutation just means the teacher does
+    not fire.
+
     SOUNDNESS: a refutation is only reported when an explicit re-solve proves the
     attacker has *no* forced VCF after the defender's move AND that re-solve
     COMPLETED within budget (``hit_cap`` False). The cap guard is essential at the
@@ -266,23 +331,18 @@ def vcf_refutations(
     "unproven", NOT "proven safe", so trusting it as a refutation could stamp a
     move that does not actually escape — the unsound direction. Requiring a
     completed search means a reported move is a genuine escape from the detected
-    VCF (no false saving moves) regardless of budget; the only cost is occasionally
-    MISSING a real refutation under a tight cap (then the teacher simply does not
-    fire on that position — the safe failure). Candidate moves are restricted to
-    the near-stone set (a four/block can only be made adjacent to existing stones),
-    which cannot miss a real refutation (an isolated stone neither blocks a four
-    nor makes one). Each candidate costs one full :func:`solve_vcf`; firing is rare
-    and gen-cost-gated upstream, but ``max_candidates`` (None = all) bounds the
-    worst case. Never mutates ``board``.
+    VCF (no false saving moves) regardless of budget. ``max_candidates`` (None =
+    all) further bounds the worst case. Never mutates ``board``.
     """
     board = np.ascontiguousarray(board, dtype=bool)
     attacker = board[0].copy()
     defender = board[1].copy()
-    empty_plane = ~(attacker | defender)
-    empty_idx = _empties_from_plane(empty_plane)
-    if len(empty_idx) == 0:
-        return []
-    candidates = _candidate_cells_from_planes(attacker, defender, empty_idx)
+    if winning_move is None:
+        res0 = solve_vcf(board, max_depth=max_depth, max_nodes=max_nodes)
+        if not res0.has_forced_win:
+            return []
+        winning_move = res0.winning_move
+    candidates = _refutation_candidates(attacker, defender, winning_move)
     if max_candidates is not None and len(candidates) > max_candidates:
         candidates = candidates[:max_candidates]
     saving: list[int] = []
