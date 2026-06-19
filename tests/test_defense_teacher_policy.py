@@ -346,3 +346,126 @@ def test_refutations_are_sound_random_positions():
                 "POLICY TEACHER UNSOUND: stamped move does not break the VCF"
     # Some seeds may yield no fires; that's fine (the assert above is the gate).
     assert n_fired >= 0
+
+
+# ---------------------------------------------------------------------------
+# #60: the lazy budgeted reverse-pass refutes ONLY kept plies, identical result
+# ---------------------------------------------------------------------------
+
+import math as _math
+
+
+def _run_loop_with_stubs(monkeypatch, n, candidates, firing, frac):
+    """Drive `_apply_teachers_to_trajectory` with the two teacher phases stubbed
+    deterministically by ply index, so the lazy reverse-pass can be compared to the
+    EAGER refute-all-then-budget reference without real VCF solves.
+
+    Each ply's `planes` is just its index. `_defense_detect_candidate` returns a
+    candidate (carrying the marker) for plies in `candidates`; `_defense_refute_stamp`
+    returns a recognizable stamp (encoding the ply) for plies in `firing` and None
+    (genuinely lost) otherwise, recording every ply it is asked to refute.
+    """
+    refute_calls: list[int] = []
+    profile: dict[str, float] = {}
+
+    def detect_stub(planes, *, vcf_already_fired, profile=None, **kw):
+        m = int(planes)
+        if m in candidates:
+            self_play._profile_add(profile, "defense_policy_candidates", 1.0)
+            return (m, None)
+        return None
+
+    def refute_stub(swapped_board, winning_move, pi, *, profile=None, **kw):
+        m = int(swapped_board)
+        refute_calls.append(m)
+        if m in firing:
+            return np.full_like(pi, float(m + 1))   # recognizable; encodes the ply
+        return None
+
+    monkeypatch.setattr(self_play, "_defense_detect_candidate", detect_stub)
+    monkeypatch.setattr(self_play, "_defense_refute_stamp", refute_stub)
+    configure_defense_teacher(policy_mode=True, max_fraction=frac)
+
+    pi0 = np.full(N * N, 1.0 / (N * N), dtype=np.float32)
+    traj = [(p, pi0.copy(), 0) for p in range(n)]
+    out = _apply_teachers_to_trajectory(
+        traj, outcome_for_black=1.0,
+        vcf_teacher=False, vct_teacher=False, defense_teacher=True, profile=profile)
+    kept = {p for p in range(n) if not np.allclose(out[p][0], pi0)}
+    for p in kept:   # right ply must carry ITS OWN marker's stamp
+        assert np.allclose(out[p][0], float(p + 1)), f"ply {p} got the wrong stamp"
+    return kept, refute_calls, profile
+
+
+@pytest.mark.parametrize("n,candidates,firing,frac", [
+    (16, {2, 4, 6, 8, 10, 12}, {2, 6, 8, 10, 12}, 0.25),  # truly-lost (4) skipped
+    (16, {2, 4, 6, 8, 10, 12}, {2, 6, 8, 12}, 0.25),      # a lost ply (10) inside the run
+    (16, {2, 4, 6, 8, 10, 12}, {2, 6, 8, 10, 12}, 1.0),   # unbounded -> keep every fire
+    (16, {2, 6, 10}, {2, 6, 10}, 0.01),                   # budget floors to 0 -> stamp none
+])
+def test_60_lazy_pass_matches_eager_budget(monkeypatch, restore_defense_knobs,
+                                           n, candidates, firing, frac):
+    kept, refute_calls, profile = _run_loop_with_stubs(
+        monkeypatch, n, candidates, firing, frac)
+
+    # EQUIVALENCE: identical kept set to the eager reference (refute every candidate,
+    # then keep the latest `budget` FIRES via the real _relabel_defense_policy_game).
+    fires = sorted(p for p in candidates if p in firing)
+    one = np.zeros(N * N, dtype=np.float32)
+    eager_kept = set(_relabel_defense_policy_game(
+        [(p, one) for p in fires], n_positions=n))
+    assert kept == eager_kept
+
+    # Detection runs on every ply regardless of budget (it is the cheap phase).
+    assert profile.get("defense_policy_candidates", 0.0) == len(candidates)
+
+    # MINIMALITY: only ever refute candidates, newest-ply-first; and when the budget
+    # actually bites, strictly fewer refutations than the candidate count (work saved).
+    assert set(refute_calls) <= candidates
+    assert refute_calls == sorted(refute_calls, reverse=True)
+    budget = n if frac >= 1.0 else _math.floor(frac * n)
+    if budget < len(fires):
+        assert len(refute_calls) < len(candidates)
+
+
+def test_60_real_vcf_trajectory_budget_keeps_latest(restore_defense_knobs):
+    """End-to-end with REAL VCF solves: 4 identical refutable plies, frac 0.5 ->
+    budget 2 -> only the latest 2 are stamped (and only they were refuted)."""
+    configure_defense_teacher(policy_mode=True, max_fraction=0.5)
+    pi = np.full(N * N, 1.0 / (N * N), dtype=np.float32)
+    traj = [(_REFUTABLE, pi.copy(), 0) for _ in range(4)]   # n=4, budget floor(0.5*4)=2
+    out = _apply_teachers_to_trajectory(
+        traj, outcome_for_black=1.0,
+        vcf_teacher=False, vct_teacher=False, defense_teacher=True)
+    stamped = {p for p in range(4) if not np.allclose(out[p][0], pi)}
+    assert stamped == {2, 3}                       # latest 2 of the 4 firing plies
+    expected = np.zeros(N * N, dtype=np.float32)
+    expected[_flat(2, 6)] = 1.0                    # the real saving move
+    for p in stamped:
+        assert np.allclose(out[p][0], expected)
+    for p in range(4):
+        assert out[p][1] == 1.0                    # value left at the natural outcome
+
+
+def test_60_real_vcf_refutes_only_kept_plies(restore_defense_knobs, monkeypatch):
+    """The #60 win, measured with REAL VCF: 8 refutable plies under frac 0.25 ->
+    budget 2 -> EXACTLY 2 refutation solves. The eager pre-#60 path refuted all 8
+    (the detection/own-win solves still run on every ply; only the expensive
+    refutation enumeration is now budget-gated)."""
+    calls = {"n": 0}
+    orig = vcf.vcf_refutations
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(vcf, "vcf_refutations", counting)
+    configure_defense_teacher(policy_mode=True, max_fraction=0.25)
+    pi = np.full(N * N, 1.0 / (N * N), dtype=np.float32)
+    traj = [(_REFUTABLE, pi.copy(), 0) for _ in range(8)]   # n=8, budget floor(0.25*8)=2
+    out = _apply_teachers_to_trajectory(
+        traj, outcome_for_black=1.0,
+        vcf_teacher=False, vct_teacher=False, defense_teacher=True)
+    assert calls["n"] == 2                          # only the 2 kept plies (pre-#60: 8)
+    stamped = {p for p in range(8) if not np.allclose(out[p][0], pi)}
+    assert stamped == {6, 7}                        # and they are the latest 2
