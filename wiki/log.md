@@ -3,6 +3,17 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-19] autolab P4 arena built (#59) — architecture page: arena section + phases
+
+`gomoku/lab/arena.py` `ArenaRole` shipped: gates a candidate vs the HF `champion`
+tag via `sliding_gate.run_gate(dry_run=True)` (PROMOTE/REVERT/AMBIGUOUS), appends
+`eval`+`verdict` rows, moves the `champion` tag on PROMOTE, shrinks `n_games` when a
+trainer slice is live (co-tenancy). First candidate (no champion) auto-promotes.
+8 mocked tests (gate/HF/eval_fn injected — GPU-free). `gomoku-lab-arena` entry point.
+Updated the Arena section (built; dry_run + HF-tag champion; Rapfi panel a logged
+follow-up) + phases table (P4 DONE; P5 research next). Live gate proof deferred
+(needs real models + a free box). P1–P4 of epic #53 now shipped.
+
 ## [2026-06-19] autolab-architecture.md — de-stale to the SHIPPED P2/P3 design (no-claim flock, ~/data home, run-base)
 
 Reconciled the design page with what's built (P1 #54, P2 #56, P3 #57 all merged).

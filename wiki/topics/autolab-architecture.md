@@ -161,14 +161,26 @@ The trained code is already mostly shaped for this; the contract makes it explic
 8. **Clean exit only** — every slice exits via the wandb-clean path, never
    SIGKILL, or it poisons the run id for the next `--resume`.
 
-## Arena (mac-native, the trainer's twin)
+## Arena (mac-native, the trainer's twin) — built (P4 #59)
 
-Same loop. `run_chunk()` loads a model, plays a bounded match block against the
-panel (champion + native Rapfi-NNUE @5s), computes a `sliding_gate.py` 3-way
-verdict, appends `eval`+`verdict` rows. Reuses `gomocup_brain.py`,
-`external_engine.py`, `match.py`/`eval.py`, `panel_tournament.py` (resumable —
-skips completed pairs). **Net-as-engine must pass `incremental=1`** (board re-dumps
-crater the history-conditioned net to ~25% OOD).
+Same daemon shape. `ArenaRole.run_chunk(item)` resolves the candidate model
+(`item.base`, HF revision or local), resolves the **current champion from the HF
+`champion` tag** (`hf_hub_download(..., revision="champion")`; absent → the first
+candidate seeds the ladder), and calls `scripts/sliding_gate.run_gate(...,
+dry_run=True)` head-to-head vs the champion. `dry_run=True` is deliberate: we want
+the gate's calibration-immune **PROMOTE / REVERT / AMBIGUOUS** verdict + its
+verdict-log, but the champion is an **HF tag**, not `run_gate`'s local peer file —
+so the arena does promotion itself by **moving the `champion` tag** to the
+candidate's revision on PROMOTE. It appends `eval` + `verdict` rows (shared `ref`).
+A live trainer slice (`probe_alive("train")`) **shrinks `n_games`** — the
+co-tenancy guard. `run_gate`'s `eval_fn` is injectable, so the whole role is
+GPU-free testable.
+
+The richer **native Rapfi-NNUE panel** (logged-but-not-gated, via
+`eval_vs_rapfi.run_rapfi_eval` + `gomocup_brain.py` with **`incremental=1`** — board
+re-dumps crater the history-conditioned net to ~25% OOD) is a follow-up on top of
+the H2H gate. The live gate proof (candidate vs a real champion) is deferred until
+the box is free + a real model exists.
 
 ## Research + worker lanes (the agent loops)
 
@@ -232,9 +244,9 @@ Each loop ships three instruments before it runs unattended:
 |---|---|---|---|
 | **P1** spine | #54 | ledger reducer + corrections + priority pick + tests | **DONE** |
 | **P2** daemon | #56 | flock singleton (no-claim re-pick) + `run_daemon` + `autolab status` | **DONE** |
-| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **DONE** |
-| P4 arena | (file) | gomocup_brain + panel + gate + champion tag, co-tenancy guard | next |
-| P5 research | (file) | ideate→append→wait loop + the wall-clock-to-elo gate (`delta_e_harness` 5-gap list) | |
+| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **DONE** (proven live) |
+| **P4** arena | #59 | `ArenaRole`: `run_gate` (dry_run) vs the HF champion + `eval`/`verdict` rows + champion-tag bump + co-tenancy guard | **DONE** (live gate proof deferred — needs real models) |
+| P5 research | (file) | ideate→append→wait loop + the wall-clock-to-elo gate (`delta_e_harness` 5-gap list) | next |
 | P6 cockpit | (file) | status into `gh_prime.sh` + escalation + retire the fragmented queue surfaces | |
 
 ## Contradictions & risks (the honest tensions)
