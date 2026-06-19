@@ -18,7 +18,11 @@ message_mode = "normal"
 # Coordinate convertion mode (Options are [none, X_flipY, flipY_X])
 # For Piskvork, choose "none".
 # For Yixin-Board GUI, choose "flipY_X".
-coord_conversion_mode = "X_flipY"
+# We drive the Piskvork/Gomocup protocol (gomoku/external_engine.py), so the
+# canonical "none" is correct (this is Rapfi's tournament-config value; the
+# gomocalc web-GUI preset uses "X_flipY"). Verified unmirrored by
+# tests/test_rapfi_native.py.
+coord_conversion_mode = "none"
 
 # Default candidate range (Options are [square2, square2_line3, square3, square3_line4, square4, full_board])
 default_candidate_range = "square3_line4"
@@ -81,7 +85,11 @@ match_space_min = 7.0
 average_branch_factor = 1.7
 
 # Exit search if turn time is used more than this ratio (even given ample match time)
-advanced_stop_ratio = 0.75
+# Rapfi's canonical tournament-config value is 0.9 (the gomocalc web-GUI preset
+# early-stops sooner at 0.75); 0.9 lets the engine use ~90% of its turn budget,
+# matching the competition engine that "really competed". Single dhbloo config
+# value — no engine modification.
+advanced_stop_ratio = 0.9
 
 # Plan time management at most this many moves ahead
 move_horizon = 64
