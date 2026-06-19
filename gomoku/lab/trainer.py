@@ -74,10 +74,11 @@ class TrainerRole:
         cell_key = config.get("cell", "SMOKE")
         cap = config.get("max_wall_secs",
                          self.mvp_cap_secs if self.mvp_mode else self.prod_cap_secs)
+        board_size = config.get("board_size")
 
         work = self._checkout(item.get("commit"), row_id)
         try:
-            self._run_slice(work, cell_key, run_base, resume, cap)
+            self._run_slice(work, cell_key, run_base, resume, cap, board_size)
             ckpt_dir = self._find_ckpt_dir(run_base)
             latest = ckpt_dir / "latest.pt" if ckpt_dir else None
             if latest is None or not latest.exists():
@@ -128,7 +129,8 @@ class TrainerRole:
     # ---- run the bundle -------------------------------------------------
 
     def _run_slice(self, work: Path, cell_key: str, run_base: Path,
-                   resume: str | None, cap: float) -> None:
+                   resume: str | None, cap: float,
+                   board_size: int | None = None) -> None:
         run_base.mkdir(parents=True, exist_ok=True)
         cmd = [sys.executable, str(work / "scripts" / "run_sweep.py"),
                "--cell", cell_key, "--max-wall-secs", str(cap),
@@ -138,6 +140,8 @@ class TrainerRole:
         env = dict(os.environ)
         env["GOMOKU_RUN_DIR"] = str(run_base)
         env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        if board_size is not None:
+            env["GOMOKU_BOARD_SIZE"] = str(board_size)
         r = subprocess.run(cmd, cwd=str(work), env=env)
         if r.returncode != 0:
             raise SliceFailed(f"run_sweep --cell {cell_key} exited {r.returncode}")
