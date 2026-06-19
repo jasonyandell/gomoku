@@ -4117,3 +4117,23 @@ passthrough, merged), #67 (arena artifact-ref fix, merged), epic #53. The
 arena-yardstick gap (no absolute Rapfi readout wired into the arena yet) is captured
 in [autolab-architecture.md](wiki/topics/autolab-architecture.md) § Arena-yardstick
 gap.
+
+**2026-06-19 — #43 I2 defense slice: lever SOUND, killed on buffer dilution (wandb
+`zrjfwny2`).** Ran the policy-stamp defense teacher live against the warm-started
+128×10 champion (cell `G15-defense-i2`, warm-start `g15_128x10_bigbuf_eval502.pt`,
+1.5M bit-packed buffer, board 15). Resumed e585 → **killed at e1286**. **The lever is
+HEALTHY** — `pl` plateaued ~1.19–1.22 (bounded; NOT the #36/#42 `pl→3.4` trunk
+corruption), `vl` clean ~0.13–0.14 (NOT the value-only `vl→0.06` saturation), `plies`
+stable ~37 (no fast-attack collapse): stamping the saving move on POLICY and leaving
+value at the natural outcome works as #43 designed. **But un-readable** — fresh stamped
+games are only ~0.16–0.3 %/hr of the 1.5M buffer even at 16 generators (~1,100 games/hr
+sustained), so the warm-start attacker-biased mass drowns the defensive stamps and the
+Rapfi white-column gate can't leave the 0/12 floor at this pace. **Binding constraint =
+buffer FRESHNESS (stamp density), not gen rate.** Killed deliberately (clean SIGTERM;
+checkpoint + wandb preserved). Levers built this session: **#69** (`run_sweep
+--n-workers` generator-count knob — 16 gens ≈ the 18-core M5 ceiling, but 16-vs-12
+sustained throughput is within noise; the 10-min A/B over-read it — the LEAN-fp16
+short/cold-window trap again, cf. LF1) and **#60** (refute only budget-kept plies → 4×
+fewer `vcf_refutations` solves, equivalence-proven). Next: #60 + a buffer-freshness
+rethink before the next live race. Full synthesis:
+`wiki/topics/white-side-defense-plan.md` § "LIVE RACE RAN, then KILLED (2026-06-19)".
