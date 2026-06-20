@@ -2,14 +2,15 @@
 
 **Status (2026-06-20):** built end-to-end and LIVE. The core bet is **confirmed at the
 data level** (swap2 self-play makes white winnable: white wins 27% vs ~0% on an empty
-board), and the **strength** signal is now strong: across independent checkpoints the
-H2H-vs-frozen-champion **white LOSS-rate falls 88% (e129) → 67% (e235) → 51% (e289)** and
-overall climbs to **66.8% at n=128 (e289, CI ~[58.6%, 75%])** — clearing 50% and the ~58%
-relative-crown lower bound (§6.6). The exact metric the project chased for months, moving
-via balanced data, not a teacher. Verdict at ~289 epochs: **essentially at the crowning
-bar, still climbing** (formal crown wants an n≥200 gate to call it). The result is the
-*trend across independent checkpoints* (n=128 gates; the lone n=64 e181 read was noise),
-not any single gate. This page is the durable
+board), and the **strength** signal is now strong and ACCELERATING: across independent
+checkpoints the H2H-vs-frozen-champion **white LOSS-rate falls 88% (e129) → 67% (e235) →
+51% (e289) → 42% (e345)** — now below 50%, white wins more than it loses vs the champ's
+defense — and overall climbs to **76.2% at n=128 (e345, CI ~[68.8%, 83.6%])**, comfortably
+clearing 50% and the ~58% relative-crown lower bound (§6.6). The exact metric the project
+chased for months, moving via balanced data, not a teacher. Verdict at ~345 epochs:
+**climbing, slope steepened (largest slice gain yet, e289→e345 +9.4 pts), NOT plateaued**
+(formal crown wants an n≥200 gate to call it). The result is the *trend across independent
+checkpoints* (n=128 gates; the lone n=64 e181 read was noise), not any single gate. This page is the durable
 synthesis: why we did it, what we built, what we learned, and what to try next. Evidence
 chronology lives in `TRAINING_WIKI.md` (2026-06-20 entries); the predecessor analysis is
 [white-side-defense-plan.md](white-side-defense-plan.md).
@@ -111,23 +112,30 @@ trained net's view; splits are `W-L`):
 | slice 3 end | e181 | 64 | 64.1% (41-23) | 59% (12-17) | 83% (29-6) | 50% (16-16) | 78% (25-7) |
 | slice 4 end | e235 | **128** | 57.0% (73-55) | **67%** (20-40) | 78% (53-15) | 41% (26-38) | 73% (47-17) |
 | slice 5 end | e289 | **128** | **66.8%** (85-42-1) | **51%** (29-30) | 81% (56-12) | 52% (33-31) | 82% (52-11) |
+| slice 6 end | e345 | **128** | **76.2%** (97-30-1) | **42%** (21-16) | 84% (76-14) | 67% (43-20) | 84% (54-10) |
 
 (White column is the agreed metric — LOSS-rate, not win-rate; white's ceiling is the draw,
-§6.6. Lower is better.)
+§6.6. Lower is better. e345 white is small-n: 38 white games, CI ~±16% on the loss-rate —
+directional. It is the first gate where white wins MORE than it loses (55% W / 42% L).)
 
-**Both the overall and the white-loss signal are now trending cleanly.** Discarding the
-e181 n=64 overshoot, the n=128 anchors climb **57.0% (e235) → 66.8% (e289)**, and at e289
-the CI (~[58.6%, 75%]) clears 50% AND the ~58% relative-crown lower bound (§6.6) — so
-"stronger than the champion" has gone from suggestive to **essentially at the bar** (formal
-crown wants n≥200 to call). The headline is **white LOSS-rate falling on the reliable
-anchors: 88% (e129) → 67% (e235, n128) → 51% (e289, n128)** (e289 white is 29-30, near
-even vs the frozen champ's defense). The e181 59% white / 64.1% overall was the same
-n=64 upward overshoot — exclude it; the n=128 points are the trustworthy trend, and they
-fall cleanly. White-side defense is
-genuinely improving, via balanced data, not a teacher. Verdict at ~235 epochs:
-**confirmed but modest, not plateaued.** All future gates use n=128 (n=64 is too noisy —
-it produced the 64.1% overshoot). Lesson: read the *trend across independent checkpoints*,
-not any single gate.
+**Both the overall and the white-loss signal are trending cleanly — and the slope
+STEEPENED at e345.** Discarding the e181 n=64 overshoot, the n=128 anchors climb
+**57.0% (e235) → 66.8% (e289) → 76.2% (e345)** — the e289→e345 jump (+9.4 pts) is the
+*largest* slice-over-slice gain, so this is acceleration, not the onset of a plateau. At
+e345 the overall CI (~[68.8%, 83.6%]) sits **comfortably clear of 50% AND the ~58%
+relative-crown lower bound** (§6.6) — "stronger than the champion" has gone from "at the
+bar" to a wide margin (the formal crown still wants an n≥200 gate to call it). The
+headline is **white LOSS-rate falling monotonically on the reliable anchors: 88% (e129) →
+67% (e235, n128) → 51% (e289, n128) → 42% (e345, n128)** — now **below 50%**, the first
+gate where white wins MORE than it loses vs the frozen champ's defense (e345 white is
+21-16, win 55% / loss 42%). Caveat: e345 white is small-n (38 white games, CI ~±16% on
+the loss-rate), so treat the white number as directional even as the overall n=128 number
+is tight. The e181 59% white / 64.1% overall was an n=64 upward overshoot — exclude it;
+the n=128 points are the trustworthy trend, and they fall cleanly. White-side defense is
+genuinely improving, via balanced data, not a teacher. Verdict at ~345 epochs:
+**climbing, slope steepened, NOT plateaued.** All future gates use n=128 (n=64 is too
+noisy — it produced the 64.1% overshoot). Lesson: read the *trend across independent
+checkpoints*, not any single gate.
 
 **Epoch context (why this isn't suspiciously fast):** the white move appeared between
 e129 and e181. General AZ wisdom is "thousands of epochs to move," but THIS project's

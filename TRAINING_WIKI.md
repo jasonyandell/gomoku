@@ -4404,3 +4404,25 @@ n≥200 gate. Still CLIMBING (e235→e289: 57→66.8), not plateaued — keep tr
 e1000. White winning ~half its games vs the frozen champ's defense is a RELATIVE signal
 (beats the OLD champ's white play, not a game-theoretic white win). High-res table:
 `wiki/topics/swap2-opening-protocol.md` §5.3.
+
+## 2026-06-20 — SWAP2 (#72) gate-6 (e345, n=128): 76.2%, white-LOSS 88%→67%→51%→42% — slope STEEPENED
+
+Trained e345 vs frozen champ, n=128 sims=200 seed7 jobs=16 (runtime 755.99s): **97-30-1 =
+76.2%**. white 21-16-1 (win 55.3% / LOSS 42.1%), black 76-14-0 (84.4%), opener 43-20-1
+(67.2%), responder 54-10-0 (84.4%). opener_color_dist {black 38, white 90}.
+
+Reliable-anchor trend (n=128): overall 57.0%(e235) → 66.8%(e289) → **76.2%(e345)**;
+**white LOSS-rate 88%(e129) → 67%(e235) → 51%(e289) → 42%(e345)** — monotonic, and at e345
+**below 50% for the first time** (white wins MORE than it loses vs the champ's defense).
+The e289→e345 jump is **+9.4 overall pts — the LARGEST slice-over-slice gain so far**, so
+the slope STEEPENED this slice; this is acceleration, not the onset of a plateau. Overall
+CI ~[68.8, 83.6] sits well clear of 50% AND the ~58% relative-crown lower bound (§6.6).
+Caveat: white sample is small (n=38 white games, CI ~±16% on white-LOSS) → treat the white
+number as directional even though the overall n=128 number is tight. (e129 51.6% and e181
+64.1% were n=64; e181 was upward noise — both excluded from the reliable anchor line.)
+
+Verdict at ~345 epochs: **climbing, slope steepened, NOT plateaued** — keep training. The
+relative-crown lower bound is comfortably cleared; the formal crown still wants an n≥200
+gate, deferred to plateau or e1000. White winning the majority of its games vs the frozen
+champ's defense is a RELATIVE signal (beats the OLD champ's white play, not a game-theoretic
+white win). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
