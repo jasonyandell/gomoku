@@ -645,12 +645,288 @@ def eval_swap2_vs_engine(
     return out
 
 
+# ===========================================================================
+# NET-vs-NET head-to-head (the #72 progress gate).
+#
+# `eval_swap2_vs_engine` (above) scores OUR net against an external ENGINE
+# (Rapfi). Vs Rapfi-NNUE our net sits near its win-rate FLOOR (single-digit %),
+# where small-n variance swamps the progress signal. The project's gate
+# methodology is "did-this-help H2H vs the PRESERVED CHAMPION, not vs Rapfi" —
+# a head-to-head between the TRAINED net and a FROZEN reference net, which sits
+# near p≈0.5 and is far more resolvable.
+#
+# This block adds that net-vs-net driver. It is PURELY additive: it does not
+# touch `play_swap2_game` (the engine path) or `eval_swap2_vs_engine`. No
+# external engine is involved, so the whole thing is pure-torch and runs
+# happily CPU-only (never competes with a live MPS trainer for the GPU).
+#
+# Both sides negotiate swap2 via `agent_act` (it takes ANY oracle, so it drives
+# BOTH nets the same way), and both play normal moves via their OWN MCTS picker.
+# Because every net forward is deterministic on CPU and the per-game (role, rng)
+# is derived only from (seed, game_index), the aggregate is EXACTLY identical
+# for any `jobs` partition — this is the correctness guarantee the tests pin.
+# ===========================================================================
+
+
+def play_swap2_game_h2h(
+    oracle_a: OracleFn,
+    picker_a,
+    oracle_b: OracleFn,
+    picker_b,
+    role_a: Actor,
+    rng: np.random.Generator,
+) -> GameOutcome:
+    """Play ONE swap2 game between two nets, attributing the result to NET A.
+
+    Net A plays the ``role_a`` negotiation role (OPENER or RESPONDER); net B
+    plays the other. At EACH opening node, whichever net is the actor
+    (``state.to_act``) decides via ``agent_act(its_oracle, state, rng,
+    greedy=True)``. After the opening is DONE, normal play alternates, each side
+    moving via ITS picker.
+
+    Color/role bookkeeping mirrors :func:`play_swap2_game` exactly: ``opener_color``
+    is the color the OPENER plays the whole game, net A's color is therefore
+    ``opener_color`` when A opened else the other color, ``mover_actor()`` maps
+    the side-to-move at the handoff to an actor, and a finished game's winning
+    color is attributed to net A iff it equals net A's color. The returned
+    :class:`GameOutcome` is from NET A's perspective (``our_role``/``our_color``
+    are A's), so an aggregate of these outcomes is A's score vs B.
+    """
+    role_b = Actor.RESPONDER if role_a == Actor.OPENER else Actor.OPENER
+
+    def oracle_for(actor: Actor) -> OracleFn:
+        return oracle_a if actor == role_a else oracle_b
+
+    def picker_for(actor: Actor):
+        return picker_a if actor == role_a else picker_b
+
+    state = initial_opening()
+
+    # -- negotiate the opening: each node's actor uses ITS net's oracle --------
+    while not state.is_done():
+        actor = state.to_act
+        action, _ = agent_act(oracle_for(actor), state, rng, greedy=True)
+        state = state.apply(action)
+
+    # -- attribution bookkeeping (color NET A plays the whole game) -----------
+    opener_color = state.opener_color
+    assert opener_color is not None
+    a_color = opener_color if role_a == Actor.OPENER else _other(opener_color)
+    opening_stones = state.n_black + state.n_white
+
+    # -- play normally from the handed-off position ---------------------------
+    gs = state.to_normal()
+    mover_actor = state.mover_actor()  # which ACTOR moves first in normal play
+
+    winner_color: Color | None = None
+    plies = 0
+    while plies < _MAX_NORMAL_PLIES:
+        done, _ = gs.is_terminal()
+        if done:
+            break
+        # The actor to move this ply alternates from the opening's first mover.
+        ply_actor = mover_actor if plies % 2 == 0 else (
+            Actor.RESPONDER if mover_actor == Actor.OPENER else Actor.OPENER
+        )
+        action = picker_for(ply_actor)(gs, rng)
+        mover_color = _mover_color(state, plies)
+        gs = gs.apply(action)
+        plies += 1
+        done, v = gs.is_terminal()
+        if done:
+            if v == -1.0:  # the side that JUST moved won
+                winner_color = mover_color
+            break
+
+    if winner_color is None:
+        result = "draw"
+    elif winner_color == a_color:
+        result = "win"
+    else:
+        result = "loss"
+
+    return GameOutcome(
+        our_role=role_a,
+        opener_color=opener_color,
+        our_color=a_color,
+        result=result,
+        normal_plies=plies,
+        opening_stones=opening_stones,
+    )
+
+
+def _build_net_player(checkpoint: str, *, sims: int, c_puct: float, device: str | None):
+    """Load a checkpoint on the resolved device and return ``(oracle, picker)``.
+
+    The same (oracle, picker) pair the vs-engine path builds for OUR side, but
+    factored so the H2H path can build it for BOTH nets. ``oracle`` is a thin
+    net-forward wrapper ``(GameState)->(policy_probs, value)`` for the swap2
+    negotiation; ``picker`` is the eval MCTS move-picker for normal play.
+    """
+    from gomoku.eval import mcts_picker
+    from gomoku.mcts import make_torch_evaluator
+    from gomoku.model import fuse_model_for_inference, load_checkpoint
+    from gomoku.self_play import _make_swap2_oracle
+    from gomoku.util import pick_device
+
+    dev = pick_device(device if device is not None else os.environ.get("GOMOKU_DEVICE"))
+    model, _ = load_checkpoint(checkpoint, device=dev)
+    model = fuse_model_for_inference(model)
+    evaluator = make_torch_evaluator(model, dev)
+    oracle = _make_swap2_oracle(evaluator)
+    picker = mcts_picker(evaluator, n_simulations=sims, c_puct=c_puct)
+    return oracle, picker
+
+
+def _play_h2h_game_indices(
+    *,
+    checkpoint_a: str,
+    checkpoint_b: str,
+    indices: list[int],
+    n_games: int,
+    sims: int,
+    c_puct: float,
+    seed: int,
+    device: str | None,
+) -> list[GameOutcome]:
+    """Load BOTH nets (on ``device``) and play exactly the games at ``indices``.
+
+    The H2H unit of work for one worker. Each call loads both checkpoints once
+    and plays its assigned game indices with each game's deterministic
+    (role, rng): NET A is OPENER on even game indices (the same alternation the
+    vs-engine path uses for OUR net). No engine subprocess is involved, so a
+    worker is pure-torch — much cheaper than the Rapfi path.
+    """
+    oracle_a, picker_a = _build_net_player(checkpoint_a, sims=sims, c_puct=c_puct, device=device)
+    oracle_b, picker_b = _build_net_player(checkpoint_b, sims=sims, c_puct=c_puct, device=device)
+
+    outcomes: list[GameOutcome] = []
+    for i in indices:
+        role_a = _game_role(i)  # game 0: A opens; alternating
+        rng = _game_rng(seed, n_games, i)
+        outcomes.append(
+            play_swap2_game_h2h(oracle_a, picker_a, oracle_b, picker_b, role_a, rng)
+        )
+    return outcomes
+
+
+def _h2h_worker_entry(task: dict) -> list[GameOutcome]:
+    """Spawn-pool worker target for the H2H path: play a chunk of game indices.
+    Top-level (picklable) for the ``spawn`` start method (macOS+torch)."""
+    return _play_h2h_game_indices(
+        checkpoint_a=task["checkpoint_a"],
+        checkpoint_b=task["checkpoint_b"],
+        indices=task["indices"],
+        n_games=task["n_games"],
+        sims=task["sims"],
+        c_puct=task["c_puct"],
+        seed=task["seed"],
+        device=task["device"],
+    )
+
+
+def eval_swap2_h2h(
+    checkpoint_a: str,
+    checkpoint_b: str,
+    n_games: int,
+    *,
+    sims: int = 100,
+    c_puct: float = 1.5,
+    seed: int = 0,
+    jobs: int = 1,
+    device: str | None = None,
+) -> dict:
+    """Net-vs-net swap2 head-to-head (the #72 progress gate).
+
+    Loads BOTH nets (default CPU), plays ``n_games`` swap2 games ALTERNATING
+    which net opens (NET A opens on even game indices, NET B on odd — the same
+    per-game (role, rng) determinism as :func:`eval_swap2_vs_engine`), and
+    returns a result dict in the SAME shape as the vs-engine path: wins / losses
+    / draws / win_rate from NET A's PERSPECTIVE, plus per-color / per-role /
+    opener-color breakdowns and the two checkpoint paths.
+
+    ``jobs`` (default 1 = serial) splits the games across that many worker
+    PROCESSES, each loading both nets on the resolved device and playing its
+    chunk. Because no external engine is involved and pure-torch CPU forwards
+    are deterministic, the aggregate for jobs=J is EXACTLY identical to jobs=1
+    at the same seed/n_games — just faster. (This exact-match is the H2H
+    correctness guarantee, stronger than the vs-engine path's "equivalent": the
+    engine adds nondeterminism, two CPU nets do not.)
+    """
+    t0 = time.time()
+    if jobs <= 1 or n_games <= 1:
+        outcomes = _play_h2h_game_indices(
+            checkpoint_a=checkpoint_a,
+            checkpoint_b=checkpoint_b,
+            indices=list(range(n_games)),
+            n_games=n_games,
+            sims=sims,
+            c_puct=c_puct,
+            seed=seed,
+            device=device,
+        )
+    else:
+        import multiprocessing as mp
+
+        chunks = _split_game_indices(n_games, jobs)
+        tasks = [
+            {
+                "checkpoint_a": checkpoint_a,
+                "checkpoint_b": checkpoint_b,
+                "indices": idxs,
+                "n_games": n_games,
+                "sims": sims,
+                "c_puct": c_puct,
+                "seed": seed,
+                "device": device,
+            }
+            for idxs in chunks
+        ]
+        ctx = mp.get_context("spawn")
+        per_chunk: list[list[GameOutcome]] = [None] * len(tasks)  # type: ignore[list-item]
+        with ctx.Pool(processes=len(tasks)) as pool:
+            for ci, outs in enumerate(pool.imap(_h2h_worker_entry, tasks)):
+                per_chunk[ci] = outs
+        # imap preserves task order; chunks are contiguous, so concatenating in
+        # chunk order reassembles games in ascending index order — matching the
+        # serial outcome ORDER as well as its multiset.
+        outcomes = [o for chunk in per_chunk for o in chunk]
+    wall = time.time() - t0
+
+    res = aggregate_outcomes(outcomes)
+    out = res.to_dict()
+    out.update(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "checkpoint_a": os.path.abspath(checkpoint_a),
+            "checkpoint_b": os.path.abspath(checkpoint_b),
+            "model_sims": sims,
+            "model_c_puct": c_puct,
+            "protocol": "swap2",
+            "mode": "h2h",
+            "board_size": BOARD_SIZE,
+            "jobs": jobs,
+            "wall_secs": round(wall, 2),
+        }
+    )
+    return out
+
+
 def main() -> None:  # pragma: no cover - thin CLI wrapper around the driver
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", required=True, help="Model checkpoint path.")
-    ap.add_argument("--engine", required=True, help="Path to the engine brain (e.g. pbrain-rapfi).")
+    ap.add_argument(
+        "--h2h", action="store_true",
+        help="Net-vs-net head-to-head: --checkpoint (A) vs --checkpoint-b (B), "
+             "both negotiating swap2. No external engine. The #72 progress gate.",
+    )
+    ap.add_argument(
+        "--checkpoint-b", default=None,
+        help="The frozen-reference (NET B) checkpoint for --h2h.",
+    )
+    ap.add_argument("--engine", required=False, help="Path to the engine brain (e.g. pbrain-rapfi).")
     ap.add_argument("--label", default="engine", help="Engine label for the record.")
     ap.add_argument("--timeout-ms", type=int, default=1000, help="Engine per-move budget (ms).")
     ap.add_argument("--sims", type=int, default=100, help="Our MCTS sims per normal move.")
@@ -670,6 +946,36 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper around the driver
     )
     ap.add_argument("--out", default=None, help="JSONL output path (append).")
     args = ap.parse_args()
+
+    if args.h2h:
+        if not args.checkpoint_b:
+            raise SystemExit("--h2h requires --checkpoint-b (the frozen-reference NET B)")
+        out = eval_swap2_h2h(
+            args.checkpoint, args.checkpoint_b, args.n_games,
+            sims=args.sims, c_puct=args.c_puct, seed=args.seed, jobs=args.jobs,
+            device=os.environ.get("GOMOKU_DEVICE"),
+        )
+        print(
+            f"A vs B: {out['wins']}W-{out['losses']}L-{out['draws']}D / "
+            f"{out['n_games']} games  win_rate(A)={out['win_rate']:.2%}  "
+            f"({out['wall_secs']:.1f}s)\n"
+            f"  A = {out['checkpoint_a']}\n"
+            f"  B = {out['checkpoint_b']}\n"
+            f"  by color (A): black {out['by_color']['black']} white {out['by_color']['white']}\n"
+            f"  by role  (A): opener {out['by_role']['opener']} responder {out['by_role']['responder']}\n"
+            f"  opener_color: {out['opener_color_dist']}"
+        )
+        if args.out:
+            import json
+
+            os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+            with open(args.out, "a") as f:
+                f.write(json.dumps(out) + "\n")
+            print(f"wrote 1 record to {args.out}")
+        return
+
+    if not args.engine:
+        raise SystemExit("vs-engine mode requires --engine (or pass --h2h for net-vs-net)")
 
     from gomoku.external_engine import ExternalEngineConfig
 

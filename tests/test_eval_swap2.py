@@ -50,8 +50,10 @@ from gomoku.eval_swap2 import (
     _split_game_indices,
     _sq,
     aggregate_outcomes,
+    eval_swap2_h2h,
     eval_swap2_vs_engine,
     play_swap2_game,
+    play_swap2_game_h2h,
 )
 
 _STUB = os.path.join(os.path.dirname(__file__), "fake_piskvork_engine.py")
@@ -590,3 +592,134 @@ def test_eval_swap2_jobs3_equals_jobs1_exact(tiny_checkpoint_path):
     for key in ("wins", "losses", "draws", "win_rate", "by_color", "by_role",
                 "opener_color_dist"):
         assert serial[key] == parallel[key], f"{key} differs between jobs=1 and jobs=3"
+
+
+# ---------------------------------------------------------------------------
+# NET-vs-NET head-to-head (the #72 progress gate).
+#
+# Two tiny CPU nets negotiate swap2 against each other; the result is attributed
+# to NET A. No external engine, so the whole thing is pure-torch/CPU and the
+# jobs=1 == jobs=2 aggregate is EXACT (the correctness guarantee).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def two_tiny_checkpoints():
+    """Two distinct tiny CPU nets, saved once for the module. Different build
+    seeds give genuinely different policies/values so A-vs-B is a real contest
+    (and not a degenerate A-vs-A self-play)."""
+    import torch
+
+    from gomoku.model import build_model, save_checkpoint
+
+    paths = []
+    for s in (11, 22):
+        torch.manual_seed(s)
+        model = build_model("tiny")
+        model.eval()
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
+            path = f.name
+        save_checkpoint(path, model, optimizer=None, epoch=0, total_games=0)
+        paths.append(path)
+    try:
+        yield paths[0], paths[1]
+    finally:
+        for p in paths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def test_play_swap2_game_h2h_well_formed():
+    """One H2H game between two stub oracles + stub pickers completes and is
+    attributed to NET A (our_role == role_a)."""
+    oracle_a = _spike_oracle([])
+    oracle_b = _spike_oracle([])
+    out = play_swap2_game_h2h(
+        oracle_a, _stub_picker(), oracle_b, _stub_picker(),
+        Actor.OPENER, np.random.default_rng(0),
+    )
+    assert isinstance(out, GameOutcome)
+    assert out.result in ("win", "loss", "draw")
+    assert out.our_role == Actor.OPENER          # role_a is A's role
+    assert out.our_color in (Color.BLACK, Color.WHITE)
+    assert out.opener_color in (Color.BLACK, Color.WHITE)
+    # A opened -> A's color is opener_color.
+    assert out.our_color == out.opener_color
+    assert out.normal_plies >= 0
+    assert out.opening_stones in (3, 4, 5)
+
+
+def test_play_swap2_game_h2h_responder_role_attribution():
+    """When role_a is RESPONDER, NET A's color is the NON-opener color."""
+    oracle_a = _spike_oracle([])
+    oracle_b = _spike_oracle([])
+    out = play_swap2_game_h2h(
+        oracle_a, _stub_picker(), oracle_b, _stub_picker(),
+        Actor.RESPONDER, np.random.default_rng(1),
+    )
+    assert out.our_role == Actor.RESPONDER
+    # A responded -> A's color is the OTHER color from opener_color.
+    assert out.our_color != out.opener_color
+
+
+def test_eval_swap2_h2h_well_formed(two_tiny_checkpoints):
+    """eval_swap2_h2h returns a well-formed result dict; W+L+D == n; the
+    by_color / by_role splits each sum to n; both checkpoint paths are recorded."""
+    ckpt_a, ckpt_b = two_tiny_checkpoints
+    out = eval_swap2_h2h(
+        ckpt_a, ckpt_b, n_games=6, sims=4, seed=0, jobs=1, device="cpu",
+    )
+    assert out["n_games"] == 6
+    assert out["wins"] + out["losses"] + out["draws"] == 6
+    assert out["mode"] == "h2h"
+    assert out["jobs"] == 1
+    assert out["checkpoint_a"] == os.path.abspath(ckpt_a)
+    assert out["checkpoint_b"] == os.path.abspath(ckpt_b)
+    assert 0.0 <= out["win_rate"] <= 1.0
+    assert set(out.keys()) >= {
+        "n_games", "wins", "losses", "draws", "win_rate",
+        "by_color", "by_role", "opener_color_dist", "protocol", "mode",
+        "checkpoint_a", "checkpoint_b", "wall_secs",
+    }
+    wld = [out["wins"], out["losses"], out["draws"]]
+    bc, br = out["by_color"], out["by_role"]
+    for i in range(3):
+        assert bc["black"][i] + bc["white"][i] == wld[i], "by_color split must sum to n"
+        assert br["opener"][i] + br["responder"][i] == wld[i], "by_role split must sum to n"
+    # opener_color distribution sums to n.
+    ocd = out["opener_color_dist"]
+    assert ocd["black"] + ocd["white"] == 6
+
+
+def test_eval_swap2_h2h_self_play_completes(two_tiny_checkpoints):
+    """Self-play sanity: NET A vs the SAME net (A vs A) over many games completes
+    and sums correctly. Nets are random-init so we don't over-constrain the score
+    (just that it's a valid aggregate over all n games)."""
+    ckpt_a, _ = two_tiny_checkpoints
+    out = eval_swap2_h2h(
+        ckpt_a, ckpt_a, n_games=8, sims=4, seed=5, jobs=1, device="cpu",
+    )
+    assert out["n_games"] == 8
+    assert out["wins"] + out["losses"] + out["draws"] == 8
+    assert 0.0 <= out["win_rate"] <= 1.0
+
+
+def test_eval_swap2_h2h_jobs1_equals_jobs2_exact(two_tiny_checkpoints):
+    """THE H2H correctness guarantee: with NO engine, two pure-torch CPU nets are
+    fully deterministic and each game's (role, rng) is derived only from
+    (seed, game_index), so jobs=2 plays the EXACT SAME games as jobs=1 — every
+    aggregate + per-color/role/opener-color split is BYTE-identical. (Stronger
+    than the vs-engine 'equivalent': there is no engine nondeterminism here.)"""
+    ckpt_a, ckpt_b = two_tiny_checkpoints
+    serial = eval_swap2_h2h(
+        ckpt_a, ckpt_b, n_games=6, sims=4, seed=321, jobs=1, device="cpu",
+    )
+    parallel = eval_swap2_h2h(
+        ckpt_a, ckpt_b, n_games=6, sims=4, seed=321, jobs=2, device="cpu",
+    )
+    assert serial["n_games"] == parallel["n_games"] == 6
+    for key in ("wins", "losses", "draws", "win_rate", "by_color", "by_role",
+                "opener_color_dist"):
+        assert serial[key] == parallel[key], f"{key} differs between jobs=1 and jobs=2"
