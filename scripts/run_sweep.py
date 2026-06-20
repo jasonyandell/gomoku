@@ -627,6 +627,90 @@ CELLS: dict[str, Cell] = {
                                    "--value-head", "wdl"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--value-head", "wdl"]),
+    # G15-wdl-defense (white-defense probe, 2026-06-19): the (A) experiment. The #43
+    # policy-stamp defense teacher proved SOUND but UN-READABLE in its live race
+    # (cell G15-defense-i2, wandb zrjfwny2) — fresh stamped games were only
+    # ~0.16-0.3 %/hr of a 1.5M WARM attacker-biased buffer, so the Rapfi white-column
+    # gate never left 0/12. The post-mortem's fix: make the stamps a meaningful
+    # fraction of the buffer. This cell IS that fix, for free: it is BYTE-IDENTICAL to
+    # G15-wdl (the from-scratch WDL champion — wdl@0, internal elo 1918) in EVERY Cell
+    # field, plus the ONE policy-stamp teacher lever. Two things de-dilute the stamps
+    # vs G15-defense-i2: (1) the buffer is 400k not 1.5M (3.75x denser) and (2) it is
+    # FROM SCRATCH, so the buffer is all current-distribution self-play with NO warm
+    # attacker-bias mass to drown the defensive lessons. Control already measured:
+    # plain G15-wdl scores white 0-20 / black 11-9 vs native Rapfi-NNUE @100ms,
+    # sims=400 (sweep_logs/probe_wdl0_vs_rapfi_n40.jsonl). GATE = re-run
+    # eval_vs_rapfi.py --jobs 8 on a matured checkpoint and watch the white column
+    # leave 0/20. Trap-checklist honored: fixed-step trainer (immune to the LEAN-fp16
+    # tile runaway), 15x15-capped solver 800/7 (9x9 defaults starve gen to 0 games),
+    # 8 workers (proven shape), small net (64x4 is ~free at 15x15), policy-stamp NOT
+    # value-only (the -458 trunk-poisoner). #60 (refute only budget-kept plies, 4x
+    # fewer solves) is merged, so the gen overhead is the cheap path.
+    "G15-wdl-defense": Cell("G15-wdl-defense-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98",
+                                   "--value-head", "wdl",
+                                   "--defense-teacher-policy",
+                                   "--defense-max-fraction", "0.25",
+                                   "--defense-detect-frac", "0.1",
+                                   "--vcf-max-nodes", "800", "--vcf-max-depth", "7"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--value-head", "wdl"]),
+    # G15-wdl-conv (white-defense "dense-shallow" probe, 2026-06-19): the (B)
+    # experiment, the COMPLEMENT of G15-wdl-defense. The sparse+deep VCF policy
+    # teacher (cell G15-defense-i2, then the de-diluted G15-wdl-defense) is SOUND
+    # but did NOT move white off the floor after ~1040 epochs even at frac 0.1 in a
+    # fresh 150k buffer (a clean null). Hypothesis here: the net lacks the BASIC
+    # block-the-obvious-threat reflex, which a DENSE, SHALLOW, CHEAP, no-tree-search
+    # teacher firing on EVERY ply can teach. The conv block-teacher detects the
+    # opponent's IMMEDIATE threat with a vectorized board scan (~microseconds/ply,
+    # NO solve_vcf) and stamps the BLOCK on the POLICY head (value left at the
+    # natural outcome — never the -458 value crush). Tier 1 = the unique forced-four
+    # block (sound); Tier 2 = open-three -> open-four prevention (heuristic, on by
+    # default). It is BYTE-IDENTICAL to G15-wdl-defense in every Cell field EXCEPT it
+    # replaces the four sparse-VCF worker levers (--defense-teacher-policy /
+    # --defense-max-fraction / --defense-detect-frac / --vcf-max-*) with the single
+    # --defense-teacher-conv lever — so it is the one-lever sibling of G15-wdl (the
+    # from-scratch WDL champion control, wdl@0 internal elo 1918). Same control to
+    # beat: plain G15-wdl scores white 0-20 @100ms / 1-19 @1000ms, black 11-9 @100ms
+    # vs native Rapfi-NNUE. GATE = re-run eval_vs_rapfi.py --jobs 8 on a matured
+    # checkpoint and watch the white column leave 0/20. Trap-checklist honored
+    # (fixed-step trainer, 8 workers, small net, policy-stamp not value-only); and
+    # the conv teacher needs NO solver budget, so the 9x9-solver-starves-gen trap
+    # does not apply at all (no tree search runs).
+    "G15-wdl-conv": Cell("G15-wdl-conv-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98",
+                                   "--value-head", "wdl",
+                                   "--defense-teacher-conv"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--value-head", "wdl"]),
     "A": Cell("A-K1-buf50k",   sgd_per_game=1.0, buffer_size=50_000),
     "B": Cell("B-K2-buf50k",   sgd_per_game=2.0, buffer_size=50_000),
     "C": Cell("C-K4-buf50k",   sgd_per_game=4.0, buffer_size=50_000),

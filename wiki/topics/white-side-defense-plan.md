@@ -1,5 +1,29 @@
 # Plan: Fixing white-side (defense / second-player) weakness — 15×15 freestyle gomoku
 
+> 🛑 **2026-06-20 CONCLUSION — STOP patching defense; the white "weakness" is the
+> first-player-win THEOREM, not a net flaw. The fix is swap2 (#22), not a teacher.**
+> A full day's investigation closed this out. (1) The hole is recipe-deep, not
+> warm-start/capacity/value-head — the from-scratch 0.44M `wdl@0` reproduces the
+> champion's white sweep to the game (white 0-20 @100ms). (2) Three policy-stamp
+> teachers ALL flattened — sparse-VCF (`--defense-detect-frac`), and the dense
+> conv block-teacher (`--defense-teacher-conv`) — white never left ~0-2/20 vs Rapfi.
+> (3) The diagnostic (`scripts/diag_white_failuremode.py`) showed WHY: white blocks
+> forced fours essentially perfectly (Tier-1 error 5.6%, the 1 miss already-lost),
+> has initiative on **1 ply in 30 games**, and is forced into an unstoppable
+> double-four in **28/30** games — it competently retreats to a forced loss, it does
+> not blunder. (4) **The clincher:** Rapfi(1000ms) vs Rapfi(1000ms) from the same
+> 4-stone openings → **white 1-9 (~10%), black 9-1.** Even the #1 engine playing
+> ITSELF gets crushed as the second player. 15×15 freestyle is a proven first-player
+> win; from an empty/random opening white is a (near-)lost role, so NO policy/value
+> teacher can make it win — there is no error to fix. **The real fix is to remove the
+> doomed role: swap2** (Gomocup's balancing protocol — place 3, then stay/swap/place-2;
+> the player is never *forced* onto the lost side). That also fixes the yardstick
+> (Rapfi is a swap2 engine). Next build = **#22 swap2** (3-stone placement + 3-way
+> color-choice node + net learning to negotiate + swap2 eval). The `--defense-detect-frac`
+> + `--defense-teacher-conv` levers are sound + tested + default-off-byte-identical;
+> they're kept as evidence, not a path forward. Full chronology: `TRAINING_WIKI.md`
+> 2026-06-20. Everything below this banner predates the conclusion.
+
 > The #33 / #18 defense plan (copied here from `/tmp/defense_plan.md`, dated 2026-06-15). §1A is implemented by `scripts/panel_white_elo.py` (the pure-analysis white-side reader over the panel JSONL); §5 is the eval-cadence fit.
 
 Date: 2026-06-15. Author: research subagent. Status: design only — **no games run**
@@ -243,6 +267,101 @@ wandb preserved) rather than burn the GPU on an unreadable run.
 rethink** (smaller or recency-weighted buffer, or a higher stamp fraction, so the defensive
 lesson is not diluted into the champion's 1.5M attacker-biased mass) before the next live
 race. Gate unchanged: `eval_vs_rapfi.py --jobs 8`, watch the white W-L-D column leave 0/12.
+
+---
+
+## §1B.2 → ROOT-CAUSE REFRAME + SPARSE-BITE LEVER (2026-06-19) — the deficit is RECIPE-DEEP, the gen bottleneck is the PER-PLY SOLVE (not buffer size), and the first fix is a 10% exact-solver sample
+
+A focused session (Jason + Claude, hobby day) produced three findings that reframe the whole arc and put a *simpler* fix in flight.
+
+### Finding 1 — the white hole is RECIPE-DEEP (not warm-start, not capacity, not the value head)
+The wiki's open probe was: does the warm-started champion's 0/12-white hole come from
+warm-start baking in the 9×9 attacker bias, or is it intrinsic to the recipe? **Answer:
+recipe-deep.** The autolab's **from-scratch** `15x15-wdl@0` (0.44M, 64×4, WDL value head,
+NO warm-start, NO teacher; HF `jasonyandell/gomoku-9x9@15x15-wdl-15x15-wdl@0`) was measured
+vs native Rapfi-NNUE the same way as the champion (sims=400, 4-stone balanced, seed 7,
+`eval_vs_rapfi.py --jobs 8`):
+
+| net | @100ms white | @100ms black | @1000ms white |
+|---|---|---|---|
+| `wdl@0` (0.44M, from-scratch) | **0-20-0** | 11-9 (55%) | 1-19-0 |
+| champion (3.3M, warm-started) | **0-20-0** | 11-9 | 3-17 |
+
+The from-scratch run reproduces the champion's white sweep **to the game** (0-20 white,
+11-9 black @100ms is byte-identical). A 7.5× smaller, from-scratch, different-value-head
+net shows the identical hole ⇒ **warm-start, capacity, and the WDL head are all exonerated.**
+The color **asymmetry is the clean signal** — this tiny net attacks at 55% vs the world #1
+yet cannot defend at all. Corroborated by the contrast that the *same recipe* defends nearly
+perfectly on 9×9 (the 9×9 champion was 43-3-74 vs Rapfi ⇒ white-loss ≤5%): the hole **scales
+with board size** — classic fast-attack collapse wearing a white-defense mask. **The fix must
+change the training DATA**, which is exactly what the #43 teacher does. Artifact:
+`sweep_logs/probe_wdl0_vs_rapfi_n40.jsonl`.
+
+### Finding 2 — the #43 "drowning" ROOT CAUSE is the per-ply solve on the gen hot path, NOT buffer dilution
+A clean 2×2 of 180 s smokes (board 15, 8–16 workers) + a steady-state profiler (`wdl@0`,
+policy teacher, caps 800/7) isolated the cost:
+
+| net start | teacher | games/180s | gen rate |
+|---|---|---|---|
+| from-scratch | OFF | 1288 | 7.2 g/s |
+| from-scratch | ON | 40 | 0.22 g/s |
+| warm `wdl@0` | OFF | **1864** | **10.4 g/s** |
+| warm `wdl@0` | ON | 24 | 0.13 g/s |
+
+The teacher slows gen **~32× from scratch, ~78× on the mature net.** Profiler breakdown
+(16 games, steady-state): **~7.1 s/game = 94 % of wall**, of which **~21 detection solves/game
+@ ~180 ms** (`solve_vcf` on every opponent-four-threat ply + a *second* `solve_vcf` for the
+StM-own-win guard) = 3.8 s/game, and refutation re-solves = 3.3 s/game. **So the #43 race
+didn't drown because the buffer was big — it drowned because the per-ply VCF solve made gen
+crawl** (the 1.5M buffer was the *symptom*; even a tiny fresh buffer can't be kept dense at
+0.13 g/s). (Note: the 8-worker smoke read ~59 s/game vs the profiler's clean 7 s/game —
+multi-process cold-window contention inflation, the same short-window trap as LF1; trust the
+profiler.) Jason's instinct — "it drowned because gen was super slow" — was exactly right.
+
+### Finding 3 (the fix in flight) — SPARSE-BITE: invoke the exact solver on only 10% of danger plies
+AlphaZero distills a defensive lesson over many epochs from a **present** signal; it does not
+need every forced loss stamped. So the simplest unlock is to **sample** the expensive solve:
+new flag **`--defense-detect-frac F`** (self_play `_DEFENSE_DETECT_FRAC`, default 1.0 =
+byte-identical) gates `solve_vcf` in `_defense_detect_candidate` to a fraction `F` of
+four-threat plies — the cheap `has_four_threat` prescan still runs every ply, only the
+expensive detection (and the guard + refute that follow) is sampled. Stamps stay **EXACT**
+(no new correctness surface). Profiler @ `F=0.1`: detection solves **21 → 2.2/game**, teacher
+cost **7.08 → 1.68 s/game** (~10× cut) ⇒ the *inline* teacher is performant again, no
+off-path machinery required. **Density math:** 10% stamping in a fresh 150k buffer is
+**~1000× denser** than the #43 race that drowned in a 1.5M warm buffer — i.e. plausibly
+already past the density threshold, at 1/10 the cost. It's a **dial**, not a rewrite: too
+sparse → turn it to 0.3.
+
+**LIVE cell `G15-wdl-defense`** (`scripts/run_sweep.py`) = `G15-wdl` (the from-scratch WDL
+champion — the 0/20 control above) **+ ONE lever** (`--defense-teacher-policy`, sparse
+`--defense-detect-frac 0.1`, `--defense-max-fraction 0.25`, caps 800/7) into a **small fresh
+150k buffer**, warm-started `--resume wdl@0`, 16 workers. Warm start = clean ~37-ply games
+(fast gen + real forced-loss positions to teach), fresh small buffer = no #43 dilution.
+**Gate:** `eval_vs_rapfi.py --jobs 8` on a matured checkpoint — watch the white W-L-D column
+leave 0/20. Restartable (`--resume latest.pt`).
+
+### Deferred: the OFF-PATH relabeler (designed, parked) and the reanalyze seam
+The original plan was a separate relabel-worker process (gen teacher-off-fast → a pool of
+solver processes stamp records → trainer; modeled on `eval_worker.py`, reusing
+`_defense_detect_candidate`/`_defense_refute_stamp` — records store `planes`, so the solver
+runs directly, no move-replay needed). Profiling killed it as the *first* move: the solve is
+~7 s/game **wherever it runs**, so off-path doesn't make it faster — it only *parallelizes*
+it, and inline-with-16-workers already uses every core, so both cap at the same ~2 g/s of
+stamped games. (The shipped in-trainer `reanalyze.py`/derby-fm9 seam can't be reused either:
+to avoid starving SGD you'd bound it so hard the stamp rate re-dilutes — the #43 failure.)
+The off-path design's *real* value is keeping the trainer fed at full gen rate while a skim
+of records gets stamped — worth building **if** sparse-bite's density proves insufficient.
+
+### Rung two (idea for later): a GPU-NATIVE cheap defensive "bite"
+The exact solver is pure-Python CPU (the CPU↔MPS bounce + 180 ms/solve). A **conv-based
+threat detector** — find the opponent's open-fours / double-threats as kernels over the
+board planes, in torch **on MPS**, derive the blocking square(s), stamp them on the policy —
+would be **dense, every-ply, no CPU/GPU jump, no tree search.** It's *shallow* (catches the
+immediate threat, not a deep VCF line), but shallow defense is exactly what white lacks
+(0-20). The endgame is **layered**: cheap-dense-shallow (GPU, every ply) + rare-deep-exact
+(solver, sparse) → the net learns "always block the obvious thing" *and* occasionally "here's
+the deep save." Real build + a new correctness surface (a wrong block teaches the wrong move),
+so deferred behind the sparse-bite result. Filed as a candidate lever.
 
 ---
 

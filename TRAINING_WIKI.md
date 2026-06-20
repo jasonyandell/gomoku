@@ -4137,3 +4137,85 @@ short/cold-window trap again, cf. LF1) and **#60** (refute only budget-kept plie
 fewer `vcf_refutations` solves, equivalence-proven). Next: #60 + a buffer-freshness
 rethink before the next live race. Full synthesis:
 `wiki/topics/white-side-defense-plan.md` § "LIVE RACE RAN, then KILLED (2026-06-19)".
+
+## 2026-06-19 — White-defense reframe: recipe-deep + the gen bottleneck is the PER-PLY SOLVE; SPARSE-BITE lever live
+
+Hobby-day session (Jason + Claude). Three results; full synthesis in
+`wiki/topics/white-side-defense-plan.md` § "ROOT-CAUSE REFRAME + SPARSE-BITE LEVER".
+
+1. **The white hole is RECIPE-DEEP.** The autolab's **from-scratch** `15x15-wdl@0`
+   (0.44M, WDL head, no warm-start, no teacher) reproduces the warm 128×10 champion's
+   white sweep vs native Rapfi-NNUE **to the game**: white **0-20** / black 11-9 @100ms
+   (byte-identical to the champion's row), white 1-19 @1000ms. 7.5× smaller + from-scratch
+   + different value head ⇒ warm-start, capacity, and the WDL head are all exonerated; the
+   deficit lives in the self-play **data distribution**. (Corroborated by the 9×9 champion
+   defending ≤5% white-loss under the same recipe — the hole scales with board size.)
+   Artifact `sweep_logs/probe_wdl0_vs_rapfi_n40.jsonl`.
+2. **The #43 "drowning" ROOT CAUSE = the per-ply VCF solve, not buffer size.** Clean 2×2
+   smokes + a steady-state profiler: the policy teacher costs **~7.1 s/game (94% of wall)** —
+   ~21 detection solves/game @ ~180 ms (incl. the StM-own-win guard's *second* solve) +
+   refutation re-solves — slowing gen **~32× from scratch, ~78× on the mature net** (warm
+   `wdl@0`: 1864 games/180s teacher-OFF → 24 teacher-ON). The 1.5M buffer was the symptom;
+   the slow gen is the root. (8-worker smoke read ~59 s/game vs the profiler's clean
+   7 s/game — cold-window contention inflation; trust the profiler.)
+3. **SPARSE-BITE lever (live).** New flag `--defense-detect-frac F` (self_play
+   `_DEFENSE_DETECT_FRAC`, default 1.0 = byte-identical) samples the EXACT solver to a
+   fraction of four-threat plies — stamps stay exact, cost scales ~1:1. AZ distills a
+   defensive lesson over epochs from a *present* signal; per-ply perfection isn't required.
+   Profiler @ F=0.1: solves 21→2.2/game, teacher 7.08→1.68 s/game (~10×). 10% in a fresh
+   150k buffer ≈ **1000× denser** than the #43 race that drowned in 1.5M. Defense tests pass
+   (43), byte-identity preserved. **LIVE cell `G15-wdl-defense`** = `G15-wdl` (the from-scratch
+   0/20 control) + ONE lever (policy teacher, `--defense-detect-frac 0.1`,
+   `--defense-max-fraction 0.25`, caps 800/7) into a small fresh **150k** buffer,
+   `--resume wdl@0`, 16 workers (board 15, mps, wandb offline). Gate: `eval_vs_rapfi.py
+   --jobs 8`, watch white leave 0/20. Restartable.
+
+Deferred (parked, with rationale in the synthesis page): the off-path relabel-worker (solve
+is ~7 s/game *wherever* it runs → off-path only parallelizes, capping at the same ~2 g/s as
+inline-16-workers; its real value is keeping the trainer fed via a skim — build it only if
+sparse-bite's density is insufficient) and a **GPU-native conv-based threat-block teacher**
+(dense, every-ply, no CPU/GPU bounce; shallow but that's what white lacks; the layered
+endgame = cheap-dense-shallow + rare-deep-exact).
+
+NOTE (machine): this session's code runs from the worktree `gomoku-white-defense-probe` via
+an **editable-MAPPING repoint** of the shared mise venv's PEP-660 finder to the worktree
+(the documented gotcha; PYTHONPATH can't shadow it). Restore to `~/code/gomoku/gomoku` at
+session end. Changes are backward-compatible (new optional flag, default byte-identical), so
+the repoint is benign for any other consumer.
+
+## 2026-06-20 — CONCLUSION: white-defense is the first-player-win THEOREM, not a net flaw → pivot to swap2 (#22)
+
+The day's white-defense investigation closed out decisively. The whole arc, in order:
+
+1. **Recipe-deep** (probe): from-scratch `wdl@0` (0.44M, WDL head) reproduces the warm
+   128×10 champion's white sweep vs Rapfi to the game (white 0-20 @100ms). Warm-start,
+   capacity, value-head all exonerated.
+2. **Sparse-VCF teacher null** (e1726, `--defense-detect-frac 0.1`): white 1-19/0-20 — no move.
+3. **Dense conv block-teacher null** (e1240, `--defense-teacher-conv`, ~13.7 stamps/game,
+   ~37% of plies): white 2-18/2-18 — a faint flicker inside the noise band, and black
+   *softened* 55%→30% (traded attack for caution). Not a fix.
+4. **Diagnostic** (`scripts/diag_white_failuremode.py`, 30 white-vs-Rapfi games on `wdl@0`):
+   white blocks forced fours essentially perfectly (**Tier-1 error 5.6%**, the lone miss
+   on an already-lost final ply); has its OWN immediate win on **1 ply across 30 games**
+   (zero initiative); is forced into an unstoppable **double-four in 28/30 games**; losses
+   run ~23 plies with defensive pressure rising toward the death. ⇒ "competent passive
+   retreat to a forced loss," NOT tactical blunders. The stamp-teachers fix the one error
+   class white doesn't make.
+5. **Clincher** (`/tmp/rapfi_vs_rapfi.py`): **Rapfi(1000ms) vs Rapfi(1000ms)**, same
+   4-stone openings, n=20 → **WHITE 1-9 (~10%), BLACK 9-1 (~90%).** Even the #1 Gomocup
+   engine playing ITSELF gets crushed as the second player.
+
+**Verdict:** 15×15 freestyle is a proven first-player win; from an empty/random opening
+white is a (near-)lost role. No policy/value teacher can make a lost role win — there is no
+error to correct. Every defense lever this project tried (FPU, search budget, value-only
+teacher #42, sparse-VCF policy #43, dense conv) was fighting the theorem. **The fix is to
+DELETE the doomed role: swap2** (Gomocup's balancing protocol — P1 places 3 stones, P2
+chooses stay/swap/place-2-and-let-opponent-pick-color; the player is never *forced* onto the
+lost side). This also makes the Rapfi yardstick honest (Rapfi is a swap2 engine) and is the
+real Gomocup game. **Next build = #22 swap2**: the 3-stone opening placement, the 3-way
+color-choice decision node, the net learning to negotiate the color, and a swap2 eval-vs-Rapfi.
+The `--defense-detect-frac` and `--defense-teacher-conv` levers are sound, tested (60 + 40/40
+VCF cross-check + 1500-fuzz), default-off byte-identical — kept as evidence, not a path forward.
+Artifacts: `sweep_logs/probe_wdl0_vs_rapfi_n40.jsonl`, `probe_convguard_e1240_vs_rapfi.jsonl`,
+`diag_white_failuremode_wdl0.jsonl`. Paused runs preserved: `sweep_runs/G15-wdl-defense-board15`
+(sparse, e1726), `sweep_runs/G15-wdl-conv-board15` (conv, e1240).
