@@ -392,6 +392,58 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-swap2 (#72): the REAL fix for white — delete the doomed role instead of
+    # teaching it. The 2026-06-20 investigation closed white-side "defense weakness"
+    # as the first-player-win THEOREM, not a net flaw (Rapfi-vs-Rapfi from 4-stone
+    # openings is white 1-9; even the #1 engine is crushed as the second player). No
+    # teacher can make a (near-)solved-lost role win — three flattened (value-only
+    # #42, sparse-VCF, dense-conv). Swap2 (Gomocup's balancing protocol: place 2B+1W,
+    # then stay/swap/place-2) means a player is never FORCED onto the lost side, so
+    # self-play generates ~50/50 data and white positions become winnable in the
+    # training set — the bootstrap an imbalanced game can't do. BYTE-IDENTICAL to the
+    # reigning champion G15-128x10-bigbuf (the eval502 lineage: 128x10 large +
+    # global_pool + value-discount 0.98 + gumbel + scalar value head) in every Cell
+    # field EXCEPT two deltas:
+    #   (1) buffer_size 1.5M -> 150k FRESH: the warm champion buffer is attacker-
+    #       biased mass; the swap2 lesson lives in NEW ~50/50 games, so a small fresh
+    #       buffer turns over to the balanced distribution fast (the 2026-06-19
+    #       small-fresh-buffer finding, ported from G15-wdl-defense).
+    #   (2) swap2=True: each self-play game starts from a swap2-negotiated opening
+    #       (the net plays both opener+responder; choices picked by a one-ply value
+    #       comparison, no trained choice head needed in v1). swap2=True drives the
+    #       trainer's gen path (trainer_cmd emits --swap2), and --swap2 in
+    #       extra_worker_args drives the workers — so every gen path negotiates (no
+    #       non-swap2 pollution regardless of trainer-vs-worker gen split). swap2 is
+    #       byte-identical-off, so OFF == the champion recipe exactly.
+    # Gen is CHEAP here (the negotiation is ~30 net forwards/game, NO VCF solver), so
+    # n_workers is bumped 4 -> 8 without the solver-starves-gen trap that bit the
+    # defense cells. WARM-START from the champion at launch (weights only; a stripped
+    # checkpoint with no embedded buffer/optimizer/wandb -> fresh buffer + fresh
+    # optimizer covering the new choice head + new wandb timeline):
+    #   python scripts/run_sweep.py G15-swap2 \
+    #       --resume /Users/jason/data/swap2/g15_champ_warmstart_weightsonly.pt \
+    #       --run-base /Users/jason/data/swap2 --max-wall-secs <chunk> --final-eval
+    # GATE = the swap2 eval harness (gomoku/eval_swap2.py) vs native Rapfi-NNUE: both
+    # sides negotiate the real protocol, so overall win% (no forced-white floor) is
+    # the honest yardstick. Re-measure each hour and watch it climb off the champion's
+    # swept-white deficit.
+    "G15-swap2": Cell("G15-swap2-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-defense (#36, sliding-derby Lap 1): the DEFENSE-TEACHER cell — the proven-
     # needed white-side fix. Diagnosis (#33) is closed: the champion's white-side
     # collapse vs strong attackers (eval502: 0-6 white vs zetor17 while 6-0 as black)
