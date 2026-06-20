@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from torch.nn.utils.fusion import fuse_conv_bn_eval
 
 from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES
+from gomoku.swap2 import N_CHOICES
 
 
 @dataclass
@@ -118,6 +119,21 @@ class ModelConfig:
     # The value/policy HEAD nonlinearities are deliberately untouched (they stay
     # F.relu) so this lever is exactly "the tower activation" — one axis.
     activation: str = "relu"
+    # Swap2 choice head (the swap2 opening protocol's only non-spatial decisions:
+    # the responder's STAY/SWAP/PLACE2 and the opener's pick-color). A width-3
+    # head (gomoku.swap2.N_CHOICES) emits a prior over those choice slots, used
+    # ONLY at choice nodes; the board policy head and value head are unchanged.
+    # The head ALWAYS exists (default True) because swap2 is the protocol this
+    # net is for; it is small and shares the trunk via the value head's
+    # penultimate hidden layer. It is reached only through forward_with_choice()
+    # — never through forward() — so the (policy, value) hot path is byte-
+    # identical and every existing `policy, value = model(x)` caller is unchanged.
+    # When False (e.g. an ablation), the head module is NOT constructed, so the
+    # state_dict / param count / inference graph match a model predating it. The
+    # warm-start load path tolerates an OLD checkpoint that lacks the choice-head
+    # weights (the champion predates this head): the core loads strict and the
+    # fresh choice head is left at its init (see load_checkpoint).
+    choice_head: bool = True
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -315,6 +331,18 @@ class GomokuNet(nn.Module):
             self.ownership_bn = nn.BatchNorm2d(cfg.value_filters)
             self.ownership_fc = nn.Linear(cfg.value_filters * spatial * spatial, n_actions)
 
+        # Swap2 choice head — a single Linear off the value head's penultimate
+        # hidden activation (value_fc1's `value_hidden`-wide output), emitting
+        # N_CHOICES (=3) logits over the choice slots. It taps the SAME shared
+        # trunk as every other head and reuses the value-head's already-computed
+        # `value_hidden` features, so it is tiny (value_hidden*3 + 3 params).
+        # Constructed ONLY when cfg.choice_head is set (default True); when False
+        # the state_dict / param count / inference graph are byte-identical to a
+        # model predating this head. Reached only via forward_with_choice(), never
+        # forward(), so the (policy, value) hot path is untouched.
+        if cfg.choice_head:
+            self.choice_fc = nn.Linear(cfg.value_hidden, N_CHOICES)
+
     def forward(
         self,
         x: torch.Tensor,
@@ -398,6 +426,48 @@ class GomokuNet(nn.Module):
                 )
             out = out + (value_logits,)
         return out
+
+    def forward_with_choice(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass for swap2 CHOICE nodes: (policy, value, choice_logits).
+
+        Returns the same (policy, value) as ``forward(x)`` PLUS the choice head's
+        ``choice_logits`` of shape ``(B, N_CHOICES)`` — a prior over the swap2
+        choice slots (responder STAY/SWAP/PLACE2 or opener pick-color), masked to
+        the legal slots by the caller (see OpeningState.legal_choice_mask). This
+        is the ONLY entry point that runs the choice head; ``forward`` and every
+        ``policy, value = model(x)`` caller are byte-identical and never touch it.
+
+        Choice nodes are ≤2 per game, so recomputing the trunk here (rather than
+        threading a third return through the hot path) costs nothing meaningful.
+        The choice head taps the value head's penultimate hidden activation, so
+        the shared value-trunk compute is reused inline.
+        """
+        if not self.cfg.choice_head:
+            raise RuntimeError(
+                "forward_with_choice requires cfg.choice_head=True "
+                "(the choice head was not constructed)"
+            )
+        h = self.tower(self.stem(x))
+
+        p = F.relu(self.policy_bn(self.policy_conv(h)))
+        p = self.policy_fc(p.flatten(1))
+
+        vh = F.relu(self.value_bn(self.value_conv(h)))
+        vh = F.relu(self.value_fc1(vh.flatten(1)))   # penultimate value hidden
+        choice_logits = self.choice_fc(vh)           # (B, N_CHOICES)
+
+        if self.cfg.value_head == "wdl":
+            wdl = F.softmax(self.value_wdl_fc(vh), dim=-1)
+            v = wdl[:, 0] - wdl[:, 2]
+        elif self.cfg.value_head == "hlgauss":
+            probs = F.softmax(self.value_hlgauss_fc(vh), dim=-1)
+            v = (probs * self.value_hlgauss_bin_centers).sum(dim=-1)
+        else:
+            v = torch.tanh(self.value_fc2(vh)).squeeze(-1)
+
+        return p, v, choice_logits
 
 
 def build_model(
@@ -535,6 +605,11 @@ def load_checkpoint(
     saved_cfg.setdefault("value_hlgauss_sigma", ModelConfig.value_hlgauss_sigma)
     # Pre-15x15-era checkpoints predate board_size; they were all 9x9.
     saved_cfg.setdefault("board_size", 9)
+    # Pre-swap2 checkpoints predate choice_head. The champion's state_dict has no
+    # choice-head weights, but the swap2 net WANTS the head, so we build it (the
+    # config default is True) and warm-start the core strict + fall back the
+    # choice head to its fresh init below — rather than disabling the head.
+    saved_cfg.setdefault("choice_head", ModelConfig.choice_head)
     if expect_board_size is not None and saved_cfg["board_size"] != expect_board_size:
         raise ValueError(
             f"checkpoint {path!r} was trained at board size "
@@ -545,5 +620,19 @@ def load_checkpoint(
         )
     cfg = ModelConfig(**saved_cfg)
     model = GomokuNet(cfg).to(device)
-    model.load_state_dict(payload["model_state_dict"])
+
+    # Warm-start tolerance for the swap2 choice head ONLY. The champion predates
+    # this head, so its state_dict lacks `choice_*` keys. We still want a STRICT
+    # load for the core (a genuinely-missing core weight must error, not be
+    # silently skipped), so we splice the freshly-initialized choice-head params
+    # into the saved dict for any choice key the checkpoint is missing, then load
+    # strict. A checkpoint that already carries the choice head loads it exactly
+    # (no fallback triggered) and round-trips bit-for-bit.
+    state = dict(payload["model_state_dict"])
+    if cfg.choice_head:
+        model_sd = model.state_dict()
+        for key, tensor in model_sd.items():
+            if key.startswith("choice_") and key not in state:
+                state[key] = tensor
+    model.load_state_dict(state)
     return model, payload
