@@ -18,10 +18,11 @@ import pytest
 import torch
 
 from gomoku.board_config import BOARD_SIZE
-from gomoku.game import GameState
+from gomoku.game import GameState, N_INPUT_PLANES
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import build_model
-from gomoku.swap2_search import negotiate
+from gomoku.swap2 import Actor, N_CHOICES
+from gomoku.swap2_search import ChoiceRecord, Swap2Result, negotiate
 from gomoku import self_play as sp
 
 
@@ -98,3 +99,86 @@ def test_swap2_off_is_default():
     )
     assert isinstance(records, list)
     assert len(records) > 0
+
+
+def test_swap2_records_choice_examples():
+    """swap2 self-play threads negotiation CHOICE records out as ChoiceExamples.
+
+    At least one game must carry a non-empty `choice_examples`, and each example
+    must be well-formed: an N_CHOICES legal mask with 2-3 legal slots (responder
+    {STAY,SWAP,PLACE2} or opener pick-color), a legal `chosen`, and a chooser_z in
+    [-1, 1]. Non-swap2 records carry an empty list (byte-identical default).
+    """
+    records = sp.generate_games(
+        12,
+        _EV,
+        n_simulations=8,
+        rng=np.random.default_rng(0),
+        swap2=True,
+    )
+    assert any(len(r.choice_examples) > 0 for r in records), (
+        "expected at least one swap2 game to produce choice examples"
+    )
+    for r in records:
+        for ce in r.choice_examples:
+            assert ce.planes.shape == (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE)
+            assert ce.legal_mask.shape == (N_CHOICES,)
+            assert ce.legal_mask.dtype == bool
+            n_legal = int(ce.legal_mask.sum())
+            assert n_legal in (2, 3), f"legal slot count {n_legal} not in (2, 3)"
+            assert 0 <= ce.chosen < N_CHOICES
+            assert bool(ce.legal_mask[ce.chosen]), "chosen slot must be legal"
+            assert -1.0 <= ce.chooser_z <= 1.0
+
+
+def _synthetic_result(to_act: Actor, mover_actor: Actor) -> Swap2Result:
+    """A minimal Swap2Result with ONE choice record at the given chooser node."""
+    planes = np.zeros((N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    legal = np.array([True, True, True], dtype=bool)
+    cr = ChoiceRecord(
+        planes=planes,
+        to_act=to_act,
+        legal_mask=legal,
+        target=np.array([1.0, 0.0, 0.0]),
+        chosen=0,
+    )
+    # normal_state/opener_color are unused by _choice_examples_for_game.
+    return Swap2Result(
+        normal_state=GameState.initial(),
+        opener_color=None,
+        mover_actor=mover_actor,
+        choice_records=[cr],
+    )
+
+
+def test_choice_example_chooser_z_sign():
+    """chooser_z = backup_sign(actor) * outcome_for_black.
+
+    outcome_for_black is the outcome for the HAND-OFF MOVER (res.mover_actor). So
+    when the chooser IS the mover (to_act == mover_actor) and the mover WON
+    (outcome_for_black=+1), chooser_z must be > 0; the sign flips when EITHER the
+    chooser is the OTHER actor OR the mover lost.
+    """
+    mover = Actor.OPENER
+    other = Actor.RESPONDER
+
+    # chooser == mover, mover won -> chooser_z > 0
+    res = _synthetic_result(to_act=mover, mover_actor=mover)
+    ce = sp._choice_examples_for_game(res, outcome_for_black=+1.0)[0]
+    assert ce.chooser_z > 0
+
+    # chooser == mover, mover LOST -> chooser_z < 0 (flips on outcome)
+    ce = sp._choice_examples_for_game(res, outcome_for_black=-1.0)[0]
+    assert ce.chooser_z < 0
+
+    # chooser == OTHER actor, mover won -> chooser_z < 0 (flips on actor)
+    res_other = _synthetic_result(to_act=other, mover_actor=mover)
+    ce = sp._choice_examples_for_game(res_other, outcome_for_black=+1.0)[0]
+    assert ce.chooser_z < 0
+
+    # chooser == OTHER actor, mover lost -> chooser_z > 0 (double flip)
+    ce = sp._choice_examples_for_game(res_other, outcome_for_black=-1.0)[0]
+    assert ce.chooser_z > 0
+
+    # No swap2 result -> no choice examples.
+    assert sp._choice_examples_for_game(None, outcome_for_black=+1.0) == []

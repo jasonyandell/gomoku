@@ -444,6 +444,37 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98", "--swap2"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-swap2-e2 (#72 era-2, "New era" Path A): a FRESH-INIT swap2 run that learns
+    # to win FAST. IDENTICAL to G15-swap2 in every Cell field EXCEPT three deltas,
+    # and launched FRESH (omit --resume — a new run-dir name means no stray latest.pt):
+    #   (1) aggression: --value-discount 0.95 (was 0.98). A steeper discount values
+    #       a faster win more, biasing self-play toward decisive short games.
+    #   (2) v2a: --choice-head-weight 0.3 TRAINS the swap2 choice head into the loss
+    #       (the negotiation choice records, previously discarded, now feed a separate
+    #       ChoiceBuffer with an outcome-driven soft target). Selection still uses the
+    #       one-ply heuristic; v2b wires the trained head into selection later.
+    #   (3) run-dir G15-swap2-e2-board15 (new, so a fresh launch has no champion buffer).
+    # Everything else (size large, buffer 150k, swap2=True, global_pool=True,
+    # n_workers=8, gumbel m=16, EMA, opponent-mix, sgd_per_position, 64 SGD/epoch,
+    # pack-buffer) is byte-identical to G15-swap2.
+    "G15-swap2-e2": Cell("G15-swap2-e2-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer",
+                                  "--choice-head-weight", "0.3"]),
     # G15-defense (#36, sliding-derby Lap 1): the DEFENSE-TEACHER cell — the proven-
     # needed white-side fix. Diagnosis (#33) is closed: the champion's white-side
     # collapse vs strong attackers (eval502: 0-6 white vs zetor17 while 6-0 as black)

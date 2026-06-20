@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import time
 from typing import MutableMapping
@@ -1013,6 +1013,25 @@ class SelfPlayExample:
 
 
 @dataclass
+class ChoiceExample:
+    """One swap2 NEGOTIATION-choice training example for the choice head.
+
+    Distinct from :class:`SelfPlayExample`: it lives at a swap2 CHOICE node (the
+    responder's {STAY, SWAP, PLACE2} or the opener's pick-color), carries an
+    N_CHOICES-wide legal mask, and its target is OUTCOME-driven (v2a): the slot
+    actually played, re-signed to this chooser's frame by ``chooser_z`` (the
+    game's outcome in [-1, 1] from the chooser's perspective). NOT D4-augmented
+    (choice slots are not spatial), and NEVER stored in the main ReplayBuffer
+    (which is shaped for the policy width) — it rides a separate ChoiceBuffer.
+    """
+
+    planes: np.ndarray       # (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE) float32 — the choice node
+    legal_mask: np.ndarray   # (N_CHOICES,) bool — legal choice slots
+    chosen: int              # the slot actually applied during negotiation
+    chooser_z: float         # game outcome in [-1, 1] from THIS chooser's perspective
+
+
+@dataclass
 class GameRecord:
     """A completed game's training examples plus some metadata."""
 
@@ -1020,6 +1039,39 @@ class GameRecord:
     plies: int
     outcome: float  # +1 if first-mover (black) won, -1 if second-mover (white) won, 0 draw
     archive_start: bool = False  # WL5: True if game was seeded from validation archive
+    # v2a swap2 choice-head examples. One per negotiation CHOICE node of the
+    # game's opening (0 when the game did not use a swap2 opening). Default is an
+    # empty list so every non-swap2 path stays byte-identical.
+    choice_examples: list[ChoiceExample] = field(default_factory=list)
+
+
+def _choice_examples_for_game(res, outcome_for_black: float) -> list[ChoiceExample]:
+    """Build the v2a choice-head examples for one game from its swap2 result.
+
+    `res` is the game's :class:`~gomoku.swap2_search.Swap2Result` (None when the
+    game did not use a swap2 opening → no choice examples). `outcome_for_black`
+    is +1 / -1 / 0 from the HAND-OFF MOVER's perspective: because `to_normal()`
+    frames board[0] as the mover at hand-off, `outcome_for_black` is really the
+    outcome for `res.mover_actor`. For each choice record we re-sign that to the
+    chooser's frame: the actor-form of `backup_sign` is `+1 iff the chooser at
+    that node IS the hand-off mover`, so
+        chooser_z = (+1 if cr.to_act == res.mover_actor else -1) * outcome_for_black.
+    Choice examples are NOT D4-augmented (the slots are not spatial).
+    """
+    if res is None or not res.choice_records:
+        return []
+    out: list[ChoiceExample] = []
+    for cr in res.choice_records:
+        sign = 1.0 if cr.to_act == res.mover_actor else -1.0
+        out.append(
+            ChoiceExample(
+                planes=cr.planes,
+                legal_mask=cr.legal_mask,
+                chosen=int(cr.chosen),
+                chooser_z=float(sign * outcome_for_black),
+            )
+        )
+    return out
 
 
 def _aux_target_for(
@@ -1303,22 +1355,24 @@ def _make_swap2_oracle(evaluator: Evaluator):
 
 def _swap2_opening_state(
     evaluator: Evaluator, rng: np.random.Generator
-) -> tuple[GameState, int]:
-    """Negotiate a swap2 opening and return `(normal_state, opening_plies)`.
+) -> tuple[GameState, int, "Swap2Result"]:
+    """Negotiate a swap2 opening and return `(normal_state, opening_plies, res)`.
 
-    Mirrors `_random_opening_state`'s return contract so the generation loops
-    can swap it in at the same opening seam: the returned state is the canonical,
-    legal, non-terminal position normal play begins from, and `opening_plies` is
-    its move count (the stones placed during negotiation, which — like the random
-    opening prefix — are NOT recorded as training examples). v1 discards the
-    negotiation `choice_records` (no choice head is trained yet).
+    Mirrors `_random_opening_state`'s `(state, plies)` contract so the generation
+    loops can swap it in at the same opening seam: the returned state is the
+    canonical, legal, non-terminal position normal play begins from, and
+    `opening_plies` is its move count (the stones placed during negotiation,
+    which — like the random opening prefix — are NOT recorded as policy/value
+    training examples). v2a ALSO threads out the full `Swap2Result` so the caller
+    can fold the negotiation `choice_records` into choice-head examples (the
+    `res.choice_records` / `res.mover_actor` were previously discarded).
     """
     from gomoku.swap2_search import negotiate
 
     oracle = _make_swap2_oracle(evaluator)
     res = negotiate(oracle, rng)
     start_state = res.normal_state
-    return start_state, start_state.move_count
+    return start_state, start_state.move_count, res
 
 
 def _gamestate_from_archive(archive: dict, idx: int) -> GameState:
@@ -1423,6 +1477,7 @@ def _generate_games_native_gumbel(
     games = []
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
     n_archive = 0 if archive is None else int(archive["planes"].shape[0])
     with _profile_timer(profile, "game_setup_s"):
         for _ in range(n_games):
@@ -1431,12 +1486,13 @@ def _generate_games_native_gumbel(
                 and n_archive > 0
                 and float(rng.random()) < archive_start_frac
             )
+            swap2_res = None
             if from_archive:
                 idx = int(rng.integers(0, n_archive))
                 start_state = _gamestate_from_archive(archive, idx)
                 opening_plies = start_state.move_count
             elif swap2:
-                start_state, opening_plies = _swap2_opening_state(evaluator, rng)
+                start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
             elif random_opening_moves > 0:
                 start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
             else:
@@ -1455,6 +1511,7 @@ def _generate_games_native_gumbel(
             )
             initial_plies.append(opening_plies)
             archive_start_flags.append(from_archive)
+            swap2_results.append(swap2_res)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
@@ -1574,6 +1631,8 @@ def _generate_games_native_gumbel(
                 plies=plies,
                 outcome=outcome_for_black,
                 archive_start=archive_start_flags[g_idx],
+                choice_examples=_choice_examples_for_game(
+                    swap2_results[g_idx], outcome_for_black),
             ))
     return records
 
@@ -1631,18 +1690,20 @@ def _generate_games_gumbel(
     games: list[MCTSGame] = []
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
     n_archive = 0 if archive is None else int(archive["planes"].shape[0])
     for _ in range(n_games):
         from_archive = (
             archive is not None and n_archive > 0
             and float(rng.random()) < archive_start_frac
         )
+        swap2_res = None
         if from_archive:
             idx = int(rng.integers(0, n_archive))
             start_state = _gamestate_from_archive(archive, idx)
             opening_plies = start_state.move_count
         elif swap2:
-            start_state, opening_plies = _swap2_opening_state(evaluator, rng)
+            start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
         elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
@@ -1657,6 +1718,7 @@ def _generate_games_gumbel(
         )
         initial_plies.append(opening_plies)
         archive_start_flags.append(from_archive)
+        swap2_results.append(swap2_res)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
@@ -1745,6 +1807,8 @@ def _generate_games_gumbel(
             plies=plies,
             outcome=outcome_for_black,
             archive_start=archive_start_flags[g_idx],
+            choice_examples=_choice_examples_for_game(
+                swap2_results[g_idx], outcome_for_black),
         ))
     return records
 
@@ -1815,6 +1879,7 @@ def _generate_games_native(
     games = []
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
     n_archive = 0 if archive is None else int(archive["planes"].shape[0])
     with _profile_timer(profile, "game_setup_s"):
         for _ in range(n_games):
@@ -1823,12 +1888,13 @@ def _generate_games_native(
                 and n_archive > 0
                 and float(rng.random()) < archive_start_frac
             )
+            swap2_res = None
             if from_archive:
                 idx = int(rng.integers(0, n_archive))
                 start_state = _gamestate_from_archive(archive, idx)
                 opening_plies = start_state.move_count
             elif swap2:
-                start_state, opening_plies = _swap2_opening_state(evaluator, rng)
+                start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
             elif random_opening_moves > 0:
                 start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
             else:
@@ -1846,6 +1912,7 @@ def _generate_games_native(
             )
             initial_plies.append(opening_plies)
             archive_start_flags.append(from_archive)
+            swap2_results.append(swap2_res)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
@@ -2008,6 +2075,8 @@ def _generate_games_native(
                 plies=plies,
                 outcome=outcome_for_black,
                 archive_start=archive_start_flags[g_idx],
+                choice_examples=_choice_examples_for_game(
+                    swap2_results[g_idx], outcome_for_black),
             ))
 
     return records
@@ -2203,9 +2272,11 @@ def generate_games(
 
     games: list[MCTSGame] = []
     initial_plies: list[int] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
     for _ in range(n_games):
+        swap2_res = None
         if swap2:
-            start_state, opening_plies = _swap2_opening_state(evaluator, rng)
+            start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
         elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
@@ -2215,6 +2286,7 @@ def generate_games(
                               forced_playout_k=forced_playout_k,
                               rng=np.random.default_rng(rng.integers(0, 2**31))))
         initial_plies.append(opening_plies)
+        swap2_results.append(swap2_res)
 
     # Per-game trajectory of (planes, pi, side_to_move_at_that_ply)
     # side_to_move is encoded as 0 for the player who moved first ("black"), 1 for the other.
@@ -2311,7 +2383,11 @@ def generate_games(
                 planes, pi, z, side, ply_at_capture, aux_pi,
                 augment_symmetries, None, ownership=ownership,
             ))
-        records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
+        records.append(GameRecord(
+            examples=examples, plies=plies, outcome=outcome_for_black,
+            choice_examples=_choice_examples_for_game(
+                swap2_results[g_idx], outcome_for_black),
+        ))
 
     return records
 
