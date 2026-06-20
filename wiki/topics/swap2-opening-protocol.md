@@ -177,6 +177,34 @@ diagnostic showed trained 12.5% > baseline 4.2% at matched seed (no regression).
 5. **Bigger/sharper gates once a candidate looks real.** H2H n=128+ and a multi-seed
    Rapfi anchor at the strong tiers to put an absolute number on a confirmed H2H gain.
 
+## 6.5 Why not vet this faster on 9×9? + the scale (Modal) era
+
+**9×9 cannot carry the white-defense signal — it is qualitatively absent, not just
+smaller (Jason, 2026-06-20).** On a small board the *edge is free defensive structure*:
+white runs the attacker into a wall and the geometry does the defending, so white doesn't
+have to be clever (the 9×9 champion already defends near-perfectly, white-loss ≤5%). The
+signal exists only where there's enough open space for a competent attacker to force
+unstoppable double-threats — i.e. it **scales with board size**. So 9×9 vets the
+*plumbing* (does the negotiation run, does a learned choice head train) but tells you
+NOTHING about whether white got better at defending — measuring a thermometer in a room
+with no temperature gradient. **The white-strength question must be answered on a big
+board.** (Middle ground: 13×13 has enough space for the signal at ~2× the speed of 15×15,
+but the native MCTS ext is only compiled for 9/15 — 13 falls back to slow pure-Python gen,
+eating the speedup unless you build a 13 ext. Buildable, not free.)
+
+**Scale / "thousands of epochs" era (Modal, deferred).** The M5 Δelo/hour ceiling is
+self-play GEN (CPU-bound; the trainer barely touches MPS at ~6% CPU) — an A100 trains
+faster than this box can feed it. So the cloud unlock is **parallel gen** (fan self-play
+across many cheap CPU workers + a shared GPU evaluator), not a bigger GPU per se. Port
+friction is bounded to two things: (a) the native MCTS ext is compiled per-arch — needs a
+CUDA/Linux build or it falls to slow pure-Python; (b) `run_sweep`'s local-subprocess
+orchestration → cloud functions. The torch training loop itself is portable (mps→cuda is
+trivial). Staging: **validate the recipe on the M5 first** (does swap2 + the learned
+choice head actually move white — the current run), **then** pay the port tax for the
+serious thousands-of-epochs run where parallel gen is the point. See the
+[containerize-training-runs](containerize-training-runs.md) seam (already flagged: "no
+MPS in Docker on macOS → targets off-Mac/at-scale").
+
 ## 7. Operational notes (durable gotchas)
 
 - **Warm-start = weights only.** Strip the champion to `{model_state_dict, model_config}`
