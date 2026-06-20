@@ -205,6 +205,44 @@ serious thousands-of-epochs run where parallel gen is the point. See the
 [containerize-training-runs](containerize-training-runs.md) seam (already flagged: "no
 MPS in Docker on macOS → targets off-Mac/at-scale").
 
+## 6.6 Crowning a new champion — the bar (approved 2026-06-20)
+
+Two separate questions; keep them apart.
+
+**RELATIVE crown ("is this our new best net?") — the gate.** Beats the FROZEN preserved
+champion under swap2 H2H (both negotiate):
+- **Overall ≥ ~58-60% at n ≥ 200** (CI lower bound clearly above 50% — at n=128 a 60%
+  reading still grazes significance, so n must grow to *call* it).
+- **Diagnostic, must not regress:** black-side win-rate ≥ the champion's; white-side
+  **LOSS-rate ≤ the champion's**.
+- On crowning, freeze the new net as the next H2H anchor.
+
+**Why white is judged on LOSS-rate, not win-rate.** In a first-player-win game perfect
+white play is a **draw**, not a win — demanding ">60% wins as white" asks for something
+that, if it happened, would disprove the first-player-win premise. White's job is to not
+lose (#18: "100% as black, 0% loss as white"). So report **white loss-rate → low**, never
+white win-rate → high. Also note: under swap2 a strong net rarely *ends up* white vs a
+peer (it negotiates away from it), so "as white" is a small, selected sample — the cleaner
+white-robustness probe is a separate FORCED-white stress test (4-stone openings) where you
+require white-loss to fall vs the champion's 0/12-swept baseline.
+
+**ABSOLUTE strength ("how good in the world?") — tracked, NOT a crown gate.** vs
+Rapfi-NNUE under swap2, overall win% at a fixed TC (e.g. 1000ms), n ≥ 100, both
+negotiating the real protocol. You can be the new champ without beating the world #1; the
+headline absolute story is the champion's forced-white-swept ~21-27% climbing toward
+40-50% overall under swap2 (no forced lost role).
+
+**Forward (the vision, NOT today): an always-running SWAP2 arena.** Generalize the swap2
+match primitive (`eval_swap2` net-vs-engine + net-vs-net, jobs-parallel) into a persistent
+ladder where external champs (Rapfi + the [gomocup engines catalog](gomocup-engines-catalog.md)),
+our historical model checkpoints, AND new candidates all play continuously under the real
+swap2 protocol → a live Bradley-Terry Elo. The pieces mostly exist: the swap2 match
+primitive (built), `panel_tournament.py`'s BT-fit + per-pair JSONL, and the autolab arena
+daemon's pull-checkpoint/schedule/append loop. The upgrade swap2 brings is **honest Elos**
+— a swap2 arena has no forced-white floor, so it fixes the yardstick at the arena level
+(the old forced-color panel was broken for white; see the 2026-06-15 reckoning). This is
+the post-validation era — validate the recipe on the M5 first, then build the arena.
+
 ## 7. Operational notes (durable gotchas)
 
 - **Warm-start = weights only.** Strip the champion to `{model_state_dict, model_config}`
