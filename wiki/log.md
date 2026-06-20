@@ -1341,3 +1341,30 @@ mainline dev (direction). Notes the simulator's real job: certify the walls are
 LLM-proof. New index doorway ("understand the autolab's *why* / decide if a change
 fits"). Companion to autolab-architecture.md (the *what*). See
 [[feedback-stateless-delegate-design]] memory.
+
+## 2026-06-20 — researcher-Claude contract + agentic-research literature pass (#61)
+
+Banked a serious-researcher literature pass (ChatGPT 5.5 Pro, ~1h, read our branch
++ the 2025–26 agentic-research/AutoML-agent/self-driving-lab corpus; Jason: "mine it,
+not gospel"). Two new pages + a doctrine refinement:
+
+- **`sources/autolab-agentic-research-lessons-2026-06-20.md`** — curated source record
+  (named papers by weight, the seven cross-project failure clusters) + the **raw
+  verbatim** preserved alongside (`…-raw.md`; Downloads is ephemeral). Credibility
+  caveat recorded: citations unverified by me, but the pass *did* read our code (its 3
+  corrections match an independent Explore agent), so its specifics earn weight.
+- **`topics/autolab-researcher-contract.md`** — the #61 design note. Re-orders the
+  frontier: the load-bearing next step is **not a richer Claude conversation** but the
+  **evidence contract** (fix the *epistemic* WHEN), the **typed-intent wall** (model
+  proposes meaning; only the substrate writes rows), and the **continuation policy**
+  (flywheel stops out-spending researcher judgment) — each with a sim invariant. Plus
+  the pure `dossier_plan`/`hydrate` split + immutable identities (pin the champion
+  *digest*, not the moving tag), three-zone governance, the claim-maturity ladder, the
+  "executable lessons → ledger, prose → wiki" resolution, and an upgraded one-sentence
+  doctrine ("event-sourced experimental control plane …"). Marks the schema-zoo /
+  scouts / auditor / reviewer-as-role as **deferred until decision traces justify**.
+- **`topics/autolab-doctrine.md`** — dated correction in §4 (mechanical vs. *epistemic*
+  WHEN) + cross-refs to the new note and source.
+
+New index doorway ("Design the autolab's research lane"). See
+[[feedback-stateless-delegate-design]] and [[feedback-learning-is-the-artifact]].

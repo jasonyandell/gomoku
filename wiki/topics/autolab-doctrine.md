@@ -111,6 +111,20 @@ ships so the loop self-runs, and Claude drops in as `decide=` with zero structur
 change. The research tick now resumes-then-proposes; the sim drives a fork to
 evidence and asserts decide-once-per-arrival + park-takes-effect.
 
+> **2026-06-20 refinement — mechanical vs. *epistemic* WHEN.** A
+> [deep literature pass](../sources/autolab-agentic-research-lessons-2026-06-20.md)
+> caught that `research_threads()` is the **mechanical** WHEN ("a new terminal slice
+> landed for this lane") — *not yet* the **epistemic** WHEN ("enough of the *right*
+> evidence for *this* question arrived"). A hypothesis needing *2 slices **and** an
+> arena verdict* would fire the instant the slices land, before the verdict exists.
+> The fix is a per-proposal **evidence contract** + a real `decision_due()`, and a
+> **typed-intent boundary** so Claude proposes *meaning* while only the substrate
+> writes rows. That work — the load-bearing next step, ahead of any richer Claude
+> conversation — has its own design note:
+> [autolab-researcher-contract.md](autolab-researcher-contract.md) (it also adds the
+> *three-zone* governance — science / adaptive policy / protected instrument — and an
+> upgraded one-sentence thesis).
+
 ## 5. Triggers are pluggable *because* they are not load-bearing
 
 You may have loops/cron/`ScheduleWakeup`, **but you do not build on them.** The
@@ -216,6 +230,11 @@ re-syncing each slice; and the bigger swing — go uv-native for mainline dev to
 
 ## Cross-refs
 
+- [autolab-researcher-contract.md](autolab-researcher-contract.md) — the smart lane's
+  I/O contract (evidence contract · typed-intent wall · continuation policy · three-zone
+  governance), the #61 design note that realizes the "intelligent WHAT."
+- [../sources/autolab-agentic-research-lessons-2026-06-20.md](../sources/autolab-agentic-research-lessons-2026-06-20.md)
+  — the agentic-research literature pass these refinements mine.
 - [autolab-architecture.md](autolab-architecture.md) — the pieces (the *what*).
 - [autolab-supervisor-and-monitor.md](autolab-supervisor-and-monitor.md) — the
   running operating contract.
