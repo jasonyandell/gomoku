@@ -6,6 +6,8 @@ It speaks just enough of the protocol to exercise gomoku.external_engine:
 - `RESTART`      -> prints OK, clears the board (per the real Piskvork protocol)
 - `INFO ...`     -> ignored
 - `BOARD` ... `DONE` -> read the position, then reply a move per the mode
+- `SWAP2BOARD` ... `DONE` -> read the (0/3/5) stone lines, reply a swap2 reply
+                per the mode (see "swap2 modes" below)
 - `TURN x,y` / `BEGIN` -> also reply a move
 - `END` / EOF -> exit
 
@@ -21,6 +23,15 @@ Modes (argv[1]):
                 commands (mimics Zetor2017's one-shot BOARD desync)
   resign_empty  resign (no move + EOF) on an empty BOARD/DONE, but answer BEGIN
                 (mimics Zetor2017 refusing to open via an empty BOARD)
+
+swap2 modes (drive the SWAP2BOARD path; reply depends on stones-in-block):
+  swap2_open    0 stones -> reply three coords; 3/5 -> a single coord
+  swap2_swap    reply the literal `SWAP` (legal at 3 or 5 stones)
+  swap2_one     reply a single coord (responder keeps color / picker plays)
+  swap2_two     reply two coords (responder places 4th+5th)
+  swap2_chatter emit MESSAGE/DEBUG + a stray `?` before a single-coord reply
+  swap2_badarity reply a single coord even when 0 stones are in (arity error:
+                the opener must return THREE coords)
 """
 
 import sys
@@ -77,6 +88,66 @@ def main() -> None:
                 x, y, field = int(parts[0]), int(parts[1]), int(parts[2])
                 occupied[(x, y)] = field
 
+    def read_swap2board() -> list[tuple[int, int]]:
+        """Read the SWAP2BOARD stone block up to DONE; return the stones in order.
+
+        Stone lines are `x,y` (the spec form the wrapper sends) — also tolerate a
+        trailing `,color` token. Returns the list so the reply can pick its arity
+        off the count (0/3/5)."""
+        stones: list[tuple[int, int]] = []
+        for bline in sys.stdin:
+            bl = bline.strip()
+            if not bl:
+                continue
+            if bl.upper() == "DONE":
+                break
+            parts = bl.split(",")
+            if len(parts) >= 2:
+                stones.append((int(parts[0]), int(parts[1])))
+        return stones
+
+    def reply_swap2(stones: list[tuple[int, int]]) -> None:
+        occ = set(stones)
+
+        def lowest_empty(skip: set[tuple[int, int]] = frozenset()) -> tuple[int, int]:
+            for yy in range(size):
+                for xx in range(size):
+                    if (xx, yy) not in occ and (xx, yy) not in skip:
+                        return (xx, yy)
+            return (0, 0)
+
+        if mode == "swap2_chatter":
+            out.write("MESSAGE thinking about the opening...\n")
+            out.write("DEBUG swap2 eval\n")
+            out.write("?\n")
+        if mode == "swap2_swap":
+            out.write("SWAP\n")
+            out.flush()
+            return
+        if mode == "swap2_two":
+            a = lowest_empty()
+            b = lowest_empty({a})
+            out.write(f"{a[0]},{a[1]} {b[0]},{b[1]}\n")
+            out.flush()
+            return
+        if mode == "swap2_badarity":
+            # Always a single coord, even when the engine was asked to OPEN (0
+            # stones), where THREE coords are required -> arity mismatch.
+            a = lowest_empty()
+            out.write(f"{a[0]},{a[1]}\n")
+            out.flush()
+            return
+        # swap2_open / swap2_one / swap2_chatter default: arity by stones-in.
+        if len(stones) == 0:
+            a = lowest_empty()
+            b = lowest_empty({a})
+            c = lowest_empty({a, b})
+            out.write(f"{a[0]},{a[1]} {b[0]},{b[1]} {c[0]},{c[1]}\n")
+        else:
+            a = lowest_empty()
+            out.write(f"{a[0]},{a[1]}\n")
+        out.flush()
+
     for raw in sys.stdin:
         line = raw.strip()
         if not line:
@@ -111,6 +182,9 @@ def main() -> None:
             board_used[0] = True
             read_board()
             reply_move(empty_board=not occupied)
+        elif upper == "SWAP2BOARD":
+            stones = read_swap2board()
+            reply_swap2(stones)
         elif upper.startswith("TURN"):
             # opponent just moved at the given coord
             try:

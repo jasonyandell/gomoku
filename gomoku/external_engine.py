@@ -66,7 +66,8 @@ from __future__ import annotations
 import shlex
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 
 import numpy as np
 
@@ -116,6 +117,95 @@ def _coord_to_xy(action: int) -> tuple[int, int]:
 
 def _xy_to_action(x: int, y: int) -> int:
     return y * BOARD_SIZE + x  # row=y, col=x
+
+
+# ---------------------------------------------------------------------------
+# Swap2 opening negotiation (the SWAP2BOARD protocol path).
+#
+# The manager drives a swap2 opening by sending the engine a `SWAP2BOARD`
+# block — the literal line `SWAP2BOARD`, then 0 / 3 / 5 stone lines in board
+# order, then `DONE` — and reading ONE reply line. The arity of the reply is
+# fixed by how many stones were on the board (see `_read_swap2_reply`):
+#
+#   0 stones (engine OPENS)       -> three coords "x,y x,y x,y" (2B+1W)
+#   3 stones (engine RESPONDS)    -> `SWAP` | one coord | two coords
+#   5 stones (engine PICKS color) -> `SWAP` | one coord
+#
+# `SWAP` and `DONE` are exact-uppercase literals; `SWAP` is NOT a coordinate
+# (it has no comma) so the positive-match `_parse_coord` gate skips it as
+# chatter — we test for the `SWAP` token explicitly before coordinate parsing.
+# Coords are zero-based X=col,Y=row, mapped to actions via `_xy_to_action`,
+# identical to the move path.
+# ---------------------------------------------------------------------------
+
+_SWAP2_TOKEN = "SWAP"
+
+# Allowed reply arities (number of coords) keyed by stones already on the board.
+# `None` is the SWAP literal, which is admissible alongside the coord arities.
+_SWAP2_ARITY: dict[int, tuple[int, ...]] = {
+    0: (3,),          # opener: must place exactly 3 opening stones
+    3: (1, 2),        # responder: keep-color (1) or place-two (2); or SWAP
+    5: (1,),          # opener picks: play the move (1); or SWAP
+}
+# Stone counts whose reply may legally be the bare `SWAP` literal.
+_SWAP2_SWAP_OK: frozenset[int] = frozenset({3, 5})
+
+
+class Swap2Option(Enum):
+    """Which swap2 reply the engine gave, disambiguated from the stone count."""
+
+    # Engine OPENED: it returned the 2B+1W opening placement (3 coords).
+    OPEN_THREE = "open_three"
+    # Engine took the opposite color (the literal `SWAP`); no new stone.
+    SWAP = "swap"
+    # Engine kept its color / played the next single move (1 coord). As a
+    # responder this is the "keep color, play the 4th move" reply; as a picker
+    # it is the chosen continuation move.
+    ONE_COORD = "one_coord"
+    # Engine (as responder) placed two more stones (4th + 5th); the OPPONENT
+    # then picks a color (our PLACE2-equivalent reply from the engine's side).
+    TWO_COORDS = "two_coords"
+
+
+@dataclass
+class Swap2Reply:
+    """A parsed, validated swap2 negotiation reply.
+
+    `coords` are the engine's returned `(x, y)` pairs in board/reply order
+    (empty for `SWAP`). `actions` maps them to flat action indices with the
+    same `action = row*BOARD_SIZE + col` convention as the move path. The eval
+    harness branches on `option` and consumes `coords` / `actions`.
+    """
+
+    option: Swap2Option
+    coords: tuple[tuple[int, int], ...] = field(default_factory=tuple)
+
+    @property
+    def is_swap(self) -> bool:
+        return self.option is Swap2Option.SWAP
+
+    @property
+    def actions(self) -> tuple[int, ...]:
+        return tuple(_xy_to_action(x, y) for x, y in self.coords)
+
+
+def _parse_coord_list(line: str) -> list[tuple[int, int]] | None:
+    """Parse a whitespace-separated list of bare `x,y` coords, or None.
+
+    Every whitespace token must itself be a coordinate; one non-coord token
+    (a banner word, `SWAP`, ...) disqualifies the whole line, so chatter is
+    never half-accepted. Returns the list (length >= 1) on success.
+    """
+    toks = line.split()
+    if not toks:
+        return None
+    coords: list[tuple[int, int]] = []
+    for tok in toks:
+        c = _parse_coord(tok)
+        if c is None:
+            return None
+        coords.append(c)
+    return coords
 
 
 @dataclass
@@ -268,6 +358,88 @@ class ExternalEnginePlayer:
             f"engine emitted {_MAX_CHATTER_LINES}+ lines without a coordinate move"
         )
 
+    def _read_swap2_reply(self, n_stones_on_board: int) -> Swap2Reply:
+        """Read one swap2 negotiation reply, classified + arity-checked.
+
+        Skips leading chatter exactly like `_read_move`: a line is taken as the
+        reply only when it is positively the `SWAP` literal OR a whitespace-list
+        of bare `x,y` coords; everything else (banners, MESSAGE/DEBUG/ERROR
+        diagnostics, lone `?`) is skipped. The first qualifying line is the
+        reply.
+
+        `n_stones_on_board` is how many stones we sent in the SWAP2BOARD block
+        (0 / 3 / 5); it fixes the legal arity. A `SWAP` reply is only legal at
+        3 or 5 stones; a coord count outside `_SWAP2_ARITY[n]` raises
+        `ExternalEngineError` (arity mismatch). An unknown stone count raises.
+        """
+        if n_stones_on_board not in _SWAP2_ARITY:
+            raise ExternalEngineError(
+                f"swap2 reply requested for unsupported stone count "
+                f"{n_stones_on_board} (expected one of {sorted(_SWAP2_ARITY)})"
+            )
+        allowed = _SWAP2_ARITY[n_stones_on_board]
+        deadline = self._read_deadline_s()
+        for _ in range(_MAX_CHATTER_LINES):
+            line = self._read_line(deadline)
+            if not line:
+                continue
+            if line.strip().upper() == _SWAP2_TOKEN:
+                if n_stones_on_board not in _SWAP2_SWAP_OK:
+                    raise ExternalEngineError(
+                        f"swap2: engine replied SWAP at {n_stones_on_board} "
+                        f"stones, where SWAP is not a legal reply"
+                    )
+                return Swap2Reply(option=Swap2Option.SWAP)
+            coords = _parse_coord_list(line)
+            if coords is None:
+                # Chatter (banner / MESSAGE / DEBUG / ERROR diagnostic / '?') —
+                # skip and keep reading for the real reply, just like _read_move.
+                continue
+            self._validate_swap2_coords(coords, n_stones_on_board)
+            n = len(coords)
+            if n not in allowed:
+                raise ExternalEngineError(
+                    f"swap2: engine returned {n} coord(s) at "
+                    f"{n_stones_on_board} stones; expected {allowed} (or SWAP)"
+                )
+            option = {
+                3: Swap2Option.OPEN_THREE,
+                1: Swap2Option.ONE_COORD,
+                2: Swap2Option.TWO_COORDS,
+            }[n]
+            return Swap2Reply(option=option, coords=tuple(coords))
+        raise ExternalEngineError(
+            f"engine emitted {_MAX_CHATTER_LINES}+ lines without a swap2 reply"
+        )
+
+    def _validate_swap2_coords(
+        self, coords: list[tuple[int, int]], n_stones_on_board: int
+    ) -> None:
+        """Range-check returned coords (no occupancy check: we don't track the
+        engine-side board here, only that every coord is on the board)."""
+        n = self.config.board_size
+        for x, y in coords:
+            if not (0 <= x < n and 0 <= y < n):
+                raise ExternalEngineError(
+                    f"swap2: returned coord {x},{y} out of range for {n}x{n}"
+                )
+
+    def _send_swap2board(self, stones: list[tuple[int, int]]) -> None:
+        """Send a SWAP2BOARD block: the literal, the stones in order, then DONE.
+
+        `stones` are `(x, y)` pairs in the board order the spec expects (0 for
+        the engine-opens probe, 3 for a responder query, 5 for a color pick).
+        Each is sent as a bare `x,y` line (the spec form Rapfi drives on).
+        RESTART first so the block is a fresh, re-entrant initialisation — same
+        rationale as the move path (see module docstring).
+        """
+        self._send("RESTART")
+        self._expect_ok()
+        self._send("SWAP2BOARD")
+        for x, y in stones:
+            self._send(f"{x},{y}")
+        self._send("DONE")
+
     def _handshake(self) -> None:
         cfg = self.config
         self._send(f"START {cfg.board_size}")
@@ -282,6 +454,48 @@ class ExternalEnginePlayer:
         self._send(f"INFO timeout_turn {cfg.timeout_ms}")
         # timeout_match 0 => no whole-game cap; rely on per-turn budget.
         self._send("INFO timeout_match 0")
+
+    # -- swap2 opening negotiation --------------------------------------
+
+    def swap2_open(self) -> Swap2Reply:
+        """Ask the engine to OPEN: place the 2B+1W opening (0 stones in).
+
+        Sends `SWAP2BOARD` + no stones + `DONE`; returns a `Swap2Reply` with
+        `option=OPEN_THREE` and the three `(x, y)` coords (and `.actions`).
+        """
+        self._send_swap2board([])
+        return self._read_swap2_reply(0)
+
+    def swap2_respond(self, stones: list[tuple[int, int]]) -> Swap2Reply:
+        """Ask the engine to RESPOND to our 3-stone opening.
+
+        `stones` are our 3 opening stones as `(x, y)` pairs in board order
+        (2 black + 1 white by placement order, per the spec). Returns a
+        `Swap2Reply`: `SWAP` (take the other color), `ONE_COORD` (keep color /
+        play the 4th move), or `TWO_COORDS` (place 4th+5th, we then pick a
+        color). Raises if we did not pass exactly 3 stones.
+        """
+        if len(stones) != 3:
+            raise ExternalEngineError(
+                f"swap2_respond expects exactly 3 stones, got {len(stones)}"
+            )
+        self._send_swap2board(list(stones))
+        return self._read_swap2_reply(3)
+
+    def swap2_pick(self, stones: list[tuple[int, int]]) -> Swap2Reply:
+        """Ask the engine to PICK a color after we did PLACE2 (5 stones in).
+
+        `stones` are the 5 stones on the board (3 black + 2 white by placement
+        order). Returns a `Swap2Reply`: `SWAP` (take the other color) or
+        `ONE_COORD` (keep color and play the next move). Raises if we did not
+        pass exactly 5 stones.
+        """
+        if len(stones) != 5:
+            raise ExternalEngineError(
+                f"swap2_pick expects exactly 5 stones, got {len(stones)}"
+            )
+        self._send_swap2board(list(stones))
+        return self._read_swap2_reply(5)
 
     # -- Picker interface ------------------------------------------------
 
