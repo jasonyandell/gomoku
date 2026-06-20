@@ -23,6 +23,20 @@
 > + `--defense-teacher-conv` levers are sound + tested + default-off-byte-identical;
 > they're kept as evidence, not a path forward. Full chronology: `TRAINING_WIKI.md`
 > 2026-06-20. Everything below this banner predates the conclusion.
+>
+> ✅ **2026-06-20 UPDATE — swap2 (#72) is now BUILT and LIVE.** Full Path A shipped on
+> `feat/swap2-opening-protocol` (6 commits, **73 tests green**, NOT merged): the negotiation
+> state machine (`gomoku/swap2.py`), a width-3 choice head + warm-start-tolerant load
+> (`gomoku/model.py`), the v1 value-based negotiator (`gomoku/swap2_search.py`), `--swap2`
+> self-play wiring (byte-identical off), and the SWAP2BOARD eval-vs-Rapfi harness where **both
+> sides negotiate** (`gomoku/external_engine.py` + `gomoku/eval_swap2.py`). **The ML thesis:**
+> an imbalanced game can't bootstrap (every game a black win → the value head only ever sees
+> `white = lost` → the policy gets no gradient on winnable white positions); **swap2 rebalances
+> the GAME so self-play generates ~50/50 data → white positions become winnable in the training
+> set** — the mechanism, not merely an honest yardstick. A **live warm-started run is underway**
+> (cell `G15-swap2`, wandb **`8nq1a7cm`**, launched 2026-06-20 ~07:40, 1h self-capping slices),
+> gated on **`eval_swap2`-vs-Rapfi** (overall win% under the real protocol, **no forced-white
+> floor**). Results pending the hourly gate. Details: `TRAINING_WIKI.md` 2026-06-20.
 
 > The #33 / #18 defense plan (copied here from `/tmp/defense_plan.md`, dated 2026-06-15). §1A is implemented by `scripts/panel_white_elo.py` (the pure-analysis white-side reader over the panel JSONL); §5 is the eval-cadence fit.
 

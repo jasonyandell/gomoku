@@ -4223,3 +4223,68 @@ checkpoints (sparse e1726, conv e1240) were discarded with the worktree on merge
 result we are not resuming; the eval JSONLs above are the cited evidence. The cells
 `G15-wdl-defense` / `G15-wdl-conv` in `run_sweep.py` reproduce the runs from the wdl@0 seed if
 ever needed.
+
+## 2026-06-20 — SWAP2 (#72) BUILT (full Path A) + LIVE warm-started run launched — the real white fix is to DELETE the doomed role (wandb `8nq1a7cm`)
+
+**This is the LIVE arm.** Acting on the same-day conclusion above (15×15 freestyle white
+weakness is the **first-player-win THEOREM**, not a net flaw — Rapfi-vs-Rapfi from 4-stone
+openings = white 1-9; three teachers all flattened: value-only #42, sparse-VCF #43, dense
+conv), the fix shipped: **swap2** (Gomocup's balancing protocol). On `feat/swap2-opening-protocol`
+(6 commits `ba37b92..167e526`, **73 tests green, NOT merged**).
+
+**The ML thesis (the mechanism, not just an honest yardstick).** An imbalanced game **cannot
+bootstrap** because self-play data collapses: every game is a black win → the value head only
+ever sees `white = lost` → the policy gets **no gradient on winnable white positions** (there
+are none in the data). No teacher can fix a role the data never shows winning. **Swap2 rebalances
+the GAME** so self-play generates **~50/50 data** → white positions become *winnable in the
+training set* → the loop can finally learn to defend because there is now a signal to learn from.
+That is the actual unlock; the honest-yardstick property (Rapfi is a swap2 engine, so the real
+Gomocup game) is a bonus, not the point.
+
+**What was BUILT — full Path A (the net learns to negotiate), 6 pieces:**
+1. **`gomoku/swap2.py`** (`ba37b92`) — pure negotiation state machine (`OpeningState`). Opener
+   places 2B+1W; responder STAY (take white + place a white stone) / SWAP (take black) / PLACE2
+   (add 1B+1W, opener then picks color). **Key modeling:** color is fixed by placement ORDER, so
+   every placement stays a spatial move over the existing board policy head — **no action-space
+   growth** for placements; only the two negotiation *moments* are abstract (a width-3 choice
+   space). Value attribution uses explicit OPENER/RESPONDER actor tags + `backup_sign()` (the
+   opener acts **3× in a row**, so "flip perspective every ply" does not hold).
+2. **`gomoku/external_engine.py`** (`2d56314`) — SWAP2BOARD protocol path
+   (`swap2_open`/`swap2_respond`/`swap2_pick` + `Swap2Reply`), eval-only, additive; the existing
+   move path is byte-identical.
+3. **`gomoku/model.py`** (`9e24e45`) — width-3 choice head via `forward_with_choice()` (taps off
+   the value head's penultimate layer); **warm-start-tolerant load** (the champion predates the
+   head → core loads strict, the choice head starts fresh). This is what makes it full Path A.
+4. **`gomoku/swap2_search.py`** (`5860326`) — v1 negotiator: `negotiate(oracle, rng)` drives the
+   opening. PLACE nodes are **sampled** for diversity; CHOICE nodes are selected by a **one-ply
+   VALUE comparison** (no trained head needed in v1) with honest minimax over the nested opener
+   pick; choice records are emitted as **future choice-head targets**. ~30 net forwards/game
+   (~0.2% overhead, no MCTS).
+5. **self-play wiring** (`6b629dc`) — `--swap2` flag threaded into all four generation paths
+   (`self_play` / `selfplay_worker` / `train` / `run_sweep`) at the `_random_opening_state` seam;
+   **mutually exclusive with `--random-opening-moves`**; byte-identical when OFF.
+6. **`gomoku/eval_swap2.py`** (`55f3e4d`) — the honest gate: **both sides negotiate** (our net
+   via `swap2_search.agent_act`, the engine via SWAP2BOARD), roles alternated, normal play from
+   `to_normal()`; result splits by our final color + role. **There is no forced-white side.**
+
+**The live run (cell `G15-swap2`, `167e526`) — LAUNCHED, results pending.** Clone of champion
+`G15-128x10-bigbuf` (128×10 large, scalar value, global_pool, value-discount 0.98, gumbel) +
+**TWO deltas**: (a) buffer **1.5M → 150k FRESH** — the swap2 lesson lives in the new ~50/50
+games and a small fresh buffer turns over fast (the 2026-06-19 small-fresh-buffer finding), and
+(b) **`--swap2`**. `n_workers 4 → 8` (the negotiation has **no VCF solver**, so no
+solver-starves-gen trap). **Warm-started** from a weights-only stripped champion
+(`/Users/jason/data/swap2/g15_champ_warmstart_weightsonly.pt` — no embedded buffer/optimizer/
+wandb → fresh everything; the tolerant loader adds the fresh choice head).
+- Launched **2026-06-20 ~07:40**, wandb run **`8nq1a7cm`**, board 15, MPS, 1h self-capping slices
+  via `--max-wall-secs 3600 --run-base /Users/jason/data/swap2`. Spin-up healthy: ~2 s/game swap2
+  gen, ~3.9 games/s aggregate, 0 errors. Babysit ledger: `/Users/jason/data/swap2/babysit/ledger.md`.
+- **GATE:** `gomoku/eval_swap2.py` vs native Rapfi-NNUE (`run-rapfi` wrapper, `GOMOKU_REPO=main`
+  for the weights) — **overall win% under the real protocol, NO forced-white floor**, re-measured
+  each ~1h. Baseline context: the champion under the OLD forced-opening measure scored ~21-27%
+  overall / white 0/12 swept; under swap2 there is **no forced-white side** — so the gate reads the
+  honest, balanced number for the first time.
+
+**Status: results pending the hourly `eval_swap2`-vs-Rapfi gate.** Next session: read the babysit
+ledger, then the gate output, and watch whether the ~50/50 data lets the loop bootstrap a defending
+white (the theorem says it can't be taught into a *forced* white role; swap2 removes the force).
+Full plan + theorem chronology: `wiki/topics/white-side-defense-plan.md`.
