@@ -433,24 +433,73 @@ def aggregate_outcomes(outcomes: list[GameOutcome]) -> Swap2EvalResult:
     return res
 
 
-def eval_swap2_vs_engine(
+# ---------------------------------------------------------------------------
+# Per-game determinism. game i gets a FIXED (role, rng) derived ONLY from
+# (seed, i) — not from the order or process it runs in. role alternates exactly
+# as the serial loop (game 0 opens, game 1 responds, ...), and the per-game rng
+# is spawned from a SeedSequence(seed) child so it is independent of every other
+# game's draws. This is the correctness guarantee for --jobs: the multiset of
+# (role, rng) games is identical for jobs=1 and jobs=J, so any partition of the
+# game indices across workers reproduces the SAME set of games — only faster.
+# ---------------------------------------------------------------------------
+
+
+def _game_role(i: int) -> Actor:
+    """Negotiation role for game index ``i`` (game 0 opens, alternating)."""
+    return Actor.OPENER if i % 2 == 0 else Actor.RESPONDER
+
+
+def _game_rng(seed: int, n_games: int, i: int) -> np.random.Generator:
+    """Independent per-game RNG for game ``i``, derived only from ``(seed, i)``.
+
+    Spawned children of one ``SeedSequence(seed)`` are mutually independent and
+    reproducible, so game ``i`` draws the SAME stream regardless of which worker
+    (or the serial loop) runs it, or in what order. We spawn ``n_games`` children
+    once and index by ``i`` (cheap; ``n_games`` is small for an eval gate).
+    """
+    children = np.random.SeedSequence(seed).spawn(n_games)
+    return np.random.default_rng(children[i])
+
+
+def _split_game_indices(n_games: int, jobs: int) -> list[list[int]]:
+    """Partition ``range(n_games)`` into ``min(jobs, n_games)`` contiguous chunks.
+
+    Contiguous (not strided) so each worker plays a block of game indices; the
+    remainder is spread one-per-chunk over the leading chunks. Pure +
+    unit-testable: the chunks concatenate back to ``range(n_games)`` exactly, so
+    the union of games played is identical to the serial range.
+    """
+    if n_games <= 0:
+        return []
+    k = max(1, min(jobs, n_games))
+    base, rem = divmod(n_games, k)
+    chunks: list[list[int]] = []
+    start = 0
+    for c in range(k):
+        size = base + (1 if c < rem else 0)
+        chunks.append(list(range(start, start + size)))
+        start += size
+    return chunks
+
+
+def _play_game_indices(
+    *,
     checkpoint: str,
     engine_cfg,
+    indices: list[int],
     n_games: int,
-    *,
-    timeout_ms: int | None = None,
-    sims: int = 100,
-    c_puct: float = 1.5,
-    seed: int = 0,
-    device: str | None = None,
-) -> dict:
-    """Score a checkpoint against an external engine under the swap2 protocol.
+    sims: int,
+    c_puct: float,
+    seed: int,
+    device: str | None,
+) -> list[GameOutcome]:
+    """Load the net (CPU/MPS per ``device``), build its OWN engine subprocess, and
+    play exactly the games at ``indices``. The unit of work for one worker.
 
-    ``engine_cfg`` is an :class:`gomoku.external_engine.ExternalEngineConfig` (or
-    a dict of its kwargs). ``timeout_ms`` overrides the config's per-move budget
-    when given. Roles ALTERNATE across games for balance (game 0: our net opens;
-    game 1: our net responds; ...). Returns a result dict mirroring the
-    eval_vs_rapfi shape, plus per-color / per-role / opener-color breakdowns.
+    Each call owns a fresh :class:`ExternalEnginePlayer` (engines are stateful
+    subprocesses, NOT shareable across processes), loads the model once, and
+    plays its assigned game indices with each game's deterministic (role, rng).
+    Returns the per-game outcomes in ``indices`` order.
     """
     from gomoku.eval import mcts_picker
     from gomoku.external_engine import ExternalEngineConfig
@@ -461,8 +510,6 @@ def eval_swap2_vs_engine(
 
     if isinstance(engine_cfg, dict):
         engine_cfg = ExternalEngineConfig(**engine_cfg)
-    if timeout_ms is not None:
-        engine_cfg.timeout_ms = timeout_ms
 
     dev = pick_device(device if device is not None else os.environ.get("GOMOKU_DEVICE"))
     model, _ = load_checkpoint(checkpoint, device=dev)
@@ -471,18 +518,110 @@ def eval_swap2_vs_engine(
     oracle = _make_swap2_oracle(evaluator)
     model_picker = mcts_picker(evaluator, n_simulations=sims, c_puct=c_puct)
 
-    rng = np.random.default_rng(seed)
     engine = ExternalEnginePlayer(engine_cfg)
-    t0 = time.time()
     outcomes: list[GameOutcome] = []
     try:
-        for g in range(n_games):
-            role = Actor.OPENER if g % 2 == 0 else Actor.RESPONDER
+        for i in indices:
+            role = _game_role(i)
+            rng = _game_rng(seed, n_games, i)
             outcomes.append(
                 play_swap2_game(oracle, engine, role, rng, model_picker=model_picker)
             )
     finally:
         engine.close()
+    return outcomes
+
+
+def _worker_entry(task: dict) -> list[GameOutcome]:
+    """Spawn-pool worker target: play a chunk of game indices. Top-level (and so
+    picklable) for the ``spawn`` start method, which macOS+MPS/torch requires."""
+    return _play_game_indices(
+        checkpoint=task["checkpoint"],
+        engine_cfg=task["engine_cfg"],
+        indices=task["indices"],
+        n_games=task["n_games"],
+        sims=task["sims"],
+        c_puct=task["c_puct"],
+        seed=task["seed"],
+        device=task["device"],
+    )
+
+
+def eval_swap2_vs_engine(
+    checkpoint: str,
+    engine_cfg,
+    n_games: int,
+    *,
+    timeout_ms: int | None = None,
+    sims: int = 100,
+    c_puct: float = 1.5,
+    seed: int = 0,
+    device: str | None = None,
+    jobs: int = 1,
+) -> dict:
+    """Score a checkpoint against an external engine under the swap2 protocol.
+
+    ``engine_cfg`` is an :class:`gomoku.external_engine.ExternalEngineConfig` (or
+    a dict of its kwargs). ``timeout_ms`` overrides the config's per-move budget
+    when given. Roles ALTERNATE across games for balance (game 0: our net opens;
+    game 1: our net responds; ...). Returns a result dict mirroring the
+    eval_vs_rapfi shape, plus per-color / per-role / opener-color breakdowns.
+
+    ``jobs`` (default 1 = serial) splits ``n_games`` across that many worker
+    PROCESSES, each with its OWN Rapfi subprocess + a net loaded on the resolved
+    device, to run far more games in the same wall-clock for an hourly gate. The
+    per-game (role, rng) is derived ONLY from ``(seed, game_index)``, so the
+    multiset of games is identical for any ``jobs`` and the aggregate for jobs=J
+    is EQUIVALENT to jobs=1 at the same ``seed``/``n_games`` — just faster. Mirrors
+    ``scripts/eval_vs_rapfi.py``'s ``--jobs`` concurrency (a ``spawn`` pool).
+    """
+    from gomoku.external_engine import ExternalEngineConfig
+
+    if isinstance(engine_cfg, dict):
+        engine_cfg = ExternalEngineConfig(**engine_cfg)
+    if timeout_ms is not None:
+        engine_cfg.timeout_ms = timeout_ms
+
+    t0 = time.time()
+    if jobs <= 1 or n_games <= 1:
+        outcomes = _play_game_indices(
+            checkpoint=checkpoint,
+            engine_cfg=engine_cfg,
+            indices=list(range(n_games)),
+            n_games=n_games,
+            sims=sims,
+            c_puct=c_puct,
+            seed=seed,
+            device=device,
+        )
+    else:
+        import multiprocessing as mp
+
+        chunks = _split_game_indices(n_games, jobs)
+        tasks = [
+            {
+                "checkpoint": checkpoint,
+                "engine_cfg": engine_cfg,
+                "indices": idxs,
+                "n_games": n_games,
+                "sims": sims,
+                "c_puct": c_puct,
+                "seed": seed,
+                "device": device,
+            }
+            for idxs in chunks
+        ]
+        # spawn (macOS default): fork + torch/MPS is unsafe. Each worker builds
+        # its OWN engine subprocess + net; the pool is sized to the chunk count.
+        ctx = mp.get_context("spawn")
+        per_chunk: list[list[GameOutcome]] = [None] * len(tasks)  # type: ignore[list-item]
+        with ctx.Pool(processes=len(tasks)) as pool:
+            for ci, outs in enumerate(pool.imap(_worker_entry, tasks)):
+                per_chunk[ci] = outs
+        # imap preserves task order; concatenating in chunk order reassembles the
+        # games in ascending game-index order (chunks are contiguous), matching
+        # the serial outcome ORDER as well as its multiset.
+        outcomes = [o for chunk in per_chunk for o in chunk]
     wall = time.time() - t0
 
     res = aggregate_outcomes(outcomes)
@@ -499,6 +638,7 @@ def eval_swap2_vs_engine(
             "model_sims": sims,
             "model_c_puct": c_puct,
             "protocol": "swap2",
+            "jobs": jobs,
             "wall_secs": round(wall, 2),
         }
     )
@@ -519,6 +659,15 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper around the driver
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--rule", type=int, default=0, help="0 = freestyle.")
     ap.add_argument("--size", type=int, default=BOARD_SIZE)
+    ap.add_argument(
+        "--jobs", type=int, default=1, metavar="J",
+        help=(
+            "Parallel worker processes (1 = serial, default). J>1 splits the "
+            "games across J spawn-workers, each with its own Rapfi subprocess + "
+            "net, so an hourly gate runs more games in the same wall-clock. The "
+            "aggregate is equivalent to --jobs 1 at the same --seed/--n-games."
+        ),
+    )
     ap.add_argument("--out", default=None, help="JSONL output path (append).")
     args = ap.parse_args()
 
@@ -533,7 +682,7 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper around the driver
     )
     out = eval_swap2_vs_engine(
         args.checkpoint, cfg, args.n_games,
-        sims=args.sims, c_puct=args.c_puct, seed=args.seed,
+        sims=args.sims, c_puct=args.c_puct, seed=args.seed, jobs=args.jobs,
     )
     print(
         f"{args.label}: {out['wins']}W-{out['losses']}L-{out['draws']}D / "

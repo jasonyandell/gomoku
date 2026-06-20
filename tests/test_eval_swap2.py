@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 import numpy as np
 import pytest
@@ -44,8 +45,12 @@ from gomoku.eval_swap2 import (
     _engine_open,
     _engine_pick,
     _engine_respond,
+    _game_rng,
+    _game_role,
+    _split_game_indices,
     _sq,
     aggregate_outcomes,
+    eval_swap2_vs_engine,
     play_swap2_game,
 )
 
@@ -466,3 +471,122 @@ def test_aggregate_outcomes_splits_consistent():
         "n_games", "wins", "losses", "draws", "win_rate",
         "by_color", "by_role", "opener_color_dist",
     }
+
+
+# ---------------------------------------------------------------------------
+# Parallel (--jobs) determinism: the partition + per-game (role, rng) helpers,
+# then an end-to-end jobs=1 vs jobs=3 EXACT-match against the fake engine.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "n_games,jobs,expected",
+    [
+        (6, 1, [[0, 1, 2, 3, 4, 5]]),
+        (6, 3, [[0, 1], [2, 3], [4, 5]]),
+        (6, 4, [[0, 1], [2, 3], [4], [5]]),   # remainder spread over leading chunks
+        (5, 2, [[0, 1, 2], [3, 4]]),
+        (3, 8, [[0], [1], [2]]),              # jobs capped at n_games (no empty chunks)
+        (0, 4, []),
+        (1, 4, [[0]]),
+    ],
+)
+def test_split_game_indices_covers_range(n_games, jobs, expected):
+    chunks = _split_game_indices(n_games, jobs)
+    assert chunks == expected
+    # Chunks concatenate back to range(n_games) exactly -> same multiset of games.
+    flat = [i for c in chunks for i in c]
+    assert flat == list(range(n_games))
+    assert all(c for c in chunks), "no empty chunks"
+
+
+def test_game_role_alternates_from_opener():
+    assert _game_role(0) == Actor.OPENER
+    assert _game_role(1) == Actor.RESPONDER
+    assert _game_role(2) == Actor.OPENER
+    assert _game_role(3) == Actor.RESPONDER
+
+
+def test_game_rng_is_index_and_seed_deterministic():
+    """game i's RNG depends only on (seed, i): same (seed, i) -> same stream;
+    different i (or seed) -> different stream. This is what makes the union of
+    games identical across any --jobs partition."""
+    a = _game_rng(7, 6, 2).random(8)
+    b = _game_rng(7, 6, 2).random(8)
+    assert np.array_equal(a, b), "same (seed, i) must reproduce the stream"
+    c = _game_rng(7, 6, 3).random(8)
+    assert not np.array_equal(a, c), "different game index must differ"
+    d = _game_rng(99, 6, 2).random(8)
+    assert not np.array_equal(a, d), "different seed must differ"
+
+
+@pytest.fixture(scope="module")
+def tiny_checkpoint_path():
+    """A fresh tiny CPU model saved once for the module (mirrors the eval_vs_rapfi
+    parallel test). Lets us drive the real ``eval_swap2_vs_engine`` end-to-end."""
+    from gomoku.model import build_model, save_checkpoint
+
+    model = build_model("tiny")
+    model.eval()
+    with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
+        path = f.name
+    try:
+        save_checkpoint(path, model, optimizer=None, epoch=0, total_games=0)
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _fake_engine_cfg(mode: str = "swap2_open"):
+    """An ExternalEngineConfig that launches the shipped fake Piskvork engine — no
+    real Rapfi, no MPS. The fake plays the swap2 negotiation AND normal play."""
+    return ExternalEngineConfig(
+        cmd=f"{sys.executable} {_STUB} {mode}",
+        timeout_ms=500,
+        label=f"stub:{mode}",
+    )
+
+
+def test_eval_swap2_jobs1_well_formed(tiny_checkpoint_path):
+    """jobs=1 (serial) returns the full result-dict shape with consistent splits."""
+    out = eval_swap2_vs_engine(
+        tiny_checkpoint_path, _fake_engine_cfg(), n_games=4,
+        sims=4, seed=0, device="cpu", jobs=1,
+    )
+    assert out["n_games"] == 4
+    assert out["wins"] + out["losses"] + out["draws"] == 4
+    assert out["jobs"] == 1
+    assert set(out.keys()) >= {
+        "n_games", "wins", "losses", "draws", "win_rate",
+        "by_color", "by_role", "opener_color_dist", "protocol", "wall_secs",
+    }
+    # by_color and by_role splits each sum to n.
+    bc, br = out["by_color"], out["by_role"]
+    for i in range(3):
+        assert bc["black"][i] + bc["white"][i] == [out["wins"], out["losses"], out["draws"]][i]
+        assert br["opener"][i] + br["responder"][i] == [out["wins"], out["losses"], out["draws"]][i]
+
+
+def test_eval_swap2_jobs3_equals_jobs1_exact(tiny_checkpoint_path):
+    """The correctness guarantee: jobs=3 plays the SAME multiset of games as jobs=1
+    for the same seed/n, so every aggregate + per-color/role/opener-color split is
+    IDENTICAL. Determinism holds because each game's (role, rng) is derived only
+    from (seed, game_index), the tiny net is deterministic on CPU, and the fake
+    engine is deterministic — so the process partition cannot change any outcome."""
+    serial = eval_swap2_vs_engine(
+        tiny_checkpoint_path, _fake_engine_cfg(), n_games=6,
+        sims=4, seed=123, device="cpu", jobs=1,
+    )
+    parallel = eval_swap2_vs_engine(
+        tiny_checkpoint_path, _fake_engine_cfg(), n_games=6,
+        sims=4, seed=123, device="cpu", jobs=3,
+    )
+
+    assert serial["n_games"] == parallel["n_games"] == 6
+    assert serial["wins"] + serial["losses"] + serial["draws"] == 6
+    for key in ("wins", "losses", "draws", "win_rate", "by_color", "by_role",
+                "opener_color_dist"):
+        assert serial[key] == parallel[key], f"{key} differs between jobs=1 and jobs=3"
