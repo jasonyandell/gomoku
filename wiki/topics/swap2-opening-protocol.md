@@ -243,6 +243,53 @@ daemon's pull-checkpoint/schedule/append loop. The upgrade swap2 brings is **hon
 (the old forced-color panel was broken for white; see the 2026-06-15 reckoning). This is
 the post-validation era — validate the recipe on the M5 first, then build the arena.
 
+## 6.7 Contingency plan — "if it stops working" (decision tree)
+
+Standing directive (2026-06-20): **don't stop what's working** — keep the live run on its
+current recipe + cadence. This menu is for *if/when* a gate says it stalled. Every option
+deploys as a NEW cell (never mutate the live run), validated in isolation, gated vs the
+frozen champion. First, triage: is it RECIPE, OPTIMIZATION, or OPERATIONAL?
+
+**A. PLATEAU** (most likely "stops working") — H2H flat / white-loss stops falling across
+≥2 consecutive **n=128** gates. First ask: plateaued ABOVE or BELOW the crowning bar
+(§6.6)?
+- **Above the bar → not a failure: CROWN it.** v1 is the win; freeze it, move to the
+  arena/Modal era.
+- **Below the bar → escalate the lever (in order):**
+  - **(P1) Learned choice head into the loss** — wire `choice_records` into the trainer so
+    the net *learns* to negotiate instead of the v1 value-lookup. Pushes self-play balance
+    past 69/27 → raises the white ceiling. The pre-identified #1 escalation.
+  - **(P2) Train opening placements for fairness** (pairs with P1; the opener learns fair
+    3-stone openings so the responder can't always swap to a black edge).
+  - **(P3) Stronger self-play** — more sims / a VCT/VCF attack teacher on top → better data.
+  - **(P4) Capacity** — if 128×10 saturates on balanced data, grow the net (net2net).
+
+**B. REGRESSION** — H2H / white-loss *worsens* beyond noise. FIRST confirm it's real at
+n=128 (we were burned by n=64 noise — the e181 64% overshoot). If real: roll back to the
+best epoch checkpoint; suspect **LR too high** (the value-target shift from balanced data
+wrecking the policy → #44: lower LR / freeze-value-head warmup); check buffer composition.
+
+**C. DYNAMICS DEATH-TELL** (well-documented: `loss-floor-bouncing.md`,
+`az-at-scale-vs-laptop.md`) — `vl` → ~<0.08 = value poisoning; `plies` falling + concave
+buffer-fill = fast-attack collapse; `pl` runaway = policy corruption. Roll back to the last
+healthy checkpoint, lower LR, inspect labels/buffer. (So far ALL absent — vl bounces
+0.14-0.21, plies rose 30→42.)
+
+**D. DATA STUCK at ~27% white** — self-play white-win% flat, not trending toward 50%. This
+is the v1 ceiling (sampled, untrained openings cap balance), so it **converges on P1+P2**
+— the learned-negotiation lever is the fix for both plateau-below and data-stuck.
+
+**E. OPERATIONAL** — process death / OOM / disk / my-session-lapse. The run is restartable
+(`--resume latest.pt`, buffer embedded). For unattended resilience WITHOUT changing the
+recipe: a self-relaunching wrapper that does exactly cap→gate→relaunch automatically
+(removes the human as the single point of failure; honors "loops are cadence, not
+load-bearing"). Identical behavior to the current loop — just not dependent on a live
+session.
+
+Meta: A/D are RECIPE (escalate the lever), B/C are OPTIMIZATION (roll back + LR), E is
+OPERATIONAL (resume/automate). A plateau *above* the bar is the happy ending, not a
+failure.
+
 ## 7. Operational notes (durable gotchas)
 
 - **Warm-start = weights only.** Strip the champion to `{model_state_dict, model_config}`
