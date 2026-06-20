@@ -4344,3 +4344,35 @@ a confirmed *strength gain*. The path to 50/50 balance is concrete: train the ne
 head into the loss). Branch `feat/swap2-opening-protocol` (latest commit `a29e645` adds the
 net-vs-net swap2 H2H gate); evidence is the live run `8nq1a7cm`. Plan + theorem chronology:
 `wiki/topics/white-side-defense-plan.md`.
+
+## 2026-06-20 — SWAP2 (#72) STRENGTH SIGNAL FIRES: H2H 51.6%→64.1%, WHITE 12%→41% (e129→e181)
+
+The H2H-vs-frozen-champion gate (the resolvable progress gate; net-vs-net swap2, both
+negotiate, n=64 / sims=200 / seed7) now has TWO comparable points and the trend is up —
+specifically on the white side, the metric the project chased for months.
+
+| gate | epoch | overall (trained's W-L) | as WHITE | as black | as opener | as responder |
+|---|---|---|---|---|---|---|
+| slice 2 end | e129 | 51.6% (33-31) | 12% (3-22) | 77% (30-9) | 22% (7-25) | 81% (26-6) |
+| slice 3 end | e181 | 64.1% (41-23) | **41% (12-17)** | 83% (29-6) | 50% (16-16) | 78% (25-7) |
+
+**Read.** Overall 51.6→64.1 (n=64 each, CI ~±12%) is suggestive but partly noisy. The
+robust, thesis-consistent signal is **white: 3/25 → 12/29 white wins (12%→41%, a 4×
+increase)**, plus opener-role 22%→50%. White is becoming viable via *balanced data*, not
+a teacher — exactly the swap2 thesis. This is the first positive STRENGTH signal (prior
+entry had it at parity/51.6%); ~52 epochs of balanced data on top of the warm start moved
+it.
+
+**Epoch context (Jason, 2026-06-20).** General AZ wisdom is "thousands of epochs to
+move," but this lab's lived experience is real movement in **~100 epochs** (laptop-scale,
+small buffer, high SGD/position). So a white shift at e129→e181 is *on-schedule for this
+setup, not anomalous* — credible, not suspicious. "Thousands" is the conservative outer
+bound; ~100 is the empirical inner bound here.
+
+**Discipline.** A single n=64 gate is a data point; the RESULT is the trend across
+INDEPENDENT checkpoints. Next gate (slice 4, e~233) at **n=128** to tighten the CI — if it
+holds ~60%+ with white ~40%, this is a genuine result. Caveat tracked: not yet 50/50
+balance (black still 69% in self-play data) because v1 samples (doesn't train) opening
+placements — the learned-choice-head lever (§6 of the synthesis page) is the path to push
+further, now a "go further" lever rather than a rescue. Synthesis +
+high-res trend table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.

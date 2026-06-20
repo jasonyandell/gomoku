@@ -1,12 +1,14 @@
 # Swap2 opening protocol (#72) — the real fix for white
 
-**Status (2026-06-20):** built end-to-end and LIVE. The core bet is **confirmed at
-the data level** (swap2 self-play makes white winnable: white wins 27% vs ~0% on an
-empty board). Whether that balanced data makes the *net measurably stronger* is still
-open — trained-vs-frozen-champion sits at parity (51.6%, n=64) after ~3 warm-started
-slices. This page is the durable synthesis: why we did it, what we built, what we
-learned, and what to try next. Evidence chronology lives in `TRAINING_WIKI.md`
-(2026-06-20 entries); the predecessor analysis is
+**Status (2026-06-20):** built end-to-end and LIVE. The core bet is **confirmed at the
+data level** (swap2 self-play makes white winnable: white wins 27% vs ~0% on an empty
+board), and the first **strength** signal is now positive: H2H vs the frozen champion
+climbed **51.6% (e129) → 64.1% (e181)**, with the **white side jumping 12% → 41%** — the
+exact metric the project chased for months, moving via balanced data, not a teacher.
+Still EARLY (n=64/gate, ~181 epochs); the result is the *trend across independent
+checkpoints*, not one gate — confirm at each subsequent cap. This page is the durable
+synthesis: why we did it, what we built, what we learned, and what to try next. Evidence
+chronology lives in `TRAINING_WIKI.md` (2026-06-20 entries); the predecessor analysis is
 [white-side-defense-plan.md](white-side-defense-plan.md).
 
 Branch: `feat/swap2-opening-protocol` (worktree, **unmerged** by request). Run: cell
@@ -94,10 +96,36 @@ In net-vs-net H2H the **responder wins ~80%** — it exploits its stay/swap/plac
 to take the better side (`opener_color_dist` shows the responder almost always grabs
 black). Swap2's balancing flows through the responder's choice, as designed.
 
-### 5.3 Strength-vs-champion is still at PARITY (the open question)
-Trained (e129) vs **frozen** warm champion, both negotiating swap2, n=64 → **51.6%**.
-Within noise of 50% after ~2h of warm-started training. The net is **not regressing**
-(it's ≥ its strong starting point) but has not pulled clearly ahead. Too early to call.
+### 5.3 Strength-vs-champion is CLIMBING — and the white side specifically (the payoff)
+The progress gate is net-vs-net swap2 H2H, **trained-latest vs the FROZEN warm
+champion** (both negotiate). Same settings each gate (n=64, sims=200, seed 7) so the
+points are directly comparable. **High-resolution trend** (win-rate is from the
+trained net's view; splits are `W-L`):
+
+| gate | epoch | overall | **as white** | as black | as opener | as responder |
+|---|---|---|---|---|---|---|
+| slice 2 end | e129 | **51.6%** (33-31) | **12%** (3-22) | 77% (30-9) | 22% (7-25) | 81% (26-6) |
+| slice 3 end | e181 | **64.1%** (41-23) | **41%** (12-17) | 83% (29-6) | 50% (16-16) | 78% (25-7) |
+
+The overall climb (51.6→64.1, n=64 each, CI ~±12%) is suggestive but partly noisy. The
+**white-side jump is the robust, thesis-consistent signal: 3/25 → 12/29 white wins
+(12% → 41%)** — a 4× increase on the *exact* metric this project has chased for months,
+plus the opener role (the disadvantaged side) 22%→50%. White is becoming viable, via
+balanced data, not a teacher. (Confirm at each subsequent gate — independent checkpoints
+— at n=128 to tighten.)
+
+**Epoch context (why this isn't suspiciously fast):** the white move appeared between
+e129 and e181. General AZ wisdom is "thousands of epochs to move," but THIS project's
+lived experience is that real movement typically shows in **~100 epochs** (laptop-scale,
+small buffer, high SGD-per-position). So a white-side shift at e129→e181 (~52 epochs of
+balanced data on top of a warm start) is **on-schedule for this setup, not anomalous** —
+which makes it more credible, not less. The "thousands" figure is the conservative
+outer bound; ~100 is this lab's empirical inner bound. Keep gating every slice — a single
+n=64 gate is a data point, the *trend across independent checkpoints* is the result.
+
+**The pre-H2H gates were noise (do not use for the trend).** Gate-1/2 vs Rapfi at n=16-48
+gave baseline 4-25% and trained 4-31% on pure variance (§5.6) — discarded in favor of the
+H2H-vs-champion gate above.
 
 ### 5.4 The data isn't perfectly 50/50 — and we know why
 Black still wins 69% because v1 **samples** opening placements for diversity rather than
@@ -121,8 +149,11 @@ diagnostic showed trained 12.5% > baseline 4.2% at matched seed (no regression).
 
 1. **Let v1 run and read the H2H trend first.** Don't add machinery ahead of the
    measurement (the exact lesson the teacher era taught). Gate trained-latest vs the
-   frozen champ each cap. If H2H climbs past ~55-60%, v1 (balanced data alone) works. If
-   it flatlines at ~50%, escalate to #2.
+   frozen champ each cap. **As of e181 this has fired positive** — H2H past 60% with white
+   12%→41%, so v1 (balanced data alone) is *already* showing it works; the job now is to
+   CONFIRM the trend across more independent checkpoints (n=128 gates) before declaring a
+   result. If it stalls, escalate to #2; if it holds, v1 is the win and #2/#3 become the
+   "push 27%→50% and go further" lever rather than a rescue.
 2. **Learned negotiation = the choice head into the loss (the deferred v2).** The choice
    head exists and the negotiator already emits `choice_records`, but those targets are
    **not yet in the trainer loss** — v1 negotiates by a one-ply value lookup. Wiring them
