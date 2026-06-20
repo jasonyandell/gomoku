@@ -2,11 +2,13 @@
 
 **Status (2026-06-20):** built end-to-end and LIVE. The core bet is **confirmed at the
 data level** (swap2 self-play makes white winnable: white wins 27% vs ~0% on an empty
-board), and the first **strength** signal is now positive: H2H vs the frozen champion
-climbed **51.6% (e129) → 64.1% (e181)**, with the **white side jumping 12% → 41%** — the
-exact metric the project chased for months, moving via balanced data, not a teacher.
-Still EARLY (n=64/gate, ~181 epochs); the result is the *trend across independent
-checkpoints*, not one gate — confirm at each subsequent cap. This page is the durable
+board), and the **strength** signal is positive on the white side: across independent
+checkpoints the H2H-vs-frozen-champion **white win-rate climbed 12% (e129) → 33% (e235,
+n=128)** — the exact metric the project chased for months, moving via balanced data, not
+a teacher. The *overall* H2H is ~57% at n=128 (suggestive, CI grazes 50%; the earlier
+64.1% n=64 reading was noise). Verdict at ~235 epochs: **confirmed but modest, not
+plateaued.** The result is the *trend across independent checkpoints* (all gates now
+n=128), not any single gate. This page is the durable
 synthesis: why we did it, what we built, what we learned, and what to try next. Evidence
 chronology lives in `TRAINING_WIKI.md` (2026-06-20 entries); the predecessor analysis is
 [white-side-defense-plan.md](white-side-defense-plan.md).
@@ -102,17 +104,22 @@ champion** (both negotiate). Same settings each gate (n=64, sims=200, seed 7) so
 points are directly comparable. **High-resolution trend** (win-rate is from the
 trained net's view; splits are `W-L`):
 
-| gate | epoch | overall | **as white** | as black | as opener | as responder |
-|---|---|---|---|---|---|---|
-| slice 2 end | e129 | **51.6%** (33-31) | **12%** (3-22) | 77% (30-9) | 22% (7-25) | 81% (26-6) |
-| slice 3 end | e181 | **64.1%** (41-23) | **41%** (12-17) | 83% (29-6) | 50% (16-16) | 78% (25-7) |
+| gate | epoch | n | overall | **as white** | as black | as opener | as responder |
+|---|---|---|---|---|---|---|---|
+| slice 2 end | e129 | 64 | 51.6% (33-31) | **12%** (3-22) | 77% (30-9) | 22% (7-25) | 81% (26-6) |
+| slice 3 end | e181 | 64 | 64.1% (41-23) | 41% (12-17) | 83% (29-6) | 50% (16-16) | 78% (25-7) |
+| slice 4 end | e235 | **128** | **57.0%** (73-55) | **33%** (20-40) | 78% (53-15) | 41% (26-38) | 73% (47-17) |
 
-The overall climb (51.6→64.1, n=64 each, CI ~±12%) is suggestive but partly noisy. The
-**white-side jump is the robust, thesis-consistent signal: 3/25 → 12/29 white wins
-(12% → 41%)** — a 4× increase on the *exact* metric this project has chased for months,
-plus the opener role (the disadvantaged side) 22%→50%. White is becoming viable, via
-balanced data, not a teacher. (Confirm at each subsequent gate — independent checkpoints
-— at n=128 to tighten.)
+**The n=128 confirmation tempers the overall number but holds the white signal.** The
+e181 **64.1% was upward n=64 noise** — the tighter e235 read is **57.0%**, whose CI
+(~[48%, 66%]) just grazes 50%, so "overall stronger than the champion" is *suggestive,
+not yet conclusive*. The **robust, thesis-consistent signal is the white side: 12% (3/25)
+→ 33% (20/60)** across independent checkpoints — a two-proportion gap that survives the
+tighter n, on the *exact* metric this project chased for months. White-side defense is
+genuinely improving, via balanced data, not a teacher. Verdict at ~235 epochs:
+**confirmed but modest, not plateaued.** All future gates use n=128 (n=64 is too noisy —
+it produced the 64.1% overshoot). Lesson: read the *trend across independent checkpoints*,
+not any single gate.
 
 **Epoch context (why this isn't suspiciously fast):** the white move appeared between
 e129 and e181. General AZ wisdom is "thousands of epochs to move," but THIS project's

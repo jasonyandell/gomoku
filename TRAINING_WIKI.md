@@ -4376,3 +4376,16 @@ balance (black still 69% in self-play data) because v1 samples (doesn't train) o
 placements — the learned-choice-head lever (§6 of the synthesis page) is the path to push
 further, now a "go further" lever rather than a rescue. Synthesis +
 high-res trend table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 — SWAP2 (#72) gate-4 CONFIRMATION (n=128): white 12%→33% holds; overall ~57% (e181's 64% was noise)
+
+Tighter n=128 H2H (trained e235 vs frozen champ, sims=200/seed7): **73-55 = 57.0%** —
+white 20-40 (33%), black 53-15 (78%), opener 26-38 (41%), responder 47-17 (73%).
+
+Trend across INDEPENDENT checkpoints: e129 51.6%/w12% (n64) → e181 64.1%/w41% (n64) →
+e235 57.0%/w33% (n128). The e181 64.1% was upward n=64 noise; the n=128 anchor is ~57%
+overall (CI ~[48,66], grazes 50% → suggestive not conclusive on the overall). The
+**white side is the robust signal: 12% (3/25) → 33% (20/60)** survives the tighter n — a
+real white-defense gain via balanced data, not a teacher. Verdict ~235 epochs: confirmed
+but MODEST, not plateaued — keep training (this lab's ~100-epoch movement window). All
+future gates n=128 (n=64 too noisy). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3.
