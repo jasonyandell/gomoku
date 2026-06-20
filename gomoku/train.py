@@ -2414,8 +2414,11 @@ def main() -> None:
                 # swap2 v2a choice-head step. OFF (choice_on False / buffer empty)
                 # => never runs (no sample, no forward, no loss). When on, it is a
                 # SEPARATE optimizer step on a choice batch (its own zero_grad +
-                # step), independent of the main loss's grad-accumulation window.
-                if (choice_on and choice_buffer is not None
+                # step), gated to `is_last_in_window` so it fires ONCE PER MAIN
+                # OPTIMIZER STEP (1:1 cadence) — NOT once per microbatch, which would
+                # over-update the shared value trunk by `grad_accum_steps`× and risk
+                # destabilizing value learning at cold-start.
+                if (is_last_in_window and choice_on and choice_buffer is not None
                         and choice_buffer.size >= args.batch_size):
                     cplanes, clegal, cchosen, ccz = choice_buffer.sample(args.batch_size)
                     cm = choice_step(

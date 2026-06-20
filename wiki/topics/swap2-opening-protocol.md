@@ -1,29 +1,40 @@
 # Swap2 opening protocol (#72) — the real fix for white
 
-**Status (2026-06-20):** built end-to-end and LIVE. The core bet is **confirmed at the
-data level** (swap2 self-play makes white winnable: white wins 27% vs ~0% on an empty
-board), and the **strength** signal is strong and HOLDING: across independent n=128
-checkpoints the H2H-vs-frozen-champion overall win-rate sits at a steady **~70% level**
-(57.0% e235 → 66.8% e289 → 76.2% e345 → 67.6% e403), comfortably above the ~58%
-relative-crown lower bound (§6.6). On the white side the **white LOSS-rate fell from 88%
-(e129) to ~parity and is now fluctuating around it (42% e345, 57% e403)** — genuinely
-improved off the catastrophic floor, but bouncing around parity, **not monotonically
-marching to 0**. **Correction to the prior gate-6 framing:** the e345 76.2%/42% reading was
-*partly an upward sample-fluctuation* (same flavor as the earlier e181 n=64 spike), not a
-"slope steepening" — the e403 pullback to 67.6% confirms the true level is ~70%, and the
-CIs overlap (it's noise, not a regression). The exact metric the project chased for months
-is moving — via balanced data, not a teacher. Verdict at ~403 epochs: **NOT a plateau, NOT
-a regression, level holding well above the crown bar — keep training; progress on the hard
-white side is noisy around parity, not a smooth descent** (formal crown wants an n≥200 gate
-to call it). The result is the *trend across independent checkpoints and their CIs* (n=128
-gates; the lone n=64 e181 read was noise), not any single gate — a single high gate can be
-an upward fluctuation, as e345 partly was. This page is the durable synthesis: why we did
-it, what we built, what we learned, and what to try next. Evidence chronology lives in
-`TRAINING_WIKI.md` (2026-06-20 entries); the predecessor analysis is
+**Status (2026-06-20) — ERA 1 DONE, PIVOTING TO ERA 2.** Swap2 era-1 (warm-started from the
+pre-swap2 champion) achieved its actual job — **the bootstrap fix is CONFIRMED**: swap2
+self-play makes white *trainable* (white ~30–40% of decisive self-play games vs ~0% on an
+empty board), and the net beats the frozen old champ a steady **~70%** (gates e235→e455:
+57.0 → 66.8 → 76.2 → 67.6 → 70.7), white LOSS-rate down off the 88% floor to ~parity.
+
+**But the Rapfi gut-check (§5.7) reframes all of that.** At e455, vs the real Rapfi-NNUE
+engine (same config as our early anchors): **10.2% — statistically identical to the
+pre-swap2 warm champ's 10.4%, and white is 0/11 = 0% vs Rapfi.** So in *absolute* terms the
+whole era-1 run was **flat**: the net got better at beating its own weak ancestor (the
+70%-vs-old-champ was a **saturated ruler**), not better at gomoku. Swap2 was never a
+strength fix — it was the **prerequisite** (unblock white's gradient). Era-1 reached the
+bottom of the hill; it did not climb.
+
+**Diagnosis — the "lose-slowly basin" (§9).** White is 0% vs Rapfi yet ~parity vs the old
+champ → it plays to *not lose*, not to *win*; plies climbed 27→50 (it learned to *stall*,
+not finish). Smoking gun: we **warm-started the pre-swap2 champion**, whose optimal policy
+in the old imbalanced regime literally *was* "delay the loss / steer to draw" — that
+defensive attractor is baked into the weights. Swap2 fixed the data; the weights kept the
+basin.
+
+**Era 2 = Path A (§9):** a **fresh-init** 15×15 swap2 net (no inherited basin) +
+**aggression shaping** (value-discount 0.98→0.95, "faster wins are better") + **v2a**
+(train the choice head into the loss — learn the swap, not a one-ply heuristic). Cheapest
+decisive test of the basin hypothesis on the target board; the 9×9→15×15 transfer
+curriculum is the bigger Path-B scale-up if A still can't make white *win*.
+
+This page is the durable synthesis. Evidence chronology lives in `TRAINING_WIKI.md`
+(2026-06-20 entries); predecessor analysis is
 [white-side-defense-plan.md](white-side-defense-plan.md).
 
-Branch: `feat/swap2-opening-protocol` (worktree, **unmerged** by request). Run: cell
-`G15-swap2`, wandb `8nq1a7cm`, board 15, home `/Users/jason/data/swap2/`.
+Branch: `feat/swap2-opening-protocol` (worktree, **unmerged** by request). Era-1 run: cell
+`G15-swap2`, wandb `8nq1a7cm`, board 15, home `/Users/jason/data/swap2/`. Era-2 run: cell
+`G15-swap2-e2` (fresh, no `--resume`). Intermediate model capture → **HuggingFace push**
+(not `cp` anchors), per Jason 2026-06-20.
 
 ---
 
@@ -182,7 +193,38 @@ diagnostic showed trained 12.5% > baseline 4.2% at matched seed (no regression).
 "did this help?" on H2H vs the preserved champion (≈p0.5, resolvable), NOT on Rapfi**
 (this is the wiki's own 2026-06-15 rule). Rapfi stays a coarse absolute anchor only.
 
-## 6. What to try next (ranked)
+### 5.7 The Rapfi gut-check (e455) — absolute strength is FLAT (the saturated-ruler finding) ⭐
+The H2H-vs-old-champ trend held ~70% but stopped *climbing* (66.8 → 76.2 → 67.6 → 70.7),
+which read as "relative plateau." To tell a real plateau from a **maxed ruler** (we'd
+outgrown the weak frozen reference), we took the absolute read:
+
+| Net | vs Rapfi-NNUE (200ms, sims=200, seed7, n=128) |
+|---|---|
+| warm champ (pre-swap2 baseline) | 10.4% |
+| e129 (early swap2) | 4.2% |
+| **e455 (end of era-1)** | **10.2%** — black 11%, **white 0/11 = 0%** |
+
+**e455 is statistically identical to the pre-swap2 champion vs a real engine** (10.2 vs
+10.4, n=128; CIs fully overlap), and **white still wins 0% vs Rapfi.** So the 70%-vs-old-champ
+was almost entirely a **saturated ruler** — the net learned to beat its own weak ancestor,
+not to play stronger gomoku. The "white parity" is *relative to the old champ's defense
+only*. **Conclusion: era-1 moved relative strength and zero absolute strength.** That is not
+a failure of swap2 — swap2's job was the *bootstrap* (white trainable), and it did that.
+It's the signal that the *strength* climb needs a different lever (§9). **The deeper read
+settled the fork:** e455 vs Rapfi at **sims=800** (4× search) = **11.7%** (15W-113L), white
+**still 0/17 = 0%**. 4× search bought ~1.5pt (inside noise) and white couldn't find a single
+win given 4× the thinking time → **NOT search-starved; basin/capacity-bound.** More search
+of a defensive policy is still defensive. This rules out the "just add self-play sims"
+shortcut and validates the era-2 basin-escape levers (§9); if a *fresh* aggressive net still
+can't make white win, the wall is genuinely capacity → Path B.
+
+**Methodology upgrade:** because the frozen old champ is now a saturated ruler, future
+relative-progress gates must **re-anchor to a recent self-checkpoint** (e.g. latest vs
+frozen-e455), not the ancient champ. Era-1's checkpoints were lost to `keep_last_n=3`
+pruning — going forward, capture intermediates via **HuggingFace push** (not `cp`), which
+also seeds the always-running-arena model registry.
+
+## 6. What to try next (ranked) — SUPERSEDED by §9 (kept for the era-1 reasoning trail)
 
 1. **Let v1 run and read the H2H trend first.** Don't add machinery ahead of the
    measurement (the exact lesson the teacher era taught). Gate trained-latest vs the
@@ -351,3 +393,67 @@ failure.
 wiring, both eval harnesses), warm-started live run, the data-balance confirmation, the
 H2H gate. **Not done:** a proven *strength* gain over the champion; the learned-choice-head
 loss; trained opening placements; merge to main (held by request).
+
+## 9. The new era (era-2 / Path A) — escape the lose-slowly basin ⭐
+
+**This section supersedes §6.** Era-1 proved the bootstrap and revealed (via the §5.7 Rapfi
+gut-check) that absolute strength never moved. The unifying diagnosis is a *behavioral
+attractor*, not a capacity wall:
+
+**The "lose-slowly basin."** Every era-1 number fits one story — the net plays to *survive*,
+not to *win*:
+- white 0% vs Rapfi but ~parity vs the old champ → a not-lose policy, not a win policy;
+- `plies` climbed 27→50 over the run → it learned to *prolong*, not *finish*;
+- **smoking gun:** era-1 **warm-started the pre-swap2 champion**, whose optimal policy in the
+  old imbalanced regime literally *was* "delay the loss / steer to draw." That defensive
+  basin is encoded in the weights. Swap2 fixed the *data*; the *weights* kept the basin, so
+  incremental swap2 training on top of it never escaped.
+
+### 9.1 Path A — the era-2 recipe (cell `G15-swap2-e2`, fresh, no `--resume`)
+One run that bundles the three basin-escape levers:
+
+1. **Fresh init (don't inherit the basin).** Launch with NO warm-start / NO `--resume` →
+   random weights, empty buffer, fresh AdamW. Swap2's whole point is that even a *fresh* net
+   gets balanced data from move one, so fresh+swap2 bootstraps white *without* importing the
+   defensive champion. (The old warm-start was a speed hack that cost us the basin.)
+2. **Aggression shaping — "faster wins are better."** `value-discount` 0.98 → **0.95**
+   (worker arg). Effect: a 50-ply win's value target falls 0.36 → 0.077 (3.6× weaker than a
+   25-ply win, vs only 1.66× under 0.98) → the value head — and through the shared trunk the
+   policy and choice head — strongly prefer crisp, short wins. Risk: too steep blurs the
+   value head on long games; back off to 0.96 if it bites, never below ~0.95.
+3. **v2a — learn the swap (train the choice head into the loss).** Era-1's negotiation was a
+   one-ply value heuristic and the choice head was scaffolded-but-untrained (records were
+   *discarded at the seam*, `_swap2_opening_state`). v2a threads `Swap2Result.choice_records`
+   out of the 4 gen seams → `GameRecord.choice_examples` → a small separate `ChoiceBuffer` →
+   a masked choice-CE loss (`--choice-head-weight 0.3`, default 0.0 = byte-identical off).
+   Target is **outcome-driven** (the head learns which negotiation slot actually *won*), with
+   the chooser-sign from `backup_sign`'s **actor** form: `outcome_for_black` is really
+   outcome-for-the-handoff-mover (`res.mover_actor`), so a choice node's chooser gets
+   `+outcome` iff `cr.to_act == mover_actor`, else `−outcome` (handles the opener-acts-3×
+   perspective without ply parity). **Staging:** v2a *trains* the head; the negotiator still
+   *selects* via the one-ply heuristic (a fresh net's random head would negotiate garbage at
+   cold-start). **Consuming the head for selection is v2b** — the immediate fast-follow once
+   the head's loss is falling and `choice_buffer` has accumulated.
+
+Keep buffer modest (150k) at cold-start so old slow/defensive games don't dilute the new
+fast-win objective; grow to ~1.5M (bigbuf, `--pack-buffer`) as a *later* slice once the
+win-length distribution is shortening and choice-loss is falling.
+
+### 9.2 The fork: Path A first, Path B if A can't make white WIN
+- **Path A (this run):** cheapest decisive test of the basin hypothesis *on the target
+  board*. Success signal = white starts actually *winning* (vs Rapfi, not just not-losing)
+  and the win-length distribution shortens.
+- **Path B — 9×9→15×15 transfer curriculum:** the bigger "serious-model / Modal-era" bet if
+  A still can't make white win (→ board-difficulty/capacity is the real wall). Feasible
+  because the net is `global-pool` → the conv **trunk is board-size-agnostic and transfers
+  directly**; only the policy head (81→225 outputs) re-inits and fine-tunes. Native ext
+  exists for 9 and 15; zeb has transfer patterns to crib.
+
+### 9.3 Measurement for era-2 (don't repeat era-1's blind spot)
+- **Re-anchor** relative gates to a recent self-checkpoint, never the ancient champ
+  (saturated ruler). Capture anchors via **HuggingFace push**, not `cp` (Jason 2026-06-20).
+- **Absolute** read vs Rapfi at the same fixed config each gate (the honest yardstick) +
+  watch the **win-length distribution** (is it learning to finish?) and self-play
+  white/black balance (smoothed, not single-epoch — those swing wildly).
+- North-star for "is the basin breaking?": **white win% vs Rapfi climbing off 0%**, and
+  mean plies *falling* on wins.
