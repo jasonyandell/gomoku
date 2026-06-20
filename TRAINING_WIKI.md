@@ -4216,6 +4216,10 @@ real Gomocup game. **Next build = #22 swap2**: the 3-stone opening placement, th
 color-choice decision node, the net learning to negotiate the color, and a swap2 eval-vs-Rapfi.
 The `--defense-detect-frac` and `--defense-teacher-conv` levers are sound, tested (60 + 40/40
 VCF cross-check + 1500-fuzz), default-off byte-identical — kept as evidence, not a path forward.
-Artifacts: `sweep_logs/probe_wdl0_vs_rapfi_n40.jsonl`, `probe_convguard_e1240_vs_rapfi.jsonl`,
-`diag_white_failuremode_wdl0.jsonl`. Paused runs preserved: `sweep_runs/G15-wdl-defense-board15`
-(sparse, e1726), `sweep_runs/G15-wdl-conv-board15` (conv, e1240).
+Artifacts preserved in `sweep_logs/`: `probe_wdl0_vs_rapfi_n40.jsonl` (the wdl@0 control),
+`probe_wdldefense_e1726_vs_rapfi.jsonl` (sparse-VCF), `probe_convguard_e1240_vs_rapfi.jsonl`
+(conv), `diag_white_failuremode_wdl0.jsonl` (the diagnostic). The large intermediate training
+checkpoints (sparse e1726, conv e1240) were discarded with the worktree on merge — a negative
+result we are not resuming; the eval JSONLs above are the cited evidence. The cells
+`G15-wdl-defense` / `G15-wdl-conv` in `run_sweep.py` reproduce the runs from the wdl@0 seed if
+ever needed.
