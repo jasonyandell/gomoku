@@ -6,8 +6,9 @@ It speaks just enough of the protocol to exercise gomoku.external_engine:
 - `RESTART`      -> prints OK, clears the board (per the real Piskvork protocol)
 - `INFO ...`     -> ignored
 - `BOARD` ... `DONE` -> read the position, then reply a move per the mode
-- `SWAP2BOARD` ... `DONE` -> read the (0/3/5) stone lines, reply a swap2 reply
-                per the mode (see "swap2 modes" below)
+- `SWAP2BOARD` ... `DONE` -> read the (0/3/5) `x,y,color` stone lines (color in
+                {1,2}; a colorless `x,y` line is rejected with an ERROR like real
+                Rapfi), reply a swap2 reply per the mode (see "swap2 modes" below)
 - `TURN x,y` / `BEGIN` -> also reply a move
 - `END` / EOF -> exit
 
@@ -91,9 +92,13 @@ def main() -> None:
     def read_swap2board() -> list[tuple[int, int]]:
         """Read the SWAP2BOARD stone block up to DONE; return the stones in order.
 
-        Stone lines are `x,y` (the spec form the wrapper sends) — also tolerate a
-        trailing `,color` token. Returns the list so the reply can pick its arity
-        off the count (0/3/5)."""
+        Stone lines are `x,y,color` (the spec form the wrapper sends), with color
+        in {1, 2} — 1 = black, 2 = white. A bare `x,y` line (no color) or an
+        out-of-range color is a protocol violation here, surfaced as an ERROR line
+        (mirroring real Rapfi, which rejects a colorless stone with
+        ``ERROR Color is not a valid value, must be one of [1, 2, 3]``). Returns
+        the (x, y) list so the reply can pick its arity off the count (0/3/5);
+        color is validated but not needed to choose the reply."""
         stones: list[tuple[int, int]] = []
         for bline in sys.stdin:
             bl = bline.strip()
@@ -102,8 +107,16 @@ def main() -> None:
             if bl.upper() == "DONE":
                 break
             parts = bl.split(",")
-            if len(parts) >= 2:
-                stones.append((int(parts[0]), int(parts[1])))
+            if len(parts) < 3:
+                out.write("ERROR Color is not a valid value, must be one of [1, 2, 3].\n")
+                out.flush()
+                continue
+            x, y, color = int(parts[0]), int(parts[1]), int(parts[2])
+            if color not in (1, 2):
+                out.write("ERROR Color is not a valid value, must be one of [1, 2, 3].\n")
+                out.flush()
+                continue
+            stones.append((x, y))
         return stones
 
     def reply_swap2(stones: list[tuple[int, int]]) -> None:

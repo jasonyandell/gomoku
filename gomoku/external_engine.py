@@ -131,11 +131,22 @@ def _xy_to_action(x: int, y: int) -> int:
 #   3 stones (engine RESPONDS)    -> `SWAP` | one coord | two coords
 #   5 stones (engine PICKS color) -> `SWAP` | one coord
 #
+# Stone lines carry COLOR. Each opening stone is sent as `x,y,color` (the same
+# `x,y,field` grammar as the move path's BOARD block), with color in {1, 2}:
+# **1 = black, 2 = white**. Rapfi REJECTS bare `x,y` stone lines with
+# ``ERROR Color is not a valid value, must be one of [1, 2, 3]`` and then opens
+# on an empty board (an arity mismatch downstream). With `x,y,color` Rapfi loads
+# its NNUE and negotiates correctly (confirmed by driving the real binary:
+# OPEN -> 3 coords, RESPOND -> SWAP|1 coord, PICK -> SWAP|1 coord, no errors).
+# The opening is 2 black + 1 white (then +1 or +2 stones); colors are read off
+# the absolute (black, white) planes, never assumed from placement parity.
+#
 # `SWAP` and `DONE` are exact-uppercase literals; `SWAP` is NOT a coordinate
 # (it has no comma) so the positive-match `_parse_coord` gate skips it as
 # chatter — we test for the `SWAP` token explicitly before coordinate parsing.
-# Coords are zero-based X=col,Y=row, mapped to actions via `_xy_to_action`,
-# identical to the move path.
+# Reply coords carry NO color (they are coords/SWAP only), so the reply parser
+# is unchanged. Coords are zero-based X=col,Y=row, mapped to actions via
+# `_xy_to_action`, identical to the move path.
 # ---------------------------------------------------------------------------
 
 _SWAP2_TOKEN = "SWAP"
@@ -424,20 +435,26 @@ class ExternalEnginePlayer:
                     f"swap2: returned coord {x},{y} out of range for {n}x{n}"
                 )
 
-    def _send_swap2board(self, stones: list[tuple[int, int]]) -> None:
+    def _send_swap2board(self, stones: list[tuple[int, int, int]]) -> None:
         """Send a SWAP2BOARD block: the literal, the stones in order, then DONE.
 
-        `stones` are `(x, y)` pairs in the board order the spec expects (0 for
-        the engine-opens probe, 3 for a responder query, 5 for a color pick).
-        Each is sent as a bare `x,y` line (the spec form Rapfi drives on).
-        RESTART first so the block is a fresh, re-entrant initialisation — same
-        rationale as the move path (see module docstring).
+        `stones` are `(x, y, color)` triples in the board order the spec expects
+        (0 for the engine-opens probe, 3 for a responder query, 5 for a color
+        pick). COLOR is in {1, 2} (1 = black, 2 = white). Each is sent as an
+        `x,y,color` line — the same `x,y,field` grammar as the move-path BOARD
+        block; Rapfi rejects a bare `x,y` stone line outright (see module
+        docstring). RESTART first so the block is a fresh, re-entrant
+        initialisation — same rationale as the move path.
         """
         self._send("RESTART")
         self._expect_ok()
         self._send("SWAP2BOARD")
-        for x, y in stones:
-            self._send(f"{x},{y}")
+        for x, y, color in stones:
+            if color not in (1, 2):
+                raise ExternalEngineError(
+                    f"swap2 stone color must be 1 (black) or 2 (white), got {color}"
+                )
+            self._send(f"{x},{y},{color}")
         self._send("DONE")
 
     def _handshake(self) -> None:
@@ -466,14 +483,14 @@ class ExternalEnginePlayer:
         self._send_swap2board([])
         return self._read_swap2_reply(0)
 
-    def swap2_respond(self, stones: list[tuple[int, int]]) -> Swap2Reply:
+    def swap2_respond(self, stones: list[tuple[int, int, int]]) -> Swap2Reply:
         """Ask the engine to RESPOND to our 3-stone opening.
 
-        `stones` are our 3 opening stones as `(x, y)` pairs in board order
-        (2 black + 1 white by placement order, per the spec). Returns a
-        `Swap2Reply`: `SWAP` (take the other color), `ONE_COORD` (keep color /
-        play the 4th move), or `TWO_COORDS` (place 4th+5th, we then pick a
-        color). Raises if we did not pass exactly 3 stones.
+        `stones` are our 3 opening stones as `(x, y, color)` triples in board
+        order (2 black + 1 white, with color in {1, 2}). Returns a `Swap2Reply`:
+        `SWAP` (take the other color), `ONE_COORD` (keep color / play the 4th
+        move), or `TWO_COORDS` (place 4th+5th, we then pick a color). Raises if
+        we did not pass exactly 3 stones.
         """
         if len(stones) != 3:
             raise ExternalEngineError(
@@ -482,13 +499,14 @@ class ExternalEnginePlayer:
         self._send_swap2board(list(stones))
         return self._read_swap2_reply(3)
 
-    def swap2_pick(self, stones: list[tuple[int, int]]) -> Swap2Reply:
+    def swap2_pick(self, stones: list[tuple[int, int, int]]) -> Swap2Reply:
         """Ask the engine to PICK a color after we did PLACE2 (5 stones in).
 
-        `stones` are the 5 stones on the board (3 black + 2 white by placement
-        order). Returns a `Swap2Reply`: `SWAP` (take the other color) or
-        `ONE_COORD` (keep color and play the next move). Raises if we did not
-        pass exactly 5 stones.
+        `stones` are the 5 stones on the board as `(x, y, color)` triples (3
+        black + 2 white, with color in {1, 2}; each stone's true color is read
+        off the OpeningState planes, not assumed from placement order). Returns
+        a `Swap2Reply`: `SWAP` (take the other color) or `ONE_COORD` (keep color
+        and play the next move). Raises if we did not pass exactly 5 stones.
         """
         if len(stones) != 5:
             raise ExternalEngineError(

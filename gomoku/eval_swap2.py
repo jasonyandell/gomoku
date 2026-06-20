@@ -117,17 +117,28 @@ def _engine_open(state: OpeningState, engine: ExternalEnginePlayer) -> OpeningSt
     return state
 
 
-def _our_three_stones_xy(state: OpeningState) -> list[tuple[int, int]]:
-    """The 3 opening stones on ``state`` as (x, y) pairs in placement order.
+def _colored_stones_xy(state: OpeningState) -> list[tuple[int, int, int]]:
+    """All stones on ``state`` as (x, y, color) triples, color in {1, 2}.
 
-    Reconstructs the order from the (black, white) planes: the opener placed
-    black, white, black, so the two black stones are moves 1 & 3 and the lone
-    white is move 2. The engine only needs the *set* of 3 stones (it tracks
-    colors by position parity itself), but we send them in board order.
+    Color is read DIRECTLY off the absolute (black, white) planes — black -> 1,
+    white -> 2 — never assumed from placement parity. The SWAP2BOARD block needs
+    an explicit color per stone (`x,y,color`); Rapfi rejects a bare `x,y` line
+    (see `external_engine` module docstring). Blacks are listed before whites in
+    board (row-major) order; with explicit colors the listing order is irrelevant
+    to the engine's coloring, it only needs the set of colored squares.
     """
-    blacks = [(int(c), int(r)) for r, c in np.argwhere(state.black)]  # (x=col, y=row)
-    whites = [(int(c), int(r)) for r, c in np.argwhere(state.white)]
+    blacks = [(int(c), int(r), 1) for r, c in np.argwhere(state.black)]  # (x=col, y=row, BLACK)
+    whites = [(int(c), int(r), 2) for r, c in np.argwhere(state.white)]  # (..., WHITE)
     return blacks + whites
+
+
+def _our_three_stones_xy(state: OpeningState) -> list[tuple[int, int, int]]:
+    """The 3 opening stones (2 black + 1 white) as (x, y, color) triples.
+
+    Thin wrapper over :func:`_colored_stones_xy`; the responder query just needs
+    the three colored opening squares.
+    """
+    return _colored_stones_xy(state)
 
 
 def _engine_respond(
@@ -162,16 +173,15 @@ def _engine_respond(
     raise ValueError(f"engine swap2_respond returned an unexpected reply: {reply.option}")
 
 
-def _five_stones_xy(state: OpeningState) -> list[tuple[int, int]]:
-    """The 5 stones on a 5-stone (PLACE2-resolved) OpeningState as (x, y) pairs.
+def _five_stones_xy(state: OpeningState) -> list[tuple[int, int, int]]:
+    """The 5 stones on a 5-stone (PLACE2-resolved) OpeningState as (x,y,color).
 
-    3 black + 2 white by placement order; the engine picks a color off the board
-    and (for ONE_COORD) plays its first normal move. We send all 5 in board
-    order (blacks then whites) — the engine derives colors from position parity.
+    3 black + 2 white; the engine picks a color off the board and (for
+    ONE_COORD) plays its first normal move. Each stone's TRUE color is read off
+    the absolute planes (do NOT assume a fixed black/white alternation), so the
+    engine sees the exact position regardless of the listing order.
     """
-    blacks = [(int(c), int(r)) for r, c in np.argwhere(state.black)]
-    whites = [(int(c), int(r)) for r, c in np.argwhere(state.white)]
-    return blacks + whites
+    return _colored_stones_xy(state)
 
 
 def _engine_pick(

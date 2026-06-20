@@ -9,9 +9,16 @@ too (swap2_* modes), launched via `ExternalEngineConfig(cmd=...)` exactly like
     3 stones in (engine RESPONDS) -> SWAP | 1 coord | 2 coords
     5 stones in (engine PICKS)    -> SWAP | 1 coord
 
-plus arity validation, chatter-skipping, and that the `SWAP` literal is never
-mis-parsed as a coordinate. Coordinate<->action mapping matches the move path
-(action = row*BOARD_SIZE + col; X=col, Y=row).
+Stone lines carry COLOR (`x,y,color`, color in {1,2}: 1 = black, 2 = white) —
+the same `x,y,field` grammar as the move-path BOARD block. The fake engine now
+REJECTS a colorless `x,y` stone line (mirroring real Rapfi, which emits
+``ERROR Color is not a valid value, must be one of [1, 2, 3]``), so the tests
+pass colored stone TRIPLES and a dedicated test pins that a bad color is
+rejected. Replies carry NO color (coords/SWAP), so the reply parser is unchanged.
+
+Tests cover arity validation, chatter-skipping, and that the `SWAP` literal is
+never mis-parsed as a coordinate. Coordinate<->action mapping matches the move
+path (action = row*BOARD_SIZE + col; X=col, Y=row).
 """
 
 from __future__ import annotations
@@ -98,7 +105,7 @@ def test_engine_opener_returns_three_coords():
 
 # -- engine as RESPONDER (3 stones -> SWAP | 1 | 2) ---------------------------
 
-_THREE_STONES = [(4, 4), (4, 5), (5, 5)]  # 2B+1W by order, board order
+_THREE_STONES = [(4, 4, 1), (4, 5, 2), (5, 5, 1)]  # 2B+1W (x,y,color)
 
 
 def test_engine_responder_swap():
@@ -140,14 +147,14 @@ def test_engine_responder_requires_three_stones():
     p = _player("swap2_one")
     try:
         with pytest.raises(ExternalEngineError):
-            p.swap2_respond([(0, 0), (1, 1)])  # wrong count
+            p.swap2_respond([(0, 0, 1), (1, 1, 2)])  # wrong count (2, not 3)
     finally:
         p.close()
 
 
 # -- engine as PICKER (5 stones -> SWAP | 1) ----------------------------------
 
-_FIVE_STONES = [(4, 4), (4, 5), (5, 5), (6, 6), (6, 7)]  # 3B+2W by order
+_FIVE_STONES = [(4, 4, 1), (4, 5, 2), (5, 5, 1), (6, 6, 1), (6, 7, 2)]  # 3B+2W (x,y,color)
 
 
 def test_engine_picker_swap():
@@ -237,6 +244,48 @@ def test_chatter_before_swap2_reply_is_skipped():
         reply = p.swap2_respond(_THREE_STONES)
         assert reply.option is Swap2Option.ONE_COORD
         assert len(reply.coords) == 1
+    finally:
+        p.close()
+
+
+# -- colored stone lines (x,y,color) ------------------------------------------
+
+def test_send_swap2board_emits_colored_stone_lines(monkeypatch):
+    """The wrapper must send each opening stone as `x,y,color` (color in {1,2}),
+    NOT a bare `x,y`. Real Rapfi rejects a colorless stone line outright; this
+    pins the wire format by capturing exactly what `_send_swap2board` writes."""
+    p = _player("swap2_swap")
+    sent: list[str] = []
+    try:
+        monkeypatch.setattr(p, "_send", lambda line: sent.append(line))
+        # `_expect_ok` would block on a real read after a stubbed RESTART; stub it.
+        monkeypatch.setattr(p, "_expect_ok", lambda: None)
+        p._send_swap2board([(4, 4, 1), (4, 5, 2), (5, 5, 1)])
+        block = list(sent)  # snapshot BEFORE close() appends its END line
+    finally:
+        p.close()
+    sent = block
+    # The block is RESTART, SWAP2BOARD, three stone lines, DONE.
+    assert sent[0] == "RESTART"
+    assert sent[1] == "SWAP2BOARD"
+    assert sent[-1] == "DONE"
+    stone_lines = sent[2:-1]
+    assert stone_lines == ["4,4,1", "4,5,2", "5,5,1"]
+    for line in stone_lines:
+        parts = line.split(",")
+        assert len(parts) == 3, f"stone line {line!r} is not x,y,color"
+        assert int(parts[2]) in (1, 2), f"stone color must be 1 or 2, got {parts[2]}"
+
+
+def test_send_swap2board_rejects_invalid_color(monkeypatch):
+    """A color outside {1, 2} is a programming error and must raise before any
+    bad line reaches the engine."""
+    p = _player("swap2_swap")
+    try:
+        monkeypatch.setattr(p, "_send", lambda line: None)
+        monkeypatch.setattr(p, "_expect_ok", lambda: None)
+        with pytest.raises(ExternalEngineError):
+            p._send_swap2board([(4, 4, 3)])  # color 3 is illegal for an opening stone
     finally:
         p.close()
 
