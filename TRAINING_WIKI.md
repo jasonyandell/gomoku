@@ -4389,3 +4389,18 @@ overall (CI ~[48,66], grazes 50% → suggestive not conclusive on the overall). 
 real white-defense gain via balanced data, not a teacher. Verdict ~235 epochs: confirmed
 but MODEST, not plateaued — keep training (this lab's ~100-epoch movement window). All
 future gates n=128 (n=64 too noisy). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3.
+
+## 2026-06-20 — SWAP2 (#72) gate-5 (e289, n=128): 66.8%, white-LOSS 88%→67%→51% — at the crowning bar
+
+Trained e289 vs frozen champ, n=128 sims=200 seed7: **85-42-1 = 66.8%**. white 29-30-0
+(LOSS 51%), black 56-12-1 (81%), opener 33-31 (52%), responder 52-11-1 (82%).
+
+Reliable-anchor trend (n=128 + e129 baseline): overall 51.6%(e129) → 57.0%(e235) →
+66.8%(e289); **white LOSS-rate 88% → 67% → 51%** — falling cleanly on the exact metric
+#18/#72 targeted. (The e181 n=64 64.1%/59%-white-loss was an upward overshoot — excluded.)
+At e289 the overall CI ~[58.6,75] clears 50% AND the ~58% relative-crown lower bound
+(§6.6) → "stronger than the champion" is essentially AT the bar; formal crown wants an
+n≥200 gate. Still CLIMBING (e235→e289: 57→66.8), not plateaued — keep training toward
+e1000. White winning ~half its games vs the frozen champ's defense is a RELATIVE signal
+(beats the OLD champ's white play, not a game-theoretic white win). High-res table:
+`wiki/topics/swap2-opening-protocol.md` §5.3.
