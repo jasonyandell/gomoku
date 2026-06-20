@@ -218,6 +218,33 @@ def parse_args() -> argparse.Namespace:
                         "stamping the loss on dozens of positions; when it binds, the "
                         "budget is spent on the LATEST firing plies (closest to the "
                         "mate). Only matters with --defense-teacher.")
+    p.add_argument("--defense-detect-frac", type=float, default=None,
+                   help="Sparse-bite sampler (#43 follow-on): invoke the EXACT VCF "
+                        "solver on only this FRACTION of opponent-four-threat plies. "
+                        "Default None/1.0 = solve every danger ply (byte-identical). "
+                        "The solver is the gen bottleneck (~7s/game on a 15x15 net); "
+                        "0.1 cuts that ~10x while keeping stamps exact — AlphaZero "
+                        "distills a defensive lesson over epochs from a PRESENT "
+                        "signal, it needs density, not per-ply perfection. Only "
+                        "matters with --defense-teacher / --defense-teacher-policy.")
+    p.add_argument("--defense-teacher-conv", action="store_true", default=False,
+                   help="CONV block-teacher (white-defense dense-shallow arm): a "
+                        "CHEAP vectorized board scan (NO solve_vcf, NO tree search, "
+                        "~microseconds/ply) that fires on EVERY ply and stamps the "
+                        "BLOCK to the opponent's IMMEDIATE threat on the POLICY head, "
+                        "leaving the value at the natural outcome. Tier 1 (sound): a "
+                        "bare opponent four -> one-hot the unique block; double-four "
+                        "or defender-can-win -> no stamp. Tier 2 (heuristic, on by "
+                        "default, disable with --defense-conv-no-tier2): opponent "
+                        "open-three -> stamp the move(s) preventing the open four. The "
+                        "complement of --defense-teacher-policy (sparse+deep); cheap "
+                        "enough to never throttle gen. Implies --defense-teacher. "
+                        "Default OFF = byte-identical self-play (scan never runs).")
+    p.add_argument("--defense-conv-no-tier2", action="store_true", default=False,
+                   help="Disable the conv block-teacher's Tier 2 (open-three -> "
+                        "open-four prevention) heuristic, keeping ONLY the sound "
+                        "forced-four block (Tier 1). Only matters with "
+                        "--defense-teacher-conv.")
     p.add_argument("--vcf-max-depth", type=int, default=None,
                    help="VCF teacher solver depth cap (Derby v5 'vcf-deep' lever). "
                         "Default None = vcf.DEFAULT_MAX_DEPTH (16). Higher proves "
@@ -871,7 +898,8 @@ def main() -> None:
     board_config.require_board_size(args.board_size)
     # --defense-teacher-policy (#43) implies the defense teacher is on; it only
     # switches WHICH target gets rewritten (policy saving-move vs value crush).
-    if args.defense_teacher_policy:
+    # --defense-teacher-conv (the dense-shallow arm) likewise implies it on.
+    if args.defense_teacher_policy or args.defense_teacher_conv:
         args.defense_teacher = True
     # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
@@ -880,8 +908,13 @@ def main() -> None:
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
     # policy_mode (#43): switch to stamping the saving move on the policy head.
+    # conv_mode: the cheap dense block-teacher (no tree search) on the policy head.
     configure_defense_teacher(args.defense_soft_value, args.defense_max_fraction,
-                              policy_mode=args.defense_teacher_policy)
+                              policy_mode=args.defense_teacher_policy,
+                              detect_frac=args.defense_detect_frac,
+                              sample_seed=args.seed,
+                              conv_mode=args.defense_teacher_conv,
+                              conv_tier2=(not args.defense_conv_no_tier2))
     configure_value_discount(args.value_discount)
     # Derby 'x-draw-contempt' (bead derby-9q4): no-op when DELTA == 0.0 (default).
     configure_draw_value(args.draw_value)

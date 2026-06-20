@@ -204,28 +204,97 @@ _DEFENSE_POLICY_MODE = False
 # fewer of that position's saving moves, never a false save).
 _DEFENSE_REFUTE_MAX_CANDIDATES = 24
 
+# White-defense "sparse bite" sampler (2026-06-19, the #43 follow-on). The EXACT
+# VCF detection solve is the generation bottleneck (~180 ms/solve, ~21 four-threat
+# plies/game on a 15x15 net ⇒ ~3.8 s/game; the whole teacher ~7 s/game ≈ 90% of
+# gen wall, measured on g15-wdl@0). AlphaZero distills a defensive lesson over many
+# epochs from a PRESENT signal — it does NOT need every forced loss stamped. So
+# invoke the proper solver on only a FRACTION of danger plies: gen cost scales ~1:1
+# with the fraction, the stamps stay EXACT (no new correctness surface), and even a
+# 10% rate in a fresh 150k buffer is ~1000× denser than the #43 race that drowned
+# in a 1.5M warm buffer. Default 1.0 = solve every danger ply (byte-identical to the
+# pre-sampler behavior). Sampled with a dedicated process-local RNG so it never
+# perturbs the gen/MCTS RNG stream. See wiki/topics/white-side-defense-plan.md.
+_DEFENSE_DETECT_FRAC = 1.0
+_DEFENSE_SAMPLE_RNG = np.random.default_rng()
+
+# CONV block-teacher (2026-06-19, the white-defense "dense shallow" arm). The
+# complement of the sparse-deep VCF policy teacher: instead of the EXACT (and
+# expensive) solver firing on a sampled fraction of plies, a CHEAP vectorized
+# board scan fires on EVERY ply and stamps the BLOCK to the opponent's IMMEDIATE
+# threat onto the POLICY head, leaving the value target at the natural outcome.
+# Cost is a couple of numpy line-scans per ply (~microseconds), NO tree search, so
+# it never throttles generation the way the VCF teacher did (~7 s/game). Hypothesis:
+# a present, dense "block the obvious threat" reflex is exactly the basic defensive
+# skill the white net lacks — and the sparse-deep approach did NOT move it off the
+# floor (a clean null), so this is the orthogonal bite. Two tiers:
+#   Tier 1 (SOUND CORE): the opponent has exactly one immediate five-completion (a
+#     bare four) -> that cell is the forced block -> one-hot policy stamp. Blocking
+#     it or losing next move is unambiguous. A double-four (>=2 opp win cells) is
+#     genuinely lost -> NO stamp (mirrors the exact teacher leaving true losses
+#     untouched). The defender having its OWN five-completion -> NO stamp (convert,
+#     don't defend; mirrors the StM-own-win guard).
+#   Tier 2 (HEURISTIC BITE, _DEFENSE_CONV_TIER2): no opp four, but the opponent has
+#     an OPEN THREE (a move that would make an unstoppable open four). Stamp the
+#     defender move(s) that PREVENT every such open four (the intersection of the
+#     threats' defeating cells); uniform if several. This is a strong heuristic, NOT
+#     strictly forced — the opponent could have other replies — so it lives behind
+#     its own sub-toggle, but is ON by default (it is where the real defensive bite
+#     is; the net likely already blocks bare fours). When the intersection is empty
+#     (no single move stops all open fours) we do NOT stamp (sound: never a false
+#     save). Both globals default OFF so generation is byte-identical when the conv
+#     lever is not set. See wiki/topics/white-side-defense-plan.md.
+_DEFENSE_CONV_MODE = False
+_DEFENSE_CONV_TIER2 = True
+
 
 def configure_defense_teacher(soft_value: float | None = None,
                               max_fraction: float | None = None,
-                              policy_mode: bool | None = None) -> None:
+                              policy_mode: bool | None = None,
+                              detect_frac: float | None = None,
+                              sample_seed: int | None = None,
+                              conv_mode: bool | None = None,
+                              conv_tier2: bool | None = None) -> None:
     """Set the process-wide defense-teacher knobs (issues #42, #43). None leaves a
     field at its current value. Call once before generation.
 
     ``soft_value``  -> :data:`_DEFENSE_SOFT_VALUE` (default -1.0, the hard loss).
     ``max_fraction`` -> :data:`_DEFENSE_MAX_FRACTION` (default 1.0, unbounded).
     ``policy_mode``  -> :data:`_DEFENSE_POLICY_MODE` (default False, value-only).
+    ``detect_frac`` -> :data:`_DEFENSE_DETECT_FRAC` (default 1.0, solve every
+    danger ply). <1.0 invokes the EXACT solver on only that fraction of four-threat
+    plies — the "sparse bite" gen-cost lever; cost scales ~1:1 with the fraction,
+    stamps stay exact. ``sample_seed`` reseeds the sampler RNG (test determinism).
+    ``conv_mode`` -> :data:`_DEFENSE_CONV_MODE` (default False). The cheap dense
+    "block the opponent's immediate threat" POLICY teacher (no tree search). When
+    on, it is a SIBLING of policy_mode in the per-game seam (the two are exclusive
+    levers on the same gate); the value target is left at the natural outcome.
+    ``conv_tier2`` -> :data:`_DEFENSE_CONV_TIER2` (default True): include the
+    open-three -> open-four prevention heuristic tier (Tier 2). Set False to keep
+    only the SOUND forced-four block (Tier 1).
+
     The defaults reproduce the original hard / unbounded value-only behavior
     byte-for-byte. ``policy_mode=True`` is the #43 saving-move-on-policy lever
     (``soft_value`` is then unused — the value target is left at the natural
     game outcome; ``max_fraction`` still bounds the per-game stamp count).
     """
     global _DEFENSE_SOFT_VALUE, _DEFENSE_MAX_FRACTION, _DEFENSE_POLICY_MODE
+    global _DEFENSE_DETECT_FRAC, _DEFENSE_SAMPLE_RNG
+    global _DEFENSE_CONV_MODE, _DEFENSE_CONV_TIER2
     if soft_value is not None:
         _DEFENSE_SOFT_VALUE = float(soft_value)
     if max_fraction is not None:
         _DEFENSE_MAX_FRACTION = float(max_fraction)
     if policy_mode is not None:
         _DEFENSE_POLICY_MODE = bool(policy_mode)
+    if detect_frac is not None:
+        _DEFENSE_DETECT_FRAC = float(detect_frac)
+    if sample_seed is not None:
+        _DEFENSE_SAMPLE_RNG = np.random.default_rng(sample_seed)
+    if conv_mode is not None:
+        _DEFENSE_CONV_MODE = bool(conv_mode)
+    if conv_tier2 is not None:
+        _DEFENSE_CONV_TIER2 = bool(conv_tier2)
 
 
 def _defense_budget(n_positions: int) -> int:
@@ -317,6 +386,7 @@ def _apply_teachers_to_trajectory(
     out: list[tuple[np.ndarray, float]] = []
     defense_fires: list[tuple[int, float]] = []
     defense_policy_candidates: list[tuple[int, tuple]] = []
+    conv_fires: list[tuple[int, np.ndarray]] = []
     for ply_idx, (planes, pi, side) in enumerate(traj):
         z = outcome_for_black if side == 0 else -outcome_for_black
         z = _discount_z(z, n - 1 - ply_idx)
@@ -330,7 +400,19 @@ def _apply_teachers_to_trajectory(
             pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                   profile=profile)
         if defense_teacher:
-            if _DEFENSE_POLICY_MODE:
+            if _DEFENSE_CONV_MODE:
+                # Conv block-teacher: a CHEAP dense scan stamps the block to the
+                # opponent's immediate threat on the POLICY head (value left at the
+                # natural outcome). No tree search; fires on every qualifying ply.
+                # Collected here and budget-capped after the loop (same per-game
+                # FRACTION cap as the policy teacher, latest plies first) so
+                # --defense-max-fraction still applies — though with the cheap scan
+                # a dense (frac 1.0) stamp is the intended use.
+                c_pi, _z, fired = _apply_defense_teacher_conv(
+                    planes, pi, z, profile=profile)
+                if fired:
+                    conv_fires.append((ply_idx, c_pi))
+            elif _DEFENSE_POLICY_MODE:
                 # #43/#60: detect the refutation CANDIDATE cheaply now (prescan +
                 # detection/own-win solves, NO refutation); the expensive saving-move
                 # enumeration is deferred to the budgeted reverse pass below, so we
@@ -369,6 +451,13 @@ def _apply_teachers_to_trajectory(
                 continue  # candidate had no saving move — genuinely lost, not a fire
             out[ply_idx] = (new_pi, out[ply_idx][1])
             kept += 1
+    if conv_fires:
+        # Same per-game FRACTION budget as the policy teacher: keep the LATEST
+        # firing plies (closest to the loss / most informative). Default frac 1.0
+        # keeps every conv stamp (the dense intent). Value left at the outcome.
+        kept_conv = _relabel_defense_policy_game(conv_fires, n)
+        for ply_idx, new_pi in kept_conv.items():
+            out[ply_idx] = (new_pi, out[ply_idx][1])
     return out
 
 
@@ -622,6 +711,14 @@ def _defense_detect_candidate(
     if not danger:
         return None
 
+    # Sparse-bite sampler (the #43 follow-on): invoke the EXACT solver on only a
+    # fraction of danger plies. The cheap prescan above still runs on every ply;
+    # this gate skips the expensive detection (and the guard + refute that follow)
+    # for the un-sampled 90%. Default frac 1.0 keeps every solve (byte-identical).
+    if _DEFENSE_DETECT_FRAC < 1.0 and _DEFENSE_SAMPLE_RNG.random() >= _DEFENSE_DETECT_FRAC:
+        _profile_add(profile, "defense_detect_skipped", 1.0)
+        return None
+
     with _profile_timer(profile, "defense_solve_s"):
         res = vcf.solve_vcf(swapped_board, max_depth=max_depth, max_nodes=max_nodes)
     _profile_add(profile, "defense_solves", 1.0)
@@ -748,6 +845,121 @@ def _apply_defense_teacher_policy(
         max_depth=max_depth, max_nodes=max_nodes)
     if new_pi is None:
         return pi, z, False
+    return new_pi, z, True
+
+
+def _conv_block_detect(
+    planes: np.ndarray,
+    *,
+    tier2: bool = True,
+) -> np.ndarray | None:
+    """CHEAP, NO-tree-search defensive POLICY detector (the conv block-teacher).
+
+    Reconstructs the board the same way the VCF defense teacher does — ``me =
+    planes[0]`` is the DEFENDER (side to move), ``opp = planes[HISTORY_PLY]`` is
+    the attacker — then, with a handful of numpy line scans (NO ``solve_vcf``, NO
+    recursion), decides whether to stamp a defensive block and over which cells.
+
+    Returns a SET of flat action indices (a 1-D int array) the defender should
+    play, or ``None`` for "no stamp" (the caller leaves the record untouched). The
+    caller turns a non-None result into a uniform policy target over those cells.
+
+    Freestyle rules: >= 5 in a row wins (overlines included) — ``vcf._five_completions``
+    already uses ``>=`` so a six-completion counts as a win cell.
+
+    Detection rules (sound core first, then the heuristic bite):
+
+    1. OWN-WIN guard. If the DEFENDER itself has any immediate five-completion,
+       it should CONVERT, not defend -> return None (mirror of the policy teacher's
+       StM-own-win guard / the offensive "side-to-move already winning" short-circuit).
+    2. Opponent four. Let ``opp_win`` be the opponent's immediate five-completion
+       cells (the cells where the opponent makes >= 5 next move).
+         * exactly one  -> the unique FORCED BLOCK -> stamp that one cell. Blocking
+           it or losing next move; unambiguously correct defense.
+         * two or more  -> a double-four, genuinely lost -> return None (mirror of
+           the exact teacher leaving truly-lost positions untouched).
+    3. (Tier 2, ``tier2`` True) No opponent four, but the opponent has an OPEN
+       THREE: a move ``f`` that would make an OPEN FOUR (>= 2 completion cells =
+       unstoppable next move). The defender must occupy a cell that defeats EVERY
+       such open-four threat. A defender move ``d`` defeats threat ``(f, comps)``
+       iff ``d == f`` or ``d in comps`` (occupying the would-be open-four square or
+       one of its completions). Stamp the INTERSECTION of all threats' defeating
+       sets (uniform if several). If that intersection is empty (no single move
+       stops all of them) return None — SOUND: never stamp a cell that does not
+       actually prevent the open four (no false saves). This tier is a strong
+       HEURISTIC, not strictly forced (the opponent has other replies), so it is
+       behind a sub-toggle; on by default since the net likely already blocks bare
+       fours and the open-three reflex is where the real bite is.
+
+    Never mutates ``planes``. ``vcf`` helpers are reused only for the (cheap,
+    non-recursive) collinear completion / open-four scans, never the solver.
+    """
+    planes = np.asarray(planes)
+    me = planes[0].astype(bool)        # DEFENDER (side to move)
+    opp = planes[HISTORY_PLY].astype(bool)  # attacker
+    occupied = me | opp
+    empty_plane = ~occupied
+
+    # Rule 1: defender can win now -> convert, don't defend.
+    if vcf._five_completions(me, empty_plane):
+        return None
+
+    # Rule 2: opponent's immediate five-completion cells (the opponent's "four").
+    opp_win = vcf._five_completions(opp, empty_plane)
+    if len(opp_win) == 1:
+        return np.array([int(opp_win[0])], dtype=np.int64)  # forced block
+    if len(opp_win) >= 2:
+        return None  # double four -> genuinely lost, no stamp
+
+    # Rule 3 (Tier 2): opponent open-three -> open-four prevention.
+    if not tier2:
+        return None
+    empty_idx = vcf._empties_from_plane(empty_plane)
+    if len(empty_idx) == 0:
+        return None
+    # Open-four-making moves for the opponent (>=2 completions), restricted to the
+    # near-stone candidate cells (a four can only form next to existing stones).
+    of_cands = vcf._candidate_cells_from_planes(opp, me, empty_idx)
+    threats = vcf._open_four_threats(opp.copy(), me.copy(), empty_plane,
+                                     [int(c) for c in of_cands])
+    if not threats:
+        return None
+    # Intersection of each threat's defeating set {f} ∪ comps. A single defender
+    # move in the intersection neutralizes every threatened open four at once; if
+    # the intersection is empty, no one move suffices -> do not stamp (sound).
+    defeating_sets = [set([f, *comps]) for f, comps in threats]
+    common = set.intersection(*defeating_sets)
+    # Only still-empty cells are legal stamps (all should be, but be defensive).
+    common = {c for c in common
+              if not occupied[c // vcf.BOARD_SIZE, c % vcf.BOARD_SIZE]}
+    if not common:
+        return None
+    return np.array(sorted(common), dtype=np.int64)
+
+
+def _apply_defense_teacher_conv(
+    planes: np.ndarray,
+    pi: np.ndarray,
+    z: float,
+    *,
+    profile: ProfileStats | None = None,
+) -> tuple[np.ndarray, float, bool]:
+    """Per-ply conv block-teacher: run :func:`_conv_block_detect` and, if it
+    returns block cells, stamp a uniform policy target over them; the value ``z``
+    is left untouched (pure policy lever, exactly like the #43 policy teacher).
+
+    Returns ``(new_pi, z, fired)``; the inputs unchanged with ``fired=False`` when
+    the detector declines (no threat / lost / own win). Profile counters:
+    ``defense_conv_s`` (wall) and ``defense_conv_fired`` (stamp count).
+    """
+    with _profile_timer(profile, "defense_conv_s"):
+        cells = _conv_block_detect(planes, tier2=_DEFENSE_CONV_TIER2)
+    _profile_add(profile, "defense_conv_calls", 1.0)
+    if cells is None or len(cells) == 0:
+        return pi, z, False
+    new_pi = np.zeros_like(pi)
+    new_pi[cells] = 1.0 / float(len(cells))
+    _profile_add(profile, "defense_conv_fired", 1.0)
     return new_pi, z, True
 
 
