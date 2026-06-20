@@ -2,17 +2,24 @@
 
 **Status (2026-06-20):** built end-to-end and LIVE. The core bet is **confirmed at the
 data level** (swap2 self-play makes white winnable: white wins 27% vs ~0% on an empty
-board), and the **strength** signal is now strong and ACCELERATING: across independent
-checkpoints the H2H-vs-frozen-champion **white LOSS-rate falls 88% (e129) → 67% (e235) →
-51% (e289) → 42% (e345)** — now below 50%, white wins more than it loses vs the champ's
-defense — and overall climbs to **76.2% at n=128 (e345, CI ~[68.8%, 83.6%])**, comfortably
-clearing 50% and the ~58% relative-crown lower bound (§6.6). The exact metric the project
-chased for months, moving via balanced data, not a teacher. Verdict at ~345 epochs:
-**climbing, slope steepened (largest slice gain yet, e289→e345 +9.4 pts), NOT plateaued**
-(formal crown wants an n≥200 gate to call it). The result is the *trend across independent
-checkpoints* (n=128 gates; the lone n=64 e181 read was noise), not any single gate. This page is the durable
-synthesis: why we did it, what we built, what we learned, and what to try next. Evidence
-chronology lives in `TRAINING_WIKI.md` (2026-06-20 entries); the predecessor analysis is
+board), and the **strength** signal is strong and HOLDING: across independent n=128
+checkpoints the H2H-vs-frozen-champion overall win-rate sits at a steady **~70% level**
+(57.0% e235 → 66.8% e289 → 76.2% e345 → 67.6% e403), comfortably above the ~58%
+relative-crown lower bound (§6.6). On the white side the **white LOSS-rate fell from 88%
+(e129) to ~parity and is now fluctuating around it (42% e345, 57% e403)** — genuinely
+improved off the catastrophic floor, but bouncing around parity, **not monotonically
+marching to 0**. **Correction to the prior gate-6 framing:** the e345 76.2%/42% reading was
+*partly an upward sample-fluctuation* (same flavor as the earlier e181 n=64 spike), not a
+"slope steepening" — the e403 pullback to 67.6% confirms the true level is ~70%, and the
+CIs overlap (it's noise, not a regression). The exact metric the project chased for months
+is moving — via balanced data, not a teacher. Verdict at ~403 epochs: **NOT a plateau, NOT
+a regression, level holding well above the crown bar — keep training; progress on the hard
+white side is noisy around parity, not a smooth descent** (formal crown wants an n≥200 gate
+to call it). The result is the *trend across independent checkpoints and their CIs* (n=128
+gates; the lone n=64 e181 read was noise), not any single gate — a single high gate can be
+an upward fluctuation, as e345 partly was. This page is the durable synthesis: why we did
+it, what we built, what we learned, and what to try next. Evidence chronology lives in
+`TRAINING_WIKI.md` (2026-06-20 entries); the predecessor analysis is
 [white-side-defense-plan.md](white-side-defense-plan.md).
 
 Branch: `feat/swap2-opening-protocol` (worktree, **unmerged** by request). Run: cell
@@ -100,7 +107,7 @@ In net-vs-net H2H the **responder wins ~80%** — it exploits its stay/swap/plac
 to take the better side (`opener_color_dist` shows the responder almost always grabs
 black). Swap2's balancing flows through the responder's choice, as designed.
 
-### 5.3 Strength-vs-champion is CLIMBING — and the white side specifically (the payoff)
+### 5.3 Strength-vs-champion is HOLDING ~70% — and the white side is around parity (the payoff)
 The progress gate is net-vs-net swap2 H2H, **trained-latest vs the FROZEN warm
 champion** (both negotiate). Same settings each gate (n=64, sims=200, seed 7) so the
 points are directly comparable. **High-resolution trend** (win-rate is from the
@@ -113,29 +120,36 @@ trained net's view; splits are `W-L`):
 | slice 4 end | e235 | **128** | 57.0% (73-55) | **67%** (20-40) | 78% (53-15) | 41% (26-38) | 73% (47-17) |
 | slice 5 end | e289 | **128** | **66.8%** (85-42-1) | **51%** (29-30) | 81% (56-12) | 52% (33-31) | 82% (52-11) |
 | slice 6 end | e345 | **128** | **76.2%** (97-30-1) | **42%** (21-16) | 84% (76-14) | 67% (43-20) | 84% (54-10) |
+| slice 7 end | e403 | **128** | **67.6%** (86-41-1) | **57%** (25-33) | 87% (61-8) | 50% (32-32) | 84% (54-9) |
 
 (White column is the agreed metric — LOSS-rate, not win-rate; white's ceiling is the draw,
-§6.6. Lower is better. e345 white is small-n: 38 white games, CI ~±16% on the loss-rate —
-directional. It is the first gate where white wins MORE than it loses (55% W / 42% L).)
+§6.6. Lower is better. The white sample is small per-gate (e345 n=38, e403 n=58) with
+CI ~±13-16% on the loss-rate, so read each gate's white number as directional — the
+negotiation/seed interaction shifts the color mix gate-to-gate, and all the variance is
+concentrated on the hard white/opener side.)
 
-**Both the overall and the white-loss signal are trending cleanly — and the slope
-STEEPENED at e345.** Discarding the e181 n=64 overshoot, the n=128 anchors climb
-**57.0% (e235) → 66.8% (e289) → 76.2% (e345)** — the e289→e345 jump (+9.4 pts) is the
-*largest* slice-over-slice gain, so this is acceleration, not the onset of a plateau. At
-e345 the overall CI (~[68.8%, 83.6%]) sits **comfortably clear of 50% AND the ~58%
-relative-crown lower bound** (§6.6) — "stronger than the champion" has gone from "at the
-bar" to a wide margin (the formal crown still wants an n≥200 gate to call it). The
-headline is **white LOSS-rate falling monotonically on the reliable anchors: 88% (e129) →
-67% (e235, n128) → 51% (e289, n128) → 42% (e345, n128)** — now **below 50%**, the first
-gate where white wins MORE than it loses vs the frozen champ's defense (e345 white is
-21-16, win 55% / loss 42%). Caveat: e345 white is small-n (38 white games, CI ~±16% on
-the loss-rate), so treat the white number as directional even as the overall n=128 number
-is tight. The e181 59% white / 64.1% overall was an n=64 upward overshoot — exclude it;
-the n=128 points are the trustworthy trend, and they fall cleanly. White-side defense is
-genuinely improving, via balanced data, not a teacher. Verdict at ~345 epochs:
-**climbing, slope steepened, NOT plateaued.** All future gates use n=128 (n=64 is too
-noisy — it produced the 64.1% overshoot). Lesson: read the *trend across independent
-checkpoints*, not any single gate.
+**The LEVEL is holding ~70% overall — and the white side is fluctuating around parity, not
+descending smoothly.** Discarding the e181 n=64 overshoot, the n=128 anchors read
+**57.0% (e235) → 66.8% (e289) → 76.2% (e345) → 67.6% (e403)**, mean **~70%**, comfortably
+above the ~58% relative-crown lower bound (§6.6). **Correction to the prior "slope
+steepened" read at e345:** the e289→e345 jump to 76.2% was *partly* an upward
+sample-fluctuation (same flavor as the earlier e181 64.1% n=64 spike), not a genuine
+acceleration — the e403 pullback to 67.6% confirms the true level is ~70%, not a steepening
+climb. The e403 dip is a **PULLBACK within noise, NOT a regression**: the CIs overlap
+heavily (overall e403 [59.5%, 75.7%] vs e345 [68.8%, 83.6%]; white-LOSS e403 [44%, 70%] vs
+e345 [26%, 58%]). On the white side the honest statement is now: **white LOSS-rate fell
+from 88% (e129) to ~50% (now) and is fluctuating around parity (42% e345, 57% e403), NOT
+monotonically marching to 0.** The early monotonic read (88→67→51→42) was real *as a fall
+from the catastrophic floor*, but at the ~parity level the gate-to-gate motion is noise, not
+a clean descent. Black (87%) and responder (84%) sides stay strong; the variance lives
+entirely on the hard white/opener side, which also carries the smaller sample. White-side
+defense is genuinely improved — via balanced data, not a teacher — and is holding around
+parity vs the frozen champ's defense. Verdict at ~403 epochs: **NOT a plateau, NOT a
+regression, still well above the crown bar — keep training.** But recalibrate expectations:
+progress on the white side is **noisy around parity, not a smooth descent.** All gates use
+n=128 (n=64 is too noisy — it produced the 64.1% overshoot). Lesson: read the *trend across
+independent checkpoints* and its CIs, not any single gate — a single high gate can be an
+upward fluctuation (as e345 partly was).
 
 **Epoch context (why this isn't suspiciously fast):** the white move appeared between
 e129 and e181. General AZ wisdom is "thousands of epochs to move," but THIS project's

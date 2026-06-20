@@ -4426,3 +4426,36 @@ relative-crown lower bound is comfortably cleared; the formal crown still wants 
 gate, deferred to plateau or e1000. White winning the majority of its games vs the frozen
 champ's defense is a RELATIVE signal (beats the OLD champ's white play, not a game-theoretic
 white win). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 — SWAP2 (#72) gate-7 (e403, n=128): 67.6%, PULLBACK within noise — corrects the gate-6 "slope steepened" read
+
+Trained e403 vs frozen champ, n=128 sims=200 seed7 jobs=16 (runtime 844.39s): **86-41-1 =
+67.6%**. white 25-33-0 (win 43.1% / LOSS 56.9%), black 61-8-1 (87.1%), opener 32-32-0
+(50.0%), responder 54-9-1 (84.4%). opener_color_dist {black 18, white 110}.
+
+Reliable-anchor trend (n=128): overall 57.0%(e235) → 66.8%(e289) → 76.2%(e345) →
+**67.6%(e403)**, mean **~70%**; white LOSS-rate 67%(e235) → 51%(e289) → 42%(e345) →
+**57%(e403)** — no longer a clean monotonic fall, now BOUNCING 42-57% (~ parity).
+
+**This corrects the gate-6 "slope steepened" read: that was partly upward noise.** e345's
+76.2%/42% was *partly* an upward sample-fluctuation (same flavor as the earlier e181 64.1%
+n=64 spike), not a genuine acceleration. The e403 dip is a **PULLBACK within noise, NOT a
+regression** — the CIs overlap heavily: overall e403 [59.5%, 75.7%] vs e345 [68.8%, 83.6%];
+white-LOSS e403 [44%, 70%] vs e345 [26%, 58%]. The true LEVEL is **~70% overall**, holding
+across the n=128 anchors (66.8 → 76.2 → 67.6), comfortably above the ~58% relative-crown
+lower bound (§6.6).
+
+The honest white-side statement is now: **white LOSS-rate fell from 88% (early) to ~50%
+(now) and is fluctuating around parity, NOT monotonically marching to 0.** The early read
+(88→67→51→42) was real *as a fall from the catastrophic floor*, but at the ~parity level the
+gate-to-gate motion is noise. Black (87%) and responder (84%) sides stay strong; all the
+variance is concentrated on the hard white/opener side, which also carries the smaller
+sample (white n=58 this gate vs n=38 last — the negotiation/seed interaction shifts the
+color mix gate-to-gate).
+
+Verdict at ~403 epochs: **NOT a plateau, NOT a regression, still well above the crown bar —
+keep training.** Recalibrate expectations: progress on the white side is **noisy around
+parity, not a smooth descent**; read the trend across independent checkpoints *and their
+CIs*, not any single gate (a single high gate can be an upward fluctuation, as e345 partly
+was). Formal crown gate stays at n≥200, deferred to plateau or e1000. High-res table:
+`wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
