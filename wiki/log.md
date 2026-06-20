@@ -1328,3 +1328,11 @@ systems shape learning (dispatch-bound regime, gen-flood runaway, smoke-first),
 the methodology meta-lesson (warm-start→smoke→external-gate→net2net-grow→preserve),
 and honest bounds (short-TC caveat). Indexed as the top "understand what we
 learned" doorway. See [[feedback-learning-is-the-artifact]] memory.
+
+## 2026-06-20 — swap2 (#72) synthesis page added
+Created `topics/swap2-opening-protocol.md` — the durable synthesis of the swap2 arc
+(why → thesis → architecture → what we learned → what to try next → operational
+gotchas). Repointed the index doorway from the code files to the page. Headline
+finding: the core bet is confirmed at the data level (white wins 27% in swap2
+self-play vs ~0% empty-board); strength-vs-champion still at parity (H2H 51.6%, early).
+Evidence chronology stays in TRAINING_WIKI.md (2026-06-20); this page is the synthesis.
