@@ -4288,3 +4288,59 @@ wandb → fresh everything; the tolerant loader adds the fresh choice head).
 ledger, then the gate output, and watch whether the ~50/50 data lets the loop bootstrap a defending
 white (the theorem says it can't be taught into a *forced* white role; swap2 removes the force).
 Full plan + theorem chronology: `wiki/topics/white-side-defense-plan.md`.
+
+## 2026-06-20 — SWAP2 (#72) LIVE: THE CORE BET IS CONFIRMED AT THE DATA LEVEL — white wins 27% in swap2 self-play (vs ~0% empty-board); white positions are now WINNABLE in the training set (wandb `8nq1a7cm`)
+
+**~2h into the live warm-started swap2 run (cell `G15-swap2`, wandb `8nq1a7cm`, board 15, MPS),
+the central hypothesis behind #72 is confirmed where it matters most — in the self-play DATA.**
+The build + launch are the entry directly above; this entry records the first measured results.
+
+**1. THE CORE BET IS CONFIRMED — white is now winnable in the training data.** Measured color
+balance of the **64 most recent swap2 self-play games** (pulled from the live run's `_records`
+GameRecords): **white wins 27% (black 69%, draw 5%).** In the OLD empty-board self-play regime
+white won **~0%** — the imbalance collapse that made white-defense unlearnable, the entire reason
+#72 exists. Under swap2, white is genuinely WINNABLE in the training data (**27% ≫ 0%**), so the
+value/policy heads finally get gradient on **winnable white positions**. This is the bootstrap an
+imbalanced game *cannot* do, working — exactly the ML thesis ("swap2 rebalances the GAME so
+self-play generates ~50/50 data → white positions become winnable in the training set"). **This is
+the single most important result of the run so far.** The white-defense teachers (#42 value-only,
+#43 sparse-VCF, dense conv) all failed because there was no error to correct in a *forced* lost
+role; swap2 instead supplies the missing signal by making the role winnable.
+
+**2. The negotiation mechanism works.** In net-vs-net swap2 H2H, the **RESPONDER wins ~80%** — it
+exploits its stay/swap/place2 choice to take the better side (`opener_color_dist` shows the
+responder almost always grabs black). Swap2's balancing comes through the responder's choice,
+exactly as designed.
+
+**3. Not yet perfectly balanced — the honest caveat + the identified NEXT LEVER.** Black still
+wins 69% (not 50/50) because **v1 SAMPLES opening placements for diversity rather than TRAINING
+them** — the opener never learns to place a FAIR opening, so the responder retains a swap-to-black
+edge. Pushing toward 50/50 = **train the negotiation.** The machinery is half-built: the width-3
+CHOICE HEAD exists (`model.forward_with_choice`) and the negotiator already emits `choice_records`
+as targets, but **those targets are NOT yet wired into the trainer loss** — v1 negotiates by a
+one-ply value lookup, with no trained choice head. **Next lever: wire `choice_records` into
+training** (+ optionally record/train opening placements so the opener learns fair openings). This
+is the identified next step toward 50/50, not a failure of the run.
+
+**4. The Rapfi gate is noise-dominated near the floor; the progress gate is now H2H-vs-frozen-
+champion.** Vs Rapfi-NNUE @200ms our net sits at single-digit-to-~30% win-rate; at **n=16–48 the
+SAME fixed baseline reads 4%–25% on noise** (variance swamps the ~5–8pt signal). Per the wiki's own
+2026-06-15 rule ("gate did-this-help on H2H vs the preserved champion, not Rapfi"), the progress
+gate is now **net-vs-net swap2 H2H vs the frozen warm champion** (near p≈0.5, resolvable; built in
+`gomoku/eval_swap2.py:eval_swap2_h2h`, jobs-parallel, exact-deterministic). **First reading: trained
+e129 vs frozen warm champ = 51.6% (n=64) — PARITY within noise, EARLY (~2h warm-started). This is
+NOT a strength claim.** Rapfi stays a coarse absolute anchor only.
+
+**5. Run mechanics — healthy throughout.** Cell `G15-swap2` (champion recipe + 150k fresh buffer +
+swap2 lever), warm-started from a weights-only stripped champion, 1h self-capping slices, **~3
+slices so far**. Dynamics healthy: **value loss bounces ~0.16–0.26** (no value-poisoning collapse),
+**plies rose ~30 → 42** (more contested games, the expected swap2 signature), **no fast-attack
+collapse** (the `selfplay/plies_mean` death-tell is absent).
+
+**Net read (~2h in):** the run does the one thing the three teachers could not — it makes white
+**winnable in the data** (27% vs ~0%), supplying the gradient the imbalanced game starved. Strength
+vs the frozen champion is at parity/early (51.6%, n=64), so this is a confirmed *mechanism*, not yet
+a confirmed *strength gain*. The path to 50/50 balance is concrete: train the negotiation (choice
+head into the loss). Branch `feat/swap2-opening-protocol` (latest commit `a29e645` adds the
+net-vs-net swap2 H2H gate); evidence is the live run `8nq1a7cm`. Plan + theorem chronology:
+`wiki/topics/white-side-defense-plan.md`.
