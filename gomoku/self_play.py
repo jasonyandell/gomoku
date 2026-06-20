@@ -1280,6 +1280,47 @@ def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameS
         # restart from scratch
 
 
+def _make_swap2_oracle(evaluator: Evaluator):
+    """Wrap a batch `evaluator` as a single-state swap2 oracle.
+
+    The negotiator wants `Callable[[GameState], (policy_probs, value)]` where
+    `policy_probs` is a true probability distribution over `N_ACTIONS` (sums to
+    1) and `value` is a float in [-1, 1] from the state's side-to-move. The
+    evaluator returns RAW LOGITS for a batch, so we softmax the single row. The
+    opening is ~30 forwards/game (negligible), so a batch-of-1 call is fine.
+    """
+
+    def oracle(gs: GameState) -> tuple[np.ndarray, float]:
+        priors, values = evaluator([gs])
+        logits = np.asarray(priors[0], dtype=np.float64)
+        logits = logits - logits.max()  # numerically stable softmax
+        e = np.exp(logits)
+        probs = e / e.sum()
+        return probs, float(values[0])
+
+    return oracle
+
+
+def _swap2_opening_state(
+    evaluator: Evaluator, rng: np.random.Generator
+) -> tuple[GameState, int]:
+    """Negotiate a swap2 opening and return `(normal_state, opening_plies)`.
+
+    Mirrors `_random_opening_state`'s return contract so the generation loops
+    can swap it in at the same opening seam: the returned state is the canonical,
+    legal, non-terminal position normal play begins from, and `opening_plies` is
+    its move count (the stones placed during negotiation, which — like the random
+    opening prefix — are NOT recorded as training examples). v1 discards the
+    negotiation `choice_records` (no choice head is trained yet).
+    """
+    from gomoku.swap2_search import negotiate
+
+    oracle = _make_swap2_oracle(evaluator)
+    res = negotiate(oracle, rng)
+    start_state = res.normal_state
+    return start_state, start_state.move_count
+
+
 def _gamestate_from_archive(archive: dict, idx: int) -> GameState:
     """WL5 archive-start: build a GameState from one archived position.
 
@@ -1328,6 +1369,7 @@ def _generate_games_native_gumbel(
     augment_symmetries: bool = True,
     wave_size: int = 16,
     random_opening_moves: int = 0,
+    swap2: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     profile: ProfileStats | None = None,
@@ -1393,6 +1435,8 @@ def _generate_games_native_gumbel(
                 idx = int(rng.integers(0, n_archive))
                 start_state = _gamestate_from_archive(archive, idx)
                 opening_plies = start_state.move_count
+            elif swap2:
+                start_state, opening_plies = _swap2_opening_state(evaluator, rng)
             elif random_opening_moves > 0:
                 start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
             else:
@@ -1549,6 +1593,7 @@ def _generate_games_gumbel(
     rng: np.random.Generator | None = None,
     augment_symmetries: bool = True,
     random_opening_moves: int = 0,
+    swap2: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     profile: ProfileStats | None = None,
@@ -1596,6 +1641,8 @@ def _generate_games_gumbel(
             idx = int(rng.integers(0, n_archive))
             start_state = _gamestate_from_archive(archive, idx)
             opening_plies = start_state.move_count
+        elif swap2:
+            start_state, opening_plies = _swap2_opening_state(evaluator, rng)
         elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
@@ -1718,6 +1765,7 @@ def _generate_games_native(
     augment_symmetries: bool = True,
     wave_size: int = 1,
     random_opening_moves: int = 0,
+    swap2: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
@@ -1779,6 +1827,8 @@ def _generate_games_native(
                 idx = int(rng.integers(0, n_archive))
                 start_state = _gamestate_from_archive(archive, idx)
                 opening_plies = start_state.move_count
+            elif swap2:
+                start_state, opening_plies = _swap2_opening_state(evaluator, rng)
             elif random_opening_moves > 0:
                 start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
             else:
@@ -1979,6 +2029,7 @@ def generate_games(
     augment_symmetries: bool = True,
     wave_size: int = 1,
     random_opening_moves: int = 0,
+    swap2: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
@@ -2053,6 +2104,12 @@ def generate_games(
     positions cost zero solver calls. Applied at the same record-build seam.
     """
     rng = rng or np.random.default_rng()
+    if swap2 and random_opening_moves > 0:
+        # Swap2 owns the opening; the two openings are mutually exclusive.
+        raise ValueError(
+            "swap2 and random_opening_moves are mutually exclusive "
+            "(swap2 negotiates the opening; set random_opening_moves=0)"
+        )
     if gumbel_root:
         # Gumbel root selection + Sequential Halving. When the native C engine
         # is available AND implements the Gumbel batch path, use it — it
@@ -2072,6 +2129,7 @@ def generate_games(
                 augment_symmetries=augment_symmetries,
                 wave_size=wave_size,
                 random_opening_moves=random_opening_moves,
+                swap2=swap2,
                 archive=archive,
                 archive_start_frac=archive_start_frac,
                 profile=profile,
@@ -2098,6 +2156,7 @@ def generate_games(
             rng=rng,
             augment_symmetries=augment_symmetries,
             random_opening_moves=random_opening_moves,
+            swap2=swap2,
             archive=archive,
             archive_start_frac=archive_start_frac,
             profile=profile,
@@ -2126,6 +2185,7 @@ def generate_games(
             augment_symmetries=augment_symmetries,
             wave_size=wave_size,
             random_opening_moves=random_opening_moves,
+            swap2=swap2,
             archive=archive,
             archive_start_frac=archive_start_frac,
             playout_cap_frac=playout_cap_frac,
@@ -2144,7 +2204,9 @@ def generate_games(
     games: list[MCTSGame] = []
     initial_plies: list[int] = []
     for _ in range(n_games):
-        if random_opening_moves > 0:
+        if swap2:
+            start_state, opening_plies = _swap2_opening_state(evaluator, rng)
+        elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
             start_state, opening_plies = GameState.initial(), 0

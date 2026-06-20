@@ -652,6 +652,13 @@ def parse_args() -> argparse.Namespace:
                         "MCTS only takes over after that, and no training examples are "
                         "recorded for the random opening. Breaks the 'always-same-opening' "
                         "collapse by forcing the model to learn from diverse positions.")
+    p.add_argument("--swap2", action="store_true", default=False,
+                   help="Start each self-play game from a swap2-negotiated opening "
+                        "(the net plays both opener and responder) instead of an "
+                        "empty/random board. Mutually exclusive with "
+                        "--random-opening-moves (swap2 owns the opening). v1 seeds "
+                        "the opening only; no choice head is trained. Default OFF == "
+                        "byte-identical to today.")
     p.add_argument("--c-puct", type=float, default=1.25,
                    help="c_puct_init in the AGZ log-schedule PUCT formula. Effective "
                         "exploration constant at N_parent=0. Default 1.25 = AGZ value.")
@@ -1095,6 +1102,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     board_config.require_board_size(args.board_size)
+    # --swap2 owns the opening; mutually exclusive with --random-opening-moves.
+    if args.swap2 and args.random_opening_moves > 0:
+        raise SystemExit(
+            "--swap2 and --random-opening-moves are mutually exclusive "
+            "(swap2 negotiates the opening; drop --random-opening-moves)"
+        )
     device = pick_device(args.device)
     print(f"device = {device}")
     print(f"board_size = {board_config.BOARD_SIZE}")
@@ -2066,6 +2079,7 @@ def main() -> None:
                 rng=rng,
                 wave_size=args.wave_size,
                 random_opening_moves=args.random_opening_moves,
+                swap2=args.swap2,
                 record_aux=aux_on,
                 record_ownership=ownership_on,
             )

@@ -109,6 +109,10 @@ class Cell:
     # examples are NOT recorded for those K plies — MCTS picks up at K+1 and
     # the model trains on post-random positions. Breaks opening monoculture.
     random_opening_moves: int = 0
+    # Swap2 opening (v1): each self-play game starts from a swap2-negotiated
+    # opening instead of an empty/random board. Mutually exclusive with
+    # random_opening_moves (swap2 owns the opening). Default OFF = byte-identical.
+    swap2: bool = False
     # WL5 levers (wiki/topics/wl5-diagnostics-archive-start-design.md). Trainer
     # scores a frozen validation set every eval cycle for stationary policy/
     # value quality. Workers seed `archive_start_frac` of games from the same
@@ -2188,6 +2192,8 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         cmd += ["--grad-accum-steps", str(cell.grad_accum_steps)]
     if cell.random_opening_moves > 0:
         cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
+    if cell.swap2:
+        cmd += ["--swap2"]
     if cell.validation_archive_path is not None:
         cmd += ["--validation-archive-path", cell.validation_archive_path]
     return cmd
