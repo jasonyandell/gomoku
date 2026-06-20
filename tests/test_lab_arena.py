@@ -38,12 +38,16 @@ def _home(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTOLAB_HOME", str(tmp_path))
 
 
-def test_first_candidate_becomes_champion(tmp_path):
+def test_first_candidate_is_human_gated_not_auto_crowned(tmp_path):
+    # The first champion would define the era's ladder root with ZERO games.
+    # Locked doctrine: first promotion is human-gated. Escalate; do NOT crown.
     role, rec = _arena(_verdict("PROMOTE", True), resolver=lambda: (None, None))
     res = role.run_chunk(_item())
     assert rec["gate"][0]["peak"] is None            # no incumbent to play
-    assert rec["set"] and rec["set"][0]["ref"] == "local:///tmp/cand.pt"
-    assert res.metrics["verdict"] == "PROMOTE" and res.metrics["promoted"] is True
+    assert rec["set"] == []                           # tag NOT moved (awaiting Jason)
+    assert res.metrics["verdict"] == "PROMOTE"        # the gate did say promote
+    assert res.metrics["promoted"] is False           # but we didn't crown
+    assert res.metrics["needs_jason"] is True
     assert res.metrics["vs"] == "(first champion)"
 
 

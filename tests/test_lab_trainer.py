@@ -14,17 +14,18 @@ from gomoku.lab import trainer as T
 
 
 def _fake_run(*, sweep_rc=0, make_latest=True):
-    """A subprocess.run that fakes `git worktree` + `run_sweep` (creates output)."""
+    """A subprocess.run that fakes `git archive`+`tar` (materialize the ref) and
+    `uv run` run_sweep (creates output). No git worktrees — the uv mechanism."""
     calls = []
 
     def run(cmd, **kw):
         calls.append((list(map(str, cmd)), kw))
-        if cmd[0] == "git" and "add" in cmd:
-            work = Path(cmd[cmd.index("--detach") + 1])
+        if cmd[0] == "git" and "archive" in cmd:
+            return types.SimpleNamespace(returncode=0, stdout=b"FAKE-TAR", stderr=b"")
+        if cmd[0] == "tar":
+            work = Path(cmd[cmd.index("-C") + 1])
             (work / "scripts").mkdir(parents=True, exist_ok=True)
-            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        if cmd[0] == "git" and "remove" in cmd:
-            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
         if any(str(c).endswith("run_sweep.py") for c in cmd):
             rb = Path(kw["env"]["GOMOKU_RUN_DIR"])
             ck = rb / "sweep_runs" / "SMOKE-bundle-plumbing" / "checkpoints"
@@ -35,7 +36,7 @@ def _fake_run(*, sweep_rc=0, make_latest=True):
                 (ck / "eval_results.jsonl").write_text(
                     json.dumps({"eval/model_elo": 1234.0}) + "\n")
             return types.SimpleNamespace(returncode=sweep_rc)
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
     run.calls = calls
     return run
@@ -71,8 +72,21 @@ def test_run_chunk_dry_run_offline(tmp_path, monkeypatch):
     assert cont["base"].startswith("local://") and cont["base"].endswith("latest.pt")
     assert cont["config"]["seq_n"] == 1
     assert ev["id"] == "eval-mvp@0" and ev["role"] == "arena" and ev["base"] == res.artifact_ref
-    # teardown happened
-    assert any(c[0][:1] == ["git"] and "remove" in c[0] for c in fake.calls)
+    # teardown removed the ephemeral source tree (rmtree, not a git worktree remove)
+    assert not (tmp_path / "worktrees" / "mvp@0").exists()
+
+
+def test_run_slice_runs_via_uv_in_the_materialized_tree(tmp_path, monkeypatch):
+    """run_sweep executes through `uv run` inside the archived ref's tree (so it
+    builds + uses THAT commit's gomoku), not the daemon's interpreter."""
+    role = _role(tmp_path, monkeypatch, dry_run=True)
+    fake = _fake_run()
+    monkeypatch.setattr(T.subprocess, "run", fake)
+    role.run_chunk(_item())
+    sweep = next(c for c in fake.calls if any(x.endswith("run_sweep.py") for x in c[0]))
+    assert sweep[0][:3] == ["uv", "run", "python"]
+    assert sweep[1]["cwd"].endswith("worktrees/mvp@0")
+    assert not any("worktree" in c[0] for c in fake.calls)  # no git worktree, ever
 
 
 def test_run_sweep_argv_and_env(tmp_path, monkeypatch):
@@ -91,6 +105,9 @@ def test_run_sweep_argv_and_env(tmp_path, monkeypatch):
 
 def test_board_size_threads_into_sweep_env(tmp_path, monkeypatch):
     """config board_size=15 → GOMOKU_BOARD_SIZE=15 in the run_sweep subprocess env."""
+    # The era guard (trainer.py) refuses a 15-row inside a 9-process; this test
+    # owns its process era so it can't trip on an ambient/leaked GOMOKU_BOARD_SIZE.
+    monkeypatch.delenv("GOMOKU_BOARD_SIZE", raising=False)
     role = _role(tmp_path, monkeypatch, dry_run=True)
     fake = _fake_run()
     monkeypatch.setattr(T.subprocess, "run", fake)
@@ -120,13 +137,14 @@ def test_prod_mode_uses_1h_cap(tmp_path, monkeypatch):
     assert argv[argv.index("--max-wall-secs") + 1] == "3600.0"
 
 
-def test_checkout_uses_detach_and_commit(tmp_path, monkeypatch):
+def test_checkout_archives_the_commit(tmp_path, monkeypatch):
     role = _role(tmp_path, monkeypatch, dry_run=True)
     fake = _fake_run()
     monkeypatch.setattr(T.subprocess, "run", fake)
     role.run_chunk(_item(commit="deadbeef"))
-    add = next(c for c in fake.calls if c[0][0] == "git" and "add" in c[0])
-    assert "--detach" in add[0] and add[0][-1] == "deadbeef"
+    arch = next(c for c in fake.calls if c[0][0] == "git" and "archive" in c[0])
+    assert arch[0][-1] == "deadbeef"                 # archives the row's exact commit
+    assert not any("worktree" in c[0] for c in fake.calls)  # the gotcha-killer
 
 
 # ---- HF delivery --------------------------------------------------------
@@ -156,7 +174,7 @@ def test_no_latest_raises_and_tears_down(tmp_path, monkeypatch):
     monkeypatch.setattr(T.subprocess, "run", fake)
     with pytest.raises(T.SliceFailed):
         role.run_chunk(_item())
-    assert any(c[0][0] == "git" and "remove" in c[0] for c in fake.calls)  # teardown ran
+    assert not (tmp_path / "worktrees" / "mvp@0").exists()  # teardown ran
 
 
 def test_run_sweep_nonzero_raises_and_tears_down(tmp_path, monkeypatch):
@@ -165,16 +183,16 @@ def test_run_sweep_nonzero_raises_and_tears_down(tmp_path, monkeypatch):
     monkeypatch.setattr(T.subprocess, "run", fake)
     with pytest.raises(T.SliceFailed):
         role.run_chunk(_item())
-    assert any(c[0][0] == "git" and "remove" in c[0] for c in fake.calls)
+    assert not (tmp_path / "worktrees" / "mvp@0").exists()
 
 
 def test_checkout_failure_raises(tmp_path, monkeypatch):
     role = _role(tmp_path, monkeypatch, dry_run=True)
 
     def bad_run(cmd, **kw):
-        if cmd[0] == "git" and "add" in cmd:
-            return types.SimpleNamespace(returncode=1, stdout="", stderr="no such commit")
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        if cmd[0] == "git" and "archive" in cmd:
+            return types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"no such commit")
+        return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(T.subprocess, "run", bad_run)
     with pytest.raises(T.SliceFailed):

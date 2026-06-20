@@ -252,13 +252,19 @@ def unload_agent(label: str, *, runner=_real_runner) -> list[str]:
 
 # ---- seed ---------------------------------------------------------------
 
-def seed_row(commit: str | None) -> dict:
-    """The exact §c overnight seed experiment row."""
+def seed_row(commit: str | None, *, board_size: int | None = None,
+             cell: str | None = None) -> dict:
+    """The §c overnight seed experiment row. ``board_size`` (when set) makes the
+    lane era-aware: a distinct lane id + a ``board_size`` in config so the row
+    can never be picked by a foreign-era daemon. 9×9 default = byte-identical."""
+    lane = SEED_LANE if not board_size or board_size == 9 else f"{board_size}x{board_size}-champ-recipe"
+    cfg = {"lane": lane, "cell": cell or SEED_CELL,
+           "max_wall_secs": SEED_MAX_WALL_SECS, "seq_n": SEED_SEQ_N}
+    if board_size is not None:
+        cfg["board_size"] = board_size
     return ledger.experiment(
-        id=SEED_ID, role="train", commit=commit, base=SEED_BASE,
-        config={"lane": SEED_LANE, "cell": SEED_CELL,
-                "max_wall_secs": SEED_MAX_WALL_SECS, "seq_n": SEED_SEQ_N},
-        priority=SEED_PRIORITY, note=SEED_NOTE)
+        id=f"{lane}@{SEED_SEQ_N}", role="train", commit=commit, base=SEED_BASE,
+        config=cfg, priority=SEED_PRIORITY, note=SEED_NOTE)
 
 
 def _has_open_train(state: ledger.LedgerState) -> bool:
@@ -270,7 +276,8 @@ def _has_open_train(state: ledger.LedgerState) -> bool:
 
 
 def seed_ledger(ledger_path: str | None = None, *, commit=None,
-                git_head=None) -> dict | None:
+                git_head=None, board_size: int | None = None,
+                cell: str | None = None) -> dict | None:
     """Append the seed row iff no open/claimed train experiment exists. Returns
     the stored row, or None if a seed lane is already live (never double-seed).
 
@@ -281,7 +288,39 @@ def seed_ledger(ledger_path: str | None = None, *, commit=None,
     if _has_open_train(state):
         return None
     sha = commit if commit is not None else resolve_commit(git_head)
-    return ledger.append(path, seed_row(sha))
+    return ledger.append(path, seed_row(sha, board_size=board_size, cell=cell))
+
+
+def supersede_foreign_era(ledger_path: str | None = None, *, board_size: int) -> list[str]:
+    """Crossing to a new board-size era: close every open/claimed train lane from
+    a DIFFERENT era so the flock singleton can't re-pick a wrong-geometry row
+    (which would silently train the wrong board in a process where
+    ``GOMOKU_BOARD_SIZE`` is already fixed). Append-only — one ``correction`` per
+    retired lane. A row with no ``board_size`` is treated as the 9×9 default."""
+    path = ledger_path or daemon.default_ledger_path()
+    state = ledger.fold(ledger.read_all(path))
+    retired = []
+    for e in state.experiments.values():
+        if e.get("status") not in (ledger.OPEN, ledger.CLAIMED):
+            continue
+        role = e.get("role")
+        if role == "train":
+            eff = (e.get("config") or {}).get("board_size")
+            eff = 9 if eff is None else int(eff)      # default era = 9 (board_config)
+            if eff == int(board_size):
+                continue
+            why = f"retire {eff}x lane"
+        elif role == "arena":
+            # a pending eval is for a now-superseded prior-era lane; the new era's
+            # flywheel will enqueue fresh evals once it trains a slice.
+            why = "retire prior-era eval"
+        else:
+            continue
+        ledger.append(path, ledger.correction(
+            e["id"], {"status": "superseded"},
+            reason=f"era cross to {board_size}x{board_size}: {why}"))
+        retired.append(e["id"])
+    return retired
 
 
 # ---- stop-file lifecycle ------------------------------------------------
@@ -311,8 +350,13 @@ def cmd_up(args) -> int:
         os.makedirs(os.path.join(daemon.home(), sub), exist_ok=True)
     # (2) clear the stop-file so daemons don't instantly exit
     clear_stop_file()
-    # (3) seed the ledger (idempotent — never double-seed)
-    seeded = seed_ledger(args.ledger, commit=args.commit)
+    # (3) era cross: retire foreign-era open train lanes before seeding the new era
+    if args.board_size is not None:
+        for r in supersede_foreign_era(args.ledger, board_size=args.board_size):
+            print(f"retired foreign-era lane {r} (crossing to {args.board_size}x{args.board_size})")
+    # (3b) seed the ledger (idempotent — never double-seed)
+    seeded = seed_ledger(args.ledger, commit=args.commit,
+                         board_size=args.board_size, cell=getattr(args, "seed_cell", None))
     if seeded is not None:
         print(f"seeded {seeded['id']} (commit {seeded.get('commit') or 'HEAD'}, "
               f"priority {seeded.get('priority')})")
@@ -381,6 +425,10 @@ def main(argv=None) -> int:
                     help="bake GOMOKU_BOARD_SIZE into the train + arena daemon "
                          "plists (default: None = native 9x9). Must precede the "
                          "subcommand, e.g. `--board-size 15 up`")
+    ap.add_argument("--seed-cell", default=None,
+                    help="cell recipe for the seed lane (default: the 9x9 "
+                         "derby-v9-small). Set this when --board-size is non-9x9 "
+                         "so the seed runs an era-appropriate recipe.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the launchctl argv instead of executing it")
     ap.add_argument("--force", action="store_true",

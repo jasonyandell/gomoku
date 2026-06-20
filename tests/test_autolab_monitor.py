@@ -306,6 +306,29 @@ def test_no_notify_suppresses(tmp_path, monkeypatch):
     assert fires == []
 
 
+def _failed_train(path, lane="dead-lane", seq_n=0):
+    rid = f"{lane}@{seq_n}"
+    L.append(path, L.experiment(id=rid, role="train", base="scratch",
+             config={"lane": lane, "cell": "c", "seq_n": seq_n}, priority=10))
+    L.append(path, L.result(rid, status=L.FAILED, error="SliceFailed: boom"))
+    return rid
+
+
+def test_stalled_lane_escalates_and_pings(tmp_path, monkeypatch):
+    # A FAILED lane with no open continuation = the trainer sleeps forever. The
+    # monitor must surface it AND ping even on the baseline tick (gate-independent).
+    path = _home(tmp_path, monkeypatch)
+    _failed_train(path)
+    monkeypatch.setattr(M.shutil, "which", lambda name: "/usr/bin/osascript")
+    fires = []
+    runner = lambda cmd, **kw: fires.append(cmd) or type("R", (), {"returncode": 0})()
+
+    digest = M.run_once(do_notify=True, do_print=False, notify_runner=runner)
+    assert "Needs you" in digest and "stalled" in digest
+    assert len(fires) == 1                                   # escalation ignores the change-gate
+    assert "needs you" in fires[0][-1].lower()
+
+
 def test_plies_trend_from_log(tmp_path, monkeypatch):
     path = _home(tmp_path, monkeypatch)
     _done_train(path, seq_n=0, elo=1100.0, cell="derby-v9-small")

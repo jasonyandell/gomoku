@@ -1328,3 +1328,16 @@ systems shape learning (dispatch-bound regime, gen-flood runaway, smoke-first),
 the methodology meta-lesson (warm-start→smoke→external-gate→net2net-grow→preserve),
 and honest bounds (short-TC caveat). Indexed as the top "understand what we
 learned" doorway. See [[feedback-learning-is-the-artifact]] memory.
+
+## 2026-06-19 — autolab doctrine page (the *why*)
+
+Added [topics/autolab-doctrine.md](topics/autolab-doctrine.md) capturing the
+vision-session synthesis: "hard walls around a sandbox"; no state in a process
+(reducers over a durable log; delegate the generic-hard part to flock/flatfile/
+HF/uv); deterministic WHEN (`actionable(ledger)`, a generalization of the built
+`health.scan`) vs intelligent WHAT (Claude); "waits" deleted → resume-on-evidence;
+triggers pluggable because not load-bearing; uv as the execution leg + uv-native
+mainline dev (direction). Notes the simulator's real job: certify the walls are
+LLM-proof. New index doorway ("understand the autolab's *why* / decide if a change
+fits"). Companion to autolab-architecture.md (the *what*). See
+[[feedback-stateless-delegate-design]] memory.

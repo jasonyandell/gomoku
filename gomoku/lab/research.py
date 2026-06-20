@@ -42,6 +42,12 @@ GATE_OPEN_ISSUE = 61            # the unbuilt wall-clock-to-Δelo gate
 MAX_PROPOSALS = 2               # ≤2 new train rows per tick
 RESEARCH_QUEUE_CAP = 3          # K: don't pile research rows past this many open
 
+# resume-on-evidence (doctrine §4): a decision over a research thread is an
+# event with this scope — DISTINCT from the "research" tick event so the two
+# never collide. ``evidence_n`` in its data = how many terminal slices it covered.
+RESEARCH_DECISION_SCOPE = "research-decision"
+FAVOR_MARGIN = 60.0            # proxy elo rise that flags a fork for promotion review
+
 # Ideas the researcher knows how to turn into a `train` row map an idea slug to an
 # EXISTING run_sweep `--cell`. Code-heavy derby ideas stay NOTE-ONLY (carried by
 # their GitHub issue) — we never file a `train` row for a cell that doesn't exist.
@@ -92,6 +98,50 @@ class Summary:
     open_arena: int = 0
     p_seed: int | None = None      # max priority among open|claimed train rows
     open_research_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Thread:
+    """A research lane whose evidence has landed and awaits a decision.
+
+    Identity = the research lane (``config.lane``). Evidence = the lane's terminal
+    train slices (DONE/FAILED), oldest first. ``covered_through`` = how many
+    evidence points a prior decision already accounted for; ``n_evidence >
+    covered_through`` is the deterministic WHEN — "new evidence landed, undecided".
+    """
+
+    lane: str
+    slices: list[dict] = field(default_factory=list)   # terminal research rows, by seq
+    open_rows: list[dict] = field(default_factory=list)  # lineage rows still runnable
+    covered_through: int = 0
+    from_issue: int | None = None
+
+    @property
+    def n_evidence(self) -> int:
+        return len(self.slices)
+
+    @property
+    def failed(self) -> bool:
+        return any(s.get("status") == ledger.FAILED for s in self.slices)
+
+    @property
+    def elos(self) -> list[float]:
+        out = []
+        for s in self.slices:
+            v = (((s.get("result") or {}).get("metrics")) or {}).get("eval/model_elo")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out.append(float(v))
+        return out
+
+
+@dataclass
+class Decision:
+    """A worker's call on a thread (the intelligent WHAT). ``followups`` are
+    ledger rows the reducer appends — e.g. corrections that park a dead fork."""
+
+    action: str                                # "park" | "keep" | "favor"
+    note: str = ""
+    followups: list[dict] = field(default_factory=list)
 
 
 # ---- helpers ------------------------------------------------------------
@@ -356,6 +406,107 @@ def propose_experiments(state: ledger.LedgerState, ideas: list[dict],
     return proposals
 
 
+# ---- resume-on-evidence: the research reducer's other half (doctrine §4) --
+#
+# "Waits" is deleted. A research thread doesn't sleep holding a result open; it
+# is an experiment row (the intent, durable) whose evidence arrives as an
+# appended result row (an event, not a timer). This half folds the ledger, finds
+# threads whose evidence landed but whose follow-up decision hasn't been made,
+# and advances each — full context reconstructed from the log. The decider is the
+# pluggable WHAT: the dumb default below, or Claude (``resume(decide=...)``).
+
+def _decisions_covered(state: ledger.LedgerState) -> dict[str, int]:
+    """Per-lane high-water mark of evidence a prior decision already covered."""
+    covered: dict[str, int] = {}
+    for ev in state.events:
+        if ev.get("scope") != RESEARCH_DECISION_SCOPE:
+            continue
+        d = ev.get("data") or {}
+        lane = d.get("lane")
+        if lane is None:
+            continue
+        covered[lane] = max(covered.get(lane, 0), int(d.get("evidence_n", 0) or 0))
+    return covered
+
+
+def research_threads(state: ledger.LedgerState) -> list[Thread]:
+    """Research lanes with terminal evidence NOT yet accounted for by a decision —
+    the deterministic WHEN for the research worker (resume-on-evidence). Pure;
+    most-evidence-first. ``actionable.research`` is exactly this list."""
+    covered = _decisions_covered(state)
+    by_lane: dict[str, list[dict]] = {}
+    open_by_lane: dict[str, list[dict]] = {}
+    for e in state.experiments.values():
+        if not _is_research_row(e):
+            continue
+        lane = (e.get("config") or {}).get("lane") or e.get("id")
+        if e.get("status") in (ledger.DONE, ledger.FAILED) and "result" in e:
+            by_lane.setdefault(lane, []).append(e)
+        elif e.get("status") in (ledger.OPEN, ledger.CLAIMED):
+            open_by_lane.setdefault(lane, []).append(e)
+    threads: list[Thread] = []
+    for lane, rows in by_lane.items():
+        c = covered.get(lane, 0)
+        if len(rows) <= c:
+            continue                                   # no NEW evidence since last decision
+        rows.sort(key=lambda e: e.get("seq", 0))
+        from_issue = next(((e.get("config") or {}).get("from_issue") for e in rows
+                           if (e.get("config") or {}).get("from_issue") is not None), None)
+        threads.append(Thread(
+            lane=lane, slices=rows, open_rows=open_by_lane.get(lane, []),
+            covered_through=c, from_issue=from_issue))
+    threads.sort(key=lambda t: t.n_evidence, reverse=True)
+    return threads
+
+
+def _park_followups(thread: Thread) -> list[dict]:
+    """Stop a parked lane by superseding its still-runnable rows — append-only
+    corrections (never an edit). ``pick('train')`` then skips them: GPU reclaimed."""
+    return [ledger.correction(e["id"], {"status": "superseded"},
+                              reason=f"research thread {thread.lane} parked")
+            for e in thread.open_rows]
+
+
+def default_decide(thread: Thread, state: ledger.LedgerState) -> Decision:
+    """The dumb, deterministic decider — proxy-only, NEVER auto-promotes (that is
+    Jason's call, #61). Park a broken/declining fork; flag a clearly-rising one
+    for review; otherwise keep deepening. The smart decider is Claude, plugged in
+    via ``resume(decide=...)``; the default exists so the loop self-runs without
+    it (doctrine §3: the default is fine because the WHEN is the truth)."""
+    elos = thread.elos
+    if thread.failed:
+        return Decision("park", "fork slice FAILED — parking", _park_followups(thread))
+    if len(elos) >= 2 and elos[-1] < elos[0]:
+        return Decision("park", "fork elo declining — parking", _park_followups(thread))
+    if len(elos) >= 2 and (elos[-1] - elos[0]) >= FAVOR_MARGIN:
+        return Decision("favor", f"fork rising +{elos[-1] - elos[0]:.0f} elo — review for promotion")
+    return Decision("keep", "fork within noise — keep deepening")
+
+
+def resume(ledger_path: str, *, decide=None,
+           state: ledger.LedgerState | None = None) -> list[dict]:
+    """Resume every research thread whose evidence has landed undecided: decide,
+    append a decision event (+ any followups), move on. Idempotent — a re-fire
+    with no new evidence is a no-op (``research_threads`` returns []). ``decide``
+    is the pluggable WHAT (default = ``default_decide``; Claude = the smart one).
+    Returns ``[{lane, action, evidence_n}, ...]``."""
+    decide = decide or default_decide
+    st = state if state is not None else ledger.fold(ledger.read_all(ledger_path))
+    out: list[dict] = []
+    for thread in research_threads(st):
+        d = decide(thread, st)
+        ledger.append(ledger_path, ledger.event(
+            scope=RESEARCH_DECISION_SCOPE,
+            summary=f"thread {thread.lane}: {d.action} — {d.note}",
+            data={"lane": thread.lane, "evidence_n": thread.n_evidence,
+                  "action": d.action, "from_issue": thread.from_issue}))
+        for row in d.followups:
+            ledger.append(ledger_path, row)
+        out.append({"lane": thread.lane, "action": d.action,
+                    "evidence_n": thread.n_evidence})
+    return out
+
+
 # ---- the note -----------------------------------------------------------
 
 def _fmt(x, fmt="{:.0f}", none="—"):
@@ -511,6 +662,11 @@ def tick(ledger_path: str) -> dict:
     """
     rows = ledger.read_all(ledger_path)
     state = ledger.fold(rows)
+    # (0) resume-on-evidence FIRST: decide any research threads whose evidence
+    # landed (park dead forks, flag rising ones) before reasoning about new work.
+    decisions = resume(ledger_path, state=state)
+    if decisions:
+        state = ledger.fold(ledger.read_all(ledger_path))   # re-fold over the parks
     summary = summarize(state)
     ideas = gather_ideas()
     ideas_ok = True
@@ -538,7 +694,8 @@ def tick(ledger_path: str) -> dict:
     _append(notes_path(), f"\n\n## {ts}\n{note}")
 
     return {"proposed": [r["id"] for r in proposals], "p_seed": summary.p_seed,
-            "has_results": summary.has_results, "digest": digest}
+            "has_results": summary.has_results, "digest": digest,
+            "decisions": decisions}
 
 
 def _gh_available() -> bool:

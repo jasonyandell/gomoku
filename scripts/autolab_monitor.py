@@ -37,7 +37,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gomoku.lab import daemon, ledger, status  # noqa: E402
+from gomoku.lab import actionable as _actionable  # noqa: E402
+from gomoku.lab import daemon, health, ledger, status  # noqa: E402
 
 # ---- durable file locations (must match the path-ownership contract) -----
 
@@ -308,6 +309,14 @@ def build_digest(state: ledger.LedgerState, daemons: dict, *,
     lines.append(f"**{header}**")
     lines.append("")
 
+    # --- (0) Needs you — escalations float to the very top ---
+    alerts = health.scan(state)
+    if alerts:
+        lines.append("## ⚠️ Needs you")
+        for a in alerts:
+            lines.append(f"- **{a.kind}**: {a.summary}")
+        lines.append("")
+
     # --- (1) Researcher thinking ---
     lines.append("## Researcher")
     rhook = _first_nonempty(research_latest_path())
@@ -325,6 +334,14 @@ def build_digest(state: ledger.LedgerState, daemons: dict, *,
     if events:
         lines.append("events: " + " ¦ ".join(
             f"[{e.get('scope', '?')}] {e.get('summary', '')}" for e in events))
+    # resume-on-evidence surface (doctrine §3/§4): research threads whose evidence
+    # landed but whose decision the reducer hasn't made yet — the WHEN, not a wait.
+    threads = _actionable.actionable(state).research
+    if threads:
+        lines.append("threads (evidence in, awaiting a decision): " + " ¦ ".join(
+            f"{t.lane} (n={t.n_evidence}"
+            + (f", #{t.from_issue}" if t.from_issue is not None else "") + ")"
+            for t in threads[:4]))
     lines.append("")
 
     # --- (2) Lanes / tickets ---
@@ -528,16 +545,24 @@ def run_once(*, do_notify: bool = True, always_notify: bool = False,
     new_header = log_line.split(" | ", 1)[0]
     changed = (prev_header is None) or (new_header != prev_header)
 
+    # A needs-you alert (stalled lane, first-champion gate, …) must reach Jason
+    # even when the header tuple is unchanged — escalations are gate-independent.
+    alerts = health.scan(state)
+    escalate = bool(alerts)
+
     write_digest(digest, log_line)
 
     if do_print:
         sys.stdout.write(digest + ("\n" if not digest.endswith("\n") else ""))
 
-    if do_notify and (always_notify or changed):
+    if do_notify and (always_notify or changed or escalate):
         # On the very first tick (no prior line) we render but DON'T ping (the
-        # baseline tick — contract §d empty-state rule), unless --always-notify.
-        if always_notify or prev_header is not None:
-            notify(build_notification(state, daemons), runner=notify_runner)
+        # baseline tick — contract §d empty-state rule), UNLESS there's an
+        # escalation (or --always-notify).
+        if always_notify or escalate or prev_header is not None:
+            body = (f"Autolab needs you: {alerts[0].summary}" if escalate
+                    else build_notification(state, daemons))
+            notify(body, runner=notify_runner)
 
     return digest
 

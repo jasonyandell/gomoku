@@ -2,19 +2,29 @@
 """The autolab trainer role (epic #53, P3).
 
 Plugs into ``daemon.run_daemon``. One ``run_chunk`` = one bounded training slice:
-resolve the start model, check out the ledger row's ``commit`` into an ephemeral
-**code-only** worktree, run the proven ``run_sweep`` bundle (1 trainer + N
-selfplay workers) with its DATA pointed at ``~/data/autolab/runs/<lane>/`` (so
-teardown can't delete checkpoints), read the eval, deliver a per-slice HF
-revision, and emit the flywheel follow-ups (continuation slice + arena eval).
+resolve the start model, **materialize the ledger row's ``commit`` as a standalone
+source snapshot (``git archive``) and run the proven ``run_sweep`` bundle inside it
+via ``uv run``** (1 trainer + N selfplay workers), with its DATA pointed at
+``~/data/autolab/runs/<lane>/`` (so teardown can't delete checkpoints), read the
+eval, deliver a per-slice HF revision, and emit the flywheel follow-ups
+(continuation slice + arena eval).
 
 The trainer owns no loop and no lock — the daemon does. It is pure work.
+
+Execution = ``uv`` (doctrine §2/§5, ``wiki/topics/autolab-doctrine.md``). The env
+is **reconstructed from the ref**, never persisted: ``git archive`` gives a tree
+with no shared ``.git``, and ``uv run`` syncs that tree's own pinned deps + builds
+its C extensions, so the slice runs the *commit's* ``gomoku`` — not main's
+editable install. This kills the shared-editable-install worktree gotcha
+structurally: "a commit" finally means a commit. (No ``uv.lock`` is committed yet,
+so deps resolve from ``pyproject`` per run — see the wiki for the lock follow-up.)
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -74,8 +84,20 @@ class TrainerRole:
         cell_key = config.get("cell", "SMOKE")
         cap = config.get("max_wall_secs",
                          self.mvp_cap_secs if self.mvp_mode else self.prod_cap_secs)
+        cap = min(float(cap), self.prod_cap_secs)  # 1h hard ceiling; ledger rows are untrusted input
         board_size = config.get("board_size")
 
+        # Board size is a process-start constant; a row from another era must not
+        # run in this process (it would silently train the wrong geometry). The
+        # era-cross retire normally prevents the pick; this is the loud backstop.
+        proc_bs = os.environ.get("GOMOKU_BOARD_SIZE")
+        if board_size is not None and proc_bs is not None and int(board_size) != int(proc_bs):
+            raise SliceFailed(f"board-size mismatch: row {board_size} != process {proc_bs}")
+
+        # Reclaim any worktree a prior slice leaked (SIGKILL/OOM skipped teardown,
+        # or a since-abandoned lane left its dir). The flock singleton guarantees
+        # no live sibling, so anything here is stale; the run DATA lives in runs/.
+        self._reclaim_stale_worktrees()
         work = self._checkout(item.get("commit"), row_id)
         try:
             self._run_slice(work, cell_key, run_base, resume, cap, board_size)
@@ -85,12 +107,26 @@ class TrainerRole:
                 raise SliceFailed(f"no latest.pt under {run_base}/sweep_runs/*/checkpoints")
             epochs = len(list(ckpt_dir.glob("epoch*.pt")))
             elo = self._read_model_elo(ckpt_dir)
-            artifact = self._deliver(item, lane, latest, elo)
             metrics = {"eval/model_elo": elo, "epochs_ran": epochs, "lane": lane,
                        "cell": cell_key}
+            # HF push is the most fragile step (4 un-retried network calls) but it
+            # is NOT load-bearing for correctness: latest.pt is the true resume. A
+            # transient blip must not mark a fully-trained slice FAILED and drop
+            # its flywheel follow-ups. Defer delivery to a local ref + an event.
+            try:
+                artifact = self._deliver(item, lane, latest, elo)
+            except Exception as e:
+                artifact = f"local://{latest}"
+                metrics["hf_push_deferred"] = f"{type(e).__name__}: {e}"
+            followups = self._followups(item, lane, artifact, elo, config)
+            if "hf_push_deferred" in metrics:
+                followups.append(ledger.event(
+                    scope=ROLE,
+                    summary=f"HF push deferred for {row_id}: {metrics['hf_push_deferred']}",
+                    data={"item": row_id, "artifact": artifact}))
             return daemon.ChunkResult(
                 artifact_ref=artifact, metrics=metrics, buffer=f"local://{latest}",
-                followups=self._followups(item, lane, artifact, elo, config))
+                followups=followups)
         finally:
             self._teardown(work)
 
@@ -109,30 +145,62 @@ class TrainerRole:
             return hf_hub_download(repo, "model.pt", revision=rev or None)
         return base  # a bare local path
 
-    # ---- ephemeral code-only worktree -----------------------------------
+    # ---- ephemeral source snapshot (git archive, NOT a worktree) --------
 
     def _checkout(self, commit: str | None, row_id: str) -> Path:
+        """Materialize the row's commit as a standalone source tree via
+        ``git archive`` — no shared ``.git``, so nothing ties this tree's
+        ``gomoku`` to main's editable install (the worktree gotcha is gone). The
+        dir is named per-row under ``worktrees/`` (the path the reclaim + the
+        simulator bound); ``uv run`` later reconstructs its env from the ref."""
         work = Path(daemon.home()) / "worktrees" / row_id.replace("/", "_")
-        work.parent.mkdir(parents=True, exist_ok=True)
+        if work.exists():
+            shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True, exist_ok=True)
         target = commit or "HEAD"
-        r = subprocess.run(
-            ["git", "-C", str(self.repo_root), "worktree", "add", "--detach",
-             str(work), target], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise SliceFailed(f"git worktree add {target}: {r.stderr.strip()}")
+        ar = subprocess.run(["git", "-C", str(self.repo_root), "archive", target],
+                            capture_output=True)
+        if ar.returncode != 0:
+            raise SliceFailed(
+                f"git archive {target}: {ar.stderr.decode('utf-8', 'replace').strip()[:200]}")
+        ex = subprocess.run(["tar", "-x", "-C", str(work)], input=ar.stdout,
+                            capture_output=True)
+        if ex.returncode != 0:
+            raise SliceFailed(
+                f"tar extract {target}: {ex.stderr.decode('utf-8', 'replace').strip()[:200]}")
         return work
 
     def _teardown(self, work: Path) -> None:
-        subprocess.run(["git", "-C", str(self.repo_root), "worktree", "remove",
-                        "--force", str(work)], capture_output=True, text=True)
+        """Remove the ephemeral source tree (+ its ``uv`` ``.venv``). Plain
+        rmtree: an archive tree is not a registered worktree, so there's no git
+        state to unwind — idempotent and crash-safe."""
+        shutil.rmtree(work, ignore_errors=True)
+
+    def _reclaim_stale_worktrees(self) -> list[str]:
+        """Remove every source tree under the autolab home (singleton ⇒ all
+        stale). Idempotent; called at slice start so a crash/abandon can't leak
+        disk. No ``git worktree prune`` needed — these were never worktrees."""
+        wt = Path(daemon.home()) / "worktrees"
+        if not wt.exists():
+            return []
+        reclaimed = []
+        for d in sorted(wt.iterdir()):
+            if d.is_dir():
+                self._teardown(d)
+                reclaimed.append(d.name)
+        return reclaimed
 
     # ---- run the bundle -------------------------------------------------
 
     def _run_slice(self, work: Path, cell_key: str, run_base: Path,
                    resume: str | None, cap: float,
                    board_size: int | None = None) -> None:
+        """Run the ``run_sweep`` bundle via ``uv run`` INSIDE the archived tree,
+        so it executes that ref's own ``gomoku`` (deps + freshly-built C
+        extensions reconstructed by uv from the pinned sources), never main's
+        editable install. DATA stays external via ``GOMOKU_RUN_DIR``."""
         run_base.mkdir(parents=True, exist_ok=True)
-        cmd = [sys.executable, str(work / "scripts" / "run_sweep.py"),
+        cmd = ["uv", "run", "python", "scripts/run_sweep.py",
                "--cell", cell_key, "--max-wall-secs", str(cap),
                "--final-eval", "--foreground"]
         if resume:
@@ -144,7 +212,7 @@ class TrainerRole:
             env["GOMOKU_BOARD_SIZE"] = str(board_size)
         r = subprocess.run(cmd, cwd=str(work), env=env)
         if r.returncode != 0:
-            raise SliceFailed(f"run_sweep --cell {cell_key} exited {r.returncode}")
+            raise SliceFailed(f"uv run run_sweep --cell {cell_key} exited {r.returncode}")
 
     def _find_ckpt_dir(self, run_base: Path) -> Path | None:
         return next((run_base / "sweep_runs").glob("*/checkpoints"), None)

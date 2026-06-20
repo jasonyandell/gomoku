@@ -18,6 +18,7 @@ Lean: no new gating math, no new match engine — just wiring over `run_gate` + 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,13 @@ ROLE = "arena"
 CHAMPION_TAG = "champion"
 
 
+def champion_tag(board_size: int) -> str:
+    """The HF champion tag is namespaced per board-size era. A 9×9 net can't be
+    loaded to gate a 15×15 candidate (shape mismatch), so each era has its own
+    ladder root; crossing eras can never resolve a stale cross-era champion."""
+    return f"{CHAMPION_TAG}-{board_size}"
+
+
 class ArenaRole:
     role_name = ROLE
     poll_interval = 30.0
@@ -36,10 +44,16 @@ class ArenaRole:
                  gate_n_games: int = 40, shrink_n_games: int = 12, sims: int = 100,
                  c_puct: float = 1.5, opening_plies: int = 4, ci_margin: float = 0.0,
                  device: str | None = None, n_workers: int = 4, seed: int = 0,
+                 board_size: int | None = None,
                  gate_fn=None, champion_resolver=None, champion_setter=None,
                  eval_fn=None):
         self.repo_root = Path(repo_root or Path(__file__).resolve().parents[2])
         self.hf_repo = hf_repo
+        # Era is a process-start constant (the daemon plist sets GOMOKU_BOARD_SIZE);
+        # the champion tag is namespaced by it so eras never cross-contaminate.
+        self.board_size = (board_size if board_size is not None
+                           else int(os.environ.get("GOMOKU_BOARD_SIZE", "9")))
+        self._champ_tag = champion_tag(self.board_size)
         self.gate_n_games = gate_n_games
         self.shrink_n_games = shrink_n_games
         self.sims = sims
@@ -73,21 +87,29 @@ class ArenaRole:
             n_games = self.shrink_n_games
 
         v = self._gate(candidate=cand_path, peak=champ_path, n_games=n_games)
-        promoted = bool(getattr(v, "promote", False))
-        if promoted:
+        gate_promote = bool(getattr(v, "promote", False))
+        first_champion = champ_rev is None
+        # The first champion defines the era's ladder root with ZERO games played
+        # (no incumbent to beat) — the single most consequential automated act.
+        # Locked doctrine: first promotion is human-gated. Escalate, don't crown.
+        crowned = gate_promote and not first_champion
+        if crowned:
             self._set_champion_fn(item, cand_ref, cand_path, v)
 
         ci = [getattr(v, "ci_lo", None), getattr(v, "ci_hi", None)]
         metrics = {"verdict": v.verdict, "win_rate": getattr(v, "win_rate", None),
                    "ci": ci, "n_games": getattr(v, "n_games", n_games),
-                   "promoted": promoted, "vs": champ_rev or "(first champion)"}
+                   "promoted": crowned, "vs": champ_rev or "(first champion)"}
+        if gate_promote and first_champion:
+            metrics["needs_jason"] = True   # awaiting human confirm; tag NOT moved
         ev_id = f"ev-{item['id']}".replace("/", "_")
+        note = ("promoted champion" if crowned else
+                "first champion — needs human confirm" if metrics.get("needs_jason") else "")
         followups = [
             ledger.eval_row(ev_id, model=cand_ref, panel=[champ_rev or "none", "candidate"],
                             metrics=metrics),
             ledger.verdict(ev_id, gate=v.verdict, win_rate=getattr(v, "win_rate", None),
-                           ci=ci, n=getattr(v, "n_games", n_games),
-                           note="promoted champion" if promoted else ""),
+                           ci=ci, n=getattr(v, "n_games", n_games), note=note),
         ]
         return daemon.ChunkResult(artifact_ref=cand_ref, metrics=metrics, followups=followups)
 
@@ -150,8 +172,8 @@ class ArenaRole:
         """Return (revision, local_path) of the current champion, or (None, None)."""
         from huggingface_hub import hf_hub_download
         try:
-            path = hf_hub_download(self.hf_repo, "model.pt", revision=CHAMPION_TAG)
-            return CHAMPION_TAG, path
+            path = hf_hub_download(self.hf_repo, "model.pt", revision=self._champ_tag)
+            return self._champ_tag, path
         except Exception:
             return None, None   # no champion yet → the candidate seeds the ladder
 
@@ -163,15 +185,15 @@ class ArenaRole:
         if parsed:
             repo, rev = parsed
             try:
-                api.delete_tag(repo, tag=CHAMPION_TAG, repo_type="model")
+                api.delete_tag(repo, tag=self._champ_tag, repo_type="model")
             except Exception:
                 pass
-            api.create_tag(repo, tag=CHAMPION_TAG, revision=rev or "main",
+            api.create_tag(repo, tag=self._champ_tag, revision=rev or "main",
                            repo_type="model", exist_ok=True)
         else:
             hf.push_slice(cand_path, repo_id=self.hf_repo,
-                          revision=f"champion-{item['id']}".replace("/", "_"),
-                          tag=CHAMPION_TAG,
+                          revision=f"{self._champ_tag}-{item['id']}".replace("/", "_"),
+                          tag=self._champ_tag,
                           provenance={"ledger_row_id": item["id"], "gate": v.verdict})
 
 
