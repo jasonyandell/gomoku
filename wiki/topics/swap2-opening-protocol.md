@@ -513,45 +513,55 @@ fault** (full evidence: `babysit/rapfi_swap2_research.md`; tracked as #73):
 *training* gap, but white has been playing a **-EV seat** — a rigged game no training can win.
 Fairness (≈50/50 w/b) is **upstream of white engagement** and is the highest-priority fix.
 
-## 11. The plan — the fixed-fair-opening run (era-3, #73 fix) ⭐ LIVE 2026-06-21
+## 11. The plan — the fixed-fair-opening LADDER (era-3, #73 fix) ⭐ LIVE 2026-06-21
 
 **The thesis under test (one sentence):** *if white loses because the game is rigged (the opener
 can't compose fair openings, §10), then on a KNOWN-FAIR board white should engage and the colors
 should trend toward ~50/50.* If white still collapses from fair starts, the weakness is real skill,
 not the seat — and that's a different (also valuable) finding.
 
-**The method — sidestep the broken negotiation entirely.** Don't make the net negotiate a fair
-opening (it can't yet). Hand it fair boards directly and let it just *play*:
-- Every self-play game starts from one of **Rapfi's 9 balanced (known-fair) swap2 openings**,
-  placed directly — **no negotiation, no opener policy, no choice head** (the net engages only
-  *post-opening*). Construction is byte-identical to swap2's `to_normal()` for the 2B+1W → white-
-  to-move outcome. (These openings are small local clusters — footprint ≤3×6 — balance-searched by
-  Rapfi so swap-value ≈ 0; D4 augmentation fans the 9 into ~72 mirror/rotation variants.)
-- **Fresh / from-scratch**, 15×15 (the openings' native size; balance is board-specific so we keep
-  it there), aggression `value-discount 0.95`, the e2 recipe otherwise.
-- Why these 9 are enough to *learn* (not memorize): each balanced opening is a deep game tree —
-  "if any were an insta-win, gomoku would be solved" (Jason). The net has to actually learn to play.
+**The method — sidestep the broken negotiation, and LADDER it for cheap epochs.** Don't make the net
+negotiate a fair opening (it can't yet). Hand it fair boards directly and let it just *play* — and
+climb the cheap small boards first to bank epochs before the 15×15 "big leagues":
+- Every self-play game starts from one of **9 canned fair openings**, placed directly — **no
+  negotiation, no opener policy, no choice head** (the net engages only *post-opening*). Construction
+  is byte-identical to swap2's `to_normal()` for the 2B+1W → white-to-move outcome.
+- **The openers are Rapfi's 9 shapes, RE-CENTERED per board** (Jason's call, 2026-06-21): translate
+  each cluster's bbox to board center; footprints ≤3×6 so **all 9 fit on 9/11/13 — zero dropped**
+  (his cookie-bet: they're sub-9×9 patterns). `gomoku/self_play.py _FAIR_OPENINGS[N]` selects the
+  book by size. Same canned fair openers at every rung; D4 aug fans each into ~72 variants.
+- **Fresh / from-scratch at 9×9 → 11 → 13 → 15**, warm-starting up each rung (the global-pool trunk
+  carries; the 3 board-bound FCs re-init). aggression `value-discount 0.95`, the e2 recipe otherwise.
+- **AUTO-PROMOTE on p90-plies-max** (#74, `babysit/ladder_grad.py`): graduate a rung when
+  `selfplay/plies_p90` has plateaued at its peak for 5 epochs — the net's defense has saturated this
+  board (it's strong enough to start drawing → would learn to *retreat*); promote NOW. **Minimal
+  gating on 9/11/13** (just bank cheap epochs, find a fresh killer); a CAP=250 backstop per rung.
+- Why 9 openings are enough to *learn* (not memorize): each is a deep game tree — "if any were an
+  insta-win, gomoku would be solved" (Jason). The net has to actually learn to play.
 
-**The run.** Cell `G15-fixed-openings` (swap2 OFF, `fixed_openings=True`); flag `--fixed-openings`
-threaded through self-play / worker / trainer (commit `3c6e9d7`, tested). Loop:
-`babysit/g15fixed_loop.sh` (30-min slices; `touch babysit/STOP_g15fixed` to stop). Run `nbctsiua`.
-Model card: [[gomoku-15x15-fixed-fair-openings]].
+**The run.** Cells `G{9,11,13,15}-fixed-openings` (swap2 OFF, `fixed_openings=True`); `--fixed-openings`
+threaded through self-play / worker / trainer (commits `3c6e9d7`, `744849a`, tested at all sizes).
+Orchestrator `babysit/fairladder.sh` (15-min slices, p90-max auto-promote, warm-start between rungs;
+`touch babysit/STOP_fairladder` to stop). Rung-9 run `eilfnz1e`. Card: [[gomoku-15x15-fixed-fair-openings]].
 
 **What success looks like / what to watch:**
-- 🟢 **white-share of decisive self-play games → ~50%** (the headline; on fair boards white should
-  stop being the doormat). Contrast every prior era: white ~25–35% (rigged).
-- 🟢 plies healthy (real games, not rush-fest collapse); draws moderate.
-- 🔴 if white-share stays pinned low (~25–35%) from FAIR starts → the seat wasn't the (only) problem;
-  white has a genuine skill gap → pivot to a white-side teacher (#44) / defense work.
-- Strength (later): vs `anchor_e455` H2H climbs (resolvable); vs-Rapfi is a weak signal here because
-  the net is **out-of-distribution** on Rapfi's openings (it only ever sees the 9 fair boards — same
-  OOD that made the ladder net's non-swap2-vs-Rapfi read 0% despite 25% in-distribution).
+- 🟢 **white-share of decisive self-play games → ~50%** (the headline; on a fair board white should
+  stop being the doormat). Contrast every prior era: white ~25–35% (rigged). **First read at 9×9:
+  white ~46–51% in the very first epochs.**
+- 🟢 plies healthy; auto-promote climbing the ladder fast (Jason expects it won't linger on 9/11/13).
+- 🔴 if white-share stays ~25–35% from FAIR starts → the seat wasn't the (only) problem; white has a
+  genuine skill gap → white-side teacher (#44).
 
-**Phases.** Phase 1 (now): play the 9 fair games well; read the white/black balance. Phase 2 (later,
-gated on Jason): **expand** — bring a *trained* fair-opening generator / negotiation back (re-enable
-the choice head v2a→v2b, or a balance-search opening generator over our own value head, §10 Option
-A/B), and broaden the opening distribution so the net generalizes beyond the 9.
+**The 15×15 gate (the real test, TODO to build during the climb).** At rung 15 we gate for real,
+including a **Rapfi-from-the-same-canned-openers eval**: our net vs Rapfi-NNUE both resuming from the
+fixed fair post-opening positions, our net as **black AND as white**. Fixed openers constrain the
+search space and give a hard, fair yardstick (vs the OOD-confounded standard-opening Rapfi read).
 
-**Relation to era-2 (the ladder).** The 9→11→13→15 ladder (best net `epoch0235`, 25% vs Rapfi,
-preserved) trained the net to *play swap2* — but on a rigged board, so white capped ~0–29%. Era-3
-removes the rig to isolate whether fair play unlocks white. Different question, both kept.
+**Phases.** Phase 1 (now): climb the ladder, read white/black balance per rung. Phase 2 (later, gated
+on Jason): **expand** — bring a *trained* fair-opening generator / negotiation back (choice head
+v2a→v2b, or a balance-search generator, §10 Option A/B) and broaden beyond the 9.
+
+**Relation to era-2 (the swap2 ladder).** That ladder (best net `epoch0235`, 25% vs Rapfi, preserved)
+trained the net to *play swap2* on a **rigged** board → white capped ~0–29%. This fair-opening ladder
+reuses the cheap-board-curriculum machinery but **removes the rig** to isolate whether fair play
+unlocks white. Different question; both kept.

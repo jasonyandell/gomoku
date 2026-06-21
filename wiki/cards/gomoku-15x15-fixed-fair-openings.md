@@ -17,9 +17,13 @@ model-index:
 
 # gomoku-15×15 · fixed-fair-openings (era-3, the fairness experiment)
 
-**Status (2026-06-21): IN TRAINING.** A research checkpoint and a controlled experiment, not a
-finished player. Run `nbctsiua`; cell `G15-fixed-openings`; loop
-`babysit/g15fixed_loop.sh`. Plan: [[swap2-opening-protocol]] §11.
+**Status (2026-06-21): IN TRAINING — now a fair-opening LADDER (9→11→13→15).** A research
+checkpoint and a controlled experiment, not a finished player. The fixed fair openers are Rapfi's 9
+shapes **re-centered per board** (`_FAIR_OPENINGS[N]`; all 9 fit at every size), so a fresh net climbs
+the cheap small boards first (auto-promote on p90-max, #74) and arrives at 15×15 ready for the real
+gates. Rung-9 run `eilfnz1e`; cells `G{9,11,13,15}-fixed-openings`; orchestrator `babysit/fairladder.sh`
+(`touch babysit/STOP_fairladder` to stop). Plan: [[swap2-opening-protocol]] §11. (Supersedes the
+earlier single-15 run `nbctsiua`.)
 
 ## TL;DR — the experiment
 

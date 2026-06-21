@@ -4542,3 +4542,22 @@ then eval-every-hour while training, recording white-vs-Rapfi off the era-1 0% f
 the 15×15 heads so the net can't play coherently yet; loses fast (59s). Now we watch it
 climb off 0% as the heads adapt (the whole bet of the ladder). Hourly reads append to
 `babysit/eval_results.jsonl`; era-1's *trained* e455 was 10.2%/white-0% for comparison.
+
+## 2026-06-21 ~11:07 — era-3 FAIR-OPENING LADDER launched (9→11→13→15)
+
+Jason's "go all in": build the fixed-fair-opening run as a LADDER for cheap epochs.
+Openers = Rapfi's 9 shapes RE-CENTERED per board (not generated — his call; the
+shapes are sub-9×9 so all 9 fit on 9/11/13, zero dropped). A FRESH net climbs
+9→11→13→15, same canned fair openers at every rung, **auto-promoting on p90-plies-max**
+(#74, `babysit/ladder_grad.py`: graduate when plies_p90 plateaus at peak for 5 epochs
+— promote before the net learns to retreat). Minimal gating on 9/11/13 (bank cheap
+epochs, find a fresh killer); real gates at 15, incl. a TODO Rapfi-from-canned-openers
+eval (our net vs Rapfi from the fixed post-opening positions, as black AND white).
+
+Cells `G{9,11,13,15}-fixed-openings` (swap2 OFF, fixed_openings=True; commits 3c6e9d7,
+744849a; tests green at all sizes). Orchestrator `babysit/fairladder.sh` (15-min slices,
+warm-start between rungs). Rung-9 run `eilfnz1e`. Single-15 predecessor run `nbctsiua`
+(stopped; showed white ~46–51% in its first epochs — the early fairness signal). era-2
+swap2-ladder best net preserved: `G-ladder-15-board15/checkpoints/epoch0235.pt` (25% vs Rapfi).
+
+THE METRIC: white-share of decisive self-play → ~50% on fair boards (was ~25–35% rigged).
