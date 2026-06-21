@@ -236,15 +236,24 @@ def seed_lane(world: World, *, lane="L", cell="derby-v9-small", priority=10,
 
 
 def seed_research(world: World, *, lane="research-foo", cell="derby-v9-small",
-                  priority=5, from_issue=99):
+                  priority=5, from_issue=99, contract=None, review_policy=None,
+                  budget=None):
     """Seed a research fork as the sole/top train work so a tick actually RUNS it
     (forks are normally below the seed; here we want the lineage to produce
-    evidence). config.research=True ⇒ the whole lineage is a research thread."""
+    evidence). config.research=True ⇒ the whole lineage is a research thread. An
+    optional evidence_contract / review_policy / budget exercise the epistemic WHEN
+    + continuation policy."""
+    cfg = {"lane": lane, "cell": cell, "max_wall_secs": 3600, "seq_n": 0,
+           "research": True, "from_issue": from_issue}
+    if contract is not None:
+        cfg["evidence_contract"] = contract
+    if review_policy is not None:
+        cfg["review_policy"] = review_policy
+    if budget is not None:
+        cfg["budget"] = budget
     row = ledger.experiment(
         id=f"{lane}@0", role="train", commit=None, base="scratch",
-        config={"lane": lane, "cell": cell, "max_wall_secs": 3600, "seq_n": 0,
-                "research": True, "from_issue": from_issue},
-        priority=priority, note="sim research fork")
+        config=cfg, priority=priority, note="sim research fork")
     ledger.append(world.ledger_path, row)
 
 
@@ -400,11 +409,66 @@ def inv_research_decided_once(world: World) -> list[str]:
     return out
 
 
+def inv_decision_cites_real_evidence(world: World) -> list[str]:
+    """The typed-intent wall (autolab-researcher-contract §2): a research decision
+    may only cite evidence the thread actually received. REJECTED intents are
+    exempt — their bogus refs are precisely why they were refused (and never
+    applied)."""
+    st = state(world)
+    real_ids = set(st.experiments) | set(st.evals)
+    out = []
+    for ev in st.events:
+        if ev.get("scope") != research.RESEARCH_DECISION_SCOPE:
+            continue
+        d = ev.get("data") or {}
+        if d.get("rejected"):
+            continue
+        for r in d.get("evidence_refs") or []:
+            if r not in real_ids:
+                out.append(f"decision on {d.get('lane')} cites absent evidence {r!r}")
+    return out
+
+
+def inv_no_redecide_same_cutoff(world: World) -> list[str]:
+    """The same evidence cutoff is never decided twice (the seq watermark): two
+    research-decision events for one lane must have distinct covers_through_seq."""
+    st = state(world)
+    seen: dict[tuple, int] = {}
+    out = []
+    for ev in st.events:
+        if ev.get("scope") != research.RESEARCH_DECISION_SCOPE:
+            continue
+        d = ev.get("data") or {}
+        key = (d.get("lane"), d.get("covers_through_seq"))
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] == 2:
+            out.append(f"lane {d.get('lane')} decided twice at cutoff seq "
+                       f"{d.get('covers_through_seq')}")
+    return out
+
+
+def inv_blocked_before_decision(world: World) -> list[str]:
+    """Continuation policy (autolab-researcher-contract §3): an exploratory fork
+    (review_policy != continuous) never has a RUNNABLE continuation while a
+    decision on its evidence is DUE — researcher judgment is causally upstream of
+    the next GPU hour."""
+    st = state(world)
+    out = []
+    for t in research.research_threads(st):
+        policy = research._lane_config(t.slices, "review_policy", "after_each_slice")
+        if policy != "continuous" and t.open_rows:
+            out.append(f"fork {t.lane} ({policy}) has runnable "
+                       f"{[e['id'] for e in t.open_rows]} while a decision is due")
+    return out
+
+
 ALL_INVARIANTS = [
     inv_worktrees_bounded, inv_cap_enforced, inv_no_lost_done_progress,
     inv_no_silent_stall, inv_hf_blip_not_fatal, inv_no_cross_era_run,
     inv_no_arena_era_failure, inv_first_promotion_gated,
     inv_actionable_consistent, inv_research_decided_once,
+    inv_decision_cites_real_evidence, inv_no_redecide_same_cutoff,
+    inv_blocked_before_decision,
 ]
 
 
@@ -593,30 +657,112 @@ def scenario_research_resume(seed=0):
 
 
 def scenario_research_park(seed=0):
-    """A decision's followups actually take effect (the pluggable WHAT): an
-    injected 'always park' decider supersedes the fork's open continuation, so the
-    trainer stops picking it — GPU reclaimed, append-only."""
+    """A 'park' decision supersedes the fork's BLOCKED continuation (append-only),
+    so the trainer never runs it — GPU reclaimed. Driven by a forced-park
+    DecisionIntent (the typed seam Claude plugs into) through validate→compile."""
     w = _tmp_world(seed)
     with w:
         seed_research(w, lane="research-bar")
         tr = FakeTrainer(w)
-        train_tick(w, tr)                       # @0 DONE, @1 OPEN continuation
+        train_tick(w, tr)                       # @0 DONE, @1 BLOCKED_FOR_DECISION
 
         st = state(w)
-        if st.pick("train", ledger.utcnow()) is None:
-            return ["no open continuation to park before resume (setup wrong)"]
+        if st.experiments.get("research-bar@1", {}).get("status") != ledger.BLOCKED:
+            return ["fork continuation not BLOCKED after a slice (setup wrong)"]
 
-        park = lambda t, s: research.Decision(  # noqa: E731 — the smart-decider seam
-            "park", "sim forced park", research._park_followups(t))
+        park = lambda t, s: research.DecisionIntent(  # noqa: E731 — the smart-decider seam
+            "park", [sl["id"] for sl in t.slices], "sim forced park")
         research.resume(w.ledger_path, decide=park)
 
         st = state(w)
         out = []
         cont = st.experiments.get("research-bar@1")
-        if cont is None or cont.get("status") != "superseded":
-            out.append(f"parked lane's continuation not superseded: {cont and cont.get('status')}")
+        if cont is None or cont.get("status") != ledger.SUPERSEDED:
+            out.append(f"parked continuation not superseded: {cont and cont.get('status')}")
         if st.pick("train", ledger.utcnow()) is not None:
             out.append("trainer still picks a parked lane's work")
+        return out
+
+
+def scenario_evidence_contract(seed=0):
+    """The EPISTEMIC WHEN (autolab-researcher-contract §1): a lane whose contract
+    requires 2 train-results does NOT surface a decision after 1 slice — only once
+    the REQUIRED evidence has landed. (continuous policy so the trainer keeps
+    producing slices uninterrupted; isolates the contract gate from blocking.)"""
+    w = _tmp_world(seed)
+    with w:
+        seed_research(w, lane="research-c2", review_policy="continuous",
+                      contract={"required": [{"kind": research.EV_TRAIN, "count": 2}]})
+        tr = FakeTrainer(w)
+        out = []
+        train_tick(w, tr)                       # 1 slice — NOT enough evidence
+        if research.research_threads(state(w)):
+            out.append("thread surfaced after 1 slice despite a 2-slice contract")
+        train_tick(w, tr)                       # 2 slices — contract satisfied
+        threads = research.research_threads(state(w))
+        t = next((t for t in threads if t.lane == "research-c2"), None)
+        if t is None:
+            out.append("thread did NOT surface after the contract's 2 slices landed")
+        elif t.due_reason != "evidence-contract-satisfied":
+            out.append(f"due for the wrong reason: {t.due_reason}")
+        out += inv_no_redecide_same_cutoff(w)
+        return out
+
+
+def scenario_continuation_policy(seed=0):
+    """Continuation policy (§3): a fork's continuation is BLOCKED_FOR_DECISION after
+    a slice (judgment upstream of GPU spend); a 'keep' decision releases it so the
+    trainer can pick it next."""
+    w = _tmp_world(seed)
+    with w:
+        seed_research(w, lane="research-cp")    # default → after_each_slice
+        tr = FakeTrainer(w)
+        out = []
+        train_tick(w, tr)                       # @0 DONE, @1 BLOCKED
+        st = state(w)
+        if st.experiments.get("research-cp@1", {}).get("status") != ledger.BLOCKED:
+            out.append(f"continuation not BLOCKED: "
+                       f"{st.experiments.get('research-cp@1', {}).get('status')}")
+        if st.pick("train", ledger.utcnow()) is not None:
+            out.append("trainer picked a blocked fork continuation before any decision")
+        out += inv_blocked_before_decision(w)   # meaningful here: a decision is due
+        # keep → release the held continuation
+        research.resume(w.ledger_path)          # default decides 'keep' on 1 noisy slice
+        st = state(w)
+        if st.experiments.get("research-cp@1", {}).get("status") != ledger.OPEN:
+            out.append("'keep' did not release the blocked continuation")
+        if (st.pick("train", ledger.utcnow()) or {}).get("id") != "research-cp@1":
+            out.append("released continuation is not the trainer's next pick")
+        return out
+
+
+def scenario_intent_validation(seed=0):
+    """The wall (§2): a forged intent citing evidence the thread never received is
+    REFUSED — never applied — recorded as rejected, escalated to a human, and the
+    watermark still advances so the loop can't spin re-refusing it."""
+    w = _tmp_world(seed)
+    with w:
+        seed_research(w, lane="research-iv")
+        tr = FakeTrainer(w)
+        train_tick(w, tr)                       # @0 DONE, @1 BLOCKED
+
+        forged = lambda t, s: research.DecisionIntent(  # noqa: E731
+            "park", evidence_refs=["ghost-999"], rationale="forged park")
+        research.resume(w.ledger_path, decide=forged)
+
+        st = state(w)
+        out = []
+        cont = st.experiments.get("research-iv@1")
+        if cont and cont.get("status") == ledger.SUPERSEDED:
+            out.append("forged intent citing absent evidence was APPLIED (park took effect)")
+        if not any(ev.get("scope") == research.RESEARCH_DECISION_SCOPE
+                   and (ev.get("data") or {}).get("rejected") for ev in st.events):
+            out.append("refused intent not recorded as a rejection")
+        if not any(getattr(a, "kind", "") == "needs_jason" for a in health.scan(st)):
+            out.append("refused intent did not escalate to needs_jason")
+        if research.research_threads(st):
+            out.append("refused thread still DUE — would spin re-refusing forever")
+        out += inv_decision_cites_real_evidence(w)
         return out
 
 
@@ -631,6 +777,9 @@ SCENARIOS = {
     "fold_deterministic": scenario_fold_determinism,
     "research_resume_on_evidence": scenario_research_resume,
     "research_park_takes_effect": scenario_research_park,
+    "evidence_contract_epistemic_when": scenario_evidence_contract,
+    "continuation_blocked_before_decision": scenario_continuation_policy,
+    "intent_validation_wall": scenario_intent_validation,
 }
 
 
@@ -719,6 +868,18 @@ def test_research_resume_on_evidence():
 
 def test_research_park_takes_effect():
     assert scenario_research_park() == []
+
+
+def test_evidence_contract_epistemic_when():
+    assert scenario_evidence_contract() == []
+
+
+def test_continuation_blocked_before_decision():
+    assert scenario_continuation_policy() == []
+
+
+def test_intent_validation_wall():
+    assert scenario_intent_validation() == []
 
 
 def test_fuzz_no_violations():

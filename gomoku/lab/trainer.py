@@ -248,11 +248,28 @@ class TrainerRole:
         ckpt = self._find_ckpt_dir(Path(daemon.home()) / "runs" / lane)
         cont_base = f"local://{ckpt/'latest.pt'}" if ckpt else item.get("base", "scratch")
         prio = int(item.get("priority", 0) or 0)
+        # Continuation policy (autolab-researcher-contract §3): a CONTINUOUS lane
+        # (the seed/production lane — the default) rolls straight on; an exploratory
+        # fork's continuation is BLOCKED_FOR_DECISION so the researcher's judgment is
+        # causally upstream of the next GPU hour (the research resume unblocks/parks
+        # it). The arena eval is NOT blocked — it is the evidence the decision needs.
+        review = config.get("review_policy") or (
+            "after_each_slice" if config.get("research") else "continuous")
+        if review == "continuous":
+            block = False
+        elif review == "after_budget":      # run free until the budget, then hold
+            ms = (config.get("budget") or {}).get("max_slices")
+            block = bool(ms and n >= int(ms))
+        else:                               # after_each_slice (the fork default)
+            block = True
+        cont_status = ledger.BLOCKED if block else ledger.OPEN
+        cont_note = f"continuation of {item['id']}" + (
+            "" if cont_status == ledger.OPEN else " (BLOCKED_FOR_DECISION — awaiting research review)")
         return [
             ledger.experiment(
                 id=f"{lane}@{n}", role=ROLE, commit=item.get("commit"),
                 base=cont_base, config={**config, "lane": lane, "seq_n": n},
-                priority=prio, note=f"continuation of {item['id']}"),
+                priority=prio, status=cont_status, note=cont_note),
             ledger.experiment(
                 id=f"eval-{item['id']}".replace("/", "_"), role="arena",
                 commit=item.get("commit"), base=artifact,

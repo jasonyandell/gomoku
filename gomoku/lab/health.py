@@ -56,4 +56,19 @@ def scan(state: "ledger.LedgerState", *, now=None) -> list[Alert]:
                 summary=f"needs Jason: {ev.get('ref')} ({m.get('verdict')} vs {m.get('vs')})",
                 data={"verdict": m.get("verdict"), "vs": m.get("vs")}))
 
+    # Human-decision flags raised as EVENTS — research escalations (a refused or
+    # favored research intent). Dedup per lane (latest wins) so a re-scanned ledger
+    # doesn't pile up duplicate alerts for the same open question.
+    latest_escalation: dict[str, dict] = {}
+    for ev in state.events:
+        d = ev.get("data") or {}
+        if d.get("needs_jason"):
+            latest_escalation[d.get("lane")] = ev
+    for lane, ev in latest_escalation.items():
+        d = ev.get("data") or {}
+        alerts.append(Alert(
+            kind="needs_jason", item=lane,
+            summary=ev.get("summary") or f"needs Jason: research thread {lane}",
+            data={"action": d.get("action"), "lane": lane}))
+
     return alerts

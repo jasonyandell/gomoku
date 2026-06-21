@@ -46,7 +46,33 @@ RESEARCH_QUEUE_CAP = 3          # K: don't pile research rows past this many ope
 # event with this scope — DISTINCT from the "research" tick event so the two
 # never collide. ``evidence_n`` in its data = how many terminal slices it covered.
 RESEARCH_DECISION_SCOPE = "research-decision"
+RESEARCH_ESCALATE_SCOPE = "research-escalate"   # a needs_jason flag health.scan surfaces
 FAVOR_MARGIN = 60.0            # proxy elo rise that flags a fork for promotion review
+
+# ---- the epistemic WHEN: evidence contracts (#61, autolab-researcher-contract) ----
+# A research row may declare in its config WHAT evidence makes its decision due. The
+# default = "any one new training slice" (preserves the pre-#61 mechanical WHEN, so
+# legacy rows are unchanged). A richer contract (e.g. {train-result:2, arena-verdict:1})
+# makes the WHEN epistemic — the thread does NOT surface until the RIGHT evidence lands.
+EV_TRAIN = "train-result"
+EV_ARENA = "arena-verdict"
+DEFAULT_CONTRACT = {"required": [{"kind": EV_TRAIN, "count": 1}]}
+
+# Continuation policy (autolab-researcher-contract §3): for a CONTINUOUS lane the
+# flywheel continuation is immediately runnable; for an exploratory fork it is
+# BLOCKED_FOR_DECISION until the researcher decides — judgment causally upstream of
+# the next GPU hour. A research row defaults to after_each_slice; a production lane
+# to continuous (so the seed lane is unchanged).
+REVIEW_CONTINUOUS = "continuous"
+REVIEW_AFTER_EACH = "after_each_slice"
+
+# The typed-intent wall (autolab-researcher-contract §2): a decider (dumb default OR
+# Claude) returns a DecisionIntent — it proposes MEANING. It may never hand the
+# reducer raw ledger rows; only ``compile_intent`` (a deterministic, in-process
+# function) builds rows, and only for these vetted actions. This is what makes the
+# loop safe to run a non-deterministic LLM inside.
+ALLOWED_ACTIONS = ("park", "keep", "favor", "escalate")
+ALLOWED_FOLLOWUP_KINDS: tuple[str, ...] = ()   # reserved; non-empty requests are refused
 
 # Ideas the researcher knows how to turn into a `train` row map an idea slug to an
 # EXISTING run_sweep `--cell`. Code-heavy derby ideas stay NOTE-ONLY (carried by
@@ -102,19 +128,27 @@ class Summary:
 
 @dataclass
 class Thread:
-    """A research lane whose evidence has landed and awaits a decision.
+    """A research lane whose REQUIRED evidence has landed and awaits a decision.
 
     Identity = the research lane (``config.lane``). Evidence = the lane's terminal
-    train slices (DONE/FAILED), oldest first. ``covered_through`` = how many
-    evidence points a prior decision already accounted for; ``n_evidence >
-    covered_through`` is the deterministic WHEN — "new evidence landed, undecided".
+    train slices (DONE/FAILED) + any DONE arena evals for the lane, oldest first.
+    ``covered_seq`` = the evidence-landing seq a prior decision already accounted
+    for; ``max_evidence_seq > covered_seq`` (NOT a count) is the watermark — "new
+    evidence since the last decision" — so a decision over seq N never races an
+    append at N+1 (autolab-researcher-contract §dossier). ``due_reason`` is the
+    EPISTEMIC WHEN: None until the contract/budget/terminal condition is met.
     """
 
     lane: str
-    slices: list[dict] = field(default_factory=list)   # terminal research rows, by seq
-    open_rows: list[dict] = field(default_factory=list)  # lineage rows still runnable
-    covered_through: int = 0
+    slices: list[dict] = field(default_factory=list)     # terminal train rows, by seq
+    open_rows: list[dict] = field(default_factory=list)  # OPEN/CLAIMED lineage rows
+    blocked_rows: list[dict] = field(default_factory=list)  # BLOCKED_FOR_DECISION rows
+    arena_evidence: list[dict] = field(default_factory=list)  # DONE arena evals for the lane
+    covered_seq: int = 0
     from_issue: int | None = None
+    contract: dict = field(default_factory=lambda: dict(DEFAULT_CONTRACT))
+    budget: dict = field(default_factory=dict)
+    due_reason: str | None = None
 
     @property
     def n_evidence(self) -> int:
@@ -133,15 +167,43 @@ class Thread:
                 out.append(float(v))
         return out
 
+    @property
+    def evidence_refs(self) -> set[str]:
+        """Every ref that IS this thread's evidence — what a decision is allowed to
+        cite. A decision citing anything outside this set is refused (it cannot
+        cover evidence it did not receive)."""
+        return ({s["id"] for s in self.slices}
+                | {a["id"] for a in self.arena_evidence})
+
+    @property
+    def max_evidence_seq(self) -> int:
+        """Highest seq at which REQUIRED-kind evidence landed (the watermark).
+        Arena evals count only when the contract actually asks for an arena-verdict,
+        so a default (train-only) lane never re-fires merely because its eval ran."""
+        seqs = [self.covered_seq]
+        for s in self.slices:
+            r = s.get("result") or {}
+            seqs.append(int(r.get("_seq") if r.get("_seq") is not None else s.get("seq", 0)))
+        if _contract_mentions(self.contract, EV_ARENA):
+            for a in self.arena_evidence:
+                r = a.get("result") or {}
+                seqs.append(int(r.get("_seq") if r.get("_seq") is not None else a.get("seq", 0)))
+        return max(seqs)
+
 
 @dataclass
-class Decision:
-    """A worker's call on a thread (the intelligent WHAT). ``followups`` are
-    ledger rows the reducer appends — e.g. corrections that park a dead fork."""
+class DecisionIntent:
+    """A worker's TYPED call on a thread (the intelligent WHAT). It proposes
+    MEANING — an action + the evidence it weighed + why — and NEVER carries raw
+    ledger rows. ``validate_intent`` checks it against the walls; ``compile_intent``
+    is the only thing that turns a *validated* intent into rows. The dumb default
+    and Claude return the identical type, so there is one safe write path."""
 
-    action: str                                # "park" | "keep" | "favor"
-    note: str = ""
-    followups: list[dict] = field(default_factory=list)
+    action: str                                  # one of ALLOWED_ACTIONS
+    evidence_refs: list[str] = field(default_factory=list)
+    rationale: str = ""
+    uncertainty: str = "med"                     # "low" | "med" | "high"
+    requested_followups: list[dict] = field(default_factory=list)  # reserved (must be empty)
 
 
 # ---- helpers ------------------------------------------------------------
@@ -397,7 +459,14 @@ def propose_experiments(state: ledger.LedgerState, ideas: list[dict],
             id=rid, role=ROLE, commit=None, base=summary.lane.base_for_fork,
             config={"lane": rid, "cell": cell, "seq_n": 0,
                     "research": True, "from_issue": idea["number"],
-                    "max_wall_secs": 3600},
+                    "max_wall_secs": 3600,
+                    # The decision contract (autolab-researcher-contract §1/§3):
+                    # decide after each slice (judgment upstream of the next GPU
+                    # hour), with a hard 4-slice budget the dumb decider parks at —
+                    # so a within-noise fork can never spin forever.
+                    "evidence_contract": {"required": [{"kind": EV_TRAIN, "count": 1}]},
+                    "budget": {"max_slices": 4},
+                    "review_policy": REVIEW_AFTER_EACH},
             priority=prio,
             note=(f"research fork from derby-idea #{idea['number']}: "
                   f"{idea['title'][:60]} (cell {cell}); priority {prio} < seed "
@@ -416,7 +485,8 @@ def propose_experiments(state: ledger.LedgerState, ideas: list[dict],
 # pluggable WHAT: the dumb default below, or Claude (``resume(decide=...)``).
 
 def _decisions_covered(state: ledger.LedgerState) -> dict[str, int]:
-    """Per-lane high-water mark of evidence a prior decision already covered."""
+    """Per-lane high-water mark of evidence COUNT a prior decision covered. Kept
+    for the ``decided-once`` invariant (count ≤ landed); the WHEN uses seq below."""
     covered: dict[str, int] = {}
     for ev in state.events:
         if ev.get("scope") != RESEARCH_DECISION_SCOPE:
@@ -429,81 +499,238 @@ def _decisions_covered(state: ledger.LedgerState) -> dict[str, int]:
     return covered
 
 
+def _covered_seq(state: ledger.LedgerState) -> dict[str, int]:
+    """Per-lane high-water mark of the evidence-landing SEQ a prior decision
+    covered (the watermark). A thread re-surfaces only when evidence lands at a
+    seq beyond this — so a decision over seq N never re-fires on the same cutoff,
+    and an append at N+1 makes a NEW decision point instead of racing."""
+    seen: dict[str, int] = {}
+    for ev in state.events:
+        if ev.get("scope") != RESEARCH_DECISION_SCOPE:
+            continue
+        d = ev.get("data") or {}
+        lane = d.get("lane")
+        if lane is None:
+            continue
+        seen[lane] = max(seen.get(lane, 0), int(d.get("covers_through_seq", 0) or 0))
+    return seen
+
+
+def _contract_mentions(contract: dict, kind: str) -> bool:
+    for k in ("required", "optional"):
+        for item in (contract or {}).get(k, []) or []:
+            if item.get("kind") == kind:
+                return True
+    return False
+
+
+def _lane_config(rows: list[dict], key: str, default):
+    """Read a config key off the lane's lineage (the proposal's config rides every
+    slice via the trainer flywheel; first declaration wins)."""
+    for e in rows:
+        v = (e.get("config") or {}).get(key)
+        if v:
+            return v
+    return default
+
+
+def decision_due(thread: Thread) -> str | None:
+    """The EPISTEMIC WHEN. Returns WHY a decision is due, or None if it is NOT yet
+    — the correction over the old mechanical WHEN ("a slice landed"). Due when a
+    terminal failure / budget exhaustion / a registered kill makes more evidence
+    pointless, or when the evidence CONTRACT's required kinds have all arrived."""
+    if thread.failed:
+        return "experiment-failed"
+    b = thread.budget or {}
+    if b.get("max_slices") and thread.n_evidence >= int(b["max_slices"]):
+        return "budget-exhausted"
+    if b.get("max_wall_secs"):
+        total = sum(float((s.get("result") or {}).get("wall_s") or 0.0) for s in thread.slices)
+        if total >= float(b["max_wall_secs"]):
+            return "budget-exhausted"
+    counts = {EV_TRAIN: thread.n_evidence, EV_ARENA: len(thread.arena_evidence)}
+    required = (thread.contract or DEFAULT_CONTRACT).get("required") or []
+    if required and all(counts.get(r.get("kind"), 0) >= int(r.get("count", 1)) for r in required):
+        return "evidence-contract-satisfied"
+    # A BLOCKED continuation is intrinsically a decision point — it must be released
+    # (keep) or parked. This also breaks the would-be deadlock of a multi-slice
+    # contract whose next slice is the very thing being held.
+    if thread.blocked_rows:
+        return "continuation-blocked"
+    return None
+
+
 def research_threads(state: ledger.LedgerState) -> list[Thread]:
-    """Research lanes with terminal evidence NOT yet accounted for by a decision —
-    the deterministic WHEN for the research worker (resume-on-evidence). Pure;
-    most-evidence-first. ``actionable.research`` is exactly this list."""
-    covered = _decisions_covered(state)
+    """Research lanes whose decision is DUE and whose evidence is NEW since the last
+    decision — the *epistemic* WHEN for the research worker (resume-on-evidence).
+    Pure; most-evidence-first. ``actionable.research`` is exactly this list."""
+    covered_seq = _covered_seq(state)
     by_lane: dict[str, list[dict]] = {}
     open_by_lane: dict[str, list[dict]] = {}
+    blocked_by_lane: dict[str, list[dict]] = {}
+    arena_by_lane: dict[str, list[dict]] = {}
     for e in state.experiments.values():
+        lane = (e.get("config") or {}).get("lane") or e.get("id")
+        if e.get("role") == "arena":
+            if e.get("status") == ledger.DONE and "result" in e:
+                arena_by_lane.setdefault(lane, []).append(e)
+            continue
         if not _is_research_row(e):
             continue
-        lane = (e.get("config") or {}).get("lane") or e.get("id")
-        if e.get("status") in (ledger.DONE, ledger.FAILED) and "result" in e:
+        st = e.get("status")
+        if st in (ledger.DONE, ledger.FAILED) and "result" in e:
             by_lane.setdefault(lane, []).append(e)
-        elif e.get("status") in (ledger.OPEN, ledger.CLAIMED):
+        elif st in (ledger.OPEN, ledger.CLAIMED):
             open_by_lane.setdefault(lane, []).append(e)
+        elif st == ledger.BLOCKED:
+            blocked_by_lane.setdefault(lane, []).append(e)
     threads: list[Thread] = []
     for lane, rows in by_lane.items():
-        c = covered.get(lane, 0)
-        if len(rows) <= c:
-            continue                                   # no NEW evidence since last decision
         rows.sort(key=lambda e: e.get("seq", 0))
         from_issue = next(((e.get("config") or {}).get("from_issue") for e in rows
                            if (e.get("config") or {}).get("from_issue") is not None), None)
-        threads.append(Thread(
+        t = Thread(
             lane=lane, slices=rows, open_rows=open_by_lane.get(lane, []),
-            covered_through=c, from_issue=from_issue))
+            blocked_rows=blocked_by_lane.get(lane, []),
+            arena_evidence=arena_by_lane.get(lane, []),
+            covered_seq=covered_seq.get(lane, 0), from_issue=from_issue,
+            contract=_lane_config(rows, "evidence_contract", dict(DEFAULT_CONTRACT)),
+            budget=_lane_config(rows, "budget", {}))
+        t.due_reason = decision_due(t)
+        if t.due_reason is None:
+            continue                                   # NOT due — the epistemic gate
+        if t.max_evidence_seq <= t.covered_seq:
+            continue                                   # already decided at this evidence cutoff
+        threads.append(t)
     threads.sort(key=lambda t: t.n_evidence, reverse=True)
     return threads
 
 
-def _park_followups(thread: Thread) -> list[dict]:
-    """Stop a parked lane by superseding its still-runnable rows — append-only
-    corrections (never an edit). ``pick('train')`` then skips them: GPU reclaimed."""
-    return [ledger.correction(e["id"], {"status": "superseded"},
-                              reason=f"research thread {thread.lane} parked")
-            for e in thread.open_rows]
-
-
-def default_decide(thread: Thread, state: ledger.LedgerState) -> Decision:
+def default_decide(thread: Thread, state: ledger.LedgerState) -> DecisionIntent:
     """The dumb, deterministic decider — proxy-only, NEVER auto-promotes (that is
     Jason's call, #61). Park a broken/declining fork; flag a clearly-rising one
-    for review; otherwise keep deepening. The smart decider is Claude, plugged in
-    via ``resume(decide=...)``; the default exists so the loop self-runs without
-    it (doctrine §3: the default is fine because the WHEN is the truth)."""
+    for review; otherwise keep deepening. Returns a typed intent citing the exact
+    slices it weighed. The smart decider is Claude (``resume(decide=...)``)
+    returning the SAME type; the default exists so the loop self-runs without it."""
+    refs = [s["id"] for s in thread.slices]
     elos = thread.elos
     if thread.failed:
-        return Decision("park", "fork slice FAILED — parking", _park_followups(thread))
+        return DecisionIntent("park", refs, "fork slice FAILED — parking", "low")
     if len(elos) >= 2 and elos[-1] < elos[0]:
-        return Decision("park", "fork elo declining — parking", _park_followups(thread))
+        return DecisionIntent("park", refs, "fork elo declining — parking", "low")
     if len(elos) >= 2 and (elos[-1] - elos[0]) >= FAVOR_MARGIN:
-        return Decision("favor", f"fork rising +{elos[-1] - elos[0]:.0f} elo — review for promotion")
-    return Decision("keep", "fork within noise — keep deepening")
+        return DecisionIntent("favor", refs,
+                              f"fork rising +{elos[-1] - elos[0]:.0f} elo — review for promotion",
+                              "med")
+    # Budget reached with no clear signal → STOP (don't let a within-noise fork
+    # spin forever burning idle GPU). This is the hard backstop on wheel-spinning.
+    if thread.due_reason == "budget-exhausted":
+        return DecisionIntent("park", refs,
+                              "budget exhausted, no clear signal — parking", "med")
+    return DecisionIntent("keep", refs, "fork within noise — keep deepening", "med")
+
+
+def validate_intent(thread: Thread, state: ledger.LedgerState,
+                    intent: "DecisionIntent") -> list[str]:
+    """The wall (autolab-researcher-contract §2). Returns validation errors ([] =
+    valid). A refused intent is NEVER compiled to rows — so a (possibly LLM)
+    decider can propose meaning but can't breach the cage: it can't name an action
+    outside the vetted set, can't cite evidence the thread never received, and
+    can't smuggle in raw followups (verdict/eval/arbitrary rows)."""
+    errs: list[str] = []
+    if not isinstance(intent, DecisionIntent):
+        return [f"decider returned {type(intent).__name__}, not DecisionIntent"]
+    if intent.action not in ALLOWED_ACTIONS:
+        errs.append(f"action {intent.action!r} not in {ALLOWED_ACTIONS}")
+    have = thread.evidence_refs
+    for r in intent.evidence_refs:
+        if r not in have:
+            errs.append(f"cites evidence {r!r} not received by this thread")
+    for fu in intent.requested_followups or []:
+        kind = fu.get("kind") if isinstance(fu, dict) else None
+        if kind not in ALLOWED_FOLLOWUP_KINDS:
+            errs.append(f"disallowed requested followup {fu!r} (LLM may not author rows)")
+    return errs
+
+
+def _escalation_event(thread: Thread, summary: str, *, action: str) -> dict:
+    """A needs_jason flag health.scan surfaces — the one way a research decision
+    reaches a human (never an autonomous promotion)."""
+    return ledger.event(
+        scope=RESEARCH_ESCALATE_SCOPE,
+        summary=f"needs Jason: research thread {thread.lane} — {summary}"[:200],
+        data={"lane": thread.lane, "needs_jason": True, "action": action,
+              "from_issue": thread.from_issue})
+
+
+def compile_intent(thread: Thread, state: ledger.LedgerState,
+                   intent: "DecisionIntent") -> list[dict]:
+    """The ONLY builder of ledger rows from a (validated) decision. Deterministic,
+    in-process — the substrate creates valid commands; the model only proposed
+    meaning. It emits corrections + escalation events; it NEVER emits verdict/eval
+    rows (only the protected arena evaluator may), so an intent cannot forge a
+    promotion. ``park`` supersedes the lane's runnable+blocked rows; ``keep``/
+    ``favor`` unblock its BLOCKED continuation (judgment releases the next slice);
+    ``favor``/``escalate`` also raise a human flag."""
+    rows: list[dict] = []
+    a = intent.action
+    why = (intent.rationale or a)[:80]
+    if a == "park":
+        for e in thread.open_rows + thread.blocked_rows:
+            rows.append(ledger.correction(
+                e["id"], {"status": ledger.SUPERSEDED},
+                reason=f"research thread {thread.lane} parked: {why}"))
+    elif a in ("keep", "favor"):
+        for e in thread.blocked_rows:               # release the held continuation
+            rows.append(ledger.correction(
+                e["id"], {"status": ledger.OPEN},
+                reason=f"research thread {thread.lane} {a}: unblock continuation"))
+    if a in ("favor", "escalate"):
+        rows.append(_escalation_event(thread, why, action=a))
+    return rows
 
 
 def resume(ledger_path: str, *, decide=None,
            state: ledger.LedgerState | None = None) -> list[dict]:
-    """Resume every research thread whose evidence has landed undecided: decide,
-    append a decision event (+ any followups), move on. Idempotent — a re-fire
-    with no new evidence is a no-op (``research_threads`` returns []). ``decide``
-    is the pluggable WHAT (default = ``default_decide``; Claude = the smart one).
-    Returns ``[{lane, action, evidence_n}, ...]``."""
+    """Resume every DUE research thread: decide → validate → compile → append.
+    ``decide`` is the pluggable WHAT (default = ``default_decide``; Claude = the
+    smart one, returning the same ``DecisionIntent`` type).
+
+    Bulletproofing properties:
+      * The decision ALWAYS appends a watermark-bearing ``research-decision`` event
+        (``covers_through_seq`` + ``evidence_n``), so a thread can never be decided
+        twice at the same cutoff and the loop ALWAYS makes forward progress — even
+        a garbage intent can't spin it (the #1 "don't repeat mistakes" property).
+      * Only a VALIDATED intent is compiled to rows; a refused one writes no side
+        effects and ESCALATES to a human instead. The model proposes meaning; the
+        substrate writes commands.
+    Idempotent — a re-fire with no new evidence is a no-op. Returns
+    ``[{lane, action, evidence_n, rejected}, ...]``."""
     decide = decide or default_decide
     st = state if state is not None else ledger.fold(ledger.read_all(ledger_path))
     out: list[dict] = []
     for thread in research_threads(st):
-        d = decide(thread, st)
+        intent = decide(thread, st)
+        errs = validate_intent(thread, st, intent)
+        action = getattr(intent, "action", None) if not errs else "escalate"
+        side_rows = [] if errs else compile_intent(thread, st, intent)
+        # the watermark record — appended FIRST and ALWAYS (forward progress).
         ledger.append(ledger_path, ledger.event(
             scope=RESEARCH_DECISION_SCOPE,
-            summary=f"thread {thread.lane}: {d.action} — {d.note}",
+            summary=f"thread {thread.lane}: {action} — "
+                    f"{(getattr(intent, 'rationale', '') or '') if not errs else '; '.join(errs)}"[:200],
             data={"lane": thread.lane, "evidence_n": thread.n_evidence,
-                  "action": d.action, "from_issue": thread.from_issue}))
-        for row in d.followups:
+                  "covers_through_seq": thread.max_evidence_seq, "action": action,
+                  "evidence_refs": list(getattr(intent, "evidence_refs", []) or []),
+                  "due_reason": thread.due_reason, "rejected": bool(errs),
+                  "errors": errs, "from_issue": thread.from_issue}))
+        for row in side_rows:
             ledger.append(ledger_path, row)
-        out.append({"lane": thread.lane, "action": d.action,
-                    "evidence_n": thread.n_evidence})
+        if errs:                                    # a refused intent reaches Jason
+            ledger.append(ledger_path, _escalation_event(
+                thread, f"intent REFUSED ({'; '.join(errs)})", action="escalate"))
+        out.append({"lane": thread.lane, "action": action,
+                    "evidence_n": thread.n_evidence, "rejected": bool(errs)})
     return out
 
 

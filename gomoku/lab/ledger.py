@@ -64,6 +64,8 @@ OPEN = "open"
 CLAIMED = "claimed"
 DONE = "done"
 FAILED = "failed"
+BLOCKED = "blocked"     # created-but-not-runnable: awaiting a research decision
+SUPERSEDED = "superseded"  # parked by a correction; never runnable again
 
 
 # ---- time helpers -------------------------------------------------------
@@ -325,6 +327,9 @@ def fold(rows: Iterable[dict]) -> LedgerState:
             if e is not None:
                 e["status"] = row.get("status", DONE)
                 e["result"] = {k: row.get(k) for k in ("model", "buffer", "metrics", "wall_s", "error")}
+                # the seq the evidence LANDED at (not the experiment's creation seq)
+                # — the watermark for "decide once per evidence arrival" (#61).
+                e["result"]["_seq"] = row.get("seq")
                 e["_results"] += 1
         elif t == CORRECTION:
             tgt = exps.get(row.get("ref")) or evals.get(row.get("ref"))
@@ -337,6 +342,7 @@ def fold(rows: Iterable[dict]) -> LedgerState:
             ev = evals.get(row.get("ref"))
             if ev is not None:
                 ev["verdict"] = {k: row.get(k) for k in ("gate", "win_rate", "ci", "n", "note")}
+                ev["verdict"]["_seq"] = row.get("seq")   # evidence-landing seq (#61 watermark)
         elif t == EVENT:
             st.events.append(dict(row))
     return st

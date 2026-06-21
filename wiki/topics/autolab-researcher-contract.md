@@ -229,6 +229,44 @@ maturity *state machine* (use the vocabulary first). Adopting the whole schema z
 once would violate both our minimalism and the pass's own failure-cluster #8 ("take
 interfaces and failure lessons, not framework size").
 
+## Status — BUILT 2026-06-21 (in `feat/autolab-sim`, unmerged)
+
+The load-bearing core (1–3) shipped, each with a falsified sim invariant. Lab suite
+**67 passing**; full repo **898 passing / 0 failing**.
+
+- **Evidence contract → the epistemic WHEN** — a research row's `config` may carry
+  `evidence_contract` + `budget`; `research.decision_due(thread)` returns *why* a
+  decision is due (`experiment-failed` / `budget-exhausted` /
+  `evidence-contract-satisfied` / `continuation-blocked`) or **None**, and
+  `research_threads` gates on it. Default contract = `{train-result: 1}`, so legacy
+  rows are byte-for-byte unchanged. Supported kinds: `train-result`, `arena-verdict`.
+- **Typed-intent wall** — `DecisionIntent` (action · evidence_refs · rationale ·
+  uncertainty; **never raw rows**) → `validate_intent` (refuses a bad action, evidence
+  the thread never received, or any smuggled followup) → `compile_intent` (the **only**
+  row-builder; emits corrections/escalations, **never** verdict/eval). `default_decide`
+  and Claude return the identical type — one safe write path. *The wall is built, so a
+  Claude `decide=` is now safe to plug in; wiring the live Claude trigger is the
+  remaining #61 agent-lane work.*
+- **Continuation policy** — `review_policy ∈ {continuous, after_each_slice,
+  after_budget}`; the trainer creates an exploratory fork's continuation **BLOCKED**
+  (a new `ledger` status `claimable` skips), so judgment is upstream of the next GPU
+  hour; `keep`/`favor` release it, `park` supersedes it. Production/seed lanes default
+  to `continuous` — unchanged.
+- **Bulletproofing guarantees** (the "doesn't spin its wheels" half): the seq
+  **watermark** (`ledger.fold` records each result/verdict's *landing* seq;
+  `covers_through_seq` on every decision) makes a cutoff un-decidable twice; `resume`
+  **always** advances the watermark so a thread can never re-fire forever; a **refused**
+  intent is never applied and **escalates to `needs_jason`**; the dumb decider **parks
+  at budget** so a within-noise fork can't loop.
+- **New sim invariants (falsified RED-when-off):** `inv_decision_cites_real_evidence`,
+  `inv_no_redecide_same_cutoff`, `inv_blocked_before_decision` — plus scenarios
+  `evidence_contract_epistemic_when`, `continuation_blocked_before_decision`,
+  `intent_validation_wall`.
+
+**Still deferred** (unchanged from above): the `dossier_plan`/`hydrate` briefing
+assembly (presentation, not safety), the `research-lesson` system, scouts/auditor/
+reviewer-as-role, and the live Claude `decide=` trigger.
+
 ## The doctrine sentence, upgraded
 
 > **The autolab is an event-sourced experimental control plane. It deterministically

@@ -1368,3 +1368,20 @@ not gospel"). Two new pages + a doctrine refinement:
 
 New index doorway ("Design the autolab's research lane"). See
 [[feedback-stateless-delegate-design]] and [[feedback-learning-is-the-artifact]].
+
+## 2026-06-21 — researcher contract BUILT (epistemic WHEN + typed-intent wall + continuation policy)
+
+Implemented the load-bearing core of the [researcher contract](topics/autolab-researcher-contract.md)
+in `feat/autolab-sim` (code, not just design): `decision_due` (evidence contracts —
+the epistemic WHEN), the `DecisionIntent → validate_intent → compile_intent` wall (the
+model proposes meaning; only the substrate writes rows; an LLM can't forge a
+verdict/eval or cite evidence it never got), and the continuation policy (a fork's
+continuation is `BLOCKED_FOR_DECISION` until the researcher releases/parks it — GPU
+judgment upstream of spend). Plus the anti-spin guarantees: a seq watermark
+(`ledger.fold` now records evidence *landing* seq) so a cutoff is never re-decided;
+`resume` always advances the watermark; a refused intent escalates to `needs_jason`
+instead of looping; the dumb decider parks at budget. Three new sim invariants + three
+scenarios, **all falsified RED-when-off**. Lab suite 53→67 passing; full repo 898/0.
+Page status updated to BUILT; the live Claude `decide=` trigger is the remaining #61
+agent-lane work (the wall makes it safe to plug in). See
+[[feedback-stateless-delegate-design]].
