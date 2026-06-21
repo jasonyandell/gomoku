@@ -532,17 +532,40 @@ climb the cheap small boards first to bank epochs before the 15×15 "big leagues
   book by size. Same canned fair openers at every rung; D4 aug fans each into ~72 variants.
 - **Fresh / from-scratch at 9×9 → 11 → 13 → 15**, warm-starting up each rung (the global-pool trunk
   carries; the 3 board-bound FCs re-init). aggression `value-discount 0.95`, the e2 recipe otherwise.
-- **AUTO-PROMOTE on p90-plies-max** (#74, `babysit/ladder_grad.py`): graduate a rung when
-  `selfplay/plies_p90` has plateaued at its peak for 5 epochs — the net's defense has saturated this
-  board (it's strong enough to start drawing → would learn to *retreat*); promote NOW. **Minimal
-  gating on 9/11/13** (just bank cheap epochs, find a fresh killer); a CAP=250 backstop per rung.
+- **THE GATE IS BOARD-FILL** (#74, `babysit/ladder_grad.py`; corrected 2026-06-21). When white is
+  strong enough it drags black all the way out and **the board fills** — `selfplay/plies_p90` climbs
+  toward board capacity. That fill IS the promote signal: it proves white's defense saturated this
+  board. Promote the moment it fills (`p90 ≥ FILL_FRAC·cells`, default 0.75, for 5 epochs) — because
+  training *past* the fill just rewards dragging-out/retreating (a **dragger, not a killer**), the
+  exact bad habit we avoid. **NOT draw rate** (draws only appear *after* p90 fills, so a draw gate is
+  always too late) and **NOT a self-relative plateau** (that fires on a LOW plateau — p90 stuck at 18
+  on an 81-cell board = black mating fast = white WEAK — the opposite of strong). The grad-check runs
+  at the *top* of the rung loop, so a resumed already-filled rung promotes without another drag-out
+  slice. **Minimal gating on 9/11/13** (bank cheap epochs, find a fresh killer); CAP=250 backstop.
+- **9×9 BLACK-ADVANTAGE PRUNE GATE** (#73, Jason 2026-06-21): *"if 9×9 shows a black advantage, stop,
+  drop one of the openers, and run again"* (9×9 trains to ~100 epochs in minutes — a fresh re-run is
+  cheap). When 9×9 shows a persistent black edge (mean white-share < 43%) **while the board won't
+  fill** — i.e. white gets mated fast, the pathological case, *not* a slight lean at full board — the
+  opener set itself is unfair. `babysit/opener_balance.py` plays the net against itself from each
+  opener and ranks by black-win%; the orchestrator drops the most black-favoring shape via
+  `GOMOKU_DROP_OPENERS` (env-configured, reversible, indices stable across drops; commit `bd099d8`),
+  wipes the rung, and re-runs FRESH. Keeps ≥4 openers (Jason: "even 2–4 real openers is fine").
+  Board-fill *wins over* prune: when the board fills we promote even with a black lean (it's the
+  residual first-player edge, not a rigged opener).
 - Why 9 openings are enough to *learn* (not memorize): each is a deep game tree — "if any were an
   insta-win, gomoku would be solved" (Jason). The net has to actually learn to play.
 
 **The run.** Cells `G{9,11,13,15}-fixed-openings` (swap2 OFF, `fixed_openings=True`); `--fixed-openings`
 threaded through self-play / worker / trainer (commits `3c6e9d7`, `744849a`, tested at all sizes).
-Orchestrator `babysit/fairladder.sh` (15-min slices, p90-max auto-promote, warm-start between rungs;
-`touch babysit/STOP_fairladder` to stop). Rung-9 run `eilfnz1e`. Card: [[gomoku-15x15-fixed-fair-openings]].
+Orchestrator `babysit/fairladder.sh` (15-min slices, board-fill auto-promote, 9×9 prune gate,
+warm-start between rungs; `touch babysit/STOP_fairladder` to stop). Rung-9 run `eilfnz1e`.
+Card: [[gomoku-15x15-fixed-fair-openings]].
+
+**Status 2026-06-21:** **rung 9 GRADUATED at e83** — it filled the board (`p90=[81,81,81,81,81]`, the
+full 81 cells) with draws then spiking 25→59 (Jason's "draws come *after* fill" confirmed); promoted
+before the drag-out deepened. White was ~38% of *decisive* games at fill — a black lean, but the
+board filled so we promote (residual first-player edge, not a rigged opener → no prune). Warm-started
+9→11 (98.9% params transferred). **Now climbing rung 11.** No opener has been pruned.
 
 **What success looks like / what to watch:**
 - 🟢 **white-share of decisive self-play games → ~50%** (the headline; on a fair board white should
