@@ -4459,3 +4459,34 @@ parity, not a smooth descent**; read the trend across independent checkpoints *a
 CIs*, not any single gate (a single high gate can be an upward fluctuation, as e345 partly
 was). Formal crown gate stays at n≥200, deferred to plateau or e1000. High-res table:
 `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 (night) — Era-2 board-size LADDER launched (9→11→13→15)
+
+Pivoted era-2 from "9×9 → warm-start straight to 15×15" to a **board-size ladder**.
+Trigger: 9×9 swap2 **saturated into draw-dominance at e102** (last-3 epochs draws
+56/75/56 vs white ~14, black ~19–31; run `lywhy1ba`) — exactly Jason's graduation
+rule `max(draw, white, black) == draw`. 9×9 is too cramped for white to convert
+defense into a win, so it learns "draw"; a bigger board reclaims room. Native exts
+compiled for 11/13 (native-11 **68.3k** > native-15 **60.7k** sims/s; pure-Python
+~40k flat regardless of size → **never fall back**, it would break Δelo/hour). Each
+rung warm-starts the previous champion (98.9% transfer, only the 3 board-bound FCs
+re-init) and trains until draw-dominant, then steps up. Rung 15 terminal (board too
+big to draw). Cells `G-ladder-11/13/15`; orchestrator `babysit/ladder_autochain.sh`;
+graduation `babysit/ladder_grad.py` (reads `wandb_run_id` from `latest.pt`).
+Synthesis: `wiki/topics/board-size-transfer-and-warm-start.md` § the multi-rung ladder.
+
+Run IDs: 9×9 `lywhy1ba` (graduated e102) → 11×11 `8jsd7qzw` (live). 11×11 at e73:
+white%dec 30–42% (balanced, black slight edge), plies up to ~38–40 (vs 9×9 ~20),
+draws creeping to ~8–11% — **saturation onset beginning, same shape as 9×9**.
+
+**Jason's predictions (logged before the fact, for posterity — check against actual
+cutover epochs in the AM):** (1) happy if white can "fight and learn" at 11 or 13 at
+all; (2) 11×11 will drawmax **~30–50% later than 9×9** (so "pretty soon"); (3) 13×13
+will drawmax **much later**; (4) draws already rising at 11 → 13 cutover maybe sooner
+than expected; (5) success = "still training in the morning."
+
+**Cadence (unattended, NO gates — "just see what happens"):** monitor every 30 min on
+rungs 11/13. On reaching **15×15**, switch to **1-hr cadence with a Rapfi eval each
+lap** (try-vs-Rapfi → record → 1 h train → repeat). If something goes sideways,
+consult the wiki for the fix and keep it TRAINING — do not gate or stop. STOP control:
+`touch babysit/STOP_ladder`. Keep updating wiki/TRAINING_WIKI at each check-in.
