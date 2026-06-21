@@ -486,8 +486,12 @@ fault** (full evidence: `babysit/rapfi_swap2_research.md`; tracked as #73):
   iff the assigned side's root value is negative (`opening.cpp:194-213 decideAction`; option
   (c) place-2 is dead code there — stay-vs-swap suffices). The strong evaluator grabbing the
   better color IS the fairness mechanism. As opener it offers **9 hand-curated balanced 3-stone
-  openings, 15×15 ONLY** (`opening.cpp:81-91`); a general `OpeningGenerator` (balanceWindow=50)
-  mints balanced openings at any size by balance-search. **No play-time opening book** ships
+  openings** (`opening.cpp:81-91`) gated behind a hardcoded `board.size()==15` check — but the
+  openings themselves are **tiny local patterns** (each 3-stone cluster has a footprint ≤ 3×6;
+  most are 4×4), just pinned at varied absolute board locations (7 of 9 fit within coords ≤8;
+  two sit near the far corner). So "15×15-only" is an artifact of hardcoded coordinates, NOT a
+  board-spanning opening — a swap2 opening is just a small balanced cluster. A general
+  `OpeningGenerator` (balanceWindow=50) mints such balanced openings at any size by balance-search. **No play-time opening book** ships
   (the `[database]` is an off-by-default result cache); our local `engines/rapfi/` has none.
   Rapfi is GPLv3 → don't import their book; **re-implement the balance-search idea over our
   own evaluator** (board-size-agnostic, no license/eval-mismatch entanglement).
