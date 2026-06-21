@@ -716,6 +716,12 @@ def parse_args() -> argparse.Namespace:
                         "--random-opening-moves (swap2 owns the opening). v1 seeds "
                         "the opening only; no choice head is trained. Default OFF == "
                         "byte-identical to today.")
+    p.add_argument("--fixed-openings", action="store_true", default=False,
+                   help="Start each self-play game from one of Rapfi's 9 BALANCED "
+                        "(known-fair) swap2 openings, placed directly -- no "
+                        "negotiation, no net, no choice head; the net plays only "
+                        "post-opening. 15x15 only. Mutually exclusive with --swap2 "
+                        "and --random-opening-moves. Default OFF.")
     p.add_argument("--c-puct", type=float, default=1.25,
                    help="c_puct_init in the AGZ log-schedule PUCT formula. Effective "
                         "exploration constant at N_parent=0. Default 1.25 = AGZ value.")
@@ -1176,6 +1182,11 @@ def main() -> None:
         raise SystemExit(
             "--swap2 and --random-opening-moves are mutually exclusive "
             "(swap2 negotiates the opening; drop --random-opening-moves)"
+        )
+    if args.fixed_openings and (args.swap2 or args.random_opening_moves > 0):
+        raise SystemExit(
+            "--fixed-openings is mutually exclusive with --swap2 and "
+            "--random-opening-moves (the opening book owns the opening)"
         )
     device = pick_device(args.device)
     print(f"device = {device}")
@@ -2164,6 +2175,7 @@ def main() -> None:
                 wave_size=args.wave_size,
                 random_opening_moves=args.random_opening_moves,
                 swap2=args.swap2,
+                fixed_openings=args.fixed_openings,
                 record_aux=aux_on,
                 record_ownership=ownership_on,
             )

@@ -10,6 +10,7 @@ from typing import MutableMapping
 import numpy as np
 
 from gomoku.game import (
+    BOARD_SIZE,
     GameState,
     HISTORY_PLY,
     N_ACTIONS,
@@ -1332,6 +1333,58 @@ def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameS
         # restart from scratch
 
 
+# Rapfi's 9 hand-curated BALANCED swap2 openings (gomoku/../rapfi opening.cpp),
+# defined for a 15x15 board. Each is 3 (x=col, y=row) coords placed BLACK, WHITE,
+# BLACK (the swap2 opener order, see gomoku/swap2.py:_NODE_INFO) -> 2 black + 1
+# white -> WHITE to move when normal play begins. Because each is balance-searched
+# (swap-value ~= 0), neither color is favored from the resulting position -- a
+# "known-fair board." Used by the fixed-opening training mode (#73): we hand the
+# net these fair positions DIRECTLY and skip the (unfair) negotiation entirely.
+_RAPFI_BALANCED_OPENINGS_15: tuple[tuple[tuple[int, int], ...], ...] = (
+    ((6, 7), (6, 4), (4, 2)),
+    ((3, 3), (5, 5), (6, 6)),
+    ((3, 2), (5, 4), (4, 5)),
+    ((5, 2), (1, 5), (1, 6)),
+    ((8, 5), (5, 8), (6, 7)),
+    ((5, 5), (8, 8), (7, 7)),
+    ((13, 12), (13, 9), (10, 12)),
+    ((11, 7), (10, 6), (13, 5)),
+    ((3, 7), (1, 8), (0, 4)),
+)
+
+
+def _fixed_opening_state(
+    rng: np.random.Generator,
+    openings: tuple[tuple[tuple[int, int], ...], ...] = _RAPFI_BALANCED_OPENINGS_15,
+) -> tuple[GameState, int]:
+    """Pick one fixed BALANCED opening uniformly and place its 3 stones directly.
+
+    Stones are colored BLACK, WHITE, BLACK in list order (the swap2 opener order),
+    yielding 2 black + 1 white -> white to move. Returns ``(GameState, plies=3)``,
+    mirroring ``_random_opening_state``'s contract so the gen loops drop it into the
+    same opening branch. NO swap2 negotiation, NO net call, NO choice records -- the
+    construction is byte-identical to ``swap2.OpeningState.to_normal()`` for the
+    2-black-1-white SWAP outcome (plane 0 = mover/white stones, plane 1 = black).
+
+    The opening coordinates are 15x15-specific; raises on any other board size.
+    """
+    if BOARD_SIZE != 15:
+        raise ValueError(
+            f"_fixed_opening_state: the balanced opening book is defined for 15x15, "
+            f"not {BOARD_SIZE}x{BOARD_SIZE} (set GOMOKU_BOARD_SIZE=15)"
+        )
+    opening = openings[int(rng.integers(0, len(openings)))]
+    black = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
+    white = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
+    for i, (x, y) in enumerate(opening):  # x=col, y=row -> board[y, x]
+        (black if i % 2 == 0 else white)[y, x] = True  # i=0,2 black; i=1 white
+    # 2 black + 1 white -> nb == nw + 1 -> WHITE to move; plane 0 = mover (white).
+    board = np.stack([white, black]).astype(bool)
+    state = GameState(board=board, move_count=3, history=())
+    assert not state.is_terminal()[0]  # 3 scattered stones can never be 5-in-a-row
+    return state, 3
+
+
 def _make_swap2_oracle(evaluator: Evaluator):
     """Wrap a batch `evaluator` as a single-state swap2 oracle.
 
@@ -1424,6 +1477,7 @@ def _generate_games_native_gumbel(
     wave_size: int = 16,
     random_opening_moves: int = 0,
     swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     profile: ProfileStats | None = None,
@@ -1493,6 +1547,8 @@ def _generate_games_native_gumbel(
                 opening_plies = start_state.move_count
             elif swap2:
                 start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+            elif fixed_openings:
+                start_state, opening_plies = _fixed_opening_state(rng)
             elif random_opening_moves > 0:
                 start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
             else:
@@ -1653,6 +1709,7 @@ def _generate_games_gumbel(
     augment_symmetries: bool = True,
     random_opening_moves: int = 0,
     swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     profile: ProfileStats | None = None,
@@ -1704,6 +1761,8 @@ def _generate_games_gumbel(
             opening_plies = start_state.move_count
         elif swap2:
             start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+        elif fixed_openings:
+            start_state, opening_plies = _fixed_opening_state(rng)
         elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
@@ -1830,6 +1889,7 @@ def _generate_games_native(
     wave_size: int = 1,
     random_opening_moves: int = 0,
     swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
@@ -1895,6 +1955,8 @@ def _generate_games_native(
                 opening_plies = start_state.move_count
             elif swap2:
                 start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+            elif fixed_openings:
+                start_state, opening_plies = _fixed_opening_state(rng)
             elif random_opening_moves > 0:
                 start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
             else:
@@ -2099,6 +2161,7 @@ def generate_games(
     wave_size: int = 1,
     random_opening_moves: int = 0,
     swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
@@ -2179,6 +2242,13 @@ def generate_games(
             "swap2 and random_opening_moves are mutually exclusive "
             "(swap2 negotiates the opening; set random_opening_moves=0)"
         )
+    if fixed_openings and (swap2 or random_opening_moves > 0):
+        # The fixed balanced opening book places the opening directly; it is
+        # mutually exclusive with swap2 negotiation and random openings.
+        raise ValueError(
+            "fixed_openings is mutually exclusive with swap2 and "
+            "random_opening_moves (the opening book owns the opening)"
+        )
     if gumbel_root:
         # Gumbel root selection + Sequential Halving. When the native C engine
         # is available AND implements the Gumbel batch path, use it — it
@@ -2199,6 +2269,7 @@ def generate_games(
                 wave_size=wave_size,
                 random_opening_moves=random_opening_moves,
                 swap2=swap2,
+                fixed_openings=fixed_openings,
                 archive=archive,
                 archive_start_frac=archive_start_frac,
                 profile=profile,
@@ -2226,6 +2297,7 @@ def generate_games(
             augment_symmetries=augment_symmetries,
             random_opening_moves=random_opening_moves,
             swap2=swap2,
+            fixed_openings=fixed_openings,
             archive=archive,
             archive_start_frac=archive_start_frac,
             profile=profile,
@@ -2255,6 +2327,7 @@ def generate_games(
             wave_size=wave_size,
             random_opening_moves=random_opening_moves,
             swap2=swap2,
+            fixed_openings=fixed_openings,
             archive=archive,
             archive_start_frac=archive_start_frac,
             playout_cap_frac=playout_cap_frac,
@@ -2277,6 +2350,8 @@ def generate_games(
         swap2_res = None
         if swap2:
             start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+        elif fixed_openings:
+            start_state, opening_plies = _fixed_opening_state(rng)
         elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:

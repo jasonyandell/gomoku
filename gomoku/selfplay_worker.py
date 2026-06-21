@@ -117,6 +117,12 @@ def parse_args() -> argparse.Namespace:
                         "with --random-opening-moves; swap2 owns the opening. "
                         "v1 seeds the opening only (no choice head is trained). "
                         "Default OFF == byte-identical to today.")
+    p.add_argument("--fixed-openings", action="store_true", default=False,
+                   help="Start each self-play game from one of Rapfi's 9 BALANCED "
+                        "(known-fair) swap2 openings, placed directly (no "
+                        "negotiation, no net, no choice head); the net plays only "
+                        "post-opening. 15x15 only. Mutually exclusive with --swap2 "
+                        "and --random-opening-moves. Default OFF.")
 
     # Playout-Cap Randomization (KataGo, Wu 2019). Opt-in; defaults are inert and
     # preserve the byte-identical production self-play path. When frac < 1.0,
@@ -776,6 +782,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             wave_size=args.wave_size,
             random_opening_moves=args.random_opening_moves,
             swap2=args.swap2,
+            fixed_openings=args.fixed_openings,
             archive=archive,
             archive_start_frac=args.archive_start_frac,
             playout_cap_frac=args.playout_cap_frac,

@@ -113,6 +113,12 @@ class Cell:
     # opening instead of an empty/random board. Mutually exclusive with
     # random_opening_moves (swap2 owns the opening). Default OFF = byte-identical.
     swap2: bool = False
+    # Fixed balanced opening book (#73): each self-play game starts from one of
+    # Rapfi's 9 known-fair swap2 openings, placed directly (no negotiation, no
+    # net, no choice head); the net plays only post-opening. 15x15 only. Mutually
+    # exclusive with swap2 / random_opening_moves. Emitted to BOTH trainer and
+    # worker cmds. Default OFF = byte-identical.
+    fixed_openings: bool = False
     # WL5 levers (wiki/topics/wl5-diagnostics-archive-start-design.md). Trainer
     # scores a frozen validation set every eval cycle for stationary policy/
     # value quality. Workers seed `archive_start_frac` of games from the same
@@ -592,6 +598,31 @@ CELLS: dict[str, Cell] = {
                 global_pool=True, swap2=True,
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-fixed-openings (#73): FROM-SCRATCH 15x15, swap2 OFF, FIXED BALANCED
+    # opening book. Every self-play game starts from one of Rapfi's 9 known-fair
+    # swap2 openings, placed directly (no negotiation, no opener policy, no choice
+    # head); the net plays only post-opening. Sidesteps the unfair-opener problem
+    # (the opener can't compose fair openings -> black edge; see swap2 wiki §10) by
+    # handing the net known-fair boards. Clone of the e2 recipe but swap2=False +
+    # fixed_openings=True, "--swap2" REMOVED from extra_worker_args. LAUNCH FRESH:
+    # GOMOKU_BOARD_SIZE=15 and omit --resume (then --resume latest.pt to continue).
+    "G15-fixed-openings": Cell("G15-fixed-openings-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=False, fixed_openings=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-defense (#36, sliding-derby Lap 1): the DEFENSE-TEACHER cell — the proven-
     # needed white-side fix. Diagnosis (#33) is closed: the champion's white-side
@@ -2395,6 +2426,8 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
     if cell.swap2:
         cmd += ["--swap2"]
+    if cell.fixed_openings:
+        cmd += ["--fixed-openings"]
     if cell.validation_archive_path is not None:
         cmd += ["--validation-archive-path", cell.validation_archive_path]
     return cmd
@@ -2434,6 +2467,8 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
         cmd += ["--weights-poll-max-sec", str(cell.weights_poll_max_sec)]
     if cell.random_opening_moves > 0:
         cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
+    if cell.fixed_openings:
+        cmd += ["--fixed-openings"]
     if cell.archive_start_path is not None and cell.archive_start_frac > 0:
         cmd += [
             "--archive-start-path", cell.archive_start_path,
