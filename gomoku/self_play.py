@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import os
 import time
 from typing import MutableMapping
 
@@ -1378,6 +1379,39 @@ _FAIR_OPENINGS: dict[int, tuple[tuple[tuple[int, int], ...], ...]] = {
 }
 
 
+def _active_fixed_openings(
+    board_size: int | None = None,
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    """The fixed opening book for ``board_size`` (default: active), minus any
+    indices listed in ``$GOMOKU_DROP_OPENERS`` (comma-separated indices into the
+    ORIGINAL book).
+
+    The black-advantage prune gate (#73, 9x9): if a rung shows a persistent black
+    edge, the orchestrator identifies the most black-favoring opener (offline
+    balance probe) and re-runs with that index dropped via this env var -- no
+    source edit, reversible, indices stay stable across drops. Raises if the drop
+    list would empty the book.
+    """
+    n = BOARD_SIZE if board_size is None else board_size
+    openings = _FAIR_OPENINGS.get(n)
+    if openings is None:
+        raise ValueError(
+            f"_active_fixed_openings: no fixed opening book for board size "
+            f"{n}; have {sorted(_FAIR_OPENINGS)} (set GOMOKU_BOARD_SIZE)"
+        )
+    raw = os.environ.get("GOMOKU_DROP_OPENERS", "").strip()
+    if not raw:
+        return openings
+    drop = {int(t) for t in raw.replace(",", " ").split() if t.strip() != ""}
+    kept = tuple(o for i, o in enumerate(openings) if i not in drop)
+    if not kept:
+        raise ValueError(
+            f"GOMOKU_DROP_OPENERS={raw!r} would drop every opener for "
+            f"board {n} (book has {len(openings)})"
+        )
+    return kept
+
+
 def _fixed_opening_state(
     rng: np.random.Generator,
     openings: tuple[tuple[tuple[int, int], ...], ...] | None = None,
@@ -1395,12 +1429,7 @@ def _fixed_opening_state(
     any other size.
     """
     if openings is None:
-        openings = _FAIR_OPENINGS.get(BOARD_SIZE)
-        if openings is None:
-            raise ValueError(
-                f"_fixed_opening_state: no fixed opening book for board size "
-                f"{BOARD_SIZE}; have {sorted(_FAIR_OPENINGS)} (set GOMOKU_BOARD_SIZE)"
-            )
+        openings = _active_fixed_openings(BOARD_SIZE)
     opening = openings[int(rng.integers(0, len(openings)))]
     black = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
     white = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)

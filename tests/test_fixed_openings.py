@@ -108,3 +108,31 @@ def test_default_path_unbroken():
     """fixed_openings defaults OFF -> standard empty-board self-play still works."""
     records = sp.generate_games(2, _EV, n_simulations=4, rng=np.random.default_rng(1))
     assert isinstance(records, list) and len(records) > 0
+
+
+def test_drop_openers_env(monkeypatch):
+    """GOMOKU_DROP_OPENERS removes the listed indices from the active book (#73 prune).
+
+    The 9x9 black-advantage prune gate drops the most black-favoring opener by
+    setting this env var and re-running -- no source edit, reversible, indices
+    stable across drops. Emptying the book raises.
+    """
+    full = sp._FAIR_OPENINGS.get(BOARD_SIZE, ())
+    if len(full) < 3:
+        pytest.skip("book too small for a drop test")
+
+    # default: no env -> full book
+    monkeypatch.delenv("GOMOKU_DROP_OPENERS", raising=False)
+    assert sp._active_fixed_openings(BOARD_SIZE) == full
+
+    # drop two indices -> those exact shapes are gone, order otherwise preserved
+    monkeypatch.setenv("GOMOKU_DROP_OPENERS", "0, 2")
+    kept = sp._active_fixed_openings(BOARD_SIZE)
+    assert len(kept) == len(full) - 2
+    assert full[0] not in kept and full[2] not in kept
+    assert kept == tuple(o for i, o in enumerate(full) if i not in (0, 2))
+
+    # dropping every index raises rather than yielding an empty book
+    monkeypatch.setenv("GOMOKU_DROP_OPENERS", ",".join(str(i) for i in range(len(full))))
+    with pytest.raises(ValueError):
+        sp._active_fixed_openings(BOARD_SIZE)
