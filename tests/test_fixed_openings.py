@@ -23,7 +23,8 @@ from gomoku.model import build_model
 from gomoku import self_play as sp
 
 pytestmark = pytest.mark.skipif(
-    BOARD_SIZE != 15, reason="fixed balanced openings are defined for 15x15 only"
+    BOARD_SIZE not in (9, 11, 13, 15),
+    reason="fixed openings are defined for board sizes 9/11/13/15",
 )
 
 
@@ -42,11 +43,12 @@ _DEV = torch.device("cpu")
 _MODEL = build_model("tiny").to(_DEV)
 _MODEL.eval()
 _EV = make_torch_evaluator(_MODEL, _DEV)
+_BOOK = sp._FAIR_OPENINGS.get(BOARD_SIZE, ())
 
 
 def test_all_openings_2black_1white_white_to_move():
     """Each of the 9 openings: 2 black + 1 white, white to move, move_count=3, not terminal."""
-    for k in range(len(sp._RAPFI_BALANCED_OPENINGS_15)):
+    for k in range(len(_BOOK)):
         state, plies = sp._fixed_opening_state(_RngForcedIndex(k))
         assert plies == 3
         assert state.move_count == 3
@@ -56,7 +58,7 @@ def test_all_openings_2black_1white_white_to_move():
         assert int(state.board[1].sum()) == 2  # two black stones
         assert not state.is_terminal()[0]  # 3 scattered stones never win
         # stones land at the expected (x=col, y=row) cells with the right color
-        opening = sp._RAPFI_BALANCED_OPENINGS_15[k]
+        opening = _BOOK[k]
         for i, (x, y) in enumerate(opening):
             plane = 1 if i % 2 == 0 else 0  # i=0,2 black (plane 1); i=1 white (plane 0)
             assert state.board[plane][y, x], f"opening {k} stone {i} at ({x},{y})"
@@ -66,7 +68,7 @@ def test_oracle_equivalence_to_swap2_to_normal():
     """Construction is byte-identical to swap2.OpeningState.to_normal() (SWAP outcome)."""
     from gomoku import swap2
 
-    for k, opening in enumerate(sp._RAPFI_BALANCED_OPENINGS_15):
+    for k, opening in enumerate(_BOOK):
         state, _ = sp._fixed_opening_state(_RngForcedIndex(k))
         black = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
         white = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)

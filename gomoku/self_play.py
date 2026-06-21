@@ -1352,10 +1352,35 @@ _RAPFI_BALANCED_OPENINGS_15: tuple[tuple[tuple[int, int], ...], ...] = (
     ((3, 7), (1, 8), (0, 4)),
 )
 
+# Fair-opening LADDER (#73/#74): the SAME Rapfi shapes RE-CENTERED onto the smaller
+# boards (translate each 3-stone cluster so its bounding box sits at board center;
+# the footprints are <=3x6 so all 9 fit on 9/11/13 -- none dropped). The relative
+# arrangement (and thus the rough balance) is preserved; centering keeps them off
+# the edges. 15 keeps Rapfi's native placements. So a fresh net trains the same
+# canned fair openers at every rung, climbing 9->11->13->15.
+_FAIR_OPENINGS: dict[int, tuple[tuple[tuple[int, int], ...], ...]] = {
+    9: (
+        ((5, 7), (5, 4), (3, 2)), ((3, 3), (5, 5), (6, 6)), ((3, 2), (5, 4), (4, 5)),
+        ((6, 2), (2, 5), (2, 6)), ((6, 3), (3, 6), (4, 5)), ((3, 3), (6, 6), (5, 5)),
+        ((5, 6), (5, 3), (2, 6)), ((3, 5), (2, 4), (5, 3)), ((5, 5), (3, 6), (2, 2)),
+    ),
+    11: (
+        ((6, 7), (6, 4), (4, 2)), ((3, 3), (5, 5), (6, 6)), ((4, 4), (6, 6), (5, 7)),
+        ((7, 3), (3, 6), (3, 7)), ((6, 3), (3, 6), (4, 5)), ((3, 3), (6, 6), (5, 5)),
+        ((7, 6), (7, 3), (4, 6)), ((5, 6), (4, 5), (7, 4)), ((7, 6), (5, 7), (4, 3)),
+    ),
+    13: (
+        ((7, 9), (7, 6), (5, 4)), ((5, 5), (7, 7), (8, 8)), ((5, 4), (7, 6), (6, 7)),
+        ((8, 4), (4, 7), (4, 8)), ((8, 5), (5, 8), (6, 7)), ((5, 5), (8, 8), (7, 7)),
+        ((7, 8), (7, 5), (4, 8)), ((5, 7), (4, 6), (7, 5)), ((7, 7), (5, 8), (4, 4)),
+    ),
+    15: _RAPFI_BALANCED_OPENINGS_15,
+}
+
 
 def _fixed_opening_state(
     rng: np.random.Generator,
-    openings: tuple[tuple[tuple[int, int], ...], ...] = _RAPFI_BALANCED_OPENINGS_15,
+    openings: tuple[tuple[tuple[int, int], ...], ...] | None = None,
 ) -> tuple[GameState, int]:
     """Pick one fixed BALANCED opening uniformly and place its 3 stones directly.
 
@@ -1366,13 +1391,16 @@ def _fixed_opening_state(
     construction is byte-identical to ``swap2.OpeningState.to_normal()`` for the
     2-black-1-white SWAP outcome (plane 0 = mover/white stones, plane 1 = black).
 
-    The opening coordinates are 15x15-specific; raises on any other board size.
+    The opening book is selected by the active board size (9/11/13/15); raises on
+    any other size.
     """
-    if BOARD_SIZE != 15:
-        raise ValueError(
-            f"_fixed_opening_state: the balanced opening book is defined for 15x15, "
-            f"not {BOARD_SIZE}x{BOARD_SIZE} (set GOMOKU_BOARD_SIZE=15)"
-        )
+    if openings is None:
+        openings = _FAIR_OPENINGS.get(BOARD_SIZE)
+        if openings is None:
+            raise ValueError(
+                f"_fixed_opening_state: no fixed opening book for board size "
+                f"{BOARD_SIZE}; have {sorted(_FAIR_OPENINGS)} (set GOMOKU_BOARD_SIZE)"
+            )
     opening = openings[int(rng.integers(0, len(openings)))]
     black = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
     white = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
