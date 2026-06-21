@@ -1,0 +1,82 @@
+# Board-size transfer & warm-start (9×9 → 15×15) — the proven curriculum
+
+**Status (2026-06-20):** PROVEN, TESTED, READY. This page is the consolidated how-to that
+was missing — the mechanism existed (`scripts/warmstart_15x15.py`, commit `221b314`, tested
+in `tests/test_warmstart.py`) and is how the 15×15 nets were actually born, but it lived only
+in the script docstring + scattered campaign logs. Don't lose it again.
+
+## What it is
+
+`scripts/warmstart_15x15.py` does a **cross-board partial load**: build a FRESH target-board
+net, copy every tensor whose name AND shape match from a source (smaller-board) checkpoint,
+leave the board-bound FCs at fresh init. Because the net uses **`global_pool`** (board-size-
+agnostic conv trunk), almost everything transfers:
+
+- **9×9 → 15×15, size=large: 98.9% of params transfer** (153/156 tensors, conv tower +
+  global-pool blocks + value trunk **byte-identical**). Only **3 board-bound FCs re-init**:
+  `policy_fc.weight`, `policy_fc.bias` (81→225 outputs), `value_fc1.weight` (spatial flatten).
+- The script **asserts arch-match** and fails LOUD on divergence (different `n_filters` etc.) —
+  it never silently half-transfers.
+- The swap2 **choice head transfers too** (it's `Linear(value_hidden, N_CHOICES)`, board-size-
+  independent); `load_checkpoint` also tolerates missing choice keys (fresh-init fallback).
+
+## Why it matters — warm-start is the remedy for the 15×15 cold-start collapse
+
+**Cold-starting a fresh net at 15×15 walks straight into fast-attack collapse** (plies crash,
+shallow rush-fest) before defense develops. This is documented and we re-confirmed it live:
+
+- 2026-06-13 `G15-seed` cold run → fast-attack collapse (plies 68→11), swapped to a
+  9×9-warm-started seed → **plies ~85 from epoch 0 (defended play), collapse skipped.**
+  Durable lesson then: "cold-start fast-attack collapse is real at 15×15; warm-start is the
+  remedy." (A later WDL from-scratch run *recovered* from the collapse on its own, so warm-
+  start isn't strictly mandatory — but it SKIPS the wasted collapse-and-recover cycle.)
+- 2026-06-20 era-2 (`G15-swap2-e2`, fresh 15×15 swap2) reproduced it exactly: **plies 70→12
+  (collapse) → recovered to ~25** over ~3 hours. That whole V-shape is the cold-start tax a
+  warm-start avoids.
+
+**The deeper trap:** era-1 warm-started the *pre-swap2 defensive champion* → imported the
+**lose-slowly basin** ([[swap2-opening-protocol]] §9). So *what* you warm-start from matters:
+warm-start an **aggressive, not-doomed** net and you import good priors; warm-start a
+defensive one and you import the basin.
+
+## The curriculum recipe (era-2 / Path A, the 2026-06-20 overnight)
+
+Three wins from one move — train cheap-and-fast where white isn't doomed, then carry it up:
+
+1. **Bootstrap on 9×9** (`G9-swap2-e2`): fresh swap2, aggression (`value-discount 0.95`),
+   v2a OFF. 9×9 is the project's NATIVE board — native state-ops + MCTS exist, **~28 s/epoch
+   vs 15×15's ~91 s (3.2×)**, games short, white trainable. Run to ~500 epochs (~3.7 h).
+2. **Transfer**: `warmstart_15x15.py` → a 15×15 seed (98.9% trunk). Skips the cold-start
+   collapse AND imports the *aggressive* 9×9 priors (not era-1's defensive ones).
+3. **Continue on 15×15** (`G15-swap2-e3`): swap2, aggression 0.95, v2a OFF, `--resume <seed>`.
+
+Orchestrated by `/Users/jason/data/swap2/babysit/overnight_autochain.sh` (detached, crash-
+guarded, `touch STOP_overnight` to stop). 9×9 cell `G9-swap2-e2` (commit `cd93233`); 15×15
+phase-2 cell `G15-swap2-e3` (commit `a16737e`); both = the e2 recipe with v2a removed.
+
+## How to run the transfer (entrypoint)
+
+```bash
+GOMOKU_DEVICE=cpu python scripts/warmstart_15x15.py \
+  --from <9x9_checkpoint.pt> --out <15x15_seed.pt> --size large --board-size 15
+# optional: --target-value-head wdl  (scalar 9x9 -> WDL 15x15; warm tower, fresh WDL head)
+# then continue training:
+GOMOKU_BOARD_SIZE=15 python -m gomoku.train --resume <15x15_seed.pt> ...
+```
+
+Verify: `GOMOKU_BOARD_SIZE=15 pytest tests/test_warmstart.py -q` (transfer accounting,
+byte-identical trunk, arch-mismatch-fails-loud, scalar→WDL).
+
+## Gotchas
+
+- **`GOMOKU_BOARD_SIZE` must be set BEFORE importing `gomoku`** — board size is resolved once,
+  process-level (`gomoku/board_config.py`), and written back to the env so workers inherit it.
+  The warmstart script handles this internally; your own scripts must set it first.
+- **Architecture must match** between source and target (same `n_filters`/`n_blocks`/
+  `global_pool`/`stem_padding`/`activation`) — else the trunk won't shape-match. Script asserts.
+- **The seed is buffer-less + optimizer-less** (`epoch=0`, no wandb id) → the first run builds
+  a fresh buffer and a clean timeline. That's intended.
+- **Board size is NOT a Cell field** in `run_sweep.py` — the `...board9`/`...board15` run-dir
+  name is just an artifact-collision guard. You select board size with the env var at launch.
+- Native ext is **compiled per board size (only 9 and 15)** by `uv pip install -e ".[dev]"`;
+  both `.so` sets exist in a properly-installed worktree. No recompile needed to switch.
