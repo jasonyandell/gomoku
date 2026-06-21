@@ -466,3 +466,45 @@ win-length distribution is shortening and choice-loss is falling.
   white/black balance (smoothed, not single-epoch — those swing wildly).
 - North-star for "is the basin breaking?": **white win% vs Rapfi climbing off 0%**, and
   mean plies *falling* on wins.
+
+## 10. The fairness diagnosis — the OPENER is the broken half (Rapfi-confirmed, 2026-06-21) ⭐
+
+Jason's gut (2026-06-21): "our swap2 isn't a fair game — black has an edge, white is
+statistically expected to lose; in Vegas the house takes black every time. Highest
+priority." A deep Rapfi source audit + our own code audit **confirms it and localizes the
+fault** (full evidence: `babysit/rapfi_swap2_research.md`; tracked as #73):
+
+- **Our responder is FINE; our opener is the broken half.** Responder stay/swap/place2 is a
+  one-ply value-head comparison (`swap2_search.py:206-225 _choice_values`) — a competent
+  responder correctly **swaps to whichever side is better (black)**. But the **opener places
+  are sampled from a policy head that has NO fairness gradient** (`swap2_search.py:133-170`):
+  it can't learn to compose a *balanced* opening, so it keeps offering openings black wants
+  → responder always takes black → stuck ~69/27. **No protocol bug exists** (counts,
+  side-to-move, PLACE2 color, `backup_sign` all correct). The choice head (v2a) is a real
+  lever but **not the cause** (it's off *and* never wired into selection anyway).
+- **How Rapfi stays fair:** it decides the swap **purely by eval-sign** — full search, swap
+  iff the assigned side's root value is negative (`opening.cpp:194-213 decideAction`; option
+  (c) place-2 is dead code there — stay-vs-swap suffices). The strong evaluator grabbing the
+  better color IS the fairness mechanism. As opener it offers **9 hand-curated balanced 3-stone
+  openings, 15×15 ONLY** (`opening.cpp:81-91`); a general `OpeningGenerator` (balanceWindow=50)
+  mints balanced openings at any size by balance-search. **No play-time opening book** ships
+  (the `[database]` is an off-by-default result cache); our local `engines/rapfi/` has none.
+  Rapfi is GPLv3 → don't import their book; **re-implement the balance-search idea over our
+  own evaluator** (board-size-agnostic, no license/eval-mismatch entanglement).
+
+**The fix, ranked (proposal — not yet implemented; Jason's call on go):**
+- **TRY FIRST — Option A: train the OPENER against the responder's swap** (the project's own
+  fix #3). Punish the opener when the responder profitably swaps → drives opening swap-value
+  → 0, i.e. the true minimax **50/50**. Only this reaches fairness while preserving learning
+  (the responder's already correct). Medium effort; risk = opener-diversity collapse (mitigate
+  with an entropy bonus). **Validate:** `opener_color_dist` / black-share → 0.50.
+- **Option B (parallel/seed): generate our own balanced opening set** via balance-search over
+  *our* value head (board-size agnostic). Reusing Rapfi's 9 triples is a weak fit (15×15-only,
+  "balanced for Rapfi ≠ balanced for us").
+- **Option C (LAST, only after A): re-enable + wire the choice head (v2a→v2b)** — sharpening
+  the responder *before* fixing the opener pushes *away* from 50/50.
+- **Option D: protocol fixes — none needed.**
+
+**Why this matters:** reframes the entire white-0% story. We were treating white weakness as a
+*training* gap, but white has been playing a **-EV seat** — a rigged game no training can win.
+Fairness (≈50/50 w/b) is **upstream of white engagement** and is the highest-priority fix.
