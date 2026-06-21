@@ -4514,3 +4514,28 @@ CAP at e401. So the *drawmax framing* didn't hold for 11 (equilibrium instead); 
 instinct (9×9-style saturation transfers up the ladder) gave way to a black-edge fixed
 point once the board had room. "13 drawmaxes much later" — TBD; 13 has even more room, so
 expect equilibrium-or-CAP again rather than a clean drawmax.
+
+### 2026-06-21 07:40 — FULL LADDER COMPLETE: reached 15×15 (9→11→13→15 overnight)
+
+The whole curriculum climbed unattended in one night. Timeline + how each rung graduated:
+
+| rung | run | epochs | graduated | how |
+|---|---|---|---|---|
+| 9×9  | `lywhy1ba` | →e102 | 2026-06-20 ~22:50 | **drawmax** (draws 56/75/56 vs white ~14) |
+| 11×11 | `8jsd7qzw` | e0→e401 | 02:50 | **CAP** (stable black-edge equilibrium, never drawmaxed) |
+| 13×13 | `2dvcxh0b` | e0→e424 | 07:40 | **CAP** (same equilibrium; black edge *stronger*, draws rarer ~10%) |
+| 15×15 | (live) | e0→ | terminal | runs until `STOP_ladder` |
+
+**Durable lesson: only the smallest board (9×9) cleanly draw-saturates.** With v2a OFF
+the swap2 negotiation doesn't balance colors, so on 11 and 13 black keeps a genuine
+first-move edge (white ~25–35% of decisive games, plies long/healthy ~50–70 — defending,
+NOT the 0% basin) and draws never overtake black. The **CAP backstop is therefore the
+real graduation mechanism for the bigger rungs**, not the drawmax rule — and that's fine,
+it advanced each rung cleanly. White "fights and learns" at every rung (Jason's bar met).
+
+15×15 starts fresh-headed (the 13→15 transfer re-inits `policy_fc`/`value_fc1`); first
+epochs are empty/raced (workers warming on slow ~plies-134 games). **Now on the 1-hr
+Rapfi cadence** (`babysit/ladder_rapfi15.sh`, gentle/concurrent): baseline read first,
+then eval-every-hour while training, recording white-vs-Rapfi off the era-1 0% floor.
+Baseline (fresh 15×15 net, untrained heads) pending — expected near 0% (the floor to
+climb from), comparable to era-1 e455's 10.2%/white-0%.
