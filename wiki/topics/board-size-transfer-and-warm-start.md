@@ -71,6 +71,46 @@ The speed thesis is paying off: **~40 epochs reached before the first human chec
   lose-slowly basin. Not seen. Distinguish from fast-attack collapse (plies falling **with**
   concave buffer-fill AND white% collapsing) — that's the bad version.
 
+## The multi-rung LADDER (9→11→13→15) — the 2026-06-20 overnight, era-2 revised
+
+9×9 is too cramped: by ~e100 the swap2 net's defense **saturates the board into
+draws** (e102 last-3 epochs draw-dominant: draws 56/75/56 vs white ~14, black
+~19–31). A draw-or-black regime teaches white bad habits and the win/loss gradient
+thins. Jumping straight to 15×15 fixes the draws but is **2.7× slower** — and we
+need epochs. So: climb a **board-size ladder**, warm-starting up a rung each time
+the current board saturates, milking cheap native epochs at every step.
+
+**Native at EVERY rung is mandatory — the make-or-break.** Measured (M5 Max, MCTS
+sims/s): native-11 **68.3k** > native-15 **60.7k** (faster, as cell-count predicts;
+native-9 64.8k). But **pure-Python is ~40k sims/s *regardless of board size***
+(Python overhead dominates), so a fallback-only 11/13 would be ~1.5× SLOWER than
+native-15 — the ladder on the fallback is worse than the destination it's trying to
+cheapen. We therefore compiled native exts for 11 and 13 (commit adds
+`_state_ops_native11/13.c` + `_mcts_native11/13.c` shims, `setup.py` blocks,
+dispatch arms, `NATIVE_BOARD_SIZES=(9,11,13,15)`). The shared `.c` is fully
+`#define BOARD_SIZE`-parametrized, so each size is a 3-line shim — adding a rung is a
+seconds-long recompile, not real work. **Never run a rung on the pure-Python
+fallback** (`GOMOKU_DISABLE_NATIVE_*`) — it violates the Δelo/hour budget.
+
+**Graduation rule (Jason's): step up when `max(draw, white, black) == draw`** — i.e.
+draws are the strict plurality of self-play outcomes; white's defense has saturated
+this board, so move up to reclaim room. Denoised: draws strict-max for 3 consecutive
+epochs, past a `MIN_EPOCH` guard (so we don't graduate during the post-warmstart
+recovery-V, which is offense-heavy/short-games, not draws), with a per-rung epoch
+CAP as anti-hang backstop. The check is a **pure read of the rung's wandb history**
+(`babysit/ladder_grad.py` looks up the `wandb_run_id` embedded in `latest.pt`) — the
+trainer is untouched. Rung 15 is **terminal**: it basically never draws (board too
+big to fill), so it trains until the STOP sentinel.
+
+**Cells** `G-ladder-11/13/15` (run_sweep.py) = the `G9-swap2-e2` recipe verbatim,
+only the run-dir differs (board size is the env var). **Orchestrator**
+`babysit/ladder_autochain.sh` (detached; `touch babysit/STOP_ladder` to stop;
+20-min slices, graduation checked between them). Seeds: rung-N warm-starts the rung-
+(N−1) champion (9→11 verified on our e102 champ: 98.9%, only the 3 board-bound FCs
+re-init). The open empirical question — does laddered learning beat a direct 9→15
+warm-start? — is a derby lane (Δelo/Δt vs the existing direct-15 reference); the
+ladder's a priori case is purely epoch-efficiency, not correctness.
+
 ## How to run the transfer (entrypoint)
 
 ```bash
