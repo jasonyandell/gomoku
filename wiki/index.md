@@ -95,7 +95,8 @@ read is:
 
 | Card | Role |
 |---|---|
-| [cards/gomoku-9x9-swap2-era2.md](cards/gomoku-9x9-swap2-era2.md) | **era-2 / Path-A phase 1 (IN TRAINING, 2026-06-20):** the first swap2 net where **white is not doomed** — fresh-init 9×9, aggression `value-discount 0.95`, v2a OFF; white ~45% of decisive self-play games (vs era-1's white-0%-vs-Rapfi basin); phase-1 seed for the 9×9→15×15 warm-start. HF-README-ready frontmatter. Run `lywhy1ba`. |
+| [cards/gomoku-15x15-fixed-fair-openings.md](cards/gomoku-15x15-fixed-fair-openings.md) | **era-3 / the fairness experiment (IN TRAINING, 2026-06-21):** fresh-init 15×15 that starts every game from one of Rapfi's 9 **known-fair** balanced openings (no negotiation, net plays only post-opening) — sidesteps the unfair opener (#73, [swap2 §10/§11](topics/swap2-opening-protocol.md)). Tests: **does white engage ~50/50 on a fair board?** Run `nbctsiua`. |
+| [cards/gomoku-9x9-swap2-era2.md](cards/gomoku-9x9-swap2-era2.md) | **era-2 / Path-A phase 1 (2026-06-20):** the first swap2 net where **white is not doomed** — fresh-init 9×9, aggression `value-discount 0.95`, v2a OFF; white ~45% of decisive self-play games (vs era-1's white-0%-vs-Rapfi basin); phase-1 seed for the 9×9→15×15 warm-start. Run `lywhy1ba`. |
 
 ### Core
 
