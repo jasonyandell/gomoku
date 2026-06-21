@@ -91,6 +91,12 @@ read is:
 
 ## Page Catalog
 
+### Model Cards
+
+| Card | Role |
+|---|---|
+| [cards/gomoku-9x9-swap2-era2.md](cards/gomoku-9x9-swap2-era2.md) | **era-2 / Path-A phase 1 (IN TRAINING, 2026-06-20):** the first swap2 net where **white is not doomed** — fresh-init 9×9, aggression `value-discount 0.95`, v2a OFF; white ~45% of decisive self-play games (vs era-1's white-0%-vs-Rapfi basin); phase-1 seed for the 9×9→15×15 warm-start. HF-README-ready frontmatter. Run `lywhy1ba`. |
+
 ### Core
 
 | Page | Role |

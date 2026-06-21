@@ -21,11 +21,20 @@ in the old imbalanced regime literally *was* "delay the loss / steer to draw" �
 defensive attractor is baked into the weights. Swap2 fixed the data; the weights kept the
 basin.
 
-**Era 2 = Path A (§9):** a **fresh-init** 15×15 swap2 net (no inherited basin) +
-**aggression shaping** (value-discount 0.98→0.95, "faster wins are better") + **v2a**
-(train the choice head into the loss — learn the swap, not a one-ply heuristic). Cheapest
-decisive test of the basin hypothesis on the target board; the 9×9→15×15 transfer
-curriculum is the bigger Path-B scale-up if A still can't make white *win*.
+**Era 2 = Path A, now the 9×9→15×15 CURRICULUM (§9, revised 2026-06-20):** a **fresh-init**
+net (no inherited basin) + **aggression shaping** (value-discount 0.98→0.95, "faster wins
+are better"), bootstrapped **on the native 9×9 board** (3.2× cheaper, white trainable) then
+**warm-started up to 15×15** ([[board-size-transfer-and-warm-start]] — the proven 98.9%-trunk
+transfer that birthed the 15×15 nets in the first place). **v2a (choice head) is OFF** — we
+killed it for the curriculum: it trains an opening-only head at ~20% throughput cost for no
+measured gain; revisit *after* white-not-doomed is locked in.
+
+**Live (2026-06-20, era-2 phase 1, 9×9, run `lywhy1ba`):** white-not-doomed is **showing** —
+white takes **~45% of decisive self-play games** (47.7% at e47) from e17 on, vs era-1's
+white-0%-vs-Rapfi basin. `plies_mean` is mid-**plies-collapse** (36→16.7) — the expected
+offense-before-defense dip, healthy *because* white still wins ~45% through it. Watching for
+the **warning**: white% trending *down toward 0* (basin relapse) — not seen. Model card:
+[[gomoku-9x9-swap2-era2]].
 
 This page is the durable synthesis. Evidence chronology lives in `TRAINING_WIKI.md`
 (2026-06-20 entries); predecessor analysis is

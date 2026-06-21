@@ -54,6 +54,23 @@ Orchestrated by `/Users/jason/data/swap2/babysit/overnight_autochain.sh` (detach
 guarded, `touch STOP_overnight` to stop). 9×9 cell `G9-swap2-e2` (commit `cd93233`); 15×15
 phase-2 cell `G15-swap2-e3` (commit `a16737e`); both = the e2 recipe with v2a removed.
 
+### Live progress — phase 1 (9×9, run `lywhy1ba`, 2026-06-20)
+
+The speed thesis is paying off: **~40 epochs reached before the first human check-in** vs
+**3 h to hit e100** on the prior 15×15 cadence. Phase-1 reads at **e47** (model card:
+[[gomoku-9x9-swap2-era2]]):
+
+- **white-not-doomed is showing** — white takes **~45% of decisive self-play games**
+  (e17 50.0% · e31 48.6% · e39 50.0% · e47 47.7%). Black keeps a slight first-mover edge
+  (expected); that is **not** the warning.
+- **plies-collapse in progress** — `plies_mean` 36 → 16.7 (p50 18→15). The normal
+  offense-before-defense dip; healthy *because* white is still winning ~45% through it. We
+  expect the V-shape: plies recover as white learns defense (same dynamic as the 15×15
+  cold-start, just on a net that isn't doomed).
+- **the warning to watch** (Jason's): white% trending *down toward 0* = relapse into the
+  lose-slowly basin. Not seen. Distinguish from fast-attack collapse (plies falling **with**
+  concave buffer-fill AND white% collapsing) — that's the bad version.
+
 ## How to run the transfer (entrypoint)
 
 ```bash
