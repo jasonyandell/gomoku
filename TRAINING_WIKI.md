@@ -4490,3 +4490,27 @@ rungs 11/13. On reaching **15×15**, switch to **1-hr cadence with a Rapfi eval 
 lap** (try-vs-Rapfi → record → 1 h train → repeat). If something goes sideways,
 consult the wiki for the fix and keep it TRAINING — do not gate or stop. STOP control:
 `touch babysit/STOP_ladder`. Keep updating wiki/TRAINING_WIKI at each check-in.
+
+### 2026-06-21 02:50 — rung 11 → 13 cutover (graduated on CAP, not drawmax)
+
+Rung 11 (`8jsd7qzw`) ran e0→**e401** and graduated via the **CAP=400 backstop**, NOT
+the drawmax rule. Why: from ~e218 it settled into a **stable black-edge equilibrium** —
+black ~40% / draw ~34% / white ~25%, plies flat ~64 — for ~180 epochs. Draws flickered
+to single-epoch drawmax (e166, e221, e380–381 hit 44–52%) but **never robustly overtook
+black**, so the 3-consecutive-drawmax denoise correctly never fired. Interpretation:
+with **v2a (choice head) OFF**, swap2's color-balancing isn't trained, so black keeps its
+intrinsic first-move edge; white's defense maxes out at "draw-or-lose-narrowly" rather
+than forcing draw-dominance. The CAP backstop is exactly the right mechanism for this
+"strong rung that plateaus short of drawmax" case — it advanced cleanly.
+
+11→13 warm-start at e401 (`ladder_seed_13.pt`); rung 13 = run `2dvcxh0b`. Early 13×13
+(e73–77): **white%dec climbing 40→49%**, draws 0, plies ~20 (fresh-board recovery, many
+decisive games) — a clean transfer, even more balanced than 11 started. "Fight and learn
+at 13" (Jason's happy condition) achieved out of the gate.
+
+**Prediction scoring so far:** Jason guessed "11 drawmaxes ~30–50% later than 9 (e133–153)."
+Reality: **11 never cleanly drawmaxed** — it hit a stable equilibrium and graduated on the
+CAP at e401. So the *drawmax framing* didn't hold for 11 (equilibrium instead); the deeper
+instinct (9×9-style saturation transfers up the ladder) gave way to a black-edge fixed
+point once the board had room. "13 drawmaxes much later" — TBD; 13 has even more room, so
+expect equilibrium-or-CAP again rather than a clean drawmax.
