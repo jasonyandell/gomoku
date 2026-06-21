@@ -552,10 +552,17 @@ Orchestrator `babysit/fairladder.sh` (15-min slices, p90-max auto-promote, warm-
 - 🔴 if white-share stays ~25–35% from FAIR starts → the seat wasn't the (only) problem; white has a
   genuine skill gap → white-side teacher (#44).
 
-**The 15×15 gate (the real test, TODO to build during the climb).** At rung 15 we gate for real,
-including a **Rapfi-from-the-same-canned-openers eval**: our net vs Rapfi-NNUE both resuming from the
-fixed fair post-opening positions, our net as **black AND as white**. Fixed openers constrain the
-search space and give a hard, fair yardstick (vs the OOD-confounded standard-opening Rapfi read).
+**The 15×15 gate — the "different era" (the exact recipe, Jason 2026-06-21; TODO to build during the
+climb):**
+- **Hold all quality judgment until ≥100 REAL 15×15 self-play epochs.** "Real" = epochs with games,
+  NOT the empty-epoch startup race (which inflates the counter while workers warm up). Until then the
+  run is *just executing the recipe* — no crowning, no quality calls.
+- Then a **1-hr cadence:** eval-vs-Rapfi → train 1 h → eval-vs-Rapfi → train 1 h → …
+- The eval is **Rapfi-from-the-SAME-canned-openers**: both sides resume from the fixed fair
+  post-opening positions — *the exact positions we trained on* — our net as **black AND as white**.
+  Fixed openers constrain the search space and give a hard, fair yardstick (vs the OOD-confounded
+  standard-opening Rapfi read). Build: extend `babysit/run_eval.py` to seed each game from a canned
+  opener (both colors) instead of negotiating; drive Rapfi-NNUE (same `--config` as the swap2 read).
 
 **Phases.** Phase 1 (now): climb the ladder, read white/black balance per rung. Phase 2 (later, gated
 on Jason): **expand** — bring a *trained* fair-opening generator / negotiation back (choice head
