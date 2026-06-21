@@ -4537,5 +4537,8 @@ it advanced each rung cleanly. White "fights and learns" at every rung (Jason's 
 epochs are empty/raced (workers warming on slow ~plies-134 games). **Now on the 1-hr
 Rapfi cadence** (`babysit/ladder_rapfi15.sh`, gentle/concurrent): baseline read first,
 then eval-every-hour while training, recording white-vs-Rapfi off the era-1 0% floor.
-Baseline (fresh 15×15 net, untrained heads) pending — expected near 0% (the floor to
-climb from), comparable to era-1 e455's 10.2%/white-0%.
+**Baseline (07:45, fresh 15×15 net `epoch0095`, untrained heads): 0.0%** vs Rapfi-NNUE
+(0W-32L-0D @ 200ms/sims200/n32; black 0/21, white 0/11). The floor — the transfer re-inits
+the 15×15 heads so the net can't play coherently yet; loses fast (59s). Now we watch it
+climb off 0% as the heads adapt (the whole bet of the ladder). Hourly reads append to
+`babysit/eval_results.jsonl`; era-1's *trained* e455 was 10.2%/white-0% for comparison.
