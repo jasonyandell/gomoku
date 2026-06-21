@@ -511,6 +511,29 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.95", "--swap2"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-swap2-e3 (#72 era-2 PHASE 2): the WARM-STARTED 15x15 swap2 run. Seeded by
+    # scripts/warmstart_15x15.py from the G9-swap2-e2 9x9 net (98.9% conv-trunk
+    # transfer, verified) so it SKIPS the 15x15 cold-start fast-attack collapse that
+    # a fresh net walks through. Identical to G9-swap2-e2 EXCEPT the run-dir (board15).
+    # v2a OFF (no choice head), aggression value-discount 0.95, swap2. LAUNCH WITH
+    # GOMOKU_BOARD_SIZE=15 and --resume the warmstart seed (then the run-dir latest.pt).
+    "G15-swap2-e3": Cell("G15-swap2-e3-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-defense (#36, sliding-derby Lap 1): the DEFENSE-TEACHER cell — the proven-
     # needed white-side fix. Diagnosis (#33) is closed: the champion's white-side
     # collapse vs strong attackers (eval502: 0-6 white vs zetor17 while 6-0 as black)
