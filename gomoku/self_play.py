@@ -1334,13 +1334,22 @@ def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameS
         # restart from scratch
 
 
-# Rapfi's 9 hand-curated BALANCED swap2 openings (gomoku/../rapfi opening.cpp),
-# defined for a 15x15 board. Each is 3 (x=col, y=row) coords placed BLACK, WHITE,
-# BLACK (the swap2 opener order, see gomoku/swap2.py:_NODE_INFO) -> 2 black + 1
-# white -> WHITE to move when normal play begins. Because each is balance-searched
-# (swap-value ~= 0), neither color is favored from the resulting position -- a
-# "known-fair board." Used by the fixed-opening training mode (#73): we hand the
-# net these fair positions DIRECTLY and skip the (unfair) negotiation entirely.
+# Rapfi's 9 hand-curated BALANCED swap2 openings, defined for a 15x15 board.
+# VERIFIED faithful to Rapfi source @6e0a1329 (Rapfi/search/opening.cpp, the static
+# SWAP2 list for board.size()==15): these exact 9 triples, stored as bare Pos(x,y)
+# with NO explicit colors -- color is implied purely by placement ORDER from an
+# empty BLACK-first board, so stone[0]=BLACK, stone[1]=WHITE, stone[2]=BLACK
+# (2 black + 1 white) and after 3 plies currentSide=~BLACK => WHITE to move. That
+# is exactly the board Rapfi EMITS to the swap2 responder ("Rapfi says go"): a
+# pre-decision 3-stone, white-to-move position; neither color is illegal (free-
+# style). Our construction below reproduces it byte-for-byte (cross-checked against
+# swap2.OpeningState.to_normal() in tests/test_fixed_openings.py). So we capture
+# Rapfi's MOVE, not just its shape -- white-to-move is the protocol-correct seat,
+# not an assumption. (The broad swap2 protocol CAN also settle to a 5-stone,
+# black-to-move board via the responder's place-2 branch, but Rapfi's hardcoded
+# canon -- and thus ours -- is strictly the 3-stone white-to-move board.)
+# Used by the fixed-opening training mode (#73): we hand the net these fair
+# positions DIRECTLY and skip the (unfair) negotiation entirely.
 _RAPFI_BALANCED_OPENINGS_15: tuple[tuple[tuple[int, int], ...], ...] = (
     ((6, 7), (6, 4), (4, 2)),
     ((3, 3), (5, 5), (6, 6)),
