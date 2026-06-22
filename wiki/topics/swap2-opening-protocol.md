@@ -595,3 +595,36 @@ v2a→v2b, or a balance-search generator, §10 Option A/B) and broaden beyond th
 trained the net to *play swap2* on a **rigged** board → white capped ~0–29%. This fair-opening ladder
 reuses the cheap-board-curriculum machinery but **removes the rig** to isolate whether fair play
 unlocks white. Different question; both kept.
+
+## 12. Single-opener "Bruce Lee" 15×15 + the buffer-balance / gen-flood knob (2026-06-22) ⭐
+
+**Pivot to ONE fair opener.** Re-centering Rapfi's shapes does **not** preserve balance (re-centered
+openers tested 0–95% black at 13×13; the two *most-central* tested most black-favored — killing the
+"centered is fairest" guess). idx-2 `((3,2),(5,4),(4,5))` (B,W,B → white-to-move) was the fairest
+(~50%). Jason's call: **"drop anything that isn't fair first"** — `GOMOKU_DROP_OPENERS` keeps only
+idx-2. Thesis: *a strong specialist from one fair opening beats an imbalanced generalist from many.*
+**"Bruce Lee" — fear the man who practiced one kick 10,000 times.** Specialize now, re-broaden later.
+
+**The 8-worker overnight (run `gogpmbhw`, e224→~616).** Held parity all night, no collapse: vs Rapfi
+0/16 (saturated ceiling, expected); vs era-2 champ `epoch0235` ~even, peaked 69%; vs frozen-self e126
+climbed to 75% (tipped positive); self-play white sloshed 39–62%; `vl` halved (0.082→0.043). Read:
+**trading real blows, not winning the war** — a healthy *developing* net. (Eval gotcha: net-vs-net
+MCTS is deterministic → a flat repeated-line series; **always sample opening plies** — `temp_plies` —
+for a real H2H.)
+
+**The buffer-balance finding (⭐ generalizes beyond swap2).** Self-play was out-generating training:
+`train/sample_reuse_ratio ≈ 0.67` (consumed/ingested). **Reuse <1 means ~half of all generated
+positions are evicted from the buffer with zero gradient steps** — a good move can be played and never
+learned. Cutting self-play workers 8→4→3 (resume from `latest.pt`, which embeds the buffer) lifted
+reuse 0.67→~3 (firmly normal-AZ, ~1–4×) AND sped epochs **65→26 s/epoch (~2.5×)**, because flooding
+made each epoch *both* less sample-efficient *and* slower (per-epoch ingest cost balloons with inflow).
+This is the **gen-flood double-tax**, the same pattern already burned in at the 96×8 cell
+(`run_sweep.py` ~L352). **`n_workers` is a first-class buffer-balance knob, not just throughput: target
+reuse ~1–4; reuse <1 is self-sabotage.** `n_workers=3` is currently an uncommitted live toggle in the
+worktree (flip to 4 for reuse ~1.8). Whether deeper reuse settles the balance-slosh is open (time-boxed
+by AC power). Full evidence + table: `TRAINING_WIKI.md` 2026-06-22.
+
+**Eval rulers (low→high, `babysit/`):** frozen-self e126 (sensitive "am I improving?") → era-2 champ
+`epoch0235` (strength milestone) → Rapfi-from-idx-2 (saturated ceiling). Hourly snapshot loop preserves
+a last-good ladder; tank-recovery kept **manual** (auto-restart would fuse recovery with the reuse
+experiment → unreadable, and a hard collapse is the best data, not something to auto-erase).

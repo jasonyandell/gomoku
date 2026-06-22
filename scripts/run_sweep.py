@@ -610,7 +610,17 @@ CELLS: dict[str, Cell] = {
     "G15-fixed-openings": Cell("G15-fixed-openings-board15", sgd_per_game=1.0,
                 buffer_size=150_000, games_per_epoch=64,
                 size="large", stem_padding=1, n_simulations=100,
-                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                # n_workers 8 -> 4 (Jason 2026-06-22): the 8-worker run held parity
+                # all night but ran reuse ~0.67 -- ~half of generated positions were
+                # evicted from the 150k buffer un-trained-on (gen-flood, cf. the
+                # 96x8 lesson at the v6 cell). Cutting ingestion ~half lifts reuse
+                # toward ~1 so the net learns from more of what it plays. Resumed
+                # from e601 latest.pt (weights+buffer preserved as snapshots/PRE4_*).
+                # -> 3 (Jason 2026-06-22, mid-run): 4 landed reuse ~1.4 but the
+                # 15x15 balance differs from 9x9; push reuse ~1.8 to sit firmly in
+                # normal AlphaZero territory. Not a controlled A/B -- a time-boxed
+                # "make the most of it" nudge.
+                n_workers=3, wave_size=64, games_per_batch=8, wave_mode=False,
                 c_puct=1.25, c_puct_base=19652.0,
                 dirichlet_alpha=0.13, dirichlet_eps=0.25,
                 temperature_moves=30, temperature_final=0.1,

@@ -4561,3 +4561,69 @@ warm-start between rungs). Rung-9 run `eilfnz1e`. Single-15 predecessor run `nbc
 swap2-ladder best net preserved: `G-ladder-15-board15/checkpoints/epoch0235.pt` (25% vs Rapfi).
 
 THE METRIC: white-share of decisive self-play → ~50% on fair boards (was ~25–35% rigged).
+
+## 2026-06-22 — Single-opener "Bruce Lee" 15×15 overnight + the worker-count / gen-flood finding ⭐
+
+Run `gogpmbhw` (`G15-fixed-openings-board15`). Context: by 2026-06-21 night the
+ladder had pivoted to a **single fair opener (idx-2** `((3,2),(5,4),(4,5))`, B,W,B →
+white-to-move) after discovering that *re-centering* Rapfi's shapes does NOT preserve
+balance (re-centered openers tested 0–95% black at 13×13; idx-2 was the fairest at
+~50%). Jason's call: "drop anything that isn't fair first … an exceptionally strong
+player from ONE fair opening beats an imbalanced player from many" — `GOMOKU_DROP_OPENERS`
+keeps only idx-2. Specialize, don't generalize: **"Bruce Lee" — fear the man who
+practiced one kick 10,000 times.** Plan: plow forth even if white lags; hold all
+verdicts until the 15-series has depth.
+
+**Overnight (8 workers, e224→~616, hands-off).** Three fixed rulers, idx-2 board, both
+seats, 16 games/seat, `temp_plies=6` opening variety:
+- **vs Rapfi** (saturated ceiling): **0/16 all night**, unmoved — expected; Rapfi reads
+  clean through us at this strength and will for a long while.
+- **vs champ0235** (era-2 best, warm-started from prior winners): bounced ~even, peaked
+  **69%**. Trading blows with the old champion on its home board — promising for the recipe.
+  (The early "16–0 sweep" was a *determinism artifact* — one line repeated 8×; it vanished
+  once `temp_plies` variety was added. **Lesson: net-vs-net MCTS is deterministic → flat
+  series; always sample opening plies for a real H2H read.**)
+- **vs self126** (FROZEN e126 self, the sensitive "am I improving?" probe): climbed
+  37→62→56→**75**→… settling a touch above 50. Tipped positive — beating its own past self.
+- **self-play balance**: sloshed 39–62% white, no trend, no collapse. `vl` halved over the
+  night (0.082→0.043) — value head sharpening while the policy thrashed (Jason's
+  spidey-sense/decision split: it *knows* who's winning before it can reliably *decide*).
+
+Verdict held: **trading real blows, not winning the war** — stronger than past-self,
+even-ish with the milestone champ, can't touch Rapfi. A healthy *developing* net. (Jason's
+pure-vibes pre-call — "won't win yet but will start to win" — landed.)
+
+**The lever — buffer balance (8→4→3 workers, 2026-06-22).** Jason noticed self-play was
+out-generating training: `train/sample_reuse_ratio ≈ 0.67` (consumed/ingested). At reuse
+<1 with random sampling (~Poisson(0.67)), **~51% of generated positions are evicted from
+the 150k buffer never having had a single gradient step** — a good move can be played and
+never learned from. The 8-worker config was *flooding* the trainer. Cut workers, resumed
+from `latest.pt` (weights+buffer; preserved copies `babysit/snapshots/PRE4_*`):
+
+| workers | reuse (per-cycle) | buffer age_p90 | s/epoch | epochs/min |
+|--------:|------------------:|---------------:|--------:|-----------:|
+| 8       | ~0.67 (½ unseen)  | ~0 (firehose)  | 65.2    | 0.9        |
+| 4       | ~1.4              | rising         | 36.5    | 1.6        |
+| 3       | **~3** (2.2–4.4)  | ~15–20         | **26.1**| **2.3**    |
+
+**The finding (⭐ the gen-flood double-tax):** flooding the buffer cost us on TWO axes at
+once — sample-efficiency *and* wall-clock. At 8 workers each epoch drowned in inflow
+(~128 new games/cycle → buffer inserts, cross-game-store updates), so epochs were both
+*less useful* and ~2.5× *slower*. Dropping to 3 fixed both: reuse → ~3 (firmly normal-AZ;
+each position studied ~3×, age_p90 off zero), and **65→26 s/epoch**. This is the SAME
+gen-flood pattern already documented at the 96×8 cell (`run_sweep.py` ~L352: "8 workers
+FLOODED it, per-epoch ingest ran away 62→313s"); it resurfaced at 15×15 fixed-openings.
+**Takeaway: `n_workers` is a first-class buffer-balance knob, not just a throughput knob —
+target reuse ~1–4; reuse <1 is self-sabotage (slower AND lossy).** Note 8→3 dropped
+ingestion *more* than linearly (new_games/cycle 128→16–24), so 3 workers overshot the ~1.8
+projection to ~3 — fine, still healthy AZ. `n_workers=3` is an uncommitted live toggle in
+the worktree; flip to 4 for reuse ~1.8 if ~3 feels deep. Whether deeper reuse settles the
+balance slosh is still open (the run was time-boxed by AC power).
+
+**Babysit infra built this session** (`/Users/jason/data/swap2/babysit/`):
+`rapfi_opener_eval.py` (vs Rapfi, idx-2, both seats), `champ_h2h_eval.py` +
+`champ_h2h_cadence.sh` (vs self126/champ0235, `temp_plies` variety), hourly
+`snapshot_loop.sh` (preserved last-good ladder; `latest.pt` embeds the buffer so each is a
+real resume point). Tank-restart safety net agreed but kept *manual* (auto-restart-at-4
+would fuse recovery with the reuse experiment → unreadable; a hard collapse is itself the
+night's best data, not something to erase).
