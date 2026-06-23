@@ -608,7 +608,15 @@ CELLS: dict[str, Cell] = {
     # fixed_openings=True, "--swap2" REMOVED from extra_worker_args. LAUNCH FRESH:
     # GOMOKU_BOARD_SIZE=15 and omit --resume (then --resume latest.pt to continue).
     "G15-fixed-openings": Cell("G15-fixed-openings-board15", sgd_per_game=1.0,
-                buffer_size=150_000, games_per_epoch=64,
+                # buffer 150k -> 1M (Jason 2026-06-23): 150k turned over in ~13
+                # epochs (p50 age ~5.5) -- too fast to consolidate past mistakes /
+                # clutch plays (textbook AZ/KataGo keep a far larger window). Bit-
+                # packed (#25) so 1M ~= 1.3GB, trivial on 48GB. Extends the window
+                # to ~85 epochs WITHOUT changing reuse (~3.7, a flow ratio): the
+                # same ~3.7 looks/position just spread over a longer span = spaced
+                # repetition. Resumes from e877 latest.pt (150k buffer grows to 1M).
+                # If the off-policy tail drags, add recency-weighted sampling (#17).
+                buffer_size=1_000_000, games_per_epoch=64,
                 size="large", stem_padding=1, n_simulations=100,
                 # n_workers 8 -> 4 (Jason 2026-06-22): the 8-worker run held parity
                 # all night but ran reuse ~0.67 -- ~half of generated positions were
