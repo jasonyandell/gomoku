@@ -655,3 +655,16 @@ winner** (v8 "buffer-comp"), not speculative. **LIVE 2026-06-23:** rewound to `S
 whether sampling *tracks the policy*. A big window WITHOUT recency weighting = stationary = dead loss.
 Target: large ring (memory) **+** recency_frac ~0.5 (freshness). Reuse (consumed/ingested) is a separate
 knob set by `n_workers` (target ~1–4; <1 is gen-flood self-sabotage — see §12).
+
+**recency-frac is a MUTATION-RATE knob (2026-06-23 finding).** Matched-epoch comparison (same fairladder,
+same maturity, only sampling differs): uniform sampling → `loss/policy` std **0.034**, smooth *drift*;
+recency-0.5 → std **0.052** (~1.5×), a slice-locked *oscillation*. So recency doesn't just "track the
+policy," it **perturbs** it — uniform = smooth-but-stationary (loss goes *dead*, the plateau); recency =
+alive-but-noisy. Critically the mean pl stayed ~flat (1.164→1.140) under the added variance: it
+**churns in place, it does not drift** — i.e. recency supplies *perturbation (mutation)* but, alone, no
+directed climb. **The lottery only pays with a SELECTION mechanism** to detect+keep good perturbations
+(self-play's win-reinforcement is the weak built-in; a derby / keep-best is the strong one). Perturbation
++ selection = evolution; perturbation alone = drift. Forward-use: in the teacher/derby era, treat
+recency-frac as a deliberate *exploration* lever paired *with* directed teachers (teacher = directed
+climb, recency = local mutation around it), with the derby as the selector. Ranks **below** directed
+teachers on Δelo/hr (undirected vs directed search).
