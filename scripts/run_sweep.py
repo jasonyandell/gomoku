@@ -641,7 +641,16 @@ CELLS: dict[str, Cell] = {
                 global_pool=True, swap2=False, fixed_openings=True,
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.95"],
-                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+                # recency curator ON (Jason 2026-06-23): the overnight 1M run sampled
+                # UNIFORMLY over a ring spanning the whole run -> a STATIONARY training
+                # distribution -> pl/vl flatlined ("not learning") and the white/black
+                # slosh never narrowed. The ring eviction is already FIFO; the culprit was
+                # uniform sampling. recency-frac 0.5 draws half of each batch from the most-
+                # recent 200k (KataGo design; the +90-elo v8 buffer-comp derby winner) so the
+                # distribution tracks the current policy while the 1M tail keeps long memory.
+                # ONE variable vs the overnight (recency 0->0.5); rewound to SHUTDOWN_e877.
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer",
+                                  "--buffer-recency-frac", "0.5"]),
     # The fair-opening LADDER rungs (#73/#74): G{9,11,13}-fixed-openings = byte-
     # identical to G15-fixed-openings EXCEPT the run-dir. Same canned fair openers
     # (Rapfi shapes re-centered per board, gomoku/self_play.py _FAIR_OPENINGS),

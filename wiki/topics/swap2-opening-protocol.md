@@ -628,3 +628,30 @@ by AC power). Full evidence + table: `TRAINING_WIKI.md` 2026-06-22.
 `epoch0235` (strength milestone) → Rapfi-from-idx-2 (saturated ceiling). Hourly snapshot loop preserves
 a last-good ladder; tank-recovery kept **manual** (auto-restart would fuse recovery with the reuse
 experiment → unreadable, and a hard collapse is the best data, not something to auto-erase).
+
+## 13. Buffer composition — the stationary-distribution trap + recency curator (2026-06-23) ⭐
+
+**A clean negative result.** Bumping `buffer_size` 150k → 1M (to extend the consolidation window) did
+**not** steady the white/black slosh, and made `pl/vl` flatline ("not learning"). Root cause:
+`gomoku/replay_buffer.py` is a **FIFO ring** (eviction = overwrite oldest, fine), but it samples
+**uniformly** (`_recency_frac=0.0`) — and uniform sampling over a ring that spans the whole run makes
+the **training distribution stationary**, so the loss converges to a fixed point and stops chasing the
+improving policy. `buffer/age_p90` climbing *linearly* (13→897) was the tell. **Bigger flat buffer is
+not better; it dilutes the current-policy signal.**
+
+**Correction to an old assumption:** the "reservoir/large buffer" was originally an anti-**collapse**
+measure — but collapse here is the **provable first-player (black) edge** (§5.7 / white-defense theorem),
+NOT a buffer pathology. So that buffer choice fixed a misdiagnosis and quietly taxed learning ever since.
+
+**The fix (already in-code, was OFF):** `--buffer-recency-frac` (the #17 curator; see
+`curated-buffer-and-curriculum-design.md`). Half of each batch from the most-recent 200k → distribution
+tracks the live policy while the 1M tail keeps long memory (KataGo's design). It's a **+90-elo derby
+winner** (v8 "buffer-comp"), not speculative. **LIVE 2026-06-23:** rewound to `SHUTDOWN_e877`, 1M ring,
+`--buffer-recency-frac 0 → 0.5` (one variable vs the overnight). Success signal = `loss/policy` +
+`loss/value` come back *alive* (keep decreasing); secondary = slosh band narrows. Evidence:
+`TRAINING_WIKI.md` 2026-06-22 / 2026-06-23.
+
+**Durable buffer lesson:** with a FIFO ring, `buffer_size` is the *window length* and `recency_frac` is
+whether sampling *tracks the policy*. A big window WITHOUT recency weighting = stationary = dead loss.
+Target: large ring (memory) **+** recency_frac ~0.5 (freshness). Reuse (consumed/ingested) is a separate
+knob set by `n_workers` (target ~1–4; <1 is gen-flood self-sabotage — see §12).

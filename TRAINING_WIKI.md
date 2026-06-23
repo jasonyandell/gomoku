@@ -4627,3 +4627,37 @@ balance slosh is still open (the run was time-boxed by AC power).
 real resume point). Tank-restart safety net agreed but kept *manual* (auto-restart-at-4
 would fuse recovery with the reuse experiment → unreadable; a hard collapse is itself the
 night's best data, not something to erase).
+
+## 2026-06-23 — 1M buffer overnight: a clean NEGATIVE result + the recency-curator fix ⭐
+
+Run `gogpmbhw` resumed from e877 with `buffer_size` **150k → 1M** (#73 follow-up; bit-packed
+so 1M ≈ 1.3GB). Hypothesis: a longer consolidation window would steady the white/black slosh.
+**Result: it did NOT.** ~930 epochs overnight (e877→e1804, ~2 epochs/min, no crashes/tanks):
+- **slosh did not narrow** (white% band stayed ~30–60 pts, arguably wider).
+- **pl/vl flatlined and smoothed** — vl crept 0.057→0.050 then leveled; Jason's read: *"that's
+  not learning."* Correct.
+- `buffer/age_p90` climbed **linearly** (13→285→545→897) instead of plateauing at the ~FIFO
+  window — the tell.
+
+**Root-cause (corrected mid-investigation):** the buffer (`gomoku/replay_buffer.py`) is a **FIFO
+ring** (eviction overwrites oldest). The pathology was NOT eviction — it was **`_recency_frac=0.0`
+= UNIFORM sampling over a ring so large it spanned the whole run.** Uniform-over-all-history makes
+the training distribution **stationary**, so the loss converges to a fixed point and stops chasing
+the improving policy → flat pl/vl, persistent slosh. (Jason had remembered adding "reservoir" to
+fight collapse; the real mechanism is uniform-sampling-over-a-huge-ring, and collapse was actually
+the provable first-player/black edge, NOT a buffer issue — so that fix was for a misdiagnosis and
+had been quietly taxing learning.)
+
+**The fix (already coded, just OFF):** `configure_curator(recency_frac, recency_window)` /
+CLI `--buffer-recency-frac` — the #17 recency curator. Draws a fraction of each batch from the
+most-recent `--buffer-recency-window` (200k) positions, rest uniform. Crucially this is a
+**validated lever**: `run_sweep.py` history shows it was a **+90-elo derby winner** (v8
+"buffer-comp", `--buffer-recency-frac 0.5` in multiple proven cells). KataGo's design exactly:
+big window for memory, recency-weighted sampling for freshness.
+
+**Experiment now LIVE (2026-06-23):** rewound to `snapshots/SHUTDOWN_e877` (clean pre-stationary
+baseline), kept the 1M ring, flipped **`--buffer-recency-frac` 0 → 0.5**. ONE variable changed vs
+the overnight, so any effect is attributable to the curator. **Watch `loss/policy` + `loss/value`:
+if they come back ALIVE (keep decreasing) the recency lever is working;** secondary: does the slosh
+band finally narrow. `n_workers=3`, reuse ~3, ~2.8 epochs/min. Resume point preserved as
+`snapshots/PRE4_e601` (8w-era) + `SHUTDOWN_e877` (pre-1M).
