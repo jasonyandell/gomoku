@@ -4661,3 +4661,22 @@ the overnight, so any effect is attributable to the curator. **Watch `loss/polic
 if they come back ALIVE (keep decreasing) the recency lever is working;** secondary: does the slosh
 band finally narrow. `n_workers=3`, reuse ~3, ~2.8 epochs/min. Resume point preserved as
 `snapshots/PRE4_e601` (8w-era) + `SHUTDOWN_e877` (pre-1M).
+
+### 2026-06-23 (later) — recency-0.5 VERDICT: loss alive, strength flat (the plateau is buffer-knob-proof) ⭐
+
+Ran ~e877→**e2300** under recency-0.5 (~1400 epochs). **What it did:** broke the stationary plateau —
+`loss/policy` went from smooth-dead (uniform, std 0.034) to alive-and-oscillating (recency, std 0.052 at
+matched epochs); the loss *moved* again. **What it did NOT do:** improve strength. On-demand 3-ruler eval
+@ e2300 (n=16/seat, idx-2, opening variety):
+- **vs self126 (frozen e126 self): 37.5%** (6–10) — *below even*, losing to its own past self
+- **vs champ0235 (era-2 milestone): 46.9%** (7–8–1) — slightly below even
+- **vs Rapfi (ceiling): 0/16** — unmoved
+
+Squarely in the same plateau band every self-play variant has occupied (even-ish vs beatable rulers,
+0 vs Rapfi); flat-to-slightly-down vs the e793 read (40.6 / 56.2 / 0). **Conclusion: keeping the loss
+alive ≠ keeping strength climbing.** Recency = *perturbation/mutation* that churns in place without a
+*selection* mechanism to cash it (see swap2 §13). We have now exhausted three data-pipeline levers —
+**reuse** (n_workers), **window** (buffer_size 1M), **freshness** (recency_frac) — and strength has not
+moved off the self-play ceiling. **The plateau is real and buffer-knob-proof; the only lever left that
+points up is an external TEACHER** (#46 curriculum / #18 exact-solver / distillation). Bruce-1 continues
+as the self-play-only *baseline-to-beat* for the teacher era.
