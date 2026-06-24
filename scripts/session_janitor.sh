@@ -37,6 +37,12 @@ pick_python() {
 }
 PY="$(pick_python || true)"
 
+# Ensure the worktree-aware import shim is installed in the shared venv so
+# `python scripts/x.py` / pytest from ANY worktree pick up THAT worktree's
+# source, not the editable-mapped main checkout (wiki/topics/worktree-hygiene.md
+# § editable-install gotcha). Idempotent + non-fatal; absent file is fine.
+"$PY" "$PROJECT_DIR/scripts/worktree_sitecustomize.py" >/dev/null 2>&1 || true
+
 # Reclaim leaked/stale worktrees. --apply is safe by design (liveness-aware).
 # Errors are swallowed so a janitor failure never blocks the session.
 "$PY" "$PROJECT_DIR/scripts/reclaim_worktrees.py" --apply >/dev/null 2>&1 || true

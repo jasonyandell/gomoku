@@ -151,3 +151,33 @@ compound. See the friction-log meta-rule in the `gomoku-research-lab` skill.
 | `worktree-agent-<hex>` branches | harness auto-name for a worktree | janitor (empty) / `--include-scratch` (with commits) |
 | `~/code/gomoku-perf-*` siblings | manual `git worktree add` | remove by hand when the lane closes |
 | `~/.codex/worktrees/*` | the `codex` CLI (external tool) | codex owns it — the janitor leaves it alone |
+
+## Editable-install gotcha: code runs against MAIN, not your worktree
+
+The shared venv (`/Users/jason/code/gomoku/.venv`) installs `gomoku` as a PEP 660
+editable. Its finder (`__editable___gomoku_0_1_0_finder.py`) `install()` **appends**
+a MetaPathFinder to `sys.meta_path`, mapping `gomoku -> <main>/gomoku`. Because the
+stdlib `PathFinder` (which searches `sys.path`) sits *before* that finder, `import
+gomoku` resolves to whatever `gomoku/` is on `sys.path` first — and only the
+worktree root being on `sys.path` makes it win.
+
+- `python -c ...` / REPL from the worktree cwd: the `''` cwd entry is on `sys.path`
+  → resolves to the worktree. **Works by luck.**
+- `python scripts/x.py`: `sys.path[0]` is `<worktree>/scripts`, not the worktree
+  root → falls through to the finder → **silently the MAIN checkout.**
+- `pytest`: entry script lives in `.venv/bin` → **MAIN checkout.**
+
+Symptom is nasty because it's *silent*: a real `gomoku.external_engine.
+ExternalEnginePlayer` whose class is main's older copy — e.g. a method the branch
+added (`analyze`) is simply absent (`hasattr(eng,'analyze') == False`). Cost an
+hour on 2026-06-24 (Rapfi BFS-miner crash session) before the mechanism was traced.
+
+**The fix is a janitor, not a procedure.** `scripts/worktree_sitecustomize.py` is
+installed as `sitecustomize.py` in the venv's site-packages; it runs at every
+interpreter startup and prepends the enclosing worktree root (nearest ancestor of
+the entry script, else cwd, containing `gomoku/__init__.py`; venv-internal dirs are
+skipped so pytest doesn't resolve up to main). `session_janitor.sh` reinstalls it
+each session → a venv rebuild self-heals. Reinstall by hand:
+`python scripts/worktree_sitecustomize.py` (`--check` to report only). The
+deleted-MAPPING *repair* path (`uv pip install -e .` from main) is a separate,
+still-valid fallback for a different failure (MAPPING pointing at a removed dir).
