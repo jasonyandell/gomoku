@@ -43,13 +43,13 @@ def test_resolve_model_local_scheme():
 
 
 def test_resolve_model_bare_repo_rev_downloads(monkeypatch):
+    huggingface_hub = pytest.importorskip("huggingface_hub")
     calls = {}
 
     def fake_dl(repo, filename, revision=None):
         calls["args"] = (repo, filename, revision)
         return f"/cache/{repo}/{revision}/{filename}"
 
-    import huggingface_hub
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_dl)
 
     out = ArenaRole()._resolve_model(REAL)

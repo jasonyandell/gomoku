@@ -352,9 +352,14 @@ def grow(
     vfc1_b = src_state["value_fc1.bias"]     # (h_src,)
     new_sd["value_fc1.weight"] = vfc1_w[idx_h].clone()
     new_sd["value_fc1.bias"] = vfc1_b[idx_h].clone()
-    # final value FC consumes value_hidden -> divide its input columns by g_h's
-    # replication counts (Net2Wider consumer rule). Exactly one of these exists.
-    for fc_name in ("value_fc2", "value_wdl_fc", "value_hlgauss_fc"):
+    # Consumers of value_fc1's value_hidden-wide output -> divide their input
+    # columns by g_h's replication counts (Net2Wider consumer rule). The final
+    # value FC is exactly ONE of value_fc2/value_wdl_fc/value_hlgauss_fc; the
+    # swap2 choice head (choice_fc, a Linear(value_hidden -> N_CHOICES) off the
+    # SAME penultimate value-hidden activation — see GomokuNet.forward_with_choice)
+    # is an independent consumer of the same g_h map, present whenever
+    # cfg.choice_head is set (the default), so it is widened identically.
+    for fc_name in ("value_fc2", "value_wdl_fc", "value_hlgauss_fc", "choice_fc"):
         wk = f"{fc_name}.weight"
         if wk in src_state:
             w = src_state[wk]                # (out, h_src)

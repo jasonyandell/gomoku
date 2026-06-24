@@ -12,6 +12,7 @@ pre-board-size checkpoints (which were all 9x9) load as board_size=9.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass
 
 import torch
@@ -576,7 +577,16 @@ def save_checkpoint(
         payload["wandb_run_id"] = wandb_run_id
     if extra:
         payload.update(extra)
-    torch.save(payload, path)
+    # Atomic write (closes #76): a concurrent reader watching `path` (e.g. the
+    # eval daemon polling latest.pt) must never observe a half-written file.
+    # torch.save streams bytes into `path` in place, so a reader can catch it
+    # mid-write (a torn checkpoint). Write to a sibling `.tmp` first, then
+    # os.replace it onto `path`: os.replace is atomic on the same filesystem, so
+    # a reader sees either the old file or the fully-written new one, never a
+    # partial. The `.tmp` is a sibling (same dir/FS) so the rename stays atomic.
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
 
 
 def load_checkpoint(

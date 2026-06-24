@@ -13,7 +13,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import torch
+
+# gomoku.hf imports huggingface_hub at module load, so importing slim_checkpoint
+# (below) ERRORs on a minimal install that lacks the optional dep. Skip the whole
+# module cleanly instead — these tests exercise the HF push/slim path, which is
+# meaningless without huggingface_hub.
+pytest.importorskip("huggingface_hub")
 
 from gomoku.game import GameState
 from gomoku.hf import slim_checkpoint
