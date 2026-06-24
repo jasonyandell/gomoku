@@ -2457,6 +2457,29 @@ CELLS["G15-fixed-openings-teacher"] = _dc.replace(
                       "--run-name", "bruce-sensei-77"],
 )
 
+# --- #86: GENTLE teacher variant (the #77 follow-up) --------------------------
+# #77 showed teacher@0.3 + full lr (0.001) + no freeze regressed Bruce 0/96 H2H
+# by flattening the policy head (#44 confirmed via the policy channel). This
+# variant applies the #44 mitigation: HALF LR (BRUCE_TEACHER_LR, default 5e-4)
+# + a softer weight (BRUCE_GENTLE_WEIGHT, default 0.1). A run-dir TAG
+# (BRUCE_GENTLE_TAG: "on"/"off") + run-name (BRUCE_RUN_NAME) let the SAME cell
+# serve both the gentle-ON run AND the matched teacher-OFF control
+# (BRUCE_GENTLE_WEIGHT=0.0, BRUCE_GENTLE_TAG=off) with isolated run-dirs + wandb
+# runs, both warm-started from bruce_e2659_warmstart.pt. See #86 / #44 / #77.
+_GENTLE_LR = float(_os.environ.get("BRUCE_TEACHER_LR", "0.0005"))
+_GENTLE_WEIGHT = _os.environ.get("BRUCE_GENTLE_WEIGHT", "0.1")
+_GENTLE_TAG = _os.environ.get("BRUCE_GENTLE_TAG", "on")
+_GENTLE_RUN = _os.environ.get("BRUCE_RUN_NAME", "bruce-sensei-86-gentle-" + _GENTLE_TAG)
+CELLS["G15-fixed-openings-teacher-gentle"] = _dc.replace(
+    CELLS["G15-fixed-openings"],
+    name="G15-fixed-openings-teacher-gentle-" + _GENTLE_TAG + "-board15",
+    lr=_GENTLE_LR,
+    extra_train_args=[*CELLS["G15-fixed-openings"].extra_train_args,
+                      "--teacher-data-path", _TEACHER_NPZ,
+                      "--teacher-weight", _GENTLE_WEIGHT,
+                      "--run-name", _GENTLE_RUN],
+)
+
 
 def run_base() -> Path:
     """Root under which sweep_runs/ and sweep_logs/ live. Defaults to REPO_ROOT
