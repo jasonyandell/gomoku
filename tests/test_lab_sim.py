@@ -73,6 +73,7 @@ class World:
         self.crash_p = 0.0
         self.hf_blip_p = 0.0
         self.train_fail_p = 0.0
+        self.arena_crash_p = 0.0    # SIGKILL mid-arena-eval (no eval row → re-pick)
         self.foreign = False
         # observability for assertions
         self.elo: dict[str, float] = {}
@@ -202,6 +203,8 @@ class FakeArena(ArenaRole):
 
     def _fake_gate(self, *, candidate, peak, n_games):
         w = self.world
+        if w.rng.random() < w.arena_crash_p:   # power-pull mid-eval, before any row is appended
+            raise SimCrash()
         # shape mismatch if champion is from a different era (real gate would crash)
         if peak is not None:
             if self._ref_era(candidate) != self._ref_era(peak):
@@ -265,7 +268,10 @@ def train_tick(world: World, trainer: FakeTrainer):
 
 
 def arena_tick(world: World, arena: FakeArena):
-    daemon.run_daemon(arena, world.ledger_path, once=True)
+    try:
+        daemon.run_daemon(arena, world.ledger_path, once=True)
+    except SimCrash:
+        world.crashes += 1     # arena daemon "died" mid-eval; flock auto-freed, no eval row
 
 
 def state(world: World) -> ledger.LedgerState:
@@ -766,6 +772,114 @@ def scenario_intent_validation(seed=0):
         return out
 
 
+def scenario_triad_resume(seed=0):
+    """The FULL TRIAD end-to-end — the loop Jason described, driven as one chain:
+    a research fork proposes with an evidence_contract requiring BOTH a
+    train-result AND an arena-verdict; the trainer trains (→ enqueues the arena
+    eval), the arena evals, and ONLY THEN — once the arena evidence has landed —
+    does the decision become due and the reducer decide it, appending the outcome
+    for the next research wakeup. A power-pull is injected at the TRAIN table and
+    again at the ARENA table; each is recovered by re-pick (no lost progress, no
+    premature decision). This is the first scenario that exercises
+    propose→train→eval→decide as a single coordinated chain under crash."""
+    w = _tmp_world(seed)
+    with w:
+        seed_research(w, lane="research-tri", review_policy="continuous",
+                      contract={"required": [{"kind": research.EV_TRAIN, "count": 1},
+                                             {"kind": research.EV_ARENA, "count": 1}]})
+        tr, ar = FakeTrainer(w), FakeArena(w)
+        out = []
+
+        # ⚡ T1 power-pull: crash the first train attempt → no result row → re-pick.
+        w.crash_p = 1.0
+        train_tick(w, tr)
+        if w.crashes < 1:
+            out.append("train crash was not injected (setup wrong)")
+        if (state(w).experiments.get("research-tri@0") or {}).get("status") == ledger.DONE:
+            out.append("crashed train slice wrongly recorded DONE (lost-crash)")
+        w.crash_p = 0.0
+        train_tick(w, tr)                       # re-pick resumes → @0 DONE + arena eval enqueued
+        st = state(w)
+        if (st.experiments.get("research-tri@0") or {}).get("status") != ledger.DONE:
+            out.append("train slice did not recover after the crash")
+
+        # the decision must NOT be due yet — the contract still needs the arena verdict.
+        if any(t.lane == "research-tri" for t in research.research_threads(st)):
+            out.append("decision became DUE before the required arena verdict landed")
+
+        # the trainer enqueued an arena eval for THIS lane (the eval-vs-everyone hook).
+        if not [e for e in st.experiments.values()
+                if e.get("role") == "arena" and (e.get("config") or {}).get("lane") == "research-tri"]:
+            out.append("trainer enqueued no arena eval for the research lane")
+
+        # ⚡ T2 power-pull: crash the first arena attempt → no eval row → re-pick.
+        w.arena_crash_p = 1.0
+        arena_tick(w, ar)
+        if any(e.get("role") == "arena" and e.get("status") == ledger.DONE
+               for e in state(w).experiments.values()):
+            out.append("crashed arena eval wrongly recorded DONE (lost-crash)")
+        w.arena_crash_p = 0.0
+        arena_tick(w, ar)                       # re-pick resumes → arena evidence lands
+        st = state(w)
+
+        # NOW the contract is satisfied → the decision is due for the right reason,
+        # and the surfaced thread actually carries the arena evidence it waited on.
+        t = next((t for t in research.research_threads(st) if t.lane == "research-tri"), None)
+        if t is None:
+            out.append("triad thread did not surface after train+arena evidence landed")
+        elif t.due_reason != "evidence-contract-satisfied":
+            out.append(f"triad decision due for the wrong reason: {t.due_reason}")
+        elif not t.arena_evidence:
+            out.append("triad thread is due but carries no arena evidence")
+
+        # the reducer decides it; the thread then clears (outcome banked for next wakeup).
+        if not any(d["lane"] == "research-tri" for d in research.resume(w.ledger_path)):
+            out.append("resume made no decision on the satisfied triad thread")
+        if research.research_threads(state(w)):
+            out.append("triad thread still unresolved after the decision (would re-fire)")
+
+        out += check(w)                          # the whole chain still holds every invariant
+        return out
+
+
+def scenario_torn_ledger_line(seed=0):
+    """Power-pull mid-append leaves a TORN final line. The reducer must tolerate it
+    (drop the partial tail, recover every prior committed row) — NOT crash every
+    loop on restart, the worst weeks-unattended failure (silent, total, needs a
+    human). But an INTERIOR malformed line is real corruption and must still
+    surface — tail-tolerance may never silently eat a committed row. Falsifies the
+    read_all tail-guard: revert it and step 1 goes RED."""
+    w = _tmp_world(seed)
+    with w:
+        seed_lane(w)
+        tr = FakeTrainer(w)
+        train_tick(w, tr)                        # real rows on disk: L@0 DONE, L@1, an arena eval
+        out = []
+
+        # 1) a torn (truncated, newline-less) final line, exactly as a power-pull lands.
+        with open(w.ledger_path, "a") as f:
+            f.write('{"type":"result","ref":"L@0","status":"do')
+        try:
+            st = state(w)                        # read_all + fold must survive
+        except Exception as e:
+            return [f"torn final line bricked the reducer: {type(e).__name__}: {e}"]
+        if "L@0" not in st.experiments:
+            out.append("tail-tolerant read dropped a committed row")
+
+        # 2) terminate that torn line and append a valid one after it → the bad line
+        #    is now INTERIOR; real corruption must raise, never be silently dropped.
+        with open(w.ledger_path, "a") as f:
+            f.write('\n{"type":"event","scope":"x","summary":"after corruption"}\n')
+        raised = False
+        try:
+            ledger.read_all(w.ledger_path)
+        except Exception:
+            raised = True
+        if not raised:
+            out.append("interior corrupt line silently dropped (a committed row would be lost)")
+        return out
+
+
 SCENARIOS = {
     "hf_blip_not_fatal": scenario_hf_blip,
     "worktrees_bounded": scenario_worktree_leak,
@@ -780,6 +894,8 @@ SCENARIOS = {
     "evidence_contract_epistemic_when": scenario_evidence_contract,
     "continuation_blocked_before_decision": scenario_continuation_policy,
     "intent_validation_wall": scenario_intent_validation,
+    "triad_resume_under_crash": scenario_triad_resume,
+    "torn_ledger_line_tolerated": scenario_torn_ledger_line,
 }
 
 
@@ -880,6 +996,14 @@ def test_continuation_blocked_before_decision():
 
 def test_intent_validation_wall():
     assert scenario_intent_validation() == []
+
+
+def test_triad_resume_under_crash():
+    assert scenario_triad_resume() == []
+
+
+def test_torn_ledger_line_tolerated():
+    assert scenario_torn_ledger_line() == []
 
 
 def test_fuzz_no_violations():

@@ -245,12 +245,30 @@ def parse_line(line: str) -> dict | None:
 
 
 def read_all(path: str | os.PathLike) -> list[dict]:
-    """Read every row from the ledger (missing file → empty)."""
+    """Read every row from the ledger (missing file → empty).
+
+    Tail-tolerant: a power-pull (or process death) mid-``append`` can leave a
+    truncated FINAL line on disk — ``append`` fsyncs, but the kill can land
+    between the partial ``write`` and that fsync. Tolerate ONLY that torn last
+    line, so a single bad byte can never brick every loop on restart. An interior
+    malformed line is real corruption and MUST surface (silently dropping it would
+    lose a committed row — the one thing an append-only ledger must never do)."""
     path = os.fspath(path)
     if not os.path.exists(path):
         return []
     with open(path, encoding="utf-8") as f:
-        return [r for r in (parse_line(ln) for ln in f) if r is not None]
+        lines = f.readlines()
+    rows = []
+    for i, ln in enumerate(lines):
+        try:
+            r = parse_line(ln)
+        except (ValueError, json.JSONDecodeError):
+            if i == len(lines) - 1:
+                break            # a torn trailing line from a power-pull — drop it
+            raise                # interior corruption — never swallow a committed row
+        if r is not None:
+            rows.append(r)
+    return rows
 
 
 # ---- the reducer --------------------------------------------------------

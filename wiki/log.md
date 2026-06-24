@@ -1385,3 +1385,72 @@ scenarios, **all falsified RED-when-off**. Lab suite 53→67 passing; full repo 
 Page status updated to BUILT; the live Claude `decide=` trigger is the remaining #61
 agent-lane work (the wall makes it safe to plug in). See
 [[feedback-stateless-delegate-design]].
+
+## 2026-06-24 — arena eval lane DESIGN (register a model → run the gamut → relative Elo)
+
+Wrote [topics/autolab-arena-eval-lane.md](topics/autolab-arena-eval-lane.md) — the
+arena's own design note, the missing third leg of the trainer/researcher/**arena**
+triad (the researcher lane already had `autolab-researcher-contract.md`; the arena only
+had a passing mention + the *Arena-yardstick gap* stub in the architecture page). Scopes
+the model-agnostic arena Jason asked for: **add a model, run the gamut of evals, get a
+relative Elo — cleanly, deterministically, performantly, organized like the rest of the
+autolab.** Design only; nothing built. Key decisions:
+
+- **Two job kinds, not one:** the fast `gate` (H2H vs champion → verdict, unchanged) and
+  a new non-gating `panel` (vs a fixed reference panel → `eval` row with relative Elo +
+  CI + per-color split). Distinguished by `config.eval_kind`; same daemon shape.
+- **Contestant contract = gomocup protocol, two on-ramps** (bring a checkpoint → we wrap
+  it with `gomocup_brain`; or bring your own engine → implement the protocol). The
+  implementer owns inference speed; we own the harness. `incremental=1` mandatory for
+  history-conditioned nets.
+- **Relative, anchor-pinned Elo, not absolute** (#35 killed the published-Elo path).
+  Pin the scale to `heuristic ≡ 0` (one post-step over `fit_bradley_terry`, which
+  mean-centers — wrong for a stable scale). Anchors (heuristic/lookahead/rapfi@measured-TC)
+  are a **protected instrument**; the champion is a reference, not an anchor.
+- **Honest two-layer determinism:** harness (seeded fold) is exact; our nets + pure-python
+  baselines are bit-reproducible (sims-budgeted, no eval Dirichlet); time-budgeted engines
+  (Rapfi) are wall-clock → pinned operating point + Wilson CI, run uncontended. The fold
+  over results is always deterministic.
+- **Performance:** cached content-addressed `panel-baseline-<panel_id>.jsonl` → adding a
+  model is O(panel) not O(panel²); CPU-parallel engine pairs while the GPU trains.
+- **Closes the triad:** a `panel` eval *is* the `arena-verdict` evidence the
+  [researcher contract](topics/autolab-researcher-contract.md) already declares — so the
+  arena becomes the deterministic producer for a research thread's epistemic WHEN.
+
+Five new sim invariants proposed (arena-only eval authority, panel-complete-or-blocked,
+anchor-pinned-Elo, baseline-immutable, eval-fold-deterministic), each falsifiable
+RED-when-off per house practice. New index doorway added. See
+[[feedback-stateless-delegate-design]].
+
+## 2026-06-24 — arena eval lane DESIGN + DR tabletop (+ torn-line fix, triad sim scenario)
+
+Two new sibling pages + a hardening pass, all on `feat/autolab-sim`:
+
+- **`topics/autolab-arena-eval-lane.md`** — the arena's own design note (the missing
+  third leg of the trainer/researcher/**arena** triad): register a model → run the gamut
+  → relative Elo. The gomocup-protocol contestant contract (two on-ramps), the fixed
+  anchor-pinned panel (relative not absolute — #35), honest two-layer determinism
+  (bit-reproducible nets/baselines + pinned-CI'd time-budgeted engines), the cached
+  O(panel) baseline, the `gate`-vs-`panel` split, and five proposed sim invariants. See
+  the earlier 2026-06-24 log entry above for the full decision list.
+- **`topics/autolab-dr-tabletop.md`** — a disaster-recovery tabletop for weeks-unattended
+  operation: pull the power at each table of the triad ring, rank the kinks by "can the
+  lab restart itself or does it need a human?". Backbone (crash→flock-frees→re-pick→
+  resume) is solid; the real threats are external-effect-before-commit and a torn ledger
+  line. 6 kinks ranked (2 were RED).
+
+**Hardened this session (RED-when-off):**
+- `ledger.read_all` is now **tail-tolerant** — drops only a truncated *trailing* line (the
+  power-pull signature), still raises on an *interior* corrupt line (corruption ≠ a torn
+  tail; never silently drop a committed row). Falsified: the old naive reader crashes.
+- New sim scenarios: **`triad_resume_under_crash`** (the first end-to-end propose→train→
+  eval→decide chain, with a power-pull at the train AND arena tables, each recovered by
+  re-pick) and **`torn_ledger_line_tolerated`**. Lab suite green; standalone sim 15/15.
+
+**Filed for the design-y kinks:** #83 (arena tag-move-before-commit idempotency), #84
+(`eval_kind` so a contract can require a *panel* score, not just any gate verdict), #85
+(W&B run-id poisoning on SIGKILL). #2-equivalent (atomic `save_checkpoint`) is closed by
+merging `main` (`f661fd4`). See [[feedback-stateless-delegate-design]].
+
+Also: pulled the Rapfi HF resolver (`rapfi_pool.py` + `publish_rapfi.py` + `eval_vs_rapfi`
+wiring) up from `main` to the branch as the arena's anchor cornerstone (commit 18eff62).
