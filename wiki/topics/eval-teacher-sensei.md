@@ -9,6 +9,16 @@
 > must be GENTLE: lower weight + #44 LR/freeze mitigations + a matched OFF control, each
 > gated on **H2H-vs-frozen-parent** (the Rapfi cadence was non-discriminating — Bruce was
 > already 0/16 vs Rapfi). See `TRAINING_WIKI.md` 2026-06-24 and issue #86 (gentle retry).
+>
+> ⚠️ **2026-06-24 (later) — #86 GENTLE retry ALSO regressed → the one-hot SIGNAL is the culprit.**
+> Half-LR (`lr=5e-4`, #44 mitigation) + `--teacher-weight 0.1` + one-hot, with a matched OFF
+> control: the ON cell (`liy2dflw`) still flattened the policy (acc→0.18, net-entropy→3.75, plies
+> inflating) while the matched OFF cell (`5briruqf`) was rock-stable (acc 0.69, entropy 1.2). Since
+> OFF held, it's the **one-hot target itself**, not the LR/weight/warm-start. The designed fix —
+> **SOFT-target distillation** (distill Rapfi's per-move winrate as a temperature-softmax soft
+> policy target; commit `8d12d95`, 13 unit tests) — is coded but was landed AFTER the runs and
+> **never live-validated** (`soft_policy_weight=0` everywhere; no soft npz generated). Still gated on
+> H2H-vs-frozen-parent. See `TRAINING_WIKI.md` 2026-06-24 (#86) and issue #86.
 
 **One subsystem, two faces.** After the recency-0.5 verdict (TRAINING_WIKI
 2026-06-23) closed the self-play-knob era — *the three data-pipeline levers
