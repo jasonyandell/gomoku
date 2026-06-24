@@ -8,6 +8,20 @@ starting point for future sessions.
 
 ## Current Read
 
+> **2026-06-24 correction — the spine has moved past the WL series.** The
+> "WL series is the current spine" / "WL4 is the best confirmed checkpoint"
+> framing below is **9×9 era-1 history**, no longer where the live work is. The
+> current spine is the **15×15 swap2/Bruce era**: Bruce-1 ("Bruce Lee") run
+> `gogpmbhw`, the single-fair-opener fixed-openings net (idx-2 opener, recency-0.5
+> curator), latest snapshot `~/data/swap2/babysit/snapshots/g15_e2659_0623_2025.pt`
+> (e2659). Bruce is the self-play-only **baseline-to-beat**; its ~50-elo plateau is
+> confirmed **buffer-knob-proof** (reuse/window/freshness levers all exhausted, flat
+> strength, 0/16 vs Rapfi). The next lever is the external Rapfi-distillation
+> teacher (#77/#46). See [swap2-opening-protocol.md](swap2-opening-protocol.md),
+> [white-side-defense-plan.md](white-side-defense-plan.md), and the
+> [TRAINING_WIKI.md](../../TRAINING_WIKI.md) tail (2026-06-16 onward). The WL-era
+> table below is preserved as the era-1 trail, not as the current frontier.
+
 - The WL series is the current spine of the project.
 - WL4 remains the best confirmed strength checkpoint in the notes:
   `WL4-no-random-openings.plateau-e4024`, wandb `44cxzc9d`, ATH elo 1841,
