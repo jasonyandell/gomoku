@@ -1,0 +1,872 @@
+{
+  "board_size": 13,
+  "checkpoint": "/Users/jason/data/swap2/sweep_runs/G-ladder-13-board13/checkpoints/latest.pt",
+  "method": {
+    "candidate_radius": 4,
+    "value_metric": "net value head, mean over 8 D4 symmetries, white-to-move",
+    "validation": "30 greedy net-vs-self playouts, 80 sims/move",
+    "max_plies": 169
+  },
+  "selected": [
+    {
+      "opening": [
+        [
+          3,
+          4
+        ],
+        [
+          3,
+          3
+        ],
+        [
+          10,
+          6
+        ]
+      ],
+      "white_share": 0.5185,
+      "d4_value_white": -0.0245,
+      "white_wins": 14,
+      "black_wins": 13,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          4,
+          10
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          6,
+          5
+        ]
+      ],
+      "white_share": 0.5185,
+      "d4_value_white": -0.0311,
+      "white_wins": 14,
+      "black_wins": 13,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          3,
+          8
+        ],
+        [
+          7,
+          6
+        ],
+        [
+          7,
+          7
+        ]
+      ],
+      "white_share": 0.4815,
+      "d4_value_white": 0.0053,
+      "white_wins": 13,
+      "black_wins": 14,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          3
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      "white_share": 0.4444,
+      "d4_value_white": -0.0254,
+      "white_wins": 12,
+      "black_wins": 15,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          8,
+          7
+        ],
+        [
+          7,
+          8
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      "white_share": 0.4138,
+      "d4_value_white": -0.0144,
+      "white_wins": 12,
+      "black_wins": 17,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          5,
+          7
+        ],
+        [
+          6,
+          8
+        ],
+        [
+          9,
+          4
+        ]
+      ],
+      "white_share": 0.6,
+      "d4_value_white": -0.0216,
+      "white_wins": 18,
+      "black_wins": 12,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          2,
+          9
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          3,
+          8
+        ]
+      ],
+      "white_share": 0.3793,
+      "d4_value_white": -0.0026,
+      "white_wins": 11,
+      "black_wins": 18,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          6,
+          6
+        ],
+        [
+          8,
+          5
+        ],
+        [
+          8,
+          10
+        ]
+      ],
+      "white_share": 0.6667,
+      "d4_value_white": -0.0313,
+      "white_wins": 20,
+      "black_wins": 10,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          6,
+          5
+        ],
+        [
+          6,
+          8
+        ],
+        [
+          7,
+          9
+        ]
+      ],
+      "white_share": 0.2069,
+      "d4_value_white": -0.0291,
+      "white_wins": 6,
+      "black_wins": 23,
+      "draws": 1,
+      "decisive": 29
+    }
+  ],
+  "all_validated": [
+    {
+      "opening": [
+        [
+          2,
+          2
+        ],
+        [
+          9,
+          6
+        ],
+        [
+          8,
+          4
+        ]
+      ],
+      "white_share": 1.0,
+      "d4_value_white": 0.0003,
+      "white_wins": 30,
+      "black_wins": 0,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          3,
+          2
+        ],
+        [
+          4,
+          8
+        ],
+        [
+          6,
+          9
+        ]
+      ],
+      "white_share": 0.9667,
+      "d4_value_white": 0.0011,
+      "white_wins": 29,
+      "black_wins": 1,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          3,
+          8
+        ],
+        [
+          7,
+          7
+        ],
+        [
+          7,
+          6
+        ]
+      ],
+      "white_share": 0.2667,
+      "d4_value_white": 0.0012,
+      "white_wins": 8,
+      "black_wins": 22,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          2,
+          2
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          9,
+          6
+        ]
+      ],
+      "white_share": 0.9667,
+      "d4_value_white": 0.0022,
+      "white_wins": 29,
+      "black_wins": 1,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          2,
+          9
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          3,
+          8
+        ]
+      ],
+      "white_share": 0.3793,
+      "d4_value_white": -0.0026,
+      "white_wins": 11,
+      "black_wins": 18,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          3,
+          2
+        ],
+        [
+          6,
+          9
+        ],
+        [
+          4,
+          8
+        ]
+      ],
+      "white_share": 1.0,
+      "d4_value_white": -0.0037,
+      "white_wins": 29,
+      "black_wins": 0,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          3,
+          8
+        ],
+        [
+          7,
+          6
+        ],
+        [
+          7,
+          7
+        ]
+      ],
+      "white_share": 0.4815,
+      "d4_value_white": 0.0053,
+      "white_wins": 13,
+      "black_wins": 14,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          3,
+          10
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          9,
+          3
+        ]
+      ],
+      "white_share": 0.9667,
+      "d4_value_white": -0.0064,
+      "white_wins": 29,
+      "black_wins": 1,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          4,
+          4
+        ],
+        [
+          10,
+          7
+        ],
+        [
+          9,
+          9
+        ]
+      ],
+      "white_share": 0.9333,
+      "d4_value_white": -0.0085,
+      "white_wins": 28,
+      "black_wins": 2,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          2,
+          4
+        ],
+        [
+          7,
+          8
+        ],
+        [
+          9,
+          7
+        ]
+      ],
+      "white_share": 0.9667,
+      "d4_value_white": 0.0117,
+      "white_wins": 29,
+      "black_wins": 1,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          8,
+          3
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      "white_share": 0.8276,
+      "d4_value_white": -0.0119,
+      "white_wins": 24,
+      "black_wins": 5,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          3,
+          3
+        ],
+        [
+          3,
+          4
+        ],
+        [
+          10,
+          6
+        ]
+      ],
+      "white_share": 0.6333,
+      "d4_value_white": 0.0124,
+      "white_wins": 19,
+      "black_wins": 11,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          2,
+          4
+        ],
+        [
+          9,
+          7
+        ],
+        [
+          7,
+          8
+        ]
+      ],
+      "white_share": 0.9333,
+      "d4_value_white": -0.0131,
+      "white_wins": 28,
+      "black_wins": 2,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          4,
+          10
+        ],
+        [
+          4,
+          9
+        ],
+        [
+          10,
+          3
+        ]
+      ],
+      "white_share": 0.9655,
+      "d4_value_white": -0.0131,
+      "white_wins": 28,
+      "black_wins": 1,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          8,
+          7
+        ],
+        [
+          7,
+          8
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      "white_share": 0.4138,
+      "d4_value_white": -0.0144,
+      "white_wins": 12,
+      "black_wins": 17,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          3,
+          5
+        ],
+        [
+          5,
+          6
+        ],
+        [
+          6,
+          10
+        ]
+      ],
+      "white_share": 0.9,
+      "d4_value_white": -0.0167,
+      "white_wins": 27,
+      "black_wins": 3,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          6,
+          8
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          9,
+          4
+        ]
+      ],
+      "white_share": 0.6667,
+      "d4_value_white": -0.0198,
+      "white_wins": 20,
+      "black_wins": 10,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          5,
+          7
+        ],
+        [
+          6,
+          8
+        ],
+        [
+          9,
+          4
+        ]
+      ],
+      "white_share": 0.6,
+      "d4_value_white": -0.0216,
+      "white_wins": 18,
+      "black_wins": 12,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          8,
+          8
+        ],
+        [
+          6,
+          7
+        ],
+        [
+          10,
+          4
+        ]
+      ],
+      "white_share": 0.8667,
+      "d4_value_white": -0.0225,
+      "white_wins": 26,
+      "black_wins": 4,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          8,
+          5
+        ],
+        [
+          6,
+          6
+        ],
+        [
+          8,
+          10
+        ]
+      ],
+      "white_share": 0.8333,
+      "d4_value_white": -0.0229,
+      "white_wins": 25,
+      "black_wins": 5,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          3,
+          4
+        ],
+        [
+          3,
+          3
+        ],
+        [
+          10,
+          6
+        ]
+      ],
+      "white_share": 0.5185,
+      "d4_value_white": -0.0245,
+      "white_wins": 14,
+      "black_wins": 13,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          8,
+          2
+        ],
+        [
+          7,
+          6
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      "white_share": 1.0,
+      "d4_value_white": -0.0247,
+      "white_wins": 30,
+      "black_wins": 0,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          3
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      "white_share": 0.4444,
+      "d4_value_white": -0.0254,
+      "white_wins": 12,
+      "black_wins": 15,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          6,
+          10
+        ],
+        [
+          6,
+          6
+        ],
+        [
+          9,
+          2
+        ]
+      ],
+      "white_share": 1.0,
+      "d4_value_white": -0.0262,
+      "white_wins": 30,
+      "black_wins": 0,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          2,
+          5
+        ],
+        [
+          4,
+          4
+        ],
+        [
+          8,
+          5
+        ]
+      ],
+      "white_share": 0.8,
+      "d4_value_white": -0.0267,
+      "white_wins": 24,
+      "black_wins": 6,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          7,
+          10
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          9,
+          3
+        ]
+      ],
+      "white_share": 1.0,
+      "d4_value_white": -0.0278,
+      "white_wins": 30,
+      "black_wins": 0,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          6,
+          5
+        ],
+        [
+          6,
+          8
+        ],
+        [
+          7,
+          9
+        ]
+      ],
+      "white_share": 0.2069,
+      "d4_value_white": -0.0291,
+      "white_wins": 6,
+      "black_wins": 23,
+      "draws": 1,
+      "decisive": 29
+    },
+    {
+      "opening": [
+        [
+          4,
+          4
+        ],
+        [
+          9,
+          9
+        ],
+        [
+          10,
+          7
+        ]
+      ],
+      "white_share": 0.8333,
+      "d4_value_white": -0.0297,
+      "white_wins": 25,
+      "black_wins": 5,
+      "draws": 0,
+      "decisive": 30
+    },
+    {
+      "opening": [
+        [
+          4,
+          10
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          6,
+          5
+        ]
+      ],
+      "white_share": 0.5185,
+      "d4_value_white": -0.0311,
+      "white_wins": 14,
+      "black_wins": 13,
+      "draws": 3,
+      "decisive": 27
+    },
+    {
+      "opening": [
+        [
+          6,
+          6
+        ],
+        [
+          8,
+          5
+        ],
+        [
+          8,
+          10
+        ]
+      ],
+      "white_share": 0.6667,
+      "d4_value_white": -0.0313,
+      "white_wins": 20,
+      "black_wins": 10,
+      "draws": 0,
+      "decisive": 30
+    }
+  ]
+}

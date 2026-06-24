@@ -19,7 +19,7 @@ from gomoku.eval import mcts_picker, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import build_model, load_checkpoint, n_params, save_checkpoint
-from gomoku.replay_buffer import ReplayBuffer
+from gomoku.replay_buffer import ChoiceBuffer, ReplayBuffer
 from gomoku.self_play import configure_draw_value, generate_games, generate_games_vs_baseline
 from gomoku.util import load_wandb_key_from_keychain, pick_device
 
@@ -455,6 +455,63 @@ def train_step(
     return out
 
 
+def choice_step(
+    model,
+    optimizer,
+    planes: torch.Tensor,
+    legal_mask: torch.Tensor,
+    chosen: torch.Tensor,
+    chooser_z: torch.Tensor,
+    *,
+    choice_weight: float = 1.0,
+    l2_weight: float = 0.0,
+) -> dict[str, float]:
+    """One swap2 choice-head optimizer step (v2a).
+
+    OUTCOME-driven soft target per row: with ``w = (chooser_z + 1) / 2`` (the
+    chooser's outcome mapped to [0, 1] — 1 = won, 0 = lost, 0.5 = draw), the
+    target is ``w * onehot(chosen) + (1 - w) * uniform-over-legal``. So a WON
+    choice pulls the head toward the slot actually played; a LOST choice pushes
+    it toward the legal alternatives; a draw is a flat legal prior. The choice
+    logits come from ``forward_with_choice`` and are masked to the legal slots
+    before the log-softmax. This TRAINS the head only — the negotiator's
+    SELECTION is unchanged (v2b). The choice head taps the value trunk, so a
+    `choice_weight * choice_ce` backward also flows gradient into the shared
+    trunk (intended: it is a real auxiliary objective). `l2_weight` defaults to
+    0 here (the main train_step already applies L2 over all params each step)."""
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+    legal = legal_mask.bool()
+    n_choices = legal.shape[-1]
+    # Outcome-driven soft target over the legal slots.
+    w = ((chooser_z + 1.0) / 2.0).clamp(0.0, 1.0).unsqueeze(-1)        # (B, 1)
+    onehot = F.one_hot(chosen.long(), num_classes=n_choices).to(planes.dtype)  # (B, C)
+    onehot = onehot * legal.to(planes.dtype)  # defensive: chosen is always legal
+    legal_f = legal.to(planes.dtype)
+    uniform = legal_f / legal_f.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    target = w * onehot + (1.0 - w) * uniform                          # (B, C)
+
+    _, _, choice_logits = model.forward_with_choice(planes)
+    neg_inf = torch.finfo(choice_logits.dtype).min
+    masked = choice_logits.masked_fill(~legal, neg_inf)
+    logp = F.log_softmax(masked, dim=-1)
+    choice_ce = -(target * logp).sum(dim=-1).mean()
+    loss = choice_weight * choice_ce
+    if l2_weight > 0:
+        l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
+        loss = loss + l2_weight * l2
+    loss.backward()
+    optimizer.step()
+    with torch.no_grad():
+        # Accuracy: does the (masked) head argmax match the slot actually played?
+        pred = masked.argmax(dim=-1)
+        acc = (pred == chosen.long()).float().mean()
+    return {
+        "loss/choice": float(choice_ce.detach()),
+        "train/choice_acc": float(acc),
+    }
+
+
 def ema_update(ema_model, model, tau: float) -> None:
     """EMA update on parameters AND buffers (batchnorm running stats):
     ema <- tau * ema + (1 - tau) * src. No-grad. WL2 lever #1."""
@@ -692,6 +749,19 @@ def parse_args() -> argparse.Namespace:
                         "MCTS only takes over after that, and no training examples are "
                         "recorded for the random opening. Breaks the 'always-same-opening' "
                         "collapse by forcing the model to learn from diverse positions.")
+    p.add_argument("--swap2", action="store_true", default=False,
+                   help="Start each self-play game from a swap2-negotiated opening "
+                        "(the net plays both opener and responder) instead of an "
+                        "empty/random board. Mutually exclusive with "
+                        "--random-opening-moves (swap2 owns the opening). v1 seeds "
+                        "the opening only; no choice head is trained. Default OFF == "
+                        "byte-identical to today.")
+    p.add_argument("--fixed-openings", action="store_true", default=False,
+                   help="Start each self-play game from one of Rapfi's 9 BALANCED "
+                        "(known-fair) swap2 openings, placed directly -- no "
+                        "negotiation, no net, no choice head; the net plays only "
+                        "post-opening. 15x15 only. Mutually exclusive with --swap2 "
+                        "and --random-opening-moves. Default OFF.")
     p.add_argument("--c-puct", type=float, default=1.25,
                    help="c_puct_init in the AGZ log-schedule PUCT formula. Effective "
                         "exploration constant at N_parent=0. Default 1.25 = AGZ value.")
@@ -914,6 +984,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-teacher-augment", action="store_true",
                    help="Disable D4 symmetry augmentation of teacher positions "
                         "(default: augment, turning N labels into 8x diversity).")
+    p.add_argument("--choice-head-weight", type=float, default=0.0,
+                   help="swap2 v2a: TRAIN the choice head into the loss. 0.0 "
+                        "(default) = OFF = byte-identical to today (no ChoiceBuffer "
+                        "is allocated, no choice examples are ingested, no choice "
+                        "forward/loss runs). When > 0, the swap2 negotiation choice "
+                        "records threaded out of self-play feed a separate "
+                        "ChoiceBuffer; each SGD step also samples a choice batch and "
+                        "adds choice_weight * masked-CE against an OUTCOME-driven soft "
+                        "target (the played slot re-signed by the game outcome from "
+                        "the chooser's frame), logged as loss/choice. This v2a step "
+                        "TRAINS the head only; the negotiator still SELECTS with the "
+                        "one-ply heuristic (v2b wires selection later). Suggested 0.3.")
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
@@ -1154,6 +1236,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     board_config.require_board_size(args.board_size)
+    # --swap2 owns the opening; mutually exclusive with --random-opening-moves.
+    if args.swap2 and args.random_opening_moves > 0:
+        raise SystemExit(
+            "--swap2 and --random-opening-moves are mutually exclusive "
+            "(swap2 negotiates the opening; drop --random-opening-moves)"
+        )
+    if args.fixed_openings and (args.swap2 or args.random_opening_moves > 0):
+        raise SystemExit(
+            "--fixed-openings is mutually exclusive with --swap2 and "
+            "--random-opening-moves (the opening book owns the opening)"
+        )
     device = pick_device(args.device)
     print(f"device = {device}")
     print(f"board_size = {board_config.BOARD_SIZE}")
@@ -1189,6 +1282,16 @@ def main() -> None:
     ownership_on = ownership_weight > 0.0
     if ownership_on:
         print(f"aux ownership head ENABLED (weight={ownership_weight})")
+
+    # swap2 v2a choice-head lever. The single weight flag gates the ChoiceBuffer,
+    # the per-game choice-example ingest, and the choice loss term. 0.0 (default)
+    # => everything off and byte-identical to the pre-v2a path. The choice head
+    # itself is always present on the model (ModelConfig.choice_head defaults to
+    # True), so no build flag is needed — only the TRAINING of it is gated here.
+    choice_weight = float(args.choice_head_weight)
+    choice_on = choice_weight > 0.0
+    if choice_on:
+        print(f"swap2 choice head TRAINING ENABLED (weight={choice_weight})")
 
     # Cross-game value sidecar ('position-stats'). The single boolean flag gates
     # the buffer key column, the trainer-owned aggregate store, the ingest
@@ -1393,7 +1496,6 @@ def main() -> None:
     if args.buffer_recency_frac > 0.0:
         print(f"buffer curator: recency_frac={args.buffer_recency_frac} "
               f"window={args.buffer_recency_window}")
-
     # Teacher distillation (eval/teacher build). When --teacher-data-path is set
     # and --teacher-weight > 0, mix a batch of expert-labelled positions into
     # every SGD step: a policy-only CE toward the teacher's move. The dataset is
@@ -1416,6 +1518,12 @@ def main() -> None:
     elif teacher_weight > 0.0:
         print("WARNING: --teacher-weight > 0 but no --teacher-data-path; teacher OFF")
         teacher_weight = 0.0
+
+    # swap2 v2a choice buffer. Allocated ONLY when the choice lever is on, so the
+    # off path never touches it (byte-identical). Tiny (~1-2 examples/swap2 game).
+    choice_buffer = ChoiceBuffer(device=device) if choice_on else None
+    if choice_on:
+        print(f"swap2 choice buffer: cap={choice_buffer.capacity}")
     # Build the reanalyze scheduler now that buffer.capacity is known.
     # OFF path never enters this branch — no import, no allocation.
     if reanalyze_on:
@@ -2148,6 +2256,8 @@ def main() -> None:
                 rng=rng,
                 wave_size=args.wave_size,
                 random_opening_moves=args.random_opening_moves,
+                swap2=args.swap2,
+                fixed_openings=args.fixed_openings,
                 record_aux=aux_on,
                 record_ownership=ownership_on,
             )
@@ -2181,6 +2291,12 @@ def main() -> None:
         else:
             for r in records:
                 buffer.add(r.examples)
+
+        # swap2 v2a: ingest this cycle's negotiation-choice examples into the
+        # separate ChoiceBuffer. OFF (choice_buffer is None) => never runs.
+        if choice_on and choice_buffer is not None:
+            for r in records:
+                choice_buffer.add(getattr(r, "choice_examples", []))
 
         # Cross-game value: aggregate THIS cycle's examples into the trainer-owned
         # store. Recency-decay the whole store once per cycle (fades old/weak-net
@@ -2395,6 +2511,22 @@ def main() -> None:
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)
+                # swap2 v2a choice-head step. OFF (choice_on False / buffer empty)
+                # => never runs (no sample, no forward, no loss). When on, it is a
+                # SEPARATE optimizer step on a choice batch (its own zero_grad +
+                # step), gated to `is_last_in_window` so it fires ONCE PER MAIN
+                # OPTIMIZER STEP (1:1 cadence) — NOT once per microbatch, which would
+                # over-update the shared value trunk by `grad_accum_steps`× and risk
+                # destabilizing value learning at cold-start.
+                if (is_last_in_window and choice_on and choice_buffer is not None
+                        and choice_buffer.size >= args.batch_size):
+                    cplanes, clegal, cchosen, ccz = choice_buffer.sample(args.batch_size)
+                    cm = choice_step(
+                        model, optimizer, cplanes, clegal, cchosen, ccz,
+                        choice_weight=choice_weight,
+                    )
+                    for k, v in cm.items():
+                        train_metrics_acc.setdefault(k, []).append(v)
                 if is_last_in_window:
                     optimizer_steps_this_cycle += 1
                     # WL2 lever #1: EMA tracks the trained model per optimizer

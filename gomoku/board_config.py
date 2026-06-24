@@ -40,7 +40,7 @@ MAX_BOARD_SIZE = 25   # sanity bound (gomocup tops out at 20; 19 = go board)
 
 # Board sizes that have a dedicated compiled native extension. Anything else
 # uses the pure-Python/NumPy fallback paths.
-NATIVE_BOARD_SIZES = (9, 15)
+NATIVE_BOARD_SIZES = (9, 11, 13, 15)
 
 
 def _parse(raw: str, source: str) -> int:

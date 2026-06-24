@@ -4224,6 +4224,463 @@ result we are not resuming; the eval JSONLs above are the cited evidence. The ce
 `G15-wdl-defense` / `G15-wdl-conv` in `run_sweep.py` reproduce the runs from the wdl@0 seed if
 ever needed.
 
+## 2026-06-20 — SWAP2 (#72) BUILT (full Path A) + LIVE warm-started run launched — the real white fix is to DELETE the doomed role (wandb `8nq1a7cm`)
+
+**This is the LIVE arm.** Acting on the same-day conclusion above (15×15 freestyle white
+weakness is the **first-player-win THEOREM**, not a net flaw — Rapfi-vs-Rapfi from 4-stone
+openings = white 1-9; three teachers all flattened: value-only #42, sparse-VCF #43, dense
+conv), the fix shipped: **swap2** (Gomocup's balancing protocol). On `feat/swap2-opening-protocol`
+(6 commits `ba37b92..167e526`, **73 tests green, NOT merged**).
+
+**The ML thesis (the mechanism, not just an honest yardstick).** An imbalanced game **cannot
+bootstrap** because self-play data collapses: every game is a black win → the value head only
+ever sees `white = lost` → the policy gets **no gradient on winnable white positions** (there
+are none in the data). No teacher can fix a role the data never shows winning. **Swap2 rebalances
+the GAME** so self-play generates **~50/50 data** → white positions become *winnable in the
+training set* → the loop can finally learn to defend because there is now a signal to learn from.
+That is the actual unlock; the honest-yardstick property (Rapfi is a swap2 engine, so the real
+Gomocup game) is a bonus, not the point.
+
+**What was BUILT — full Path A (the net learns to negotiate), 6 pieces:**
+1. **`gomoku/swap2.py`** (`ba37b92`) — pure negotiation state machine (`OpeningState`). Opener
+   places 2B+1W; responder STAY (take white + place a white stone) / SWAP (take black) / PLACE2
+   (add 1B+1W, opener then picks color). **Key modeling:** color is fixed by placement ORDER, so
+   every placement stays a spatial move over the existing board policy head — **no action-space
+   growth** for placements; only the two negotiation *moments* are abstract (a width-3 choice
+   space). Value attribution uses explicit OPENER/RESPONDER actor tags + `backup_sign()` (the
+   opener acts **3× in a row**, so "flip perspective every ply" does not hold).
+2. **`gomoku/external_engine.py`** (`2d56314`) — SWAP2BOARD protocol path
+   (`swap2_open`/`swap2_respond`/`swap2_pick` + `Swap2Reply`), eval-only, additive; the existing
+   move path is byte-identical.
+3. **`gomoku/model.py`** (`9e24e45`) — width-3 choice head via `forward_with_choice()` (taps off
+   the value head's penultimate layer); **warm-start-tolerant load** (the champion predates the
+   head → core loads strict, the choice head starts fresh). This is what makes it full Path A.
+4. **`gomoku/swap2_search.py`** (`5860326`) — v1 negotiator: `negotiate(oracle, rng)` drives the
+   opening. PLACE nodes are **sampled** for diversity; CHOICE nodes are selected by a **one-ply
+   VALUE comparison** (no trained head needed in v1) with honest minimax over the nested opener
+   pick; choice records are emitted as **future choice-head targets**. ~30 net forwards/game
+   (~0.2% overhead, no MCTS).
+5. **self-play wiring** (`6b629dc`) — `--swap2` flag threaded into all four generation paths
+   (`self_play` / `selfplay_worker` / `train` / `run_sweep`) at the `_random_opening_state` seam;
+   **mutually exclusive with `--random-opening-moves`**; byte-identical when OFF.
+6. **`gomoku/eval_swap2.py`** (`55f3e4d`) — the honest gate: **both sides negotiate** (our net
+   via `swap2_search.agent_act`, the engine via SWAP2BOARD), roles alternated, normal play from
+   `to_normal()`; result splits by our final color + role. **There is no forced-white side.**
+
+**The live run (cell `G15-swap2`, `167e526`) — LAUNCHED, results pending.** Clone of champion
+`G15-128x10-bigbuf` (128×10 large, scalar value, global_pool, value-discount 0.98, gumbel) +
+**TWO deltas**: (a) buffer **1.5M → 150k FRESH** — the swap2 lesson lives in the new ~50/50
+games and a small fresh buffer turns over fast (the 2026-06-19 small-fresh-buffer finding), and
+(b) **`--swap2`**. `n_workers 4 → 8` (the negotiation has **no VCF solver**, so no
+solver-starves-gen trap). **Warm-started** from a weights-only stripped champion
+(`/Users/jason/data/swap2/g15_champ_warmstart_weightsonly.pt` — no embedded buffer/optimizer/
+wandb → fresh everything; the tolerant loader adds the fresh choice head).
+- Launched **2026-06-20 ~07:40**, wandb run **`8nq1a7cm`**, board 15, MPS, 1h self-capping slices
+  via `--max-wall-secs 3600 --run-base /Users/jason/data/swap2`. Spin-up healthy: ~2 s/game swap2
+  gen, ~3.9 games/s aggregate, 0 errors. Babysit ledger: `/Users/jason/data/swap2/babysit/ledger.md`.
+- **GATE:** `gomoku/eval_swap2.py` vs native Rapfi-NNUE (`run-rapfi` wrapper, `GOMOKU_REPO=main`
+  for the weights) — **overall win% under the real protocol, NO forced-white floor**, re-measured
+  each ~1h. Baseline context: the champion under the OLD forced-opening measure scored ~21-27%
+  overall / white 0/12 swept; under swap2 there is **no forced-white side** — so the gate reads the
+  honest, balanced number for the first time.
+
+**Status: results pending the hourly `eval_swap2`-vs-Rapfi gate.** Next session: read the babysit
+ledger, then the gate output, and watch whether the ~50/50 data lets the loop bootstrap a defending
+white (the theorem says it can't be taught into a *forced* white role; swap2 removes the force).
+Full plan + theorem chronology: `wiki/topics/white-side-defense-plan.md`.
+
+## 2026-06-20 — SWAP2 (#72) LIVE: THE CORE BET IS CONFIRMED AT THE DATA LEVEL — white wins 27% in swap2 self-play (vs ~0% empty-board); white positions are now WINNABLE in the training set (wandb `8nq1a7cm`)
+
+**~2h into the live warm-started swap2 run (cell `G15-swap2`, wandb `8nq1a7cm`, board 15, MPS),
+the central hypothesis behind #72 is confirmed where it matters most — in the self-play DATA.**
+The build + launch are the entry directly above; this entry records the first measured results.
+
+**1. THE CORE BET IS CONFIRMED — white is now winnable in the training data.** Measured color
+balance of the **64 most recent swap2 self-play games** (pulled from the live run's `_records`
+GameRecords): **white wins 27% (black 69%, draw 5%).** In the OLD empty-board self-play regime
+white won **~0%** — the imbalance collapse that made white-defense unlearnable, the entire reason
+#72 exists. Under swap2, white is genuinely WINNABLE in the training data (**27% ≫ 0%**), so the
+value/policy heads finally get gradient on **winnable white positions**. This is the bootstrap an
+imbalanced game *cannot* do, working — exactly the ML thesis ("swap2 rebalances the GAME so
+self-play generates ~50/50 data → white positions become winnable in the training set"). **This is
+the single most important result of the run so far.** The white-defense teachers (#42 value-only,
+#43 sparse-VCF, dense conv) all failed because there was no error to correct in a *forced* lost
+role; swap2 instead supplies the missing signal by making the role winnable.
+
+**2. The negotiation mechanism works.** In net-vs-net swap2 H2H, the **RESPONDER wins ~80%** — it
+exploits its stay/swap/place2 choice to take the better side (`opener_color_dist` shows the
+responder almost always grabs black). Swap2's balancing comes through the responder's choice,
+exactly as designed.
+
+**3. Not yet perfectly balanced — the honest caveat + the identified NEXT LEVER.** Black still
+wins 69% (not 50/50) because **v1 SAMPLES opening placements for diversity rather than TRAINING
+them** — the opener never learns to place a FAIR opening, so the responder retains a swap-to-black
+edge. Pushing toward 50/50 = **train the negotiation.** The machinery is half-built: the width-3
+CHOICE HEAD exists (`model.forward_with_choice`) and the negotiator already emits `choice_records`
+as targets, but **those targets are NOT yet wired into the trainer loss** — v1 negotiates by a
+one-ply value lookup, with no trained choice head. **Next lever: wire `choice_records` into
+training** (+ optionally record/train opening placements so the opener learns fair openings). This
+is the identified next step toward 50/50, not a failure of the run.
+
+**4. The Rapfi gate is noise-dominated near the floor; the progress gate is now H2H-vs-frozen-
+champion.** Vs Rapfi-NNUE @200ms our net sits at single-digit-to-~30% win-rate; at **n=16–48 the
+SAME fixed baseline reads 4%–25% on noise** (variance swamps the ~5–8pt signal). Per the wiki's own
+2026-06-15 rule ("gate did-this-help on H2H vs the preserved champion, not Rapfi"), the progress
+gate is now **net-vs-net swap2 H2H vs the frozen warm champion** (near p≈0.5, resolvable; built in
+`gomoku/eval_swap2.py:eval_swap2_h2h`, jobs-parallel, exact-deterministic). **First reading: trained
+e129 vs frozen warm champ = 51.6% (n=64) — PARITY within noise, EARLY (~2h warm-started). This is
+NOT a strength claim.** Rapfi stays a coarse absolute anchor only.
+
+**5. Run mechanics — healthy throughout.** Cell `G15-swap2` (champion recipe + 150k fresh buffer +
+swap2 lever), warm-started from a weights-only stripped champion, 1h self-capping slices, **~3
+slices so far**. Dynamics healthy: **value loss bounces ~0.16–0.26** (no value-poisoning collapse),
+**plies rose ~30 → 42** (more contested games, the expected swap2 signature), **no fast-attack
+collapse** (the `selfplay/plies_mean` death-tell is absent).
+
+**Net read (~2h in):** the run does the one thing the three teachers could not — it makes white
+**winnable in the data** (27% vs ~0%), supplying the gradient the imbalanced game starved. Strength
+vs the frozen champion is at parity/early (51.6%, n=64), so this is a confirmed *mechanism*, not yet
+a confirmed *strength gain*. The path to 50/50 balance is concrete: train the negotiation (choice
+head into the loss). Branch `feat/swap2-opening-protocol` (latest commit `a29e645` adds the
+net-vs-net swap2 H2H gate); evidence is the live run `8nq1a7cm`. Plan + theorem chronology:
+`wiki/topics/white-side-defense-plan.md`.
+
+## 2026-06-20 — SWAP2 (#72) STRENGTH SIGNAL FIRES: H2H 51.6%→64.1%, WHITE 12%→41% (e129→e181)
+
+The H2H-vs-frozen-champion gate (the resolvable progress gate; net-vs-net swap2, both
+negotiate, n=64 / sims=200 / seed7) now has TWO comparable points and the trend is up —
+specifically on the white side, the metric the project chased for months.
+
+| gate | epoch | overall (trained's W-L) | as WHITE | as black | as opener | as responder |
+|---|---|---|---|---|---|---|
+| slice 2 end | e129 | 51.6% (33-31) | 12% (3-22) | 77% (30-9) | 22% (7-25) | 81% (26-6) |
+| slice 3 end | e181 | 64.1% (41-23) | **41% (12-17)** | 83% (29-6) | 50% (16-16) | 78% (25-7) |
+
+**Read.** Overall 51.6→64.1 (n=64 each, CI ~±12%) is suggestive but partly noisy. The
+robust, thesis-consistent signal is **white: 3/25 → 12/29 white wins (12%→41%, a 4×
+increase)**, plus opener-role 22%→50%. White is becoming viable via *balanced data*, not
+a teacher — exactly the swap2 thesis. This is the first positive STRENGTH signal (prior
+entry had it at parity/51.6%); ~52 epochs of balanced data on top of the warm start moved
+it.
+
+**Epoch context (Jason, 2026-06-20).** General AZ wisdom is "thousands of epochs to
+move," but this lab's lived experience is real movement in **~100 epochs** (laptop-scale,
+small buffer, high SGD/position). So a white shift at e129→e181 is *on-schedule for this
+setup, not anomalous* — credible, not suspicious. "Thousands" is the conservative outer
+bound; ~100 is the empirical inner bound here.
+
+**Discipline.** A single n=64 gate is a data point; the RESULT is the trend across
+INDEPENDENT checkpoints. Next gate (slice 4, e~233) at **n=128** to tighten the CI — if it
+holds ~60%+ with white ~40%, this is a genuine result. Caveat tracked: not yet 50/50
+balance (black still 69% in self-play data) because v1 samples (doesn't train) opening
+placements — the learned-choice-head lever (§6 of the synthesis page) is the path to push
+further, now a "go further" lever rather than a rescue. Synthesis +
+high-res trend table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 — SWAP2 (#72) gate-4 CONFIRMATION (n=128): white 12%→33% holds; overall ~57% (e181's 64% was noise)
+
+Tighter n=128 H2H (trained e235 vs frozen champ, sims=200/seed7): **73-55 = 57.0%** —
+white 20-40 (33%), black 53-15 (78%), opener 26-38 (41%), responder 47-17 (73%).
+
+Trend across INDEPENDENT checkpoints: e129 51.6%/w12% (n64) → e181 64.1%/w41% (n64) →
+e235 57.0%/w33% (n128). The e181 64.1% was upward n=64 noise; the n=128 anchor is ~57%
+overall (CI ~[48,66], grazes 50% → suggestive not conclusive on the overall). The
+**white side is the robust signal: 12% (3/25) → 33% (20/60)** survives the tighter n — a
+real white-defense gain via balanced data, not a teacher. Verdict ~235 epochs: confirmed
+but MODEST, not plateaued — keep training (this lab's ~100-epoch movement window). All
+future gates n=128 (n=64 too noisy). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3.
+
+## 2026-06-20 — SWAP2 (#72) gate-5 (e289, n=128): 66.8%, white-LOSS 88%→67%→51% — at the crowning bar
+
+Trained e289 vs frozen champ, n=128 sims=200 seed7: **85-42-1 = 66.8%**. white 29-30-0
+(LOSS 51%), black 56-12-1 (81%), opener 33-31 (52%), responder 52-11-1 (82%).
+
+Reliable-anchor trend (n=128 + e129 baseline): overall 51.6%(e129) → 57.0%(e235) →
+66.8%(e289); **white LOSS-rate 88% → 67% → 51%** — falling cleanly on the exact metric
+#18/#72 targeted. (The e181 n=64 64.1%/59%-white-loss was an upward overshoot — excluded.)
+At e289 the overall CI ~[58.6,75] clears 50% AND the ~58% relative-crown lower bound
+(§6.6) → "stronger than the champion" is essentially AT the bar; formal crown wants an
+n≥200 gate. Still CLIMBING (e235→e289: 57→66.8), not plateaued — keep training toward
+e1000. White winning ~half its games vs the frozen champ's defense is a RELATIVE signal
+(beats the OLD champ's white play, not a game-theoretic white win). High-res table:
+`wiki/topics/swap2-opening-protocol.md` §5.3.
+
+## 2026-06-20 — SWAP2 (#72) gate-6 (e345, n=128): 76.2%, white-LOSS 88%→67%→51%→42% — slope STEEPENED
+
+Trained e345 vs frozen champ, n=128 sims=200 seed7 jobs=16 (runtime 755.99s): **97-30-1 =
+76.2%**. white 21-16-1 (win 55.3% / LOSS 42.1%), black 76-14-0 (84.4%), opener 43-20-1
+(67.2%), responder 54-10-0 (84.4%). opener_color_dist {black 38, white 90}.
+
+Reliable-anchor trend (n=128): overall 57.0%(e235) → 66.8%(e289) → **76.2%(e345)**;
+**white LOSS-rate 88%(e129) → 67%(e235) → 51%(e289) → 42%(e345)** — monotonic, and at e345
+**below 50% for the first time** (white wins MORE than it loses vs the champ's defense).
+The e289→e345 jump is **+9.4 overall pts — the LARGEST slice-over-slice gain so far**, so
+the slope STEEPENED this slice; this is acceleration, not the onset of a plateau. Overall
+CI ~[68.8, 83.6] sits well clear of 50% AND the ~58% relative-crown lower bound (§6.6).
+Caveat: white sample is small (n=38 white games, CI ~±16% on white-LOSS) → treat the white
+number as directional even though the overall n=128 number is tight. (e129 51.6% and e181
+64.1% were n=64; e181 was upward noise — both excluded from the reliable anchor line.)
+
+Verdict at ~345 epochs: **climbing, slope steepened, NOT plateaued** — keep training. The
+relative-crown lower bound is comfortably cleared; the formal crown still wants an n≥200
+gate, deferred to plateau or e1000. White winning the majority of its games vs the frozen
+champ's defense is a RELATIVE signal (beats the OLD champ's white play, not a game-theoretic
+white win). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 — SWAP2 (#72) gate-7 (e403, n=128): 67.6%, PULLBACK within noise — corrects the gate-6 "slope steepened" read
+
+Trained e403 vs frozen champ, n=128 sims=200 seed7 jobs=16 (runtime 844.39s): **86-41-1 =
+67.6%**. white 25-33-0 (win 43.1% / LOSS 56.9%), black 61-8-1 (87.1%), opener 32-32-0
+(50.0%), responder 54-9-1 (84.4%). opener_color_dist {black 18, white 110}.
+
+Reliable-anchor trend (n=128): overall 57.0%(e235) → 66.8%(e289) → 76.2%(e345) →
+**67.6%(e403)**, mean **~70%**; white LOSS-rate 67%(e235) → 51%(e289) → 42%(e345) →
+**57%(e403)** — no longer a clean monotonic fall, now BOUNCING 42-57% (~ parity).
+
+**This corrects the gate-6 "slope steepened" read: that was partly upward noise.** e345's
+76.2%/42% was *partly* an upward sample-fluctuation (same flavor as the earlier e181 64.1%
+n=64 spike), not a genuine acceleration. The e403 dip is a **PULLBACK within noise, NOT a
+regression** — the CIs overlap heavily: overall e403 [59.5%, 75.7%] vs e345 [68.8%, 83.6%];
+white-LOSS e403 [44%, 70%] vs e345 [26%, 58%]. The true LEVEL is **~70% overall**, holding
+across the n=128 anchors (66.8 → 76.2 → 67.6), comfortably above the ~58% relative-crown
+lower bound (§6.6).
+
+The honest white-side statement is now: **white LOSS-rate fell from 88% (early) to ~50%
+(now) and is fluctuating around parity, NOT monotonically marching to 0.** The early read
+(88→67→51→42) was real *as a fall from the catastrophic floor*, but at the ~parity level the
+gate-to-gate motion is noise. Black (87%) and responder (84%) sides stay strong; all the
+variance is concentrated on the hard white/opener side, which also carries the smaller
+sample (white n=58 this gate vs n=38 last — the negotiation/seed interaction shifts the
+color mix gate-to-gate).
+
+Verdict at ~403 epochs: **NOT a plateau, NOT a regression, still well above the crown bar —
+keep training.** Recalibrate expectations: progress on the white side is **noisy around
+parity, not a smooth descent**; read the trend across independent checkpoints *and their
+CIs*, not any single gate (a single high gate can be an upward fluctuation, as e345 partly
+was). Formal crown gate stays at n≥200, deferred to plateau or e1000. High-res table:
+`wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 (night) — Era-2 board-size LADDER launched (9→11→13→15)
+
+Pivoted era-2 from "9×9 → warm-start straight to 15×15" to a **board-size ladder**.
+Trigger: 9×9 swap2 **saturated into draw-dominance at e102** (last-3 epochs draws
+56/75/56 vs white ~14, black ~19–31; run `lywhy1ba`) — exactly Jason's graduation
+rule `max(draw, white, black) == draw`. 9×9 is too cramped for white to convert
+defense into a win, so it learns "draw"; a bigger board reclaims room. Native exts
+compiled for 11/13 (native-11 **68.3k** > native-15 **60.7k** sims/s; pure-Python
+~40k flat regardless of size → **never fall back**, it would break Δelo/hour). Each
+rung warm-starts the previous champion (98.9% transfer, only the 3 board-bound FCs
+re-init) and trains until draw-dominant, then steps up. Rung 15 terminal (board too
+big to draw). Cells `G-ladder-11/13/15`; orchestrator `babysit/ladder_autochain.sh`;
+graduation `babysit/ladder_grad.py` (reads `wandb_run_id` from `latest.pt`).
+Synthesis: `wiki/topics/board-size-transfer-and-warm-start.md` § the multi-rung ladder.
+
+Run IDs: 9×9 `lywhy1ba` (graduated e102) → 11×11 `8jsd7qzw` (live). 11×11 at e73:
+white%dec 30–42% (balanced, black slight edge), plies up to ~38–40 (vs 9×9 ~20),
+draws creeping to ~8–11% — **saturation onset beginning, same shape as 9×9**.
+
+**Jason's predictions (logged before the fact, for posterity — check against actual
+cutover epochs in the AM):** (1) happy if white can "fight and learn" at 11 or 13 at
+all; (2) 11×11 will drawmax **~30–50% later than 9×9** (so "pretty soon"); (3) 13×13
+will drawmax **much later**; (4) draws already rising at 11 → 13 cutover maybe sooner
+than expected; (5) success = "still training in the morning."
+
+**Cadence (unattended, NO gates — "just see what happens"):** monitor every 30 min on
+rungs 11/13. On reaching **15×15**, switch to **1-hr cadence with a Rapfi eval each
+lap** (try-vs-Rapfi → record → 1 h train → repeat). If something goes sideways,
+consult the wiki for the fix and keep it TRAINING — do not gate or stop. STOP control:
+`touch babysit/STOP_ladder`. Keep updating wiki/TRAINING_WIKI at each check-in.
+
+### 2026-06-21 02:50 — rung 11 → 13 cutover (graduated on CAP, not drawmax)
+
+Rung 11 (`8jsd7qzw`) ran e0→**e401** and graduated via the **CAP=400 backstop**, NOT
+the drawmax rule. Why: from ~e218 it settled into a **stable black-edge equilibrium** —
+black ~40% / draw ~34% / white ~25%, plies flat ~64 — for ~180 epochs. Draws flickered
+to single-epoch drawmax (e166, e221, e380–381 hit 44–52%) but **never robustly overtook
+black**, so the 3-consecutive-drawmax denoise correctly never fired. Interpretation:
+with **v2a (choice head) OFF**, swap2's color-balancing isn't trained, so black keeps its
+intrinsic first-move edge; white's defense maxes out at "draw-or-lose-narrowly" rather
+than forcing draw-dominance. The CAP backstop is exactly the right mechanism for this
+"strong rung that plateaus short of drawmax" case — it advanced cleanly.
+
+11→13 warm-start at e401 (`ladder_seed_13.pt`); rung 13 = run `2dvcxh0b`. Early 13×13
+(e73–77): **white%dec climbing 40→49%**, draws 0, plies ~20 (fresh-board recovery, many
+decisive games) — a clean transfer, even more balanced than 11 started. "Fight and learn
+at 13" (Jason's happy condition) achieved out of the gate.
+
+**Prediction scoring so far:** Jason guessed "11 drawmaxes ~30–50% later than 9 (e133–153)."
+Reality: **11 never cleanly drawmaxed** — it hit a stable equilibrium and graduated on the
+CAP at e401. So the *drawmax framing* didn't hold for 11 (equilibrium instead); the deeper
+instinct (9×9-style saturation transfers up the ladder) gave way to a black-edge fixed
+point once the board had room. "13 drawmaxes much later" — TBD; 13 has even more room, so
+expect equilibrium-or-CAP again rather than a clean drawmax.
+
+### 2026-06-21 07:40 — FULL LADDER COMPLETE: reached 15×15 (9→11→13→15 overnight)
+
+The whole curriculum climbed unattended in one night. Timeline + how each rung graduated:
+
+| rung | run | epochs | graduated | how |
+|---|---|---|---|---|
+| 9×9  | `lywhy1ba` | →e102 | 2026-06-20 ~22:50 | **drawmax** (draws 56/75/56 vs white ~14) |
+| 11×11 | `8jsd7qzw` | e0→e401 | 02:50 | **CAP** (stable black-edge equilibrium, never drawmaxed) |
+| 13×13 | `2dvcxh0b` | e0→e424 | 07:40 | **CAP** (same equilibrium; black edge *stronger*, draws rarer ~10%) |
+| 15×15 | (live) | e0→ | terminal | runs until `STOP_ladder` |
+
+**Durable lesson: only the smallest board (9×9) cleanly draw-saturates.** With v2a OFF
+the swap2 negotiation doesn't balance colors, so on 11 and 13 black keeps a genuine
+first-move edge (white ~25–35% of decisive games, plies long/healthy ~50–70 — defending,
+NOT the 0% basin) and draws never overtake black. The **CAP backstop is therefore the
+real graduation mechanism for the bigger rungs**, not the drawmax rule — and that's fine,
+it advanced each rung cleanly. White "fights and learns" at every rung (Jason's bar met).
+
+15×15 starts fresh-headed (the 13→15 transfer re-inits `policy_fc`/`value_fc1`); first
+epochs are empty/raced (workers warming on slow ~plies-134 games). **Now on the 1-hr
+Rapfi cadence** (`babysit/ladder_rapfi15.sh`, gentle/concurrent): baseline read first,
+then eval-every-hour while training, recording white-vs-Rapfi off the era-1 0% floor.
+**Baseline (07:45, fresh 15×15 net `epoch0095`, untrained heads): 0.0%** vs Rapfi-NNUE
+(0W-32L-0D @ 200ms/sims200/n32; black 0/21, white 0/11). The floor — the transfer re-inits
+the 15×15 heads so the net can't play coherently yet; loses fast (59s). Now we watch it
+climb off 0% as the heads adapt (the whole bet of the ladder). Hourly reads append to
+`babysit/eval_results.jsonl`; era-1's *trained* e455 was 10.2%/white-0% for comparison.
+
+## 2026-06-21 ~11:07 — era-3 FAIR-OPENING LADDER launched (9→11→13→15)
+
+Jason's "go all in": build the fixed-fair-opening run as a LADDER for cheap epochs.
+Openers = Rapfi's 9 shapes RE-CENTERED per board (not generated — his call; the
+shapes are sub-9×9 so all 9 fit on 9/11/13, zero dropped). A FRESH net climbs
+9→11→13→15, same canned fair openers at every rung, **auto-promoting on p90-plies-max**
+(#74, `babysit/ladder_grad.py`: graduate when plies_p90 plateaus at peak for 5 epochs
+— promote before the net learns to retreat). Minimal gating on 9/11/13 (bank cheap
+epochs, find a fresh killer); real gates at 15, incl. a TODO Rapfi-from-canned-openers
+eval (our net vs Rapfi from the fixed post-opening positions, as black AND white).
+
+Cells `G{9,11,13,15}-fixed-openings` (swap2 OFF, fixed_openings=True; commits 3c6e9d7,
+744849a; tests green at all sizes). Orchestrator `babysit/fairladder.sh` (15-min slices,
+warm-start between rungs). Rung-9 run `eilfnz1e`. Single-15 predecessor run `nbctsiua`
+(stopped; showed white ~46–51% in its first epochs — the early fairness signal). era-2
+swap2-ladder best net preserved: `G-ladder-15-board15/checkpoints/epoch0235.pt` (25% vs Rapfi).
+
+THE METRIC: white-share of decisive self-play → ~50% on fair boards (was ~25–35% rigged).
+
+## 2026-06-22 — Single-opener "Bruce Lee" 15×15 overnight + the worker-count / gen-flood finding ⭐
+
+Run `gogpmbhw` (`G15-fixed-openings-board15`). Context: by 2026-06-21 night the
+ladder had pivoted to a **single fair opener (idx-2** `((3,2),(5,4),(4,5))`, B,W,B →
+white-to-move) after discovering that *re-centering* Rapfi's shapes does NOT preserve
+balance (re-centered openers tested 0–95% black at 13×13; idx-2 was the fairest at
+~50%). Jason's call: "drop anything that isn't fair first … an exceptionally strong
+player from ONE fair opening beats an imbalanced player from many" — `GOMOKU_DROP_OPENERS`
+keeps only idx-2. Specialize, don't generalize: **"Bruce Lee" — fear the man who
+practiced one kick 10,000 times.** Plan: plow forth even if white lags; hold all
+verdicts until the 15-series has depth.
+
+**Overnight (8 workers, e224→~616, hands-off).** Three fixed rulers, idx-2 board, both
+seats, 16 games/seat, `temp_plies=6` opening variety:
+- **vs Rapfi** (saturated ceiling): **0/16 all night**, unmoved — expected; Rapfi reads
+  clean through us at this strength and will for a long while.
+- **vs champ0235** (era-2 best, warm-started from prior winners): bounced ~even, peaked
+  **69%**. Trading blows with the old champion on its home board — promising for the recipe.
+  (The early "16–0 sweep" was a *determinism artifact* — one line repeated 8×; it vanished
+  once `temp_plies` variety was added. **Lesson: net-vs-net MCTS is deterministic → flat
+  series; always sample opening plies for a real H2H read.**)
+- **vs self126** (FROZEN e126 self, the sensitive "am I improving?" probe): climbed
+  37→62→56→**75**→… settling a touch above 50. Tipped positive — beating its own past self.
+- **self-play balance**: sloshed 39–62% white, no trend, no collapse. `vl` halved over the
+  night (0.082→0.043) — value head sharpening while the policy thrashed (Jason's
+  spidey-sense/decision split: it *knows* who's winning before it can reliably *decide*).
+
+Verdict held: **trading real blows, not winning the war** — stronger than past-self,
+even-ish with the milestone champ, can't touch Rapfi. A healthy *developing* net. (Jason's
+pure-vibes pre-call — "won't win yet but will start to win" — landed.)
+
+**The lever — buffer balance (8→4→3 workers, 2026-06-22).** Jason noticed self-play was
+out-generating training: `train/sample_reuse_ratio ≈ 0.67` (consumed/ingested). At reuse
+<1 with random sampling (~Poisson(0.67)), **~51% of generated positions are evicted from
+the 150k buffer never having had a single gradient step** — a good move can be played and
+never learned from. The 8-worker config was *flooding* the trainer. Cut workers, resumed
+from `latest.pt` (weights+buffer; preserved copies `babysit/snapshots/PRE4_*`):
+
+| workers | reuse (per-cycle) | buffer age_p90 | s/epoch | epochs/min |
+|--------:|------------------:|---------------:|--------:|-----------:|
+| 8       | ~0.67 (½ unseen)  | ~0 (firehose)  | 65.2    | 0.9        |
+| 4       | ~1.4              | rising         | 36.5    | 1.6        |
+| 3       | **~3** (2.2–4.4)  | ~15–20         | **26.1**| **2.3**    |
+
+**The finding (⭐ the gen-flood double-tax):** flooding the buffer cost us on TWO axes at
+once — sample-efficiency *and* wall-clock. At 8 workers each epoch drowned in inflow
+(~128 new games/cycle → buffer inserts, cross-game-store updates), so epochs were both
+*less useful* and ~2.5× *slower*. Dropping to 3 fixed both: reuse → ~3 (firmly normal-AZ;
+each position studied ~3×, age_p90 off zero), and **65→26 s/epoch**. This is the SAME
+gen-flood pattern already documented at the 96×8 cell (`run_sweep.py` ~L352: "8 workers
+FLOODED it, per-epoch ingest ran away 62→313s"); it resurfaced at 15×15 fixed-openings.
+**Takeaway: `n_workers` is a first-class buffer-balance knob, not just a throughput knob —
+target reuse ~1–4; reuse <1 is self-sabotage (slower AND lossy).** Note 8→3 dropped
+ingestion *more* than linearly (new_games/cycle 128→16–24), so 3 workers overshot the ~1.8
+projection to ~3 — fine, still healthy AZ. `n_workers=3` is an uncommitted live toggle in
+the worktree; flip to 4 for reuse ~1.8 if ~3 feels deep. Whether deeper reuse settles the
+balance slosh is still open (the run was time-boxed by AC power).
+
+**Babysit infra built this session** (`/Users/jason/data/swap2/babysit/`):
+`rapfi_opener_eval.py` (vs Rapfi, idx-2, both seats), `champ_h2h_eval.py` +
+`champ_h2h_cadence.sh` (vs self126/champ0235, `temp_plies` variety), hourly
+`snapshot_loop.sh` (preserved last-good ladder; `latest.pt` embeds the buffer so each is a
+real resume point). Tank-restart safety net agreed but kept *manual* (auto-restart-at-4
+would fuse recovery with the reuse experiment → unreadable; a hard collapse is itself the
+night's best data, not something to erase).
+
+## 2026-06-23 — 1M buffer overnight: a clean NEGATIVE result + the recency-curator fix ⭐
+
+Run `gogpmbhw` resumed from e877 with `buffer_size` **150k → 1M** (#73 follow-up; bit-packed
+so 1M ≈ 1.3GB). Hypothesis: a longer consolidation window would steady the white/black slosh.
+**Result: it did NOT.** ~930 epochs overnight (e877→e1804, ~2 epochs/min, no crashes/tanks):
+- **slosh did not narrow** (white% band stayed ~30–60 pts, arguably wider).
+- **pl/vl flatlined and smoothed** — vl crept 0.057→0.050 then leveled; Jason's read: *"that's
+  not learning."* Correct.
+- `buffer/age_p90` climbed **linearly** (13→285→545→897) instead of plateauing at the ~FIFO
+  window — the tell.
+
+**Root-cause (corrected mid-investigation):** the buffer (`gomoku/replay_buffer.py`) is a **FIFO
+ring** (eviction overwrites oldest). The pathology was NOT eviction — it was **`_recency_frac=0.0`
+= UNIFORM sampling over a ring so large it spanned the whole run.** Uniform-over-all-history makes
+the training distribution **stationary**, so the loss converges to a fixed point and stops chasing
+the improving policy → flat pl/vl, persistent slosh. (Jason had remembered adding "reservoir" to
+fight collapse; the real mechanism is uniform-sampling-over-a-huge-ring, and collapse was actually
+the provable first-player/black edge, NOT a buffer issue — so that fix was for a misdiagnosis and
+had been quietly taxing learning.)
+
+**The fix (already coded, just OFF):** `configure_curator(recency_frac, recency_window)` /
+CLI `--buffer-recency-frac` — the #17 recency curator. Draws a fraction of each batch from the
+most-recent `--buffer-recency-window` (200k) positions, rest uniform. Crucially this is a
+**validated lever**: `run_sweep.py` history shows it was a **+90-elo derby winner** (v8
+"buffer-comp", `--buffer-recency-frac 0.5` in multiple proven cells). KataGo's design exactly:
+big window for memory, recency-weighted sampling for freshness.
+
+**Experiment now LIVE (2026-06-23):** rewound to `snapshots/SHUTDOWN_e877` (clean pre-stationary
+baseline), kept the 1M ring, flipped **`--buffer-recency-frac` 0 → 0.5**. ONE variable changed vs
+the overnight, so any effect is attributable to the curator. **Watch `loss/policy` + `loss/value`:
+if they come back ALIVE (keep decreasing) the recency lever is working;** secondary: does the slosh
+band finally narrow. `n_workers=3`, reuse ~3, ~2.8 epochs/min. Resume point preserved as
+`snapshots/PRE4_e601` (8w-era) + `SHUTDOWN_e877` (pre-1M).
+
+### 2026-06-23 (later) — recency-0.5 VERDICT: loss alive, strength flat (the plateau is buffer-knob-proof) ⭐
+
+Ran ~e877→**e2300** under recency-0.5 (~1400 epochs). **What it did:** broke the stationary plateau —
+`loss/policy` went from smooth-dead (uniform, std 0.034) to alive-and-oscillating (recency, std 0.052 at
+matched epochs); the loss *moved* again. **What it did NOT do:** improve strength. On-demand 3-ruler eval
+@ e2300 (n=16/seat, idx-2, opening variety):
+- **vs self126 (frozen e126 self): 37.5%** (6–10) — *below even*, losing to its own past self
+- **vs champ0235 (era-2 milestone): 46.9%** (7–8–1) — slightly below even
+- **vs Rapfi (ceiling): 0/16** — unmoved
+
+Squarely in the same plateau band every self-play variant has occupied (even-ish vs beatable rulers,
+0 vs Rapfi); flat-to-slightly-down vs the e793 read (40.6 / 56.2 / 0). **Conclusion: keeping the loss
+alive ≠ keeping strength climbing.** Recency = *perturbation/mutation* that churns in place without a
+*selection* mechanism to cash it (see swap2 §13). We have now exhausted three data-pipeline levers —
+**reuse** (n_workers), **window** (buffer_size 1M), **freshness** (recency_frac) — and strength has not
+moved off the self-play ceiling. **The plateau is real and buffer-knob-proof; the only lever left that
+points up is an external TEACHER** (#46 curriculum / #18 exact-solver / distillation). Bruce-1 continues
+as the self-play-only *baseline-to-beat* for the teacher era.
+
 ### 2026-06-23 (later still) — BUILT the eval+teacher sensei (the lever up after the knobs)
 
 After the recency-0.5 verdict closed the self-play-knob era (three data-pipeline levers

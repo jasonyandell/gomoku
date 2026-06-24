@@ -110,6 +110,19 @@ def parse_args() -> argparse.Namespace:
                         "out (down to where the child's PUCT value would equal the "
                         "best child's) before renormalizing. Recommended 2.0.")
     p.add_argument("--random-opening-moves", type=int, default=0)
+    p.add_argument("--swap2", action="store_true", default=False,
+                   help="Start each self-play game from a swap2-negotiated "
+                        "opening (the net plays both opener and responder roles) "
+                        "instead of an empty/random board. Mutually exclusive "
+                        "with --random-opening-moves; swap2 owns the opening. "
+                        "v1 seeds the opening only (no choice head is trained). "
+                        "Default OFF == byte-identical to today.")
+    p.add_argument("--fixed-openings", action="store_true", default=False,
+                   help="Start each self-play game from one of Rapfi's 9 BALANCED "
+                        "(known-fair) swap2 openings, placed directly (no "
+                        "negotiation, no net, no choice head); the net plays only "
+                        "post-opening. 15x15 only. Mutually exclusive with --swap2 "
+                        "and --random-opening-moves. Default OFF.")
 
     # Playout-Cap Randomization (KataGo, Wu 2019). Opt-in; defaults are inert and
     # preserve the byte-identical production self-play path. When frac < 1.0,
@@ -768,6 +781,8 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             rng=rng,
             wave_size=args.wave_size,
             random_opening_moves=args.random_opening_moves,
+            swap2=args.swap2,
+            fixed_openings=args.fixed_openings,
             archive=archive,
             archive_start_frac=args.archive_start_frac,
             playout_cap_frac=args.playout_cap_frac,
@@ -901,6 +916,13 @@ def main() -> None:
     # --defense-teacher-conv (the dense-shallow arm) likewise implies it on.
     if args.defense_teacher_policy or args.defense_teacher_conv:
         args.defense_teacher = True
+    # --swap2 owns the opening (it negotiates a balanced one); it is mutually
+    # exclusive with --random-opening-moves. Fail fast with a clear message.
+    if args.swap2 and args.random_opening_moves > 0:
+        raise SystemExit(
+            "--swap2 and --random-opening-moves are mutually exclusive "
+            "(swap2 negotiates the opening; drop --random-opening-moves)"
+        )
     # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)

@@ -14,13 +14,18 @@ from typing import Any
 from gomoku.board_config import BOARD_SIZE
 
 # Native MCTS is compiled per board size: `_mcts_native` is the 9x9 build,
-# `_mcts_native15` the 15x15 build (see setup.py). Any other size falls back
-# to the pure-Python MCTS (same code path as GOMOKU_DISABLE_NATIVE_MCTS=1).
+# `_mcts_native11/13/15` the larger-board builds for the 9->11->13->15
+# curriculum (see setup.py). Any other size falls back to the pure-Python MCTS
+# (same code path as GOMOKU_DISABLE_NATIVE_MCTS=1).
 try:  # pragma: no cover - import path depends on local build artifacts.
     if os.environ.get("GOMOKU_DISABLE_NATIVE_MCTS"):
         raise ImportError("native MCTS disabled by environment")
     if BOARD_SIZE == 9:
         from gomoku import _mcts_native as _native
+    elif BOARD_SIZE == 11:
+        from gomoku import _mcts_native11 as _native
+    elif BOARD_SIZE == 13:
+        from gomoku import _mcts_native13 as _native
     elif BOARD_SIZE == 15:
         from gomoku import _mcts_native15 as _native
     else:

@@ -508,3 +508,74 @@ class ReplayBuffer:
             self.current_weight_version = int(sd["current_weight_version"])
         self.size = n
         self.head = n % self.capacity
+
+
+class ChoiceBuffer:
+    """Tiny ring buffer of swap2 NEGOTIATION-choice examples (v2a choice head).
+
+    SEPARATE from :class:`ReplayBuffer` — that buffer is shaped for the policy
+    width (N_ACTIONS) and the D4-augmented self-play stream, while choice
+    examples are N_CHOICES-wide, NOT D4-augmented, and ~1-2 per swap2 game. The
+    target is OUTCOME-driven (built in the trainer from `chosen` + `chooser_z`);
+    this buffer only carries the raw fields. Constructed ONLY when the choice
+    lever is on (--choice-head-weight > 0), so the off-case path never allocates
+    or touches it.
+    """
+
+    def __init__(
+        self,
+        capacity: int = 20_000,
+        device: torch.device | str = "cpu",
+    ):
+        from gomoku.swap2 import N_CHOICES
+
+        self.capacity = int(capacity)
+        self.device = torch.device(device)
+        self.n_choices = int(N_CHOICES)
+        self._plane_shape = (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE)
+        self.planes = torch.zeros(
+            (self.capacity, N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE),
+            dtype=torch.float32, device=self.device,
+        )
+        self.legal_mask = torch.zeros(
+            (self.capacity, self.n_choices), dtype=torch.bool, device=self.device
+        )
+        self.chosen = torch.zeros((self.capacity,), dtype=torch.int64, device=self.device)
+        self.chooser_z = torch.zeros((self.capacity,), dtype=torch.float32, device=self.device)
+        self.head = 0
+        self.size = 0
+
+    def add(self, examples: list) -> None:
+        """Add a list of :class:`~gomoku.self_play.ChoiceExample` (empty → no-op)."""
+        if not examples:
+            return
+        n = len(examples)
+        planes = torch.from_numpy(np.stack([e.planes for e in examples])).to(torch.float32)
+        legal = torch.from_numpy(
+            np.stack([np.asarray(e.legal_mask, dtype=bool) for e in examples])
+        )
+        chosen = torch.from_numpy(np.array([int(e.chosen) for e in examples], dtype=np.int64))
+        cz = torch.from_numpy(np.array([float(e.chooser_z) for e in examples], dtype=np.float32))
+        i = 0
+        while i < n:
+            end = min(self.head + (n - i), self.capacity)
+            chunk = end - self.head
+            self.planes[self.head:end].copy_(planes[i:i + chunk].to(self.device))
+            self.legal_mask[self.head:end].copy_(legal[i:i + chunk].to(self.device))
+            self.chosen[self.head:end].copy_(chosen[i:i + chunk].to(self.device))
+            self.chooser_z[self.head:end].copy_(cz[i:i + chunk].to(self.device))
+            i += chunk
+            self.head = end % self.capacity
+            self.size = min(self.size + chunk, self.capacity)
+
+    def sample(self, batch_size: int) -> tuple[torch.Tensor, ...]:
+        """Uniformly sample `(planes, legal_mask, chosen, chooser_z)` on `device`."""
+        if self.size == 0:
+            raise ValueError("empty choice buffer")
+        idx = torch.randint(0, self.size, (batch_size,), device=self.device)
+        return (
+            self.planes[idx],
+            self.legal_mask[idx],
+            self.chosen[idx],
+            self.chooser_z[idx],
+        )

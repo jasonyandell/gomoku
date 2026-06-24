@@ -109,6 +109,16 @@ class Cell:
     # examples are NOT recorded for those K plies — MCTS picks up at K+1 and
     # the model trains on post-random positions. Breaks opening monoculture.
     random_opening_moves: int = 0
+    # Swap2 opening (v1): each self-play game starts from a swap2-negotiated
+    # opening instead of an empty/random board. Mutually exclusive with
+    # random_opening_moves (swap2 owns the opening). Default OFF = byte-identical.
+    swap2: bool = False
+    # Fixed balanced opening book (#73): each self-play game starts from one of
+    # Rapfi's 9 known-fair swap2 openings, placed directly (no negotiation, no
+    # net, no choice head); the net plays only post-opening. 15x15 only. Mutually
+    # exclusive with swap2 / random_opening_moves. Emitted to BOTH trainer and
+    # worker cmds. Default OFF = byte-identical.
+    fixed_openings: bool = False
     # WL5 levers (wiki/topics/wl5-diagnostics-archive-start-design.md). Trainer
     # scores a frozen validation set every eval cycle for stationary policy/
     # value quality. Workers seed `archive_start_frac` of games from the same
@@ -387,6 +397,316 @@ CELLS: dict[str, Cell] = {
                 global_pool=True,
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
                                    "--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-swap2 (#72): the REAL fix for white — delete the doomed role instead of
+    # teaching it. The 2026-06-20 investigation closed white-side "defense weakness"
+    # as the first-player-win THEOREM, not a net flaw (Rapfi-vs-Rapfi from 4-stone
+    # openings is white 1-9; even the #1 engine is crushed as the second player). No
+    # teacher can make a (near-)solved-lost role win — three flattened (value-only
+    # #42, sparse-VCF, dense-conv). Swap2 (Gomocup's balancing protocol: place 2B+1W,
+    # then stay/swap/place-2) means a player is never FORCED onto the lost side, so
+    # self-play generates ~50/50 data and white positions become winnable in the
+    # training set — the bootstrap an imbalanced game can't do. BYTE-IDENTICAL to the
+    # reigning champion G15-128x10-bigbuf (the eval502 lineage: 128x10 large +
+    # global_pool + value-discount 0.98 + gumbel + scalar value head) in every Cell
+    # field EXCEPT two deltas:
+    #   (1) buffer_size 1.5M -> 150k FRESH: the warm champion buffer is attacker-
+    #       biased mass; the swap2 lesson lives in NEW ~50/50 games, so a small fresh
+    #       buffer turns over to the balanced distribution fast (the 2026-06-19
+    #       small-fresh-buffer finding, ported from G15-wdl-defense).
+    #   (2) swap2=True: each self-play game starts from a swap2-negotiated opening
+    #       (the net plays both opener+responder; choices picked by a one-ply value
+    #       comparison, no trained choice head needed in v1). swap2=True drives the
+    #       trainer's gen path (trainer_cmd emits --swap2), and --swap2 in
+    #       extra_worker_args drives the workers — so every gen path negotiates (no
+    #       non-swap2 pollution regardless of trainer-vs-worker gen split). swap2 is
+    #       byte-identical-off, so OFF == the champion recipe exactly.
+    # Gen is CHEAP here (the negotiation is ~30 net forwards/game, NO VCF solver), so
+    # n_workers is bumped 4 -> 8 without the solver-starves-gen trap that bit the
+    # defense cells. WARM-START from the champion at launch (weights only; a stripped
+    # checkpoint with no embedded buffer/optimizer/wandb -> fresh buffer + fresh
+    # optimizer covering the new choice head + new wandb timeline):
+    #   python scripts/run_sweep.py G15-swap2 \
+    #       --resume /Users/jason/data/swap2/g15_champ_warmstart_weightsonly.pt \
+    #       --run-base /Users/jason/data/swap2 --max-wall-secs <chunk> --final-eval
+    # GATE = the swap2 eval harness (gomoku/eval_swap2.py) vs native Rapfi-NNUE: both
+    # sides negotiate the real protocol, so overall win% (no forced-white floor) is
+    # the honest yardstick. Re-measure each hour and watch it climb off the champion's
+    # swept-white deficit.
+    "G15-swap2": Cell("G15-swap2-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.98", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-swap2-e2 (#72 era-2, "New era" Path A): a FRESH-INIT swap2 run that learns
+    # to win FAST. IDENTICAL to G15-swap2 in every Cell field EXCEPT three deltas,
+    # and launched FRESH (omit --resume — a new run-dir name means no stray latest.pt):
+    #   (1) aggression: --value-discount 0.95 (was 0.98). A steeper discount values
+    #       a faster win more, biasing self-play toward decisive short games.
+    #   (2) v2a: --choice-head-weight 0.3 TRAINS the swap2 choice head into the loss
+    #       (the negotiation choice records, previously discarded, now feed a separate
+    #       ChoiceBuffer with an outcome-driven soft target). Selection still uses the
+    #       one-ply heuristic; v2b wires the trained head into selection later.
+    #   (3) run-dir G15-swap2-e2-board15 (new, so a fresh launch has no champion buffer).
+    # Everything else (size large, buffer 150k, swap2=True, global_pool=True,
+    # n_workers=8, gumbel m=16, EMA, opponent-mix, sgd_per_position, 64 SGD/epoch,
+    # pack-buffer) is byte-identical to G15-swap2.
+    "G15-swap2-e2": Cell("G15-swap2-e2-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer",
+                                  "--choice-head-weight", "0.3"]),
+    # G9-swap2-e2 (#72 era-2 on the NATIVE 9x9 board): an overnight bootstrap of a
+    # "not-doomed white" on the small board, where the native state-ops + native
+    # MCTS extensions exist (9 is a NATIVE_BOARD_SIZE) so throughput is high and
+    # games are short. LAUNCH WITH GOMOKU_BOARD_SIZE=9 (board size is process-level
+    # config, not a Cell field — the env var propagates to workers; the run-dir
+    # name just keeps 9x9 artifacts from colliding with the board15 dirs).
+    #
+    # CLONE of G15-swap2-e2 — byte-identical in EVERY Cell field (size large so the
+    # conv trunk can transfer to 15x15 later, buffer 150k, swap2=True,
+    # global_pool=True, n_workers=8, gumbel m=16, value-discount 0.95 aggression,
+    # stem_padding=1, 64 SGD/epoch, pack-buffer) EXCEPT two deltas:
+    #   (1) run-dir G9-swap2-e2-board9 (own dirs; a fresh launch has no champion buffer).
+    #   (2) v2a OFF: --choice-head-weight 0.3 REMOVED from extra_train_args. The
+    #       choice head is NOT trained here (selection stays on the one-ply
+    #       heuristic; no ChoiceBuffer). Keeps --sgd-steps-per-epoch 64 --pack-buffer.
+    # No teacher flags (like e2), so nothing board-specific to retune. Launch FRESH:
+    #   GOMOKU_BOARD_SIZE=9 python scripts/run_sweep.py --cell G9-swap2-e2 \
+    #       --run-base /Users/jason/data/swap2 --max-wall-secs <chunk>
+    # then --resume the run-dir's latest.pt to continue the same timeline.
+    "G9-swap2-e2": Cell("G9-swap2-e2-board9", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-swap2-e3 (#72 era-2 PHASE 2): the WARM-STARTED 15x15 swap2 run. Seeded by
+    # scripts/warmstart_15x15.py from the G9-swap2-e2 9x9 net (98.9% conv-trunk
+    # transfer, verified) so it SKIPS the 15x15 cold-start fast-attack collapse that
+    # a fresh net walks through. Identical to G9-swap2-e2 EXCEPT the run-dir (board15).
+    # v2a OFF (no choice head), aggression value-discount 0.95, swap2. LAUNCH WITH
+    # GOMOKU_BOARD_SIZE=15 and --resume the warmstart seed (then the run-dir latest.pt).
+    "G15-swap2-e3": Cell("G15-swap2-e3-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # ===== The board-size LADDER (#72 era-2, the 9->11->13->15 curriculum) =====
+    # Each rung is BYTE-IDENTICAL to the G9-swap2-e2 recipe (swap2, aggression
+    # value-discount 0.95, v2a OFF, global_pool) — only the run-dir changes. Board
+    # size is the GOMOKU_BOARD_SIZE env var, NOT a Cell field; native ext exists for
+    # 9/11/13/15. The ladder warm-starts up a rung when self-play goes draw-dominant
+    # (max(draw,white,black)==draw): white's defense has saturated this board, so step
+    # up to reclaim room. Orchestrated by babysit/ladder_autochain.sh. Launch each rung
+    # with GOMOKU_BOARD_SIZE=N and --resume the warmstart seed (then run-dir latest.pt).
+    "G-ladder-11": Cell("G-ladder-11-board11", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    "G-ladder-13": Cell("G-ladder-13-board13", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    "G-ladder-15": Cell("G-ladder-15-board15", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95", "--swap2"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    # G15-fixed-openings (#73): FROM-SCRATCH 15x15, swap2 OFF, FIXED BALANCED
+    # opening book. Every self-play game starts from one of Rapfi's 9 known-fair
+    # swap2 openings, placed directly (no negotiation, no opener policy, no choice
+    # head); the net plays only post-opening. Sidesteps the unfair-opener problem
+    # (the opener can't compose fair openings -> black edge; see swap2 wiki §10) by
+    # handing the net known-fair boards. Clone of the e2 recipe but swap2=False +
+    # fixed_openings=True, "--swap2" REMOVED from extra_worker_args. LAUNCH FRESH:
+    # GOMOKU_BOARD_SIZE=15 and omit --resume (then --resume latest.pt to continue).
+    "G15-fixed-openings": Cell("G15-fixed-openings-board15", sgd_per_game=1.0,
+                # buffer 150k -> 1M (Jason 2026-06-23): 150k turned over in ~13
+                # epochs (p50 age ~5.5) -- too fast to consolidate past mistakes /
+                # clutch plays (textbook AZ/KataGo keep a far larger window). Bit-
+                # packed (#25) so 1M ~= 1.3GB, trivial on 48GB. Extends the window
+                # to ~85 epochs WITHOUT changing reuse (~3.7, a flow ratio): the
+                # same ~3.7 looks/position just spread over a longer span = spaced
+                # repetition. Resumes from e877 latest.pt (150k buffer grows to 1M).
+                # If the off-policy tail drags, add recency-weighted sampling (#17).
+                buffer_size=1_000_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                # n_workers 8 -> 4 (Jason 2026-06-22): the 8-worker run held parity
+                # all night but ran reuse ~0.67 -- ~half of generated positions were
+                # evicted from the 150k buffer un-trained-on (gen-flood, cf. the
+                # 96x8 lesson at the v6 cell). Cutting ingestion ~half lifts reuse
+                # toward ~1 so the net learns from more of what it plays. Resumed
+                # from e601 latest.pt (weights+buffer preserved as snapshots/PRE4_*).
+                # -> 3 (Jason 2026-06-22, mid-run): 4 landed reuse ~1.4 but the
+                # 15x15 balance differs from 9x9; push reuse ~1.8 to sit firmly in
+                # normal AlphaZero territory. Not a controlled A/B -- a time-boxed
+                # "make the most of it" nudge.
+                n_workers=3, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=False, fixed_openings=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95"],
+                # recency curator ON (Jason 2026-06-23): the overnight 1M run sampled
+                # UNIFORMLY over a ring spanning the whole run -> a STATIONARY training
+                # distribution -> pl/vl flatlined ("not learning") and the white/black
+                # slosh never narrowed. The ring eviction is already FIFO; the culprit was
+                # uniform sampling. recency-frac 0.5 draws half of each batch from the most-
+                # recent 200k (KataGo design; the +90-elo v8 buffer-comp derby winner) so the
+                # distribution tracks the current policy while the 1M tail keeps long memory.
+                # ONE variable vs the overnight (recency 0->0.5); rewound to SHUTDOWN_e877.
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer",
+                                  "--buffer-recency-frac", "0.5"]),
+    # The fair-opening LADDER rungs (#73/#74): G{9,11,13}-fixed-openings = byte-
+    # identical to G15-fixed-openings EXCEPT the run-dir. Same canned fair openers
+    # (Rapfi shapes re-centered per board, gomoku/self_play.py _FAIR_OPENINGS),
+    # selected by GOMOKU_BOARD_SIZE. Climb 9->11->13->15 with p90-max auto-promote
+    # (babysit/ladder_grad.py) + warm-start between rungs. Minimal gating on 9/11/13
+    # (just bank cheap epochs); real gates at 15. Orchestrator: babysit/fairladder.sh.
+    "G9-fixed-openings": Cell("G9-fixed-openings-board9", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=False, fixed_openings=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    "G11-fixed-openings": Cell("G11-fixed-openings-board11", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=False, fixed_openings=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
+    "G13-fixed-openings": Cell("G13-fixed-openings-board13", sgd_per_game=1.0,
+                buffer_size=150_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=8, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=False, fixed_openings=True,
+                extra_worker_args=["--gumbel-root", "--gumbel-m", "16",
+                                   "--value-discount", "0.95"],
                 extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer"]),
     # G15-defense (#36, sliding-derby Lap 1): the DEFENSE-TEACHER cell — the proven-
     # needed white-side fix. Diagnosis (#33) is closed: the champion's white-side
@@ -2188,6 +2508,10 @@ def trainer_cmd(cell: Cell, dirs: dict) -> list[str]:
         cmd += ["--grad-accum-steps", str(cell.grad_accum_steps)]
     if cell.random_opening_moves > 0:
         cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
+    if cell.swap2:
+        cmd += ["--swap2"]
+    if cell.fixed_openings:
+        cmd += ["--fixed-openings"]
     if cell.validation_archive_path is not None:
         cmd += ["--validation-archive-path", cell.validation_archive_path]
     return cmd
@@ -2227,6 +2551,8 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
         cmd += ["--weights-poll-max-sec", str(cell.weights_poll_max_sec)]
     if cell.random_opening_moves > 0:
         cmd += ["--random-opening-moves", str(cell.random_opening_moves)]
+    if cell.fixed_openings:
+        cmd += ["--fixed-openings"]
     if cell.archive_start_path is not None and cell.archive_start_frac > 0:
         cmd += [
             "--archive-start-path", cell.archive_start_path,
