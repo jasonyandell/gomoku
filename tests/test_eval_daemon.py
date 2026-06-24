@@ -38,7 +38,6 @@ def test_build_rulers_rapfi_runs_net_deterministic():
     rulers = build_rulers(
         [("rapfi", "rapfi"), ("look", "lookahead:depth=2")],
         n_games=8, sims=100, temp_until_ply=9, temperature=1.0, rapfi_timeout_ms=500,
-        drop_rapfi_if_unavailable=False,
     )
     by = {r.label: r for r in rulers}
     # Rapfi supplies its own variety -> net plays deterministically (temp 0).

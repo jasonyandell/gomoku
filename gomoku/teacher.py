@@ -44,7 +44,12 @@ from gomoku.game import HISTORY_PLY, GameState, _sym_policy
 from gomoku.model import fuse_model_for_inference, load_checkpoint
 from gomoku.mcts import make_torch_evaluator
 from gomoku.eval_panel import IDX2_OPENING, fixed_opening_state, make_net_picker
-from gomoku.rapfi_pool import RapfiPool, default_rapfi_cmd, rapfi_available
+from gomoku.rapfi_pool import (
+    RapfiPool,
+    RapfiUnavailable,
+    default_rapfi_cmd,
+    rapfi_obtainable,
+)
 from gomoku.util import pick_device
 
 TEACHER_NPZ_VERSION = 1
@@ -277,10 +282,26 @@ def _parse_opening(spec: str) -> tuple[tuple[int, int], ...] | None:
 
 
 def generate(args: argparse.Namespace) -> int:
-    if not rapfi_available():
+    # The teacher REQUIRES Rapfi (it is the labeller). Fail fast — and resolve the
+    # launch command up front, BEFORE the expensive self-play gather, so an
+    # obtainable-but-unfetchable Rapfi gives one clean actionable error instead of
+    # a traceback after we've already burned the gather. No silent continuation.
+    if not rapfi_obtainable():
         print(
-            "ERROR: Rapfi binary not found (engines/rapfi/pbrain-rapfi). Set "
-            "GOMOKU_REPO or pass --rapfi-cmd.",
+            "ERROR: Rapfi cannot be resolved (no local engines/rapfi build, no "
+            "cached/fetchable HF snapshot). Build via engines/rapfi/build_rapfi.sh, "
+            "pass --rapfi-cmd, or run on an arm64 mac with network for the one-time "
+            "HF fetch.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        cmd = args.rapfi_cmd or default_rapfi_cmd()
+    except RapfiUnavailable as e:
+        print(
+            f"ERROR: Rapfi could not be obtained ({e}). Build "
+            "engines/rapfi/build_rapfi.sh, ensure network for the HF auto-fetch "
+            "(jasonyandell/rapfi-arm64), or pass --rapfi-cmd.",
             file=sys.stderr,
         )
         return 2
@@ -306,7 +327,6 @@ def generate(args: argparse.Namespace) -> int:
     )
     print(f"  gathered {len(states)} distinct positions in {time.time()-t0:.1f}s")
 
-    cmd = args.rapfi_cmd or default_rapfi_cmd()
     print(f"labelling with {args.pool_size} warm Rapfi @ {args.rapfi_timeout_ms}ms: {cmd}")
     t1 = time.time()
     with RapfiPool(
