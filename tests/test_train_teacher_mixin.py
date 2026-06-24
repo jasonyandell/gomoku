@@ -99,3 +99,37 @@ def test_teacher_distillation_reduces_teacher_ce():
         )["loss/teacher"]
     # The model should fit the (fixed) teacher targets: CE drops substantially.
     assert last < first * 0.7
+
+
+def _soft_teacher_batch(seed: int = 7, batch: int = 4, support: int = 10):
+    """A SOFT teacher target: a per-row distribution over a scored support, the
+    shape the #86 soft-winrate teacher produces (masked temperature-softmax)."""
+    g = torch.Generator().manual_seed(seed)
+    planes = torch.rand(batch, N_INPUT_PLANES, 9, 9, generator=g)
+    tpi = torch.zeros(batch, N_ACTIONS)
+    for b in range(batch):
+        idx = torch.randperm(N_ACTIONS, generator=g)[:support]
+        tpi[b, idx] = torch.softmax(torch.rand(support, generator=g) * 3.0, dim=-1)
+    return planes, tpi
+
+
+def test_soft_teacher_distillation_reduces_teacher_ce():
+    """The same CE arm distils a SOFT (multi-cell) teacher distribution, not just
+    a one-hot — the #86 gentle target. CE toward it drops as the net fits it."""
+    planes, pi, z = _fixed_batch(5)
+    tplanes, tpi = _soft_teacher_batch()
+    assert torch.allclose(tpi.sum(dim=-1), torch.ones(tpi.shape[0]), atol=1e-5)
+    torch.manual_seed(1)
+    model = build_model("small").to("cpu")
+    opt = torch.optim.SGD(model.parameters(), lr=0.5, momentum=0.9)
+
+    first = train_step(
+        model, opt, planes, pi, z,
+        teacher_planes=tplanes, teacher_pi=tpi, teacher_weight=1.0,
+    )["loss/teacher"]
+    for _ in range(60):
+        last = train_step(
+            model, opt, planes, pi, z,
+            teacher_planes=tplanes, teacher_pi=tpi, teacher_weight=1.0,
+        )["loss/teacher"]
+    assert last < first

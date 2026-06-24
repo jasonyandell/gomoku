@@ -110,6 +110,25 @@ def _parse_coord(line: str) -> tuple[int, int] | None:
     return x, y
 
 
+def _eval_to_winrate(token: str) -> float | None:
+    """Map an ``INFO EVAL`` token to a side-to-move winrate fallback.
+
+    Used ONLY when ``INFO WINRATE`` is absent (mate / infinite scores, where
+    Rapfi may emit a symbolic EVAL): ``+M<k>`` / ``VAL_INF`` with a ``+`` sign
+    -> 1.0 (we win), ``-M<k>`` / mated / ``VAL_INF`` with a ``-`` sign -> 0.0.
+    A plain integer EVAL returns None (the real WINRATE line is preferred and
+    always present alongside it); an unparseable token returns None.
+    """
+    if not token:
+        return None
+    t = token.strip().upper()
+    if t.startswith("+M") or t == "VAL_INF" or t.startswith("+VAL_INF"):
+        return 1.0
+    if t.startswith("-M") or t.startswith("-VAL_INF") or t == "MATED":
+        return 0.0
+    return None
+
+
 def _coord_to_xy(action: int) -> tuple[int, int]:
     row, col = divmod(action, BOARD_SIZE)
     return col, row  # X=col, Y=row
@@ -598,6 +617,137 @@ class ExternalEnginePlayer:
                 f"engine returned illegal/occupied move {x},{y} (action {action})"
             )
         return action
+
+    # -- whole-board analysis (multiPV soft-target distillation) ---------
+
+    def analyze(
+        self, state: GameState, *, max_node: int = 20000
+    ) -> dict[int, float]:
+        """Score EVERY candidate root move for ``state`` -> ``{action: winrate}``.
+
+        Rapfi's gomocup protocol can emit a per-move EVAL+WINRATE for the whole
+        board (a multiPV search) — the signal the SOFT teacher distils. We DRIVE
+        the existing binary; nothing in the engine is rebuilt (GPL untouched).
+        Returns winrates in [0, 1] from the SIDE-TO-MOVE's perspective, keyed by
+        the flat action index ``y*BOARD_SIZE + x``. Pruned-away (far-from-action)
+        cells are simply absent — their mass is correctly ~0.
+
+        Drive sequence (a one-shot stateless BOARD dump; assumes RESTART-fresh):
+        set a small node budget + SHOW_DETAIL/CAUTION so the search both emits the
+        per-PV blocks and widens its candidate range, dump the position, then
+        ``YXNBEST 999`` to run multiPV = movesLeft(). ``DONE`` triggers a stray
+        default multiPV=1 think whose bestmove reply we DRAIN and discard. Each
+        ``INFO PV <idx>`` block carries an ``INFO EVAL`` / ``INFO WINRATE`` /
+        ``INFO BESTLINE <root> ...``; iterative deepening RE-EMITS every PV per
+        depth, so we keep the LAST block seen for each ``PV <idx>``. The whole
+        analysis is terminated by a bare ``x,y`` bestmove line.
+
+        Only meaningful for a stateless (``incremental=False``) engine: we always
+        RESTART + full-BOARD dump, carrying NO state between calls (the same
+        re-entrant contract the pool relies on for safe reuse).
+        """
+        n = self.config.board_size
+        own = state.board[0]  # side-to-move == this engine -> field 1
+        opp = state.board[1]  # opponent -> field 2
+        own_cells = {(x, y) for y in range(n) for x in range(n) if own[y, x]}
+        opp_cells = {(x, y) for y in range(n) for x in range(n) if opp[y, x]}
+        moves_left = n * n - len(own_cells) - len(opp_cells)
+        if moves_left <= 0:
+            return {}
+
+        # Configure multiPV-friendly analysis. max_node bounds the search so a
+        # whole-board scan stays fast; SHOW_DETAIL 2 emits the INFO PV/EVAL/WINRATE
+        # blocks; CAUTION_FACTOR widens the candidate set toward the whole board.
+        self._send(f"INFO max_node {int(max_node)}")
+        self._send("INFO SHOW_DETAIL 2")
+        self._send("INFO CAUTION_FACTOR 5")
+        # Re-entrant full-board dump (same contract as the move path's BOARD mode).
+        self._send("RESTART")
+        self._expect_ok()
+        self._send("BOARD")
+        for x, y in sorted(own_cells):
+            self._send(f"{x},{y},1")
+        for x, y in sorted(opp_cells):
+            self._send(f"{x},{y},2")
+        self._send("DONE")
+        # DONE triggers a default multiPV=1 think — read & discard its bestmove.
+        self._read_move()
+        # Now run the whole-board multiPV scan and parse it.
+        self._send(f"YXNBEST {moves_left}")
+        return self._read_analysis(legal_cap=moves_left)
+
+    def _read_analysis(self, *, legal_cap: int) -> dict[int, float]:
+        """Parse the multiPV stream until the terminating bare ``x,y`` bestmove.
+
+        Keeps, per ``PV <idx>``, the winrate from the LAST (deepest) block — the
+        root move is the FIRST token of that block's ``INFO BESTLINE``. EVAL is
+        used only to recover a winrate when WINRATE is absent (mate/inf scores):
+        ``+M<k>``/``VAL_INF+`` -> 1.0, ``-M<k>``/mated/``VAL_INF-`` -> 0.0.
+        Returns ``{action: winrate}`` with winrate clamped to [0, 1].
+        """
+        deadline = self._read_deadline_s()
+        # Per PV index, the latest (eval_winrate, root_action) seen.
+        by_pv: dict[int, tuple[float | None, int | None]] = {}
+        cur_pv: int | None = None
+        cur_winrate: float | None = None
+        cur_eval_wr: float | None = None
+        cur_root: int | None = None
+
+        def _commit() -> None:
+            if cur_pv is None or cur_root is None:
+                return
+            wr = cur_winrate if cur_winrate is not None else cur_eval_wr
+            if wr is None:
+                return
+            by_pv[cur_pv] = (wr, cur_root)
+
+        for _ in range(_MAX_CHATTER_LINES):
+            line = self._read_line(deadline)
+            if not line:
+                continue
+            # The whole analysis ends with a bare coordinate bestmove line.
+            if not line.startswith("INFO") and _parse_coord(line) is not None:
+                _commit()
+                break
+            if not line.startswith("INFO"):
+                continue  # MESSAGE / DEBUG / banner chatter
+            body = line[len("INFO"):].strip()
+            if body.startswith("PV "):
+                # Start of a new PV block: commit the previous block first.
+                _commit()
+                try:
+                    cur_pv = int(body[3:].strip())
+                except ValueError:
+                    cur_pv = None
+                cur_winrate = cur_eval_wr = cur_root = None
+            elif body == "PV DONE":
+                _commit()
+                cur_pv = None
+                cur_winrate = cur_eval_wr = cur_root = None
+            elif body.startswith("WINRATE"):
+                try:
+                    cur_winrate = float(body.split()[1])
+                except (IndexError, ValueError):
+                    cur_winrate = None
+            elif body.startswith("EVAL"):
+                cur_eval_wr = _eval_to_winrate(body.split()[1] if len(body.split()) > 1 else "")
+            elif body.startswith("BESTLINE"):
+                toks = body.split()
+                if len(toks) >= 2:
+                    c = _parse_coord(toks[1])
+                    cur_root = _xy_to_action(*c) if c is not None else None
+        else:
+            raise ExternalEngineError(
+                f"engine emitted {_MAX_CHATTER_LINES}+ lines without ending the "
+                f"multiPV analysis (no bestmove terminator)"
+            )
+
+        out: dict[int, float] = {}
+        for wr, root in by_pv.values():
+            if root is None or wr is None:
+                continue
+            out[int(root)] = float(min(1.0, max(0.0, wr)))
+        return out
 
     def close(self) -> None:
         if self._proc.poll() is None:

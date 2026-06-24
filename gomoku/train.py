@@ -366,12 +366,17 @@ def train_step(
         loss = loss + ownership_weight * own_l
         own_l_val = float(own_l.detach())
     # Teacher distillation (eval/teacher build): a SEPARATE forward over a batch
-    # of expert-labelled positions adds a policy cross-entropy toward the
-    # teacher's move (a one-hot from a stronger engine, e.g. Rapfi). POLICY ONLY
-    # — the value head is never touched here: per issues #18/#44 the policy must
-    # carry the load and value-only teaching is structurally wrong. With
-    # teacher_weight == 0.0 (default) the block never runs and the graph is
-    # byte-identical to the pre-teacher path (no extra forward).
+    # of expert-labelled positions adds a policy cross-entropy / KL toward the
+    # teacher's policy target — a one-hot best move (v1 HARD) OR a soft per-move
+    # winrate distribution (v2 SOFT, #86). The cross-entropy below is the SAME
+    # `-(teacher_pi * log p)` for both: a one-hot teacher_pi makes it plain CE, a
+    # soft teacher_pi makes it a (constant-entropy-shifted) KL distillation. The
+    # one-hot best-move target collapsed the student (policy -> uniform, #77/#86);
+    # the SOFT winrate target is the gentle fix. POLICY ONLY — the value head is
+    # never touched here: per issues #18/#44 the policy must carry the load and
+    # value-only teaching is structurally wrong. With teacher_weight == 0.0
+    # (default) the block never runs and the graph is byte-identical to the
+    # pre-teacher path (no extra forward).
     teacher_l_val = float("nan")
     use_teacher = (
         teacher_weight > 0.0 and teacher_planes is not None and teacher_pi is not None
@@ -968,12 +973,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--teacher-data-path", type=str, default=None,
                    help="Teacher distillation (eval/teacher build): path to an "
                         "npz of expert-labelled positions produced by "
-                        "`python -m gomoku.teacher generate ...` (planes + a "
-                        "one-hot teacher move per position, e.g. Rapfi's). When "
-                        "set together with --teacher-weight > 0, a batch is mixed "
-                        "into every SGD step as a POLICY-ONLY cross-entropy toward "
-                        "the teacher's move (value head untouched — per #18/#44 the "
-                        "policy carries the load). Default None = OFF.")
+                        "`python -m gomoku.teacher generate ...`. A v1 npz holds a "
+                        "one-hot teacher move per position; a v2 npz (--soft) holds "
+                        "a dense per-move WINRATE map distilled as a SOFT policy "
+                        "target via --teacher-temp. When set together with "
+                        "--teacher-weight > 0, a batch is mixed into every SGD step "
+                        "as a POLICY-ONLY cross-entropy / KL toward that target "
+                        "(value head untouched — per #18/#44 the policy carries the "
+                        "load). Default None = OFF.")
     p.add_argument("--teacher-weight", type=float, default=0.0,
                    help="Weight of the teacher policy-distillation term. 0.0 "
                         "(default) = OFF = byte-identical to the pre-teacher path "
@@ -981,6 +988,13 @@ def parse_args() -> argparse.Namespace:
                         "loss/teacher is logged when ON.")
     p.add_argument("--teacher-batch-size", type=int, default=0,
                    help="Batch size for the teacher mix-in (0 = use --batch-size).")
+    p.add_argument("--teacher-temp", type=float, default=0.10,
+                   help="SOFT teacher (v2 npz with a dense soft_policy): softmax "
+                        "temperature applied to Rapfi's per-move winrate map to "
+                        "build the distillation target (masked to the scored "
+                        "support). Lower = sharper toward the best move; temp->0 "
+                        "recovers the v1 one-hot CE. Ignored for a v1 (hard) npz. "
+                        "Default 0.10.")
     p.add_argument("--no-teacher-augment", action="store_true",
                    help="Disable D4 symmetry augmentation of teacher positions "
                         "(default: augment, turning N labels into 8x diversity).")
@@ -1508,12 +1522,18 @@ def main() -> None:
         from gomoku.teacher import TeacherDataset
 
         teacher_ds = TeacherDataset.load(
-            args.teacher_data_path, device=device, augment=not args.no_teacher_augment
+            args.teacher_data_path,
+            device=device,
+            augment=not args.no_teacher_augment,
+            teacher_temp=float(getattr(args, "teacher_temp", 0.10)),
         )
+        _soft = teacher_ds.soft_policy is not None
         print(
             f"teacher distillation ENABLED: weight={teacher_weight} "
             f"positions={teacher_ds.n} batch={teacher_batch_size} "
-            f"augment={teacher_ds.augment} src={args.teacher_data_path}"
+            f"augment={teacher_ds.augment} "
+            f"mode={'SOFT(temp=%g)' % teacher_ds.teacher_temp if _soft else 'HARD(one-hot)'} "
+            f"src={args.teacher_data_path}"
         )
     elif teacher_weight > 0.0:
         print("WARNING: --teacher-weight > 0 but no --teacher-data-path; teacher OFF")
