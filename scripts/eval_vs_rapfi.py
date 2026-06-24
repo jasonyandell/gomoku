@@ -16,10 +16,14 @@ Treat the Gomocup Elo as provenance, not a 9x9 label. The local question is
 narrow: "what does checkpoint X score against Rapfi at local time control Y on
 9x9 freestyle?"
 
+Rapfi resolves with zero friction: omit ``--rapfi`` and the script uses
+``gomoku.rapfi_pool`` — the local ``engines/rapfi`` build if present, else the
+pinned public HF snapshot (fetched once per machine). Pass ``--rapfi <path>`` to
+override with a specific binary / launch command.
+
 Example:
     PYTHONPATH=$PWD GOMOKU_DEVICE=cpu python scripts/eval_vs_rapfi.py \
         --checkpoint archives/wl5_e10200_seed.pt --sims 100 \
-        --rapfi engines/rapfi/pbrain-rapfi \
         --timeouts 100 500 1000 --n-games 20 \
         --out sweep_logs/rapfi_eval.jsonl
 """
@@ -29,15 +33,44 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import time
 from datetime import datetime, timezone
 
 
-def _build_ref(rapfi_path: str) -> dict:
-    """Best-effort build provenance for the Rapfi binary."""
+def _rapfi_bin(rapfi_cmd: str) -> str:
+    """The binary path out of a Rapfi launch spec.
+
+    ``rapfi_cmd`` may be a bare binary path (``--rapfi engines/.../pbrain-rapfi``)
+    or a full launch command (the resolver's ``pbrain-rapfi --config x gomocup``).
+    The binary is always the first shell token."""
+    parts = shlex.split(rapfi_cmd)
+    return parts[0] if parts else rapfi_cmd
+
+
+def _resolve_rapfi(rapfi: str | None) -> str:
+    """Resolve the Rapfi launch spec.
+
+    An explicit ``--rapfi <path>`` (or full command) is honoured verbatim so the
+    override always works. When omitted (``None``/empty) we resolve via the
+    friction-free HF resolver (``gomoku.rapfi_pool.default_rapfi_cmd``): the local
+    ``engines/rapfi`` build if present, else the pinned HF snapshot (fetched on
+    first use). This makes the script work from any worktree / fresh machine with
+    no ``--rapfi`` and no ``GOMOKU_REPO`` indirection."""
+    if rapfi:
+        return rapfi
+    from gomoku.rapfi_pool import default_rapfi_cmd
+
+    return default_rapfi_cmd()
+
+
+def _build_ref(rapfi_cmd: str) -> dict:
+    """Best-effort build provenance for the Rapfi binary (accepts a bare path or a
+    full launch command)."""
+    rapfi_path = _rapfi_bin(rapfi_cmd)
     ref: dict = {"path": os.path.abspath(rapfi_path)}
-    side = os.path.join(os.path.dirname(rapfi_path), "BUILD_COMMIT.txt")
+    side = os.path.join(os.path.dirname(os.path.abspath(rapfi_path)), "BUILD_COMMIT.txt")
     if os.path.exists(side):
         try:
             with open(side) as f:
@@ -165,9 +198,10 @@ def run_rapfi_eval(
             f"coordinate mapping derives from the import-time BOARD_SIZE."
         )
 
-    rapfi_abs = os.path.abspath(rapfi)
-    if not os.path.exists(rapfi_abs):
-        raise SystemExit(f"rapfi binary not found: {rapfi_abs}")
+    rapfi_cmd = _resolve_rapfi(rapfi)
+    rapfi_bin = _rapfi_bin(rapfi_cmd)
+    if not os.path.exists(rapfi_bin):
+        raise SystemExit(f"rapfi binary not found: {rapfi_bin}")
 
     # Built directly via mcts_picker (not the match.py spec string) so the
     # eval-config levers (FPU / tree-reuse / proven-prop) can be threaded.
@@ -184,12 +218,12 @@ def run_rapfi_eval(
         proven_prop=proven_prop,
     )
 
-    build_ref = _build_ref(rapfi_abs)
+    build_ref = _build_ref(rapfi_cmd)
     records: list[dict] = []
     for timeout_ms in timeouts:
         engine = ExternalEnginePlayer(
             ExternalEngineConfig(
-                cmd=rapfi_abs,
+                cmd=rapfi_cmd,
                 timeout_ms=timeout_ms,
                 label=f"rapfi{timeout_ms}",
                 rule=rule,
@@ -287,7 +321,7 @@ def _worker_play(task: dict) -> dict:
 
     engine = ExternalEnginePlayer(
         ExternalEngineConfig(
-            cmd=task["rapfi_abs"], timeout_ms=task["timeout_ms"],
+            cmd=task["rapfi_cmd"], timeout_ms=task["timeout_ms"],
             label=f"rapfi{task['timeout_ms']}", rule=task["rule"],
             board_size=task["size"],
         )
@@ -327,9 +361,10 @@ def run_rapfi_eval_parallel(
         )
     if n_games % 2 != 0:
         raise SystemExit("--n-games must be even for color balance under --jobs.")
-    rapfi_abs = os.path.abspath(rapfi)
-    if not os.path.exists(rapfi_abs):
-        raise SystemExit(f"rapfi binary not found: {rapfi_abs}")
+    rapfi_cmd = _resolve_rapfi(rapfi)
+    rapfi_bin = _rapfi_bin(rapfi_cmd)
+    if not os.path.exists(rapfi_bin):
+        raise SystemExit(f"rapfi binary not found: {rapfi_bin}")
 
     total_pairs = n_games // 2
     # Build the task list: shard each tier's pairs across up to `jobs` shards.
@@ -339,7 +374,7 @@ def run_rapfi_eval_parallel(
             if sp == 0:
                 continue
             tasks.append({
-                "timeout_ms": t, "rapfi_abs": rapfi_abs, "rule": rule, "size": size,
+                "timeout_ms": t, "rapfi_cmd": rapfi_cmd, "rule": rule, "size": size,
                 "n_games": 2 * sp,
                 "seed": seed + ti * 100003 + s * 101,  # distinct independent openings
                 "random_opening_moves": random_opening_moves,
@@ -361,7 +396,7 @@ def run_rapfi_eval_parallel(
                 a["black"][i] += r["black"][i]; a["white"][i] += r["white"][i]
     batch_wall = time.time() - t0
 
-    build_ref = _build_ref(rapfi_abs)
+    build_ref = _build_ref(rapfi_cmd)
     records: list[dict] = []
     for t in timeouts:  # stable, requested order
         a = agg.get(t)
@@ -399,7 +434,11 @@ def main() -> None:
     ap.add_argument("--checkpoint", required=True, help="Model checkpoint path.")
     ap.add_argument("--sims", type=int, default=100, help="Model MCTS sims per move.")
     ap.add_argument("--c-puct", type=float, default=1.5)
-    ap.add_argument("--rapfi", required=True, help="Path to pbrain-rapfi binary.")
+    ap.add_argument("--rapfi", default=None,
+                    help="Rapfi launch spec (bare binary path or full command). "
+                         "Omit to auto-resolve via gomoku.rapfi_pool: the local "
+                         "engines/rapfi build if present, else the pinned HF "
+                         "snapshot (fetched on first use).")
     ap.add_argument("--timeouts", type=int, nargs="+", default=[100, 500, 1000],
                     help="Rapfi per-move timeout tiers in ms (difficulty tiers).")
     ap.add_argument("--n-games", type=int, default=20,
