@@ -59,6 +59,59 @@ def test_checkpoint_roundtrip(tmp_path):
         assert torch.equal(p1, p2)
 
 
+def test_save_checkpoint_is_atomic(tmp_path, monkeypatch):
+    """save_checkpoint must never leave a partial file observable at `path`
+    (closes #76): a concurrent reader watching latest.pt must see either the old
+    file or the fully-written new one, never a torn mid-write file.
+
+    We prove the write goes through a sibling `.tmp` + os.replace by spying on
+    both: torch.save is asserted to target a `.tmp` path (NOT `path` directly),
+    and the bytes only land on `path` via os.replace AFTER torch.save returns. So
+    at no point does an incomplete file exist at the observable destination.
+    """
+    import os as _os
+
+    import gomoku.model as model_mod
+
+    p = tmp_path / "latest.pt"
+
+    # Seed an existing (old) checkpoint at the destination; the atomic replace
+    # must overwrite it in one step, never truncate-then-fill it.
+    save_checkpoint(str(p), build_model("tiny"), epoch=1)
+    old_bytes = p.read_bytes()
+
+    events: list[str] = []
+    real_save = torch.save
+    real_replace = _os.replace
+
+    def spy_save(obj, f, *a, **k):
+        # torch.save must target the sibling tmp, never the final path.
+        assert str(f) == str(p) + ".tmp", f"torch.save wrote to {f!r}, not the .tmp"
+        # The observable destination still holds the OLD file (no partial) while
+        # the new bytes are being streamed into the tmp.
+        assert p.read_bytes() == old_bytes, "destination changed before os.replace"
+        events.append("save")
+        return real_save(obj, f, *a, **k)
+
+    def spy_replace(src, dst, *a, **k):
+        assert str(src) == str(p) + ".tmp" and str(dst) == str(p)
+        # The replace lands AFTER the tmp is fully written.
+        assert events == ["save"], "os.replace ran before torch.save completed"
+        events.append("replace")
+        return real_replace(src, dst, *a, **k)
+
+    monkeypatch.setattr(model_mod.torch, "save", spy_save)
+    monkeypatch.setattr(model_mod.os, "replace", spy_replace)
+
+    save_checkpoint(str(p), build_model("tiny"), epoch=2, total_games=99)
+
+    assert events == ["save", "replace"]
+    # No leftover tmp, and the final file is the fully-written new checkpoint.
+    assert not (tmp_path / "latest.pt.tmp").exists()
+    _m, payload = load_checkpoint(str(p))
+    assert payload["epoch"] == 2 and payload["total_games"] == 99
+
+
 def test_checkpoint_embeds_board_size_and_legacy_defaults_to_9(tmp_path):
     # 15x15-era contract: every new checkpoint embeds its board size, and a
     # legacy checkpoint without the field loads as 9x9 (all pre-era nets were

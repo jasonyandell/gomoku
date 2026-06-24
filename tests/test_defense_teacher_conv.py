@@ -40,6 +40,21 @@ from gomoku.self_play import (
 
 N = state_ops.BOARD_SIZE
 
+# A few fixtures below are crafted for the LIVE 15x15 board (the docstring's
+# stated config) and are geometrically invalid at 9x9: the open-three at row 6
+# cols 6,7,8 has a prevention cell at (6,9), which is OFF a 9x9 board (cols 0..8),
+# and _crafted_single_fours' r0/c0 sweep yields < the required 20 positions on a
+# 9x9 grid. They are NOT board-agnostic, so gate them to board 15 — matching the
+# sibling white-defense suite (tests/test_white_defense.py) which skips wholesale
+# unless GOMOKU_BOARD_SIZE=15. The remaining tests in this file are board-agnostic
+# and still run at every size. (The conv teacher's detection logic itself is
+# board-size-independent; only these crafted positions need the 15x15 geometry.)
+needs_board15 = pytest.mark.skipif(
+    N != 15,
+    reason="fixture geometry (open-three prevention cell / crafted-fours count) "
+    "is crafted for the live 15x15 board; run with GOMOKU_BOARD_SIZE=15",
+)
+
 
 @pytest.fixture
 def restore_defense_knobs():
@@ -132,6 +147,7 @@ def test_quiet_position_no_stamp():
 # Tier 2 (heuristic): open three -> open four prevention; sub-toggle
 # ---------------------------------------------------------------------------
 
+@needs_board15
 def test_open_three_stamps_prevention_cells():
     # Opponent .XXX. (three at row 6 cols 6,7,8). The open-four-making moves are
     # (6,5) and (6,9); each end is in the other's defeating set, so blocking either
@@ -188,6 +204,7 @@ def _crafted_single_fours():
                     yield planes, int(opp_win[0])
 
 
+@needs_board15
 def test_conv_agrees_with_vcf_on_shallow_fours():
     # CROSS-CHECK: for >= 20 crafted positions where the opponent has an IMMEDIATE
     # four (a depth-1 forced win), the conv detector's forced-block cell must equal
@@ -253,6 +270,7 @@ def test_conv_never_stamps_a_nonblocking_cell_fuzz():
 # Per-ply stamp wrapper: uniform policy, value untouched
 # ---------------------------------------------------------------------------
 
+@needs_board15
 def test_apply_conv_stamps_uniform_policy_value_untouched(restore_defense_knobs):
     self_play._DEFENSE_CONV_TIER2 = True
     pi = np.full(N * N, 1.0 / (N * N), dtype=np.float32)

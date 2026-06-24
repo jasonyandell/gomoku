@@ -8,6 +8,11 @@ from pathlib import Path
 
 import pytest
 
+# gomoku.lab.trainer imports gomoku.hf at module load, which imports
+# huggingface_hub — so importing trainer (below) ERRORs on a minimal install
+# that lacks the optional dep. Skip the whole module cleanly instead.
+pytest.importorskip("huggingface_hub")
+
 from gomoku.lab import daemon as D
 from gomoku.lab import ledger as L
 from gomoku.lab import trainer as T

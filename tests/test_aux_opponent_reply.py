@@ -136,9 +136,22 @@ def test_build_examples_aux_propagates_and_masks():
 # --------------------------------------------------------------------------
 
 def test_model_off_byte_identical():
-    """small model with aux OFF == small without the field: same keys+params."""
-    off = build_model("small")
-    on = build_model("small", aux_opponent_reply=True)
+    """small model with aux OFF == small without the aux field: same keys+params.
+
+    This isolates the AUX head's byte-identical-OFF guarantee, so it builds the
+    baseline with choice_head=False — the swap2 choice head is an UNRELATED
+    optional head (default-on; +choice_fc.{weight,bias}, +value_hidden*N_CHOICES+
+    N_CHOICES params) and must not be conflated with the aux-OFF baseline. With it
+    off, the baseline is the pure pre-aux-field small model (344458 params, 72
+    keys), and turning aux ON must add EXACTLY the 8 aux keys and nothing else.
+    """
+    import dataclasses
+
+    from gomoku.model import SIZE_PRESETS, GomokuNet
+
+    base_cfg = dataclasses.replace(SIZE_PRESETS["small"], choice_head=False)
+    off = GomokuNet(base_cfg)
+    on = GomokuNet(dataclasses.replace(base_cfg, aux_opponent_reply=True))
     off_keys = set(off.state_dict().keys())
     on_keys = set(on.state_dict().keys())
     assert off.cfg.aux_opponent_reply is False
