@@ -392,6 +392,7 @@ def play_match_pickers(
     n_games: int,
     seed: int = 0,
     random_opening_moves: int = 0,
+    start_state: GameState | None = None,
 ) -> MatchResult:
     """Play A vs B, alternating colors. Returns result from A's perspective.
 
@@ -405,6 +406,13 @@ def play_match_pickers(
     black vs white.  This mirrors the swap-2 convention's goal of neutralising
     first-mover advantage: neither player benefits from the opening stone
     placement because each side plays both colors from the same starting board.
+
+    When ``start_state`` is given EVERY game starts from that exact position
+    (with the same color-swap-per-pair seat alternation). This is the fixed-
+    opening eval path — e.g. the swap2 idx-2 board the rulers use, where both
+    players take the side-to-move seat across a pair so neither benefits from
+    the (fixed) opening. ``start_state`` takes precedence over
+    ``random_opening_moves``; a fixed opening does not compose with a random one.
 
     If ``n_games`` is odd the final game gets its own opening (no partner for
     the color swap), so keep ``n_games`` even for balanced evaluation.
@@ -424,8 +432,16 @@ def play_match_pickers(
     for g_idx in range(n_games):
         a_is_black = (g_idx % 2 == 0)
         a_to_move = a_is_black
+        # A fixed start position (e.g. the swap2 idx-2 board) wins over a random
+        # opening: same seat-swap per pair, but the board is identical every game.
+        if start_state is not None:
+            state = start_state
+            ply = state.move_count
+            if ply % 2 == 1:
+                # Odd-ply opening → white to move; flip from the base assignment.
+                a_to_move = not a_is_black
         # Use the shared opening for both games in each color-swap pair.
-        if random_opening_moves > 0:
+        elif random_opening_moves > 0:
             pair_idx = g_idx // 2
             state = opening_states[pair_idx]
             # After a random opening, side-to-move is encoded in state.board[0].

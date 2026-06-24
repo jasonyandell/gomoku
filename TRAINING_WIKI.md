@@ -4223,3 +4223,50 @@ checkpoints (sparse e1726, conv e1240) were discarded with the worktree on merge
 result we are not resuming; the eval JSONLs above are the cited evidence. The cells
 `G15-wdl-defense` / `G15-wdl-conv` in `run_sweep.py` reproduce the runs from the wdl@0 seed if
 ever needed.
+
+### 2026-06-23 (later still) — BUILT the eval+teacher sensei (the lever up after the knobs)
+
+After the recency-0.5 verdict closed the self-play-knob era (three data-pipeline levers
+exhausted; the plateau is buffer-knob-proof; teachers are the only lever that points up), built
+the keystone: an **eval+teacher sensei** on `feat/eval-teacher-sensei` (off main). One subsystem,
+two faces — the eval is the teacher's measuring stick AND its selector.
+
+**Eval face (closes #34):** a warm `RapfiPool` (persistent NNUE processes, no per-pass respawn —
+the 10×+ win) behind an HTTP daemon (`gomoku-eval-daemon serve`) PLUS a flatfile-reducer cadence
+loop (`… cadence`) that watches a checkpoint and appends a per-color-split JSONL series every N
+epochs. **White is reported separately** (the hard #34 constraint): every row carries
+`white_score`/`white_loss_rate`/`white_wld`, never folded into the aggregate. CPU-only → never
+competes with the MPS trainer (same property that makes the babysit cadence safe). Rulers map to
+the babysit set (self126/champ0235/rapfi) at the fixed idx-2 opening via a new additive
+`play_match_pickers(start_state=…)` seam (default None = byte-identical). `EvaluatorCache` keeps
+fixed-ruler nets warm across epochs; `run_panel` pins one (weights, epoch) snapshot so the series
+is never mislabeled.
+
+**Teacher face (advances #46/#18/#44):** Rapfi exposes only a MOVE, and #18/#44 say the policy
+must carry the load and value-only teaching is structurally wrong — so the teacher is **policy-side
+one-hot distillation** ("the master plays here"), value untouched. `python -m gomoku.teacher
+generate` self-plays from the opening (stall-guarded), labels positions with the warm pool, writes
+an npz with D4-augment-at-sample-time; `gomoku-train --teacher-data-path … --teacher-weight 0.3`
+mixes a teacher CE into every SGD step (BatchNorm frozen on the teacher forward so it doesn't
+pollute inference running-stats; weight 0 = byte-identical).
+
+**Verification:** full new-surface test suite (5 files) green at board 9; real-Rapfi pool tests
+green at board 15; the FULL existing suite shows no regressions from the `train_step` /
+`play_match_pickers` edits (the only failures are pre-existing-on-main `test_defense_teacher_conv`
++ an optional `huggingface_hub` dep missing from the minimal worktree venv). Adversarial 5-reviewer
+workflow verified the load-bearing correctness (seat-parity, color accounting, white-split math,
+gradient-accum scaling, action-perm alignment, cadence reducer) and surfaced 14 edge findings — the
+2 HIGH (BN running-stat pollution from the teacher's 2nd forward; `gather_states` infinite-hang)
+and the substantive mediums (RapfiPool close-vs-respawn leak; torn in-place checkpoint read;
+malformed-opening 500→400; serve pool-leak-on-startup-failure) all fixed. Live smoke on real Rapfi:
+panel reads epoch + white-split correctly; teacher labelled 60 idx-2 positions at 18.6/s.
+
+**Operational constraint discovered:** the live Bruce checkpoints are written by the SWAP2 branch,
+whose `ModelConfig` has a `choice_head` field main lacks — so a **main-built daemon cannot load
+swap2-trained weights** (panel degrades gracefully to per-ruler error rows). To eval live Bruce,
+run the daemon from a checkout whose `model.py` matches the trainer (swap2, or main after both this
+build and swap2 merge). Watch `worker_weights.pt` (atomically written) not `latest.pt` (in-place).
+
+**NOT validated:** that distillation actually breaks the plateau — that needs hours of live training
+(gate on not competing for the GPU). Bruce-1 (recency-0.5) is the strength-to-beat. Wiki:
+`topics/eval-teacher-sensei.md`.

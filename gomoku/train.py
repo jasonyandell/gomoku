@@ -217,6 +217,9 @@ def train_step(
     ownership_mask: torch.Tensor | None = None,
     ownership_weight: float = 0.0,
     soft_policy_weight: float = 0.0,
+    teacher_planes: torch.Tensor | None = None,
+    teacher_pi: torch.Tensor | None = None,
+    teacher_weight: float = 0.0,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
@@ -362,6 +365,41 @@ def train_step(
             own_l = per_own_se.sum() * 0.0  # keep head connected, zero grad
         loss = loss + ownership_weight * own_l
         own_l_val = float(own_l.detach())
+    # Teacher distillation (eval/teacher build): a SEPARATE forward over a batch
+    # of expert-labelled positions adds a policy cross-entropy toward the
+    # teacher's move (a one-hot from a stronger engine, e.g. Rapfi). POLICY ONLY
+    # — the value head is never touched here: per issues #18/#44 the policy must
+    # carry the load and value-only teaching is structurally wrong. With
+    # teacher_weight == 0.0 (default) the block never runs and the graph is
+    # byte-identical to the pre-teacher path (no extra forward).
+    teacher_l_val = float("nan")
+    use_teacher = (
+        teacher_weight > 0.0 and teacher_planes is not None and teacher_pi is not None
+    )
+    if use_teacher:
+        # Freeze BatchNorm running-stat updates for the teacher forward. The main
+        # forward above already tracks the training (self-play) distribution into
+        # BN's running_mean/var; a SECOND train-mode forward over teacher_planes
+        # would double-update those stats (and double the effective BN momentum),
+        # silently shifting the inference-time normalization. Eval-mode BN still
+        # backprops to the conv/BN weights — only the running-stat tracking is
+        # paused — so the distillation gradient is unaffected.
+        _bn = [m for m in model.modules()
+               if isinstance(m, torch.nn.modules.batchnorm._BatchNorm)]
+        _bn_was_training = [m.training for m in _bn]
+        for m in _bn:
+            m.eval()
+        try:
+            t_out = model(teacher_planes)
+        finally:
+            for m, was in zip(_bn, _bn_was_training):
+                m.train(was)
+        t_logits = t_out[0] if isinstance(t_out, tuple) else t_out
+        t_logp = F.log_softmax(t_logits, dim=-1)
+        per_teacher_ce = -(teacher_pi * t_logp).sum(dim=-1)
+        teacher_ce = per_teacher_ce.mean()
+        loss = loss + teacher_weight * teacher_ce
+        teacher_l_val = float(teacher_ce.detach())
     if l2_weight > 0:
         l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
         loss = loss + l2_weight * l2
@@ -396,6 +434,8 @@ def train_step(
     if use_ownership:
         out["loss/aux_ownership"] = own_l_val
         out["train/ownership_mask_frac"] = float(ownership_mask.bool().float().mean())
+    if use_teacher:
+        out["loss/teacher"] = teacher_l_val
     if side is not None and ply is not None:
         with torch.no_grad():
             ce_cpu = per_policy_ce.detach()
@@ -855,6 +895,25 @@ def parse_args() -> argparse.Namespace:
                         "structure the sharp completed-Q target drops under our "
                         "60-70%% draw regime. Suggested starting value 0.15; keep "
                         "the 0.25 exponent fixed (one lever).")
+    p.add_argument("--teacher-data-path", type=str, default=None,
+                   help="Teacher distillation (eval/teacher build): path to an "
+                        "npz of expert-labelled positions produced by "
+                        "`python -m gomoku.teacher generate ...` (planes + a "
+                        "one-hot teacher move per position, e.g. Rapfi's). When "
+                        "set together with --teacher-weight > 0, a batch is mixed "
+                        "into every SGD step as a POLICY-ONLY cross-entropy toward "
+                        "the teacher's move (value head untouched — per #18/#44 the "
+                        "policy carries the load). Default None = OFF.")
+    p.add_argument("--teacher-weight", type=float, default=0.0,
+                   help="Weight of the teacher policy-distillation term. 0.0 "
+                        "(default) = OFF = byte-identical to the pre-teacher path "
+                        "(no extra forward). Suggested starting value ~0.3; "
+                        "loss/teacher is logged when ON.")
+    p.add_argument("--teacher-batch-size", type=int, default=0,
+                   help="Batch size for the teacher mix-in (0 = use --batch-size).")
+    p.add_argument("--no-teacher-augment", action="store_true",
+                   help="Disable D4 symmetry augmentation of teacher positions "
+                        "(default: augment, turning N labels into 8x diversity).")
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
@@ -1334,6 +1393,29 @@ def main() -> None:
     if args.buffer_recency_frac > 0.0:
         print(f"buffer curator: recency_frac={args.buffer_recency_frac} "
               f"window={args.buffer_recency_window}")
+
+    # Teacher distillation (eval/teacher build). When --teacher-data-path is set
+    # and --teacher-weight > 0, mix a batch of expert-labelled positions into
+    # every SGD step: a policy-only CE toward the teacher's move. The dataset is
+    # a small npz produced by `python -m gomoku.teacher generate ...`. OFF
+    # (default, weight 0.0) => never loaded, byte-identical to the baseline.
+    teacher_weight = float(getattr(args, "teacher_weight", 0.0))
+    teacher_ds = None
+    teacher_batch_size = int(getattr(args, "teacher_batch_size", 0) or args.batch_size)
+    if teacher_weight > 0.0 and getattr(args, "teacher_data_path", None):
+        from gomoku.teacher import TeacherDataset
+
+        teacher_ds = TeacherDataset.load(
+            args.teacher_data_path, device=device, augment=not args.no_teacher_augment
+        )
+        print(
+            f"teacher distillation ENABLED: weight={teacher_weight} "
+            f"positions={teacher_ds.n} batch={teacher_batch_size} "
+            f"augment={teacher_ds.augment} src={args.teacher_data_path}"
+        )
+    elif teacher_weight > 0.0:
+        print("WARNING: --teacher-weight > 0 but no --teacher-data-path; teacher OFF")
+        teacher_weight = 0.0
     # Build the reanalyze scheduler now that buffer.capacity is known.
     # OFF path never enters this branch — no import, no allocation.
     if reanalyze_on:
@@ -2288,6 +2370,9 @@ def main() -> None:
                     planes, pi, z, side, ply = buffer.sample(args.batch_size)
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
+                teacher_planes = teacher_pi = None
+                if teacher_ds is not None and teacher_weight > 0.0:
+                    teacher_planes, teacher_pi = teacher_ds.sample(teacher_batch_size)
                 m = train_step(
                     model, optimizer, planes, pi, z,
                     value_weight=args.value_weight,
@@ -2304,6 +2389,9 @@ def main() -> None:
                     ownership_mask=ownership_mask,
                     ownership_weight=ownership_weight,
                     soft_policy_weight=args.soft_policy_weight,
+                    teacher_planes=teacher_planes,
+                    teacher_pi=teacher_pi,
+                    teacher_weight=teacher_weight,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)
