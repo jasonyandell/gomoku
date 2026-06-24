@@ -4727,3 +4727,19 @@ build and swap2 merge). Watch `worker_weights.pt` (atomically written) not `late
 **NOT validated:** that distillation actually breaks the plateau — that needs hours of live training
 (gate on not competing for the GPU). Bruce-1 (recency-0.5) is the strength-to-beat. Wiki:
 `topics/eval-teacher-sensei.md`.
+
+## 2026-06-24 — #77 Rapfi policy-distillation teacher on warm-started Bruce: CATASTROPHIC REGRESSION (teacher@0.3 + high-LR warmstart wrecks the policy)
+
+**Setup.** Warm-started plateaued Bruce (g15 e2659, 128x10 15x15, G15-fixed-openings recipe: 1M packed buffer, recency-0.5, 9 fair openings, 3 workers, gumbel-root m16, value-discount 0.95, sgd-steps 64), turned ON policy-side Rapfi distillation: `--teacher-weight 0.3` over `teacher_bruce_e2659_fair9.npz` (4050 fair-opening Rapfi-labeled one-hot positions). Value head untouched (per #18/#44). wandb `bruce-sensei-77` (`5nzr45ns`). e2659->e3021 (~362 epochs), 0 crashes. Preserved `snapshots/g15_sensei_e3021.pt`. Seed: `teacher/bruce_e2659_warmstart.pt` (e2659 weights+optim+1M buffer, wandb id stripped).
+
+**Verdict (#77 = NO, worse than null).** H2H vs frozen Bruce-1/e2659 (`run_h2h.py`): teacher net **0W-48L-0D at sims=160 AND 0W-48L-0D at sims=100 = 0/96**, both seats (black 0-8, white 0-40), both swap2 roles (opener 0-24, responder 0-24). The teacher@0.3 didn't break the plateau — it destroyed the policy that defined the plateau's floor.
+
+**Mechanism = policy-side trunk corruption, NOT the teacher term.** loss/policy (self-play CE) 1.1->5.0 carries ~all of total (1.85->7.30); policy_net_entropy 1.26->4.57 (toward uniform, log81=4.39); policy_acc 0.685->0.30; policy_kl 0.78->2.97. The teacher CE term stayed small/benign (0.96->1.83, weighted 0.3). Self-reinforcing diffusion: flat policy -> diffuse MCTS targets (target_entropy 0.49->1.60) -> longer games (plies 22->70) -> softer targets. Net-entropy outran target-entropy => the head destabilized on its own. Value degraded only mildly (vl 0.063->0.154). Stable plateau-of-degradation (no NaN, sat in the bad basin 340 epochs — did not blow up, could not recover). NOT a fast-attack collapse (plies ROSE; the opposite tell).
+
+**#44 CONFIRMED — via the policy channel, not value.** Its predicted signature landed: strong warm-started net + sudden teacher target at fixed lr=0.001, no head/trunk freeze => destructive trunk step, pl balloons (1.1->5.0) and stays, instead of holding ~1.25. Same trunk-corruption-via-high-LR failure mode as #44, but through the POLICY-side one-hot Rapfi CE (value untouched). #44's mitigations (1/2-1/4 LR, staged freeze) are the obvious next interventions — UNTESTED in this run.
+
+**#46 unresolved, but the plateau looks FRAGILE.** One naive external-signal injection knocked Bruce well below his own plateau and he stably stayed there (no self-heal) => mild evidence the equilibrium is a delicate basin, not a hardened floor. Curriculum/external-gradient direction (#46) still live, but the injection must be GENTLE or it corrupts the trunk before any benefit accrues.
+
+**Caveats.** weight=0.3 unswept (can't separate "distillation harmful" from "0.3 too hot"); NO matched teacher-OFF control (warm-start/buffer-refresh transient not isolated from teacher harm); LR fixed, no freeze (#44 mitigations untested); H2H used full swap2 negotiation while teacher data was fair-opening-labeled (graded off-distribution); `run_h2h.py` hardcodes CPU. The 0/96 SIGN is certain; magnitude/attribution is what's caveated.
+
+**Process win.** Ran all night crash-free, but the Rapfi *cadence* eval (0% vs Rapfi throughout) was NON-discriminating — Bruce was already 0/16 vs Rapfi. The H2H-vs-frozen-parent + loss decomposition are what revealed the harm. Future overnight teacher runs must gate on H2H-vs-frozen-parent and auto-abort on regression (don't burn 362 epochs on a known-bad basin).

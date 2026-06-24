@@ -1,5 +1,15 @@
 # The eval+teacher sensei — always-on Rapfi eval + Rapfi-as-teacher
 
+> ⚠️ **2026-06-24 — first live #77 validation REGRESSED. Read before running a teacher.**
+> Warm-started Bruce (g15 e2659) + policy-distillation teacher at `--teacher-weight 0.3`,
+> fixed lr=0.001, no head/trunk freeze → **0/96 H2H vs frozen Bruce-1** after 362 epochs.
+> The teacher CE term was benign; the **policy head flattened toward uniform** (entropy
+> 1.26→4.57, pl 1.1→5.0) — trunk corruption, the **#44 failure mode confirmed via the
+> policy channel**. The distillation *direction* (#46) is still live, but the injection
+> must be GENTLE: lower weight + #44 LR/freeze mitigations + a matched OFF control, each
+> gated on **H2H-vs-frozen-parent** (the Rapfi cadence was non-discriminating — Bruce was
+> already 0/16 vs Rapfi). See `TRAINING_WIKI.md` 2026-06-24 and issue #86 (gentle retry).
+
 **One subsystem, two faces.** After the recency-0.5 verdict (TRAINING_WIKI
 2026-06-23) closed the self-play-knob era — *the three data-pipeline levers
 (reuse / window / recency) are exhausted; keeping the loss alive ≠ keeping
