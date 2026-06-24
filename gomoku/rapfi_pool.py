@@ -29,7 +29,9 @@ retries once. A caller never sees a transient engine death.
 from __future__ import annotations
 
 import os
+import platform
 import queue
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -45,34 +47,178 @@ from gomoku.external_engine import (
 
 
 class RapfiUnavailable(RuntimeError):
-    """Raised when the Rapfi binary / config cannot be found on disk."""
+    """Raised when the Rapfi binary / config cannot be resolved."""
+
+
+# --------------------------------------------------------------------------
+# Artifact resolution — local build OR a pinned HuggingFace snapshot.
+#
+# The Rapfi binary + NNUE weights are ~40MB of gitignored local build artifacts,
+# so a fresh worktree / machine / CI doesn't have them. Rather than the brittle
+# GOMOKU_REPO -> ~/code/gomoku indirection back to the main checkout, we resolve
+# them from a PINNED-revision HF repo into the machine-global hub cache (one
+# fetch per machine, shared across every worktree/venv — the one store that is
+# genuinely worktree- and venv-invariant). The local build stays the higher-
+# precedence fast path, so a box that already built the engine never touches the
+# network and behaviour is byte-identical to before.
+#
+# Pinned to an immutable commit SHA (NOT a mutable tag) for reproducibility, and
+# the binary's sha256 is asserted after fetch (we chmod +x a file pulled from the
+# network — verify it's exactly the build we pinned). Both constants are filled by
+# scripts/publish_rapfi.py; while None, only the local path is used (legacy
+# behaviour, byte-identical).
+# --------------------------------------------------------------------------
+RAPFI_HF_REPO = "jasonyandell/rapfi-arm64"
+# Pinned to an immutable commit SHA (built from dhbloo/rapfi @ 6e0a132, arm64).
+# Bump both via scripts/publish_rapfi.py after a new build.
+RAPFI_HF_REVISION: str | None = "697aec1a50ab8b8b5b280749516fb37ea95435c5"
+RAPFI_BINARY_SHA256: str | None = (
+    "9f8efade631f8391b2763acb5f66038d2b0ee5ace2f12919e80f8b497fe3ded6"
+)
+_RAPFI_PATTERNS = ["pbrain-rapfi", "config.toml", "*.bin.lz4", "model210901.bin"]
 
 
 def default_rapfi_repo(repo: str | None = None) -> str:
-    """Resolve the gomoku checkout that holds ``engines/rapfi/``.
-
-    The Rapfi binary + NNUE weights are local build artifacts (not version
-    controlled), so they live in the user's MAIN checkout even when this code
-    runs from a worktree. Precedence: explicit arg → ``GOMOKU_REPO`` env →
-    ``~/code/gomoku`` (matches ``tests/test_rapfi_native.py``).
+    """Resolve the gomoku checkout that *may* hold a local ``engines/rapfi/``
+    build. Precedence: explicit arg → ``GOMOKU_REPO`` env → this checkout's root
+    (the package's own repo) → ``~/code/gomoku``.
     """
-    return repo or os.environ.get("GOMOKU_REPO") or os.path.expanduser("~/code/gomoku")
+    if repo:
+        return repo
+    env = os.environ.get("GOMOKU_REPO")
+    if env:
+        return env
+    # The repo root two levels up from this file (…/<root>/gomoku/rapfi_pool.py).
+    here_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.isfile(os.path.join(here_root, "engines", "rapfi", "pbrain-rapfi")):
+        return here_root
+    return os.path.expanduser("~/code/gomoku")
+
+
+def _local_rapfi_dir(repo: str | None = None) -> str | None:
+    """The local ``engines/rapfi`` dir iff it holds a runnable build, else None."""
+    rdir = os.path.join(default_rapfi_repo(repo), "engines", "rapfi")
+    if os.path.isfile(os.path.join(rdir, "pbrain-rapfi")) and os.path.isfile(
+        os.path.join(rdir, "config.toml")
+    ):
+        return rdir
+    return None
+
+
+def _hf_importable() -> bool:
+    try:
+        import huggingface_hub  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def _is_arm64_mac() -> bool:
+    """The published binary is an arm64 macOS Mach-O — only fetchable-and-runnable
+    here. (Making the FILES appear on a Linux runner must not imply it can run.)"""
+    return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def _sha256(path: str) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def rapfi_artifacts(
+    *, revision: str | None = None, allow_fetch: bool = True, repo: str | None = None
+) -> str:
+    """Return a directory containing ``pbrain-rapfi`` + ``config.toml`` + weights.
+
+    Precedence: local ``engines/rapfi`` build (fast path) → the pinned HF snapshot
+    in the machine-global hub cache (fetched on first use iff ``allow_fetch``).
+    The binary is made executable and (when a hash is pinned) sha256-verified.
+    Raises :class:`RapfiUnavailable` if neither resolves.
+    """
+    local = _local_rapfi_dir(repo)
+    if local is not None:
+        return local
+
+    rev = revision or RAPFI_HF_REVISION
+    if not rev:
+        raise RapfiUnavailable(
+            "no local engines/rapfi build and no pinned HF revision "
+            "(RAPFI_HF_REVISION is None). Build via engines/rapfi/build_rapfi.sh, "
+            "or publish once via `python scripts/publish_rapfi.py`."
+        )
+    if not _hf_importable():
+        raise RapfiUnavailable(
+            "huggingface_hub not installed; cannot fetch Rapfi "
+            "(`uv pip install huggingface_hub`)."
+        )
+    from huggingface_hub import snapshot_download
+
+    try:
+        adir = snapshot_download(
+            RAPFI_HF_REPO,
+            revision=rev,
+            allow_patterns=_RAPFI_PATTERNS,
+            local_files_only=not allow_fetch,
+        )
+    except Exception as e:
+        raise RapfiUnavailable(
+            f"could not resolve Rapfi from HF {RAPFI_HF_REPO}@{rev[:12]} "
+            f"(allow_fetch={allow_fetch}): {type(e).__name__}: {e}"
+        ) from e
+
+    binp = os.path.join(adir, "pbrain-rapfi")
+    if not os.path.isfile(binp):
+        raise RapfiUnavailable(f"HF snapshot {adir} is missing pbrain-rapfi")
+    if not os.access(binp, os.X_OK):
+        # Hub cache stores blobs 0644; the engine must be executable.
+        os.chmod(binp, 0o755)
+    if RAPFI_BINARY_SHA256:
+        got = _sha256(binp)
+        if got != RAPFI_BINARY_SHA256:
+            raise RapfiUnavailable(
+                f"Rapfi binary sha256 mismatch (refusing to run an unexpected "
+                f"binary): expected {RAPFI_BINARY_SHA256[:12]}…, got {got[:12]}…"
+            )
+    return adir
 
 
 def default_rapfi_cmd(repo: str | None = None) -> str:
-    """The canonical ``pbrain-rapfi --config ... gomocup`` launch command."""
-    rdir = os.path.join(default_rapfi_repo(repo), "engines", "rapfi")
-    binp = os.path.join(rdir, "pbrain-rapfi")
-    cfg = os.path.join(rdir, "config.toml")
+    """The canonical ``pbrain-rapfi --config ... gomocup`` launch command,
+    resolving the binary+config from the local build or the pinned HF snapshot
+    (fetching on first use if needed)."""
+    adir = rapfi_artifacts(repo=repo)
+    binp = os.path.join(adir, "pbrain-rapfi")
+    cfg = os.path.join(adir, "config.toml")
     return f"{binp} --config {cfg} gomocup"
 
 
 def rapfi_available(repo: str | None = None) -> bool:
-    """True iff the Rapfi binary and config exist (cheap, no spawn)."""
-    rdir = os.path.join(default_rapfi_repo(repo), "engines", "rapfi")
-    return os.path.isfile(os.path.join(rdir, "pbrain-rapfi")) and os.path.isfile(
-        os.path.join(rdir, "config.toml")
-    )
+    """True iff Rapfi is resolvable WITHOUT a network fetch — a local build is
+    present, or the pinned HF snapshot is already cached. Cheap and never
+    downloads, so it is safe for test gating."""
+    if _local_rapfi_dir(repo) is not None:
+        return True
+    if not RAPFI_HF_REVISION or not _hf_importable():
+        return False
+    try:
+        rapfi_artifacts(allow_fetch=False, repo=repo)  # cache-only
+        return True
+    except RapfiUnavailable:
+        return False
+
+
+def rapfi_obtainable(repo: str | None = None) -> bool:
+    """True iff Rapfi can be made available, possibly via a one-time HF fetch on
+    first use (local present, already cached, or fetchable on this arch). Use this
+    (not :func:`rapfi_available`) to decide whether to *offer* Rapfi."""
+    if rapfi_available(repo):
+        return True
+    return bool(RAPFI_HF_REVISION) and _hf_importable() and _is_arm64_mac()
 
 
 class RapfiPool:
@@ -98,14 +244,18 @@ class RapfiPool:
     ) -> None:
         if size < 1:
             raise ValueError(f"pool size must be >= 1, got {size}")
+        # default_rapfi_cmd() resolves the local build or the pinned HF snapshot
+        # (fetching on first use); an explicit cmd is used as-is.
         resolved_cmd = cmd or default_rapfi_cmd()
         # Fail fast with a clear message rather than a cryptic FileNotFoundError
-        # from deep inside subprocess.Popen.
+        # from deep inside subprocess.Popen (covers an explicit cmd= that points
+        # at a missing binary).
         bin_path = resolved_cmd.split()[0]
         if not os.path.isfile(bin_path):
             raise RapfiUnavailable(
-                f"Rapfi binary not found: {bin_path!r}. Set GOMOKU_REPO or pass "
-                f"cmd=... (the binary is a local build artifact, not in git)."
+                f"Rapfi binary not found: {bin_path!r}. Pass a valid cmd=, build "
+                f"engines/rapfi/build_rapfi.sh, or publish via "
+                f"scripts/publish_rapfi.py (then the HF resolver fetches it)."
             )
         self._cfg_kwargs = dict(
             cmd=resolved_cmd,
