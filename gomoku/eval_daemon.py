@@ -43,7 +43,13 @@ from gomoku.eval_panel import (
     run_panel,
 )
 from gomoku.game import GameState
-from gomoku.rapfi_pool import RapfiPool, default_rapfi_cmd, rapfi_available
+from gomoku.rapfi_pool import (
+    RapfiPool,
+    RapfiUnavailable,
+    default_rapfi_cmd,
+    rapfi_available,
+    rapfi_obtainable,
+)
 from pydantic import BaseModel
 
 
@@ -111,13 +117,13 @@ def build_rulers(
     temp_until_ply: int,
     temperature: float,
     rapfi_timeout_ms: int,
-    drop_rapfi_if_unavailable: bool = True,
 ) -> list[Ruler]:
+    # Fail-fast policy (no silent fallback): a configured rapfi ruler is ALWAYS
+    # kept as-is. We never silently drop it on unavailability — instead serve() /
+    # cadence() build the pool and refuse to start if Rapfi can't be obtained, so
+    # the operator gets a loud, actionable error instead of a baseline-only run.
     rulers = []
     for label, opp in specs:
-        if opp == "rapfi" and drop_rapfi_if_unavailable and not rapfi_available():
-            print(f"  (skipping ruler {label}: Rapfi unavailable)", file=sys.stderr)
-            continue
         # Rapfi supplies its own move variety via timeout wobble, so the net plays
         # deterministically against it; net-vs-net / baseline rulers need early-ply
         # sampling to get any game variety at a fixed opening.
@@ -138,6 +144,35 @@ def build_rulers(
 
 def needs_pool(rulers: list[Ruler]) -> bool:
     return any(r.opponent == "rapfi" for r in rulers)
+
+
+def _require_rapfi_pool(args: argparse.Namespace) -> RapfiPool:
+    """Build the warm Rapfi pool or FAIL FAST (no silent fallback).
+
+    A rapfi ruler is configured, so Rapfi is REQUIRED. We always attempt to build
+    the pool — ``default_rapfi_cmd()`` resolves the local build or the pinned HF
+    snapshot (fetching on first use) — and on any :class:`RapfiUnavailable` we
+    print one clear, actionable line and ``raise SystemExit(2)``. We never return
+    ``None`` / continue baseline-only: a silently-degraded eval is the footgun
+    this daemon refuses to be.
+    """
+    try:
+        return RapfiPool(
+            size=args.pool_size,
+            cmd=args.rapfi_cmd or default_rapfi_cmd(),
+            timeout_ms=args.rapfi_timeout_ms,
+            board_size=BOARD_SIZE,
+        )
+    except RapfiUnavailable as e:
+        print(
+            "ERROR: Rapfi is required by the configured rulers but could not be "
+            f"obtained ({e}). Build engines/rapfi/build_rapfi.sh, ensure network "
+            "for the HF auto-fetch (jasonyandell/rapfi-arm64), or configure only "
+            "non-rapfi rulers (e.g. --ruler heuristic=heuristic "
+            "--ruler look4=lookahead:depth=4).",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from e
 
 
 # --------------------------------------------------------------------------
@@ -257,20 +292,28 @@ def serve(args: argparse.Namespace) -> int:
         rapfi_timeout_ms=args.rapfi_timeout_ms,
     )
     opening = parse_opening(args.opening)
-    # Warm a pool in serve mode whenever Rapfi is present, so /move and ad-hoc
-    # rapfi /eval work regardless of the default rulers (not only when a rapfi
-    # ruler is configured).
     pool = None
-    if rapfi_available():
-        pool = RapfiPool(
-            size=args.pool_size,
-            cmd=args.rapfi_cmd or default_rapfi_cmd(),
-            timeout_ms=args.rapfi_timeout_ms,
-            board_size=BOARD_SIZE,
-        )
+    if needs_pool(rulers):
+        # A rapfi ruler is configured (the default) -> Rapfi is REQUIRED. Build the
+        # pool or fail fast (no silent baseline-only fallback).
+        pool = _require_rapfi_pool(args)
         print(f"warmed Rapfi pool: size={args.pool_size} @ {args.rapfi_timeout_ms}ms")
-    elif needs_pool(rulers):
-        print("WARNING: rapfi rulers configured but Rapfi unavailable", file=sys.stderr)
+    elif rapfi_obtainable():
+        # No rapfi ruler configured, but Rapfi is obtainable: best-effort warm so
+        # /move and ad-hoc rapfi /eval still work. This is an optional convenience,
+        # NOT a configured requirement, so a fetch failure here is non-fatal.
+        try:
+            pool = RapfiPool(
+                size=args.pool_size,
+                cmd=args.rapfi_cmd or default_rapfi_cmd(),
+                timeout_ms=args.rapfi_timeout_ms,
+                board_size=BOARD_SIZE,
+            )
+            print(f"warmed Rapfi pool (for /move): size={args.pool_size} @ {args.rapfi_timeout_ms}ms")
+        except RapfiUnavailable as e:
+            print(f"NOTE: no rapfi ruler configured and pool warm skipped: {e}",
+                  file=sys.stderr)
+            pool = None
     import uvicorn
 
     print(f"serving sensei on {args.host}:{args.port} (board_size={BOARD_SIZE})")
@@ -336,12 +379,9 @@ def cadence(args: argparse.Namespace) -> int:
     cache = EvaluatorCache()
     pool = None
     if needs_pool(rulers):
-        pool = RapfiPool(
-            size=args.pool_size,
-            cmd=args.rapfi_cmd or default_rapfi_cmd(),
-            timeout_ms=args.rapfi_timeout_ms,
-            board_size=BOARD_SIZE,
-        )
+        # A rapfi ruler is configured -> Rapfi is REQUIRED. Build the pool or fail
+        # fast (no silently-dropped rapfi ruler / baseline-only cadence).
+        pool = _require_rapfi_pool(args)
 
     stop = {"req": False}
 
