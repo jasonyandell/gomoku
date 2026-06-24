@@ -1336,3 +1336,17 @@ gotchas). Repointed the index doorway from the code files to the page. Headline
 finding: the core bet is confirmed at the data level (white wins 27% in swap2
 self-play vs ~0% empty-board); strength-vs-champion still at parity (H2H 51.6%, early).
 Evidence chronology stays in TRAINING_WIKI.md (2026-06-20); this page is the synthesis.
+
+## 2026-06-23 — sensei page synced: Rapfi HF packaging + daemon fail-fast
+Updated `topics/eval-teacher-sensei.md` to match where the build landed this session:
+(1) Rapfi now resolves friction-free via `rapfi_artifacts()` — local build → a
+**public**, commit-SHA-pinned + sha256-verified HF snapshot (`jasonyandell/rapfi-arm64`,
+a GPL mirror of dhbloo/rapfi @ 6e0a132; this project is MIT, see `THIRD_PARTY.md`),
+cached machine-globally so any worktree/fresh box resolves identically (chosen over
+Docker: workflow scored HF-resolver 8 vs Docker 3). (2) The daemon/teacher are
+**fail-fast** — a configured rapfi ruler (the default) means run-with-Rapfi or
+`SystemExit(2)` with an actionable message; no silent baseline-only fallback
+(repeatable-by-default; opt out by configuring non-rapfi rulers). (3) Refreshed two
+now-resolved operational notes (swap2 schema merged to main; `save_checkpoint` atomic
+#76). `available()`=no-network/test-gating vs `obtainable()`=may-fetch distinction
+documented.

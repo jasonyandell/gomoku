@@ -94,8 +94,9 @@ GOMOKU_BOARD_SIZE=15 gomoku-eval-daemon cadence \
     --series-out .../eval_series.jsonl --cadence-epochs 50 \
     --ruler rapfi=rapfi --ruler self126=.../anchor_e126.pt --ruler champ0235=.../epoch0235.pt
 #   Pure reducer over the append-only series: last_epoch is recovered from the
-#   file, so kill+restart resumes exactly. Watch worker_weights.pt (atomically
-#   written, 13 MB) — NOT latest.pt (1.4 GB, in-place write).
+#   file, so kill+restart resumes exactly. Watch worker_weights.pt (13 MB published
+#   EMA weights) — cheapest to poll; latest.pt works too (atomic since #76) but is
+#   1.4 GB.
 
 # 3. GENERATE A TEACHER DATASET, then train against it
 GOMOKU_BOARD_SIZE=15 python -m gomoku.teacher generate \
@@ -109,26 +110,40 @@ gomoku-train … --teacher-data-path teacher_idx2.npz --teacher-weight 0.3
 The Rapfi binary + NNUE weights + config are ~40MB of **gitignored** local build
 artifacts, so a fresh worktree / machine / CI doesn't have them. `rapfi_pool.py`
 resolves them with `rapfi_artifacts()`: **local `engines/rapfi` build → pinned HF
-snapshot**. The artifacts live in a private, commit-SHA-pinned HF repo
-(`jasonyandell/rapfi-arm64`); on first use `snapshot_download` pulls them into the
-machine-global `~/.cache/huggingface` (the one store that's worktree- *and*
-venv-invariant), `chmod +x`'s the binary, and **asserts its sha256** against the
-pin (`RAPFI_HF_REVISION` / `RAPFI_BINARY_SHA256`). A box that already built the
-engine never touches the network (local is higher precedence, byte-identical to
-before). Bump the engine via `python scripts/publish_rapfi.py` (uploads + prints
-the two pin constants to update). We chose this over Docker deliberately: on a Mac,
-Docker is a Linux VM that can't even run the arm64 Mach-O, and crossing a VM
+snapshot**. The artifacts live in a **public**, commit-SHA-pinned HF repo
+([`jasonyandell/rapfi-arm64`](https://huggingface.co/jasonyandell/rapfi-arm64)) — a
+GPL mirror of `dhbloo/rapfi @ 6e0a132` with the corresponding source cited in its
+card (this project's own code is MIT; `THIRD_PARTY.md` records the arm's-length
+attribution — Rapfi runs as a separate process, so its copyleft doesn't reach this
+code). On first use `snapshot_download` pulls them into the machine-global
+`~/.cache/huggingface` (the one store that's worktree- *and* venv-invariant),
+`chmod +x`'s the binary, and **asserts its sha256** against the pin
+(`RAPFI_HF_REVISION` / `RAPFI_BINARY_SHA256`). A box that already built the engine
+never touches the network (local is higher precedence, byte-identical to before).
+Bump the engine via `python scripts/publish_rapfi.py` (uploads to the public repo +
+prints the two pin constants to update). We chose this over Docker deliberately: on
+a Mac, Docker is a Linux VM that can't even run the arm64 Mach-O, and crossing a VM
 boundary on the per-move stdin/stdout loop is the wrong shape for a native
-warm-pool CPU engine (design workflow scored HF-resolver 8 vs Docker 3). Caveats:
-the *first* fetch on a cold machine needs network once (then cached); the binary is
-single-arch arm64-macOS, so `rapfi_available()` (no-network, cache-only) gates tests
-while `rapfi_obtainable()` (may fetch) decides whether to offer Rapfi.
+warm-pool CPU engine (design workflow scored HF-resolver 8 vs Docker 3). The split:
+`rapfi_available()` is cache-only / no-network (gates tests so they never fetch as a
+side effect); `rapfi_obtainable()` may fetch (decides whether to *attempt* on this
+arch). Caveat: the *first* fetch on a cold machine needs network once (then cached);
+the binary is single-arch arm64-macOS.
 
 ## Operational constraints (discovered during the build)
 
 - **Board size is a process constant.** Launch the daemon/teacher with
   `GOMOKU_BOARD_SIZE=15` to eval 15×15 checkpoints; the Rapfi NNUE weights are
   15×15. The idx-2 opening is a 15×15 board.
+- **Rapfi is required by default — fail-fast, no silent fallback.** The default
+  rulers include `rapfi`, so the daemon (`serve`/`cadence`) and `teacher generate`
+  either run *with* Rapfi or **refuse to start** — `SystemExit(2)` with an
+  actionable message (build `engines/rapfi/build_rapfi.sh`, ensure network for the
+  HF auto-fetch, or configure only non-rapfi rulers). This is deliberate:
+  repeatable-by-default beats a quietly baseline-only run you have to *notice*. To
+  opt out, configure non-rapfi rulers explicitly
+  (`--ruler heuristic=heuristic --ruler look4=lookahead:depth=4`) — deviation is a
+  keystroke, never an accident.
 - **Model schema (resolved).** Bruce's checkpoints carry a `choice_head` field;
   once the swap2 branch merged to `main` (2026-06-23), a main-built daemon loads
   them fine. (Historically, a pre-merge main daemon raised on the unknown key and
