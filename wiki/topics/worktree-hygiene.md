@@ -151,3 +151,34 @@ compound. See the friction-log meta-rule in the `gomoku-research-lab` skill.
 | `worktree-agent-<hex>` branches | harness auto-name for a worktree | janitor (empty) / `--include-scratch` (with commits) |
 | `~/code/gomoku-perf-*` siblings | manual `git worktree add` | remove by hand when the lane closes |
 | `~/.codex/worktrees/*` | the `codex` CLI (external tool) | codex owns it — the janitor leaves it alone |
+
+## Per-worktree uv envs (kills the editable-install gotcha by construction)
+
+**The trap (cost ~1h on 2026-06-24, #87).** The repo ships a PEP 660 editable
+install whose finder maps `gomoku` to ONE physical dir. With a single shared
+`.venv`, a worktree never had its own code installed: `source /…/gomoku/.venv/bin/
+activate` from a worktree silently ran the **main** checkout. The finder is
+*appended* to `sys.meta_path`, so the symptom is invisible — `import gomoku`
+resolves to whatever `gomoku/` is first on `sys.path`, which for `python
+scripts/x.py` (sys.path[0] = `scripts/`) or `pytest` (entry in `.venv/bin`) is
+main, not your worktree. You get a real object off the wrong source tree — e.g. a
+method a branch *added* is simply absent. A `sitecustomize` shim that patched
+`sys.path` at startup was prototyped and **rejected**: papering over the wrong
+layer with startup magic.
+
+**The fix = isolation by construction.** Every worktree gets its OWN uv-managed
+`.venv` with `gomoku` editable-installed → *itself*. On APFS uv clones from its
+cache, so this is ~1–4 s and ~0 incremental disk (measured). `scripts/
+worktree_session.py add` (and therefore `gh_worktree.py`) runs `uv sync --extra
+dev` at creation; `--no-venv` skips it. `uv.lock` is committed for reproducible
+envs.
+
+**Access via `uv run`, never activate.** `uv run <cmd>` finds the project root
+from the cwd and uses that worktree's `.venv` — so it is *impossible* to silently
+hit main. `uv run pytest`, `uv run python scripts/x.py`, `uv run gomoku-train …`.
+There is no activation state to get wrong; the wall is real, not remembered.
+
+**Still on the shared venv (Phase 2, a quiet-window migration):** the live fleet —
+the launchd autolab agents, `gomoku/lab/up.py` (hardcoded `VENV_PY`), and the
+GPU-runner scripts (`sliding_derby_runner.sh`, `train_workhorse.sh`) — is pinned
+to main's `.venv` and untouched until nothing is training.

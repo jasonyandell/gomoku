@@ -5,15 +5,17 @@ AlphaZero for 9x9 free-style gomoku on Apple Silicon (M-series Mac via PyTorch M
 ## Setup
 
 ```bash
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv sync --extra dev        # creates .venv from the pinned uv.lock
 ```
+
+Run everything with `uv run <cmd>` — no `source .venv/bin/activate` needed, and it
+resolves the right environment from your current directory (this matters when you
+work in [git worktrees](wiki/topics/worktree-hygiene.md)).
 
 ## Train
 
 ```bash
-gomoku-train --epochs 100 --games-per-epoch 64 --n-simulations 100 --wandb
+uv run gomoku-train --epochs 100 --games-per-epoch 64 --n-simulations 100 --wandb
 ```
 
 Checkpoints land in `checkpoints/`. Resume with `--resume checkpoints/latest.pt`.
