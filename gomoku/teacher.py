@@ -215,6 +215,7 @@ def soft_label_states_with_pool(
     *,
     max_node: int = 20000,
     max_workers: int | None = None,
+    max_pv: int | None = None,
     on_progress=None,
 ) -> list[TeacherExample]:
     """SOFT label: stamp each position with Rapfi's dense per-move WINRATE map.
@@ -233,7 +234,7 @@ def soft_label_states_with_pool(
     def _label(i: int) -> None:
         s = states[i]
         try:
-            wr = pool.analyze_state(s, max_node=max_node)
+            wr = pool.analyze_state(s, max_node=max_node, max_pv=max_pv)
         except Exception:
             return  # leave None; filtered below
         if not wr:
@@ -254,6 +255,82 @@ def soft_label_states_with_pool(
             if on_progress is not None and done % 200 == 0:
                 on_progress(done, len(states))
     return [e for e in out if e is not None]
+
+
+# --------------------------------------------------------------------------
+# Model-free BFS mining — the position set is defined by the TEACHER, not the
+# student. No net, no GPU: one Rapfi analyze per board serves BOTH faces (its
+# dense winrate map is the soft target AND its top-k moves are the children),
+# and a whole BFS level is fanned across the warm pool so the machine saturates.
+# --------------------------------------------------------------------------
+def bfs_mine(
+    pool: RapfiPool,
+    start_state: GameState,
+    *,
+    expand_k: int = 8,
+    limit: int = 4000,
+    max_node: int = 20000,
+    max_pv: int | None = None,
+    on_progress=None,
+) -> list[TeacherExample]:
+    """Breadth-first mine soft teacher targets from ``start_state`` with Rapfi.
+
+    At each board a single ``analyze`` yields ``{action: winrate}``; that map is
+    the SOFT target for the board, and its top-``expand_k`` legal moves are the
+    children pushed onto the next BFS level. No model and no GPU are touched —
+    the position distribution is Rapfi's tree from the opening (teacher-defined),
+    not the net's reachable set (student-defined). Each level is analyzed in
+    parallel across the whole pool (``analyze_states``), so 1 → k → k² boards
+    saturate the engines within the first couple of levels. Boards are de-duped
+    by content (transpositions collapse); decided boards are not expanded.
+    Returns one soft :class:`TeacherExample` per distinct board, in BFS order,
+    until ``limit`` is reached (or the frontier empties).
+    """
+    seen: set[bytes] = {start_state.board.tobytes()}
+    examples: list[TeacherExample] = []
+    frontier: list[GameState] = [start_state]
+
+    while frontier and len(examples) < limit:
+        # Only analyze as many as we still need — bounds total Rapfi calls to ~limit.
+        batch = frontier[: limit - len(examples)]
+        maps = pool.analyze_states(batch, max_node=max_node, max_pv=max_pv)
+        next_frontier: list[GameState] = []
+        for s, wr in zip(batch, maps):
+            if not wr:
+                continue  # engine refused / empty analysis — skip, don't expand
+            best = max(wr.items(), key=lambda kv: kv[1])[0]
+            examples.append(
+                TeacherExample(
+                    planes=np.asarray(s.to_planes(), dtype=np.float32),
+                    move=int(best),
+                    side=int(s.move_count % 2),
+                    ply=int(s.move_count),
+                    winrates={int(a): float(w) for a, w in wr.items()},
+                )
+            )
+            if len(examples) >= limit:
+                break
+            done, _ = s.is_terminal()
+            if done:
+                continue  # decided board — no teaching value below it
+            legal = {int(a) for a in s.legal_actions()}
+            kept = 0
+            for a, _w in sorted(wr.items(), key=lambda kv: kv[1], reverse=True):
+                if kept >= expand_k:
+                    break
+                if int(a) not in legal:
+                    continue
+                child = s.apply(int(a))
+                ckey = child.board.tobytes()
+                if ckey in seen:
+                    continue
+                seen.add(ckey)
+                next_frontier.append(child)
+                kept += 1
+        frontier = next_frontier
+        if on_progress is not None:
+            on_progress(len(examples), limit)
+    return examples
 
 
 # --------------------------------------------------------------------------
@@ -492,61 +569,98 @@ def generate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    device = pick_device(os.environ.get("GOMOKU_DEVICE", "cpu"))
-    model, _payload = load_checkpoint(args.checkpoint, device=device)
-    model = fuse_model_for_inference(model)
-    evaluator = make_torch_evaluator(model, device)
-
     opening = _parse_opening(args.opening)
     start = fixed_opening_state(opening) if opening else GameState.initial()
 
-    t0 = time.time()
-    print(f"gathering {args.n_positions} positions via self-play from {args.opening} ...")
-    states = gather_states(
-        evaluator,
-        start,
-        n_positions=args.n_positions,
-        sims=args.sims,
-        c_puct=args.c_puct,
-        temp_until_ply=args.temp_until_ply,
-        temperature=args.temperature,
-        seed=args.seed,
-    )
-    print(f"  gathered {len(states)} distinct positions in {time.time()-t0:.1f}s")
+    # Resolve pool size: --mine-bfs is pure-CPU (no GPU contention), so default it
+    # WIDE to saturate the machine; the self-play path stays at the gentle 6.
+    pool_size = args.pool_size if args.pool_size is not None else (20 if args.mine_bfs else 6)
 
-    mode = "SOFT (dense winrate)" if args.soft else "HARD (one-hot best move)"
-    print(
-        f"labelling [{mode}] with {args.pool_size} warm Rapfi @ "
-        f"{args.rapfi_timeout_ms}ms"
-        + (f", max_node={args.rapfi_max_node}" if args.soft else "")
-        + f": {cmd}"
-    )
-    t1 = time.time()
-    with RapfiPool(
-        size=args.pool_size,
-        cmd=cmd,
-        timeout_ms=args.rapfi_timeout_ms,
-        board_size=BOARD_SIZE,
-    ) as pool:
-        if args.soft:
-            examples = soft_label_states_with_pool(
-                states,
-                pool,
+    if args.mine_bfs:
+        # MODEL-FREE: the position set is Rapfi's BFS tree from the opening — no
+        # checkpoint, no GPU. Always a SOFT (dense winrate) dataset.
+        print(
+            f"mining [BFS top-k, MODEL-FREE] from {args.opening}: k={args.bfs_k}, "
+            f"limit={args.n_positions}, {pool_size} warm Rapfi @ "
+            f"{args.rapfi_timeout_ms}ms, max_node={args.rapfi_max_node}"
+            + (f", max_pv={args.max_pv}" if args.max_pv else "")
+            + f": {cmd}"
+        )
+        # A near-empty board has 200+ legal moves; an uncapped whole-board multiPV
+        # there floods 2000+ INFO lines and never terminates. Cap the support by
+        # default (>= expand_k so every expanded child is still scored).
+        mine_max_pv = args.max_pv if args.max_pv is not None else max(2 * args.bfs_k, 24)
+        t1 = time.time()
+        with RapfiPool(
+            size=pool_size, cmd=cmd, timeout_ms=args.rapfi_timeout_ms,
+            board_size=BOARD_SIZE,
+        ) as pool:
+            examples = bfs_mine(
+                pool, start,
+                expand_k=args.bfs_k,
+                limit=args.n_positions,
                 max_node=args.rapfi_max_node,
-                on_progress=lambda d, n: print(f"  labelled {d}/{n}", flush=True),
+                max_pv=mine_max_pv,
+                on_progress=lambda d, n: print(f"  mined {d}/{n}", flush=True),
             )
-        else:
-            examples = label_states_with_pool(
-                states,
-                pool,
-                on_progress=lambda d, n: print(f"  labelled {d}/{n}", flush=True),
-            )
+        soft = True
+    else:
+        device = pick_device(os.environ.get("GOMOKU_DEVICE", "cpu"))
+        model, _payload = load_checkpoint(args.checkpoint, device=device)
+        model = fuse_model_for_inference(model)
+        evaluator = make_torch_evaluator(model, device)
+
+        t0 = time.time()
+        print(f"gathering {args.n_positions} positions via self-play from {args.opening} ...")
+        states = gather_states(
+            evaluator,
+            start,
+            n_positions=args.n_positions,
+            sims=args.sims,
+            c_puct=args.c_puct,
+            temp_until_ply=args.temp_until_ply,
+            temperature=args.temperature,
+            seed=args.seed,
+        )
+        print(f"  gathered {len(states)} distinct positions in {time.time()-t0:.1f}s")
+
+        mode = "SOFT (dense winrate)" if args.soft else "HARD (one-hot best move)"
+        print(
+            f"labelling [{mode}] with {pool_size} warm Rapfi @ "
+            f"{args.rapfi_timeout_ms}ms"
+            + (f", max_node={args.rapfi_max_node}" if args.soft else "")
+            + f": {cmd}"
+        )
+        t1 = time.time()
+        with RapfiPool(
+            size=pool_size,
+            cmd=cmd,
+            timeout_ms=args.rapfi_timeout_ms,
+            board_size=BOARD_SIZE,
+        ) as pool:
+            if args.soft:
+                examples = soft_label_states_with_pool(
+                    states,
+                    pool,
+                    max_node=args.rapfi_max_node,
+                    max_pv=args.max_pv,
+                    on_progress=lambda d, n: print(f"  labelled {d}/{n}", flush=True),
+                )
+            else:
+                examples = label_states_with_pool(
+                    states,
+                    pool,
+                    on_progress=lambda d, n: print(f"  labelled {d}/{n}", flush=True),
+                )
+        soft = args.soft
+
     dt = time.time() - t1
     rate = len(examples) / max(dt, 1e-6)
-    print(f"  labelled {len(examples)} positions in {dt:.1f}s ({rate:.1f}/s)")
+    verb = "mined" if args.mine_bfs else "labelled"
+    print(f"  {verb} {len(examples)} positions in {dt:.1f}s ({rate:.1f}/s)")
 
     save_teacher_npz(args.out, examples)
-    if args.soft and examples:
+    if soft and examples:
         supports = [len(e.winrates) for e in examples if e.winrates]
         if supports:
             mean_support = sum(supports) / len(supports)
@@ -562,7 +676,9 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Rapfi-as-teacher dataset tools")
     sub = p.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("generate", help="self-play + Rapfi-label a teacher npz")
-    g.add_argument("--checkpoint", required=True, help="net used to gather positions")
+    g.add_argument("--checkpoint", default=None,
+                   help="net used to gather positions (the self-play path). "
+                        "NOT used by --mine-bfs (model-free).")
     g.add_argument("--out", required=True, help="output npz path")
     g.add_argument("--n-positions", type=int, default=4000)
     g.add_argument("--opening", type=str, default="idx2",
@@ -572,7 +688,25 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--temp-until-ply", type=int, default=12,
                    help="sample (not argmax) net moves before this ply for variety")
     g.add_argument("--temperature", type=float, default=1.0)
-    g.add_argument("--pool-size", type=int, default=6)
+    g.add_argument("--pool-size", type=int, default=None,
+                   help="warm Rapfi engines. Default: 6 for self-play, 20 for "
+                        "--mine-bfs (pure-CPU, so it maxes the machine).")
+    g.add_argument("--mine-bfs", action="store_true",
+                   help="MODEL-FREE top-k BFS mining: instead of gathering "
+                        "positions with the net's self-play, breadth-first expand "
+                        "Rapfi's own tree from the opening (one analyze per board "
+                        "is BOTH the soft target AND the top-k expansion). No "
+                        "checkpoint, no GPU; always a SOFT dataset. The position "
+                        "set is TEACHER-defined, not student-defined — coverage of "
+                        "boards the net avoids (e.g. white-defense).")
+    g.add_argument("--bfs-k", type=int, default=8,
+                   help="--mine-bfs expansion width: children per board (Rapfi's "
+                        "top-k legal moves by winrate). Default 8.")
+    g.add_argument("--max-pv", type=int, default=None,
+                   help="Cap the scored support (multiPV lines) per position. "
+                        "Bounds per-board cost on near-empty boards; the soft "
+                        "target keeps the top-max_pv moves (far cells carry ~0 "
+                        "mass). Default: whole board.")
     g.add_argument("--rapfi-cmd", type=str, default=None)
     g.add_argument("--rapfi-timeout-ms", type=int, default=1000)
     g.add_argument("--soft", action="store_true",
@@ -589,6 +723,9 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
     if args.cmd == "generate":
+        if not args.mine_bfs and not args.checkpoint:
+            p.error("--checkpoint is required for the self-play gather path "
+                    "(or pass --mine-bfs for model-free mining)")
         return generate(args)
     p.error(f"unknown command {args.cmd}")
     return 2

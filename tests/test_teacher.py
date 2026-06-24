@@ -6,11 +6,12 @@ import numpy as np
 import torch
 
 from gomoku.board_config import BOARD_SIZE, N_ACTIONS
-from gomoku.game import N_INPUT_PLANES
+from gomoku.game import GameState, N_INPUT_PLANES
 from gomoku.teacher import (
     TeacherDataset,
     TeacherExample,
     _action_perms,
+    bfs_mine,
     save_teacher_npz,
 )
 
@@ -194,3 +195,57 @@ def test_soft_augment_keeps_dense_target_aligned():
         rr, cc = stone[0].tolist()
         # the dominant soft-target cell moves exactly where the stone moves.
         assert int(pi.argmax(dim=-1).item()) == rr * BOARD_SIZE + cc
+
+
+# --- model-free BFS mining (bfs_mine over a stub pool, no engine) -----------
+class _StubPool:
+    """Offline stand-in for RapfiPool: scores each board's first few legal
+    actions with descending winrates. Deterministic, no engine, no network —
+    enough to exercise bfs_mine's expansion / dedup / limit logic."""
+
+    size = 4
+
+    def __init__(self, support: int = 6) -> None:
+        self.support = support
+        self.analyzed = 0
+
+    def analyze_states(self, states, *, max_node=20000, max_pv=None):
+        out = []
+        for s in states:
+            legal = sorted(int(a) for a in s.legal_actions())
+            cap = self.support if max_pv is None else min(self.support, max_pv)
+            legal = legal[:cap]
+            out.append({a: 1.0 - 0.1 * i for i, a in enumerate(legal)})
+            self.analyzed += 1
+        return out
+
+
+def test_bfs_mine_respects_limit_dedups_and_is_soft():
+    pool = _StubPool()
+    start = GameState.initial()
+    ex = bfs_mine(pool, start, expand_k=3, limit=20, max_pv=4)
+
+    # the BFS tree is far larger than 20 → exactly the limit, no over-mining
+    assert len(ex) == 20
+    assert pool.analyzed == 20  # one analyze per produced example, dedup'd
+
+    # model-free mining is ALWAYS soft: every example carries a winrate map,
+    # and max_pv caps the scored support
+    assert all(e.winrates for e in ex)
+    assert all(len(e.winrates) <= 4 for e in ex)
+
+    # BFS order: the root is first, plies are non-decreasing down the levels
+    assert ex[0].ply == start.move_count
+    assert all(ex[i].ply <= ex[i + 1].ply for i in range(len(ex) - 1))
+
+    # move is the argmax of the soft target (the highest-winrate scored action)
+    for e in ex:
+        assert e.move == max(e.winrates.items(), key=lambda kv: kv[1])[0]
+
+
+def test_bfs_mine_expand_k_one_is_a_single_chain():
+    pool = _StubPool()
+    start = GameState.initial()
+    ex = bfs_mine(pool, start, expand_k=1, limit=5)
+    # k=1 → one child per level → a strict chain, ply increments by one each step
+    assert [e.ply for e in ex] == [start.move_count + i for i in range(5)]

@@ -621,7 +621,7 @@ class ExternalEnginePlayer:
     # -- whole-board analysis (multiPV soft-target distillation) ---------
 
     def analyze(
-        self, state: GameState, *, max_node: int = 20000
+        self, state: GameState, *, max_node: int = 20000, max_pv: int | None = None
     ) -> dict[int, float]:
         """Score EVERY candidate root move for ``state`` -> ``{action: winrate}``.
 
@@ -672,8 +672,14 @@ class ExternalEnginePlayer:
         self._send("DONE")
         # DONE triggers a default multiPV=1 think — read & discard its bestmove.
         self._read_move()
-        # Now run the whole-board multiPV scan and parse it.
-        self._send(f"YXNBEST {moves_left}")
+        # Now run the multiPV scan and parse it. ``max_pv`` caps the number of PV
+        # lines (the soft target's scored support): the whole-board scan is
+        # ``YXNBEST moves_left``, but on a near-empty board that is 200+ lines and
+        # the per-node cost balloons. Capping to the top ``max_pv`` moves keeps the
+        # support information-equivalent for a temperature-softmax target (far cells
+        # carry ~0 mass) while bounding cost so a warm pool stays saturated.
+        pv_count = moves_left if max_pv is None else max(1, min(int(max_pv), moves_left))
+        self._send(f"YXNBEST {pv_count}")
         return self._read_analysis(legal_cap=moves_left)
 
     def _read_analysis(self, *, legal_cap: int) -> dict[int, float]:

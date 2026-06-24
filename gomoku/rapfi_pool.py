@@ -367,7 +367,8 @@ class RapfiPool:
         raise last
 
     def analyze_state(
-        self, state, *, max_node: int = 20000, retries: int = 1
+        self, state, *, max_node: int = 20000, retries: int = 1,
+        max_pv: int | None = None,
     ) -> dict:
         """Return Rapfi's whole-board ``{action: winrate}`` map for ``state``.
 
@@ -381,7 +382,7 @@ class RapfiPool:
         for attempt in range(retries + 1):
             try:
                 with self.lease() as eng:
-                    return eng.analyze(state, max_node=max_node)
+                    return eng.analyze(state, max_node=max_node, max_pv=max_pv)
             except ExternalEngineError as e:
                 last = e
                 if attempt >= retries:
@@ -390,24 +391,26 @@ class RapfiPool:
         raise last
 
     def analyze_states(
-        self, states, *, max_node: int = 20000, max_workers: int | None = None
+        self, states, *, max_node: int = 20000, max_workers: int | None = None,
+        max_pv: int | None = None,
     ) -> list[dict]:
         """Analyze many positions with the whole pool in parallel.
 
         Returns one ``{action: winrate}`` map per input state, in input order.
         Concurrency is capped at the pool size (more threads just block on the
-        lease queue).
+        lease queue). ``max_pv`` caps the scored support per position (see
+        :meth:`ExternalEnginePlayer.analyze`).
         """
         states = list(states)
         if not states:
             return []
         workers = min(self.size, len(states)) if max_workers is None else max_workers
         if workers <= 1:
-            return [self.analyze_state(s, max_node=max_node) for s in states]
+            return [self.analyze_state(s, max_node=max_node, max_pv=max_pv) for s in states]
         out: list[dict | None] = [None] * len(states)
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {
-                ex.submit(self.analyze_state, s, max_node=max_node): i
+                ex.submit(self.analyze_state, s, max_node=max_node, max_pv=max_pv): i
                 for i, s in enumerate(states)
             }
             for fut, i in futs.items():
