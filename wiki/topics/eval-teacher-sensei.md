@@ -104,24 +104,39 @@ GOMOKU_BOARD_SIZE=15 python -m gomoku.teacher generate \
 gomoku-train … --teacher-data-path teacher_idx2.npz --teacher-weight 0.3
 ```
 
+## Packaging Rapfi (friction-free resolution)
+
+The Rapfi binary + NNUE weights + config are ~40MB of **gitignored** local build
+artifacts, so a fresh worktree / machine / CI doesn't have them. `rapfi_pool.py`
+resolves them with `rapfi_artifacts()`: **local `engines/rapfi` build → pinned HF
+snapshot**. The artifacts live in a private, commit-SHA-pinned HF repo
+(`jasonyandell/rapfi-arm64`); on first use `snapshot_download` pulls them into the
+machine-global `~/.cache/huggingface` (the one store that's worktree- *and*
+venv-invariant), `chmod +x`'s the binary, and **asserts its sha256** against the
+pin (`RAPFI_HF_REVISION` / `RAPFI_BINARY_SHA256`). A box that already built the
+engine never touches the network (local is higher precedence, byte-identical to
+before). Bump the engine via `python scripts/publish_rapfi.py` (uploads + prints
+the two pin constants to update). We chose this over Docker deliberately: on a Mac,
+Docker is a Linux VM that can't even run the arm64 Mach-O, and crossing a VM
+boundary on the per-move stdin/stdout loop is the wrong shape for a native
+warm-pool CPU engine (design workflow scored HF-resolver 8 vs Docker 3). Caveats:
+the *first* fetch on a cold machine needs network once (then cached); the binary is
+single-arch arm64-macOS, so `rapfi_available()` (no-network, cache-only) gates tests
+while `rapfi_obtainable()` (may fetch) decides whether to offer Rapfi.
+
 ## Operational constraints (discovered during the build)
 
 - **Board size is a process constant.** Launch the daemon/teacher with
   `GOMOKU_BOARD_SIZE=15` to eval 15×15 checkpoints; the Rapfi NNUE weights are
   15×15. The idx-2 opening is a 15×15 board.
-- **Model-schema must match the training branch.** The live Bruce checkpoints are
-  written by the swap2 branch, whose `ModelConfig` carries a `choice_head` field
-  that `main` doesn't have — so a **main-built daemon cannot load swap2-trained
-  weights** (`load_checkpoint` raises on the unknown key; the panel degrades
-  gracefully to per-ruler error rows). To eval live Bruce, run the daemon from a
-  checkout whose `model.py` matches the trainer (the swap2 branch, or `main`
-  after both this build and swap2 are merged). This is schema drift, not a daemon
-  bug.
-- **Watch the atomically-written checkpoint.** Only `worker_weights.pt` is written
-  via tmp+`os.replace`; `latest.pt`/`epochNNNN.pt` are in-place `torch.save`. The
-  `EvaluatorCache` retries on a torn read, but point the cadence at
-  `worker_weights.pt` to avoid the window entirely. (Follow-up: make
-  `save_checkpoint` atomic repo-wide.)
+- **Model schema (resolved).** Bruce's checkpoints carry a `choice_head` field;
+  once the swap2 branch merged to `main` (2026-06-23), a main-built daemon loads
+  them fine. (Historically, a pre-merge main daemon raised on the unknown key and
+  degraded to per-ruler error rows — schema drift, not a daemon bug.)
+- **Checkpoints are atomic (resolved).** `save_checkpoint` now writes
+  tmp+`os.replace` repo-wide (#76), so the cadence can safely watch any
+  checkpoint, including the in-place-feeling `latest.pt`. `worker_weights.pt`
+  (13MB, published EMA weights) is still the cheapest watch target.
 - **CPU-only by design.** The daemon defaults `GOMOKU_DEVICE=cpu`; it does not
   compete with the MPS trainer.
 
