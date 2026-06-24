@@ -2432,6 +2432,32 @@ CELLS: dict[str, Cell] = {
 }
 
 
+# --- #77: Rapfi-distillation teacher cell (live-validate the sensei) ----------
+# Byte-identical to G15-fixed-openings (same recipe: 1M packed buffer +
+# recency-frac 0.5, 9 fair 15x15 openings, 3 workers, gumbel-root m16,
+# value-discount 0.95, sgd-steps 64) EXCEPT: a distinct run-dir (isolates the
+# experiment from Bruce's own G15-fixed-openings-board15 lineage) and the
+# policy-side Rapfi distillation flags. Warm-started via CLI --resume from the
+# wandb-stripped e2659 Bruce seed (bruce_e2659_warmstart.pt) so it opens a FRESH
+# wandb run rather than resuming Bruce's `gogpmbhw`. The teacher npz + weight are
+# read from env so the overnight loop owns them (the teacher-OFF control is the
+# same seed with BRUCE_TEACHER_WEIGHT=0.0). See issue #77 / wiki eval-teacher-sensei.
+import os as _os
+import dataclasses as _dc
+_TEACHER_NPZ = _os.environ.get(
+    "BRUCE_TEACHER_NPZ",
+    "/Users/jason/data/swap2/teacher/teacher_bruce_e2659_fair9.npz")
+_TEACHER_WEIGHT = _os.environ.get("BRUCE_TEACHER_WEIGHT", "0.3")
+CELLS["G15-fixed-openings-teacher"] = _dc.replace(
+    CELLS["G15-fixed-openings"],
+    name="G15-fixed-openings-teacher-board15",
+    extra_train_args=[*CELLS["G15-fixed-openings"].extra_train_args,
+                      "--teacher-data-path", _TEACHER_NPZ,
+                      "--teacher-weight", _TEACHER_WEIGHT,
+                      "--run-name", "bruce-sensei-77"],
+)
+
+
 def run_base() -> Path:
     """Root under which sweep_runs/ and sweep_logs/ live. Defaults to REPO_ROOT
     (so the derby and every existing caller are unchanged); the autolab sets
