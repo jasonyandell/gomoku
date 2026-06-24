@@ -9,13 +9,13 @@ commit, then prints the commit SHA + binary sha256 to paste into
 After that, any worktree / fresh machine resolves the engine from the
 machine-global hub cache with zero manual steps.
 
-    python scripts/publish_rapfi.py                      # private (default)
-    python scripts/publish_rapfi.py --public --tag v1    # public + a readable tag
+    python scripts/publish_rapfi.py                      # public (default), tag v1
+    python scripts/publish_rapfi.py --private            # private repo instead
 
-Private vs public: private keeps Rapfi's GPL artifacts off a public mirror and
-needs your HF token to pull (already cached on a machine you've `huggingface-cli
-login`'d). Public allows token-free pulls on truly-fresh machines but is a public
-GPL redistribution (offer-source applies) — your call.
+Public (default) allows token-free pulls on a fresh machine and is a clean public
+GPL redistribution (corresponding source = the upstream commit, cited in the model
+card). `--private` keeps the artifacts off a public mirror but then needs your HF
+token to pull (cached on a machine you've `huggingface-cli login`'d).
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo", default="jasonyandell/rapfi-arm64")
     ap.add_argument("--engines-dir", default=None,
                     help="defaults to <this repo>/engines/rapfi")
-    ap.add_argument("--public", dest="private", action="store_false", default=True,
-                    help="publish a PUBLIC repo (default: private)")
+    ap.add_argument("--private", action="store_true", default=False,
+                    help="publish a PRIVATE repo (default: public)")
     ap.add_argument("--tag", default=None, help="optional human-readable tag")
     ap.add_argument("--message", default="publish rapfi arm64 build")
     args = ap.parse_args(argv)

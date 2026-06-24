@@ -3,6 +3,9 @@ name = "gomoku"
 version = "0.1.0"
 description = "AlphaZero for 9x9 free-style gomoku on Apple Silicon"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jason Yandell" }]
 dependencies = [
     "torch>=2.11",
     "numpy>=2.0",
