@@ -93,25 +93,17 @@ def rollout_once(
     batched ``run_batched_mcts`` GPU pass across every net-to-move game; Rapfi
     (the opponent) moves are fanned across the warm pool in one ``label_states``.
     Early-ply temperature sampling on the student's own policy spreads the visited
-    distribution (coverage). Returns ``(visited_states, n_finished, n_plies)`` —
-    every distinct board seen, in natural (un-canonicalised) frame.
+    distribution (coverage). Returns ``(visited, n_finished, n_states)`` where
+    ``visited`` is a list of ``(state, z)`` — every distinct board seen (natural,
+    un-canonicalised) tagged with the **Monte-Carlo game outcome** ``z`` from the
+    side-to-move's perspective (+1 won / −1 lost / 0 draw-or-unfinished). ``z`` is
+    AlphaZero's value target, free from the games we already play to terminal:
+    "P(my policy beats Rapfi from here)" — exactly the value to teach vs Rapfi.
     """
     rng = np.random.default_rng(seed)
     start = fixed_opening_state(IDX2_OPENING)
-    games = [{"state": start, "net_black": (i % 2 == 0), "done": False}
-             for i in range(n_games)]
-    visited: list = []
-    # de-dup raw boards within this rollout so a shared opening prefix is kept once
-    raw_seen: set[bytes] = set()
-
-    def _see(s):
-        k = s.board.tobytes()
-        if k not in raw_seen:
-            raw_seen.add(k)
-            visited.append(s)
-
-    for g in games:
-        _see(g["state"])
+    games = [{"state": start, "net_black": (i % 2 == 0), "done": False,
+              "winner": None, "traj": [start]} for i in range(n_games)]
 
     ply = start.move_count
     while any(not g["done"] for g in games) and ply < max_plies:
@@ -134,15 +126,31 @@ def rollout_once(
             if a is None:
                 continue
             g["state"] = g["state"].apply(a)
-            _see(g["state"])
-            done, _v = g["state"].is_terminal()
+            g["traj"].append(g["state"])
+            done, v = g["state"].is_terminal()
             if done:
                 g["done"] = True
+                # v == -1.0 → the side that JUST moved won; else terminal draw.
+                g["winner"] = side if v == -1.0 else None
         ply += 1
 
+    # Tag every distinct board with its game's MC outcome (first occurrence wins
+    # on a transposition — an unbiased, slightly noisy sample). z from the
+    # side-to-move's perspective: +1 if that side won, −1 if it lost, 0 draw.
+    visited: list = []
+    raw_seen: set[bytes] = set()
+    for g in games:
+        w = g["winner"]
+        for s in g["traj"]:
+            k = s.board.tobytes()
+            if k in raw_seen:
+                continue
+            raw_seen.add(k)
+            stm = s.move_count % 2
+            z = 0.0 if w is None else (1.0 if stm == w else -1.0)
+            visited.append((s, z))
     n_finished = sum(1 for g in games if g["done"])
-    n_plies = len(visited)
-    return visited, n_finished, n_plies
+    return visited, n_finished, len(visited)
 
 
 def gather_round(
@@ -207,24 +215,29 @@ def gather_round(
             # is still board-only (Rapfi is history-blind), so only the input
             # planes change. canonical_state transforms history under the same sym.
             fresh = []
-            for s in visited:
+            for s, z in visited:
                 k = canonical_key(s)
                 if k in seen:
                     continue
                 seen.add(k)
                 canon, _ = canonical_state(s)
-                fresh.append((canon, k))
+                fresh.append((canon, k, z))
             if not fresh:
                 continue
-            # Label the novel states with the expert. STRONG (time-bounded one-hot)
+            # Label the novel states with the expert. STRONG (time-bounded) policy
             # when label_pool is set; else the (weak) node-bounded soft winrate map.
+            # POLICY = Rapfi's move; VALUE = the MC game outcome z, encoded through
+            # the trainer's value=2·max(soft)−1: a one-hot at Rapfi's move with
+            # winrate (z+1)/2 gives policy=one-hot AND value=z, no trainer change.
             if label_pool is not None:
-                acts = label_pool.label_states([c for c, _ in fresh])
-                labels = [{int(a): 1.0} for a in acts]  # HARD one-hot per state
+                acts = label_pool.label_states([c for c, _, _ in fresh])
+                labels = [{int(a): (z + 1.0) / 2.0}
+                          for a, (_, _, z) in zip(acts, fresh)]
             else:
-                labels = pool.analyze_states([c for c, _ in fresh], max_node=max_node,
-                                             max_pv=max_pv)
-            for (canon, k), wr in zip(fresh, labels):
+                # Soft path: node-bounded winrate map (value from the map, not MC).
+                labels = pool.analyze_states([c for c, _, _ in fresh],
+                                             max_node=max_node, max_pv=max_pv)
+            for (canon, k, _z), wr in zip(fresh, labels):
                 if not wr:
                     continue  # engine refused / empty — skip, don't store an empty target
                 writer.add(
