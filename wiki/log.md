@@ -1365,3 +1365,13 @@ search · operate), each capability → how-to + deep doc, NEW rows tagged. Link
 the index Start-Here callout + table + read-order, plus a Maintenance Rule: **every
 significant run closes the spine AND updates capabilities**, not just a topic page
 (the discoverability bug this fixes). Purely additive — no existing topic deprecated.
+
+**Follow-up same day:** refreshed the index's stale `## Current Synthesis` (it still
+framed the project as 9×9 defend-vs-imitate / WL-series / Core ML). Now reads the
+current 15×15 front — central question = make WHITE winnable / stand vs Rapfi-NNUE;
+binding wound = white-defense gap (Bruce: black ~42% / white 0/12 @idx-2); the two
+principled white fixes (swap2, fixed-fair-openings); the one-hot-harms / soft-target
+distillation lesson (#77/#86); think-time-not-node strength dial; matured tooling →
+`capabilities.md`. Kept the era-independent durable lessons (fast-attack collapse,
+noisy evals, native-MCTS bottleneck, preserve-evidence). Scoped refresh, not a full
+re-curation (status-tags / pruning still deferred).

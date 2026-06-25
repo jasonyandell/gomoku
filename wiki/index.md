@@ -69,33 +69,56 @@ reading it front-to-back unless the work actually needs that.
 
 ## Current Synthesis
 
-The central project question is not just "can the code run faster?" It is "what
-training loop reliably teaches 9x9 AlphaZero-style Gomoku to defend, not merely
-to imitate fast attacks from its own search?"
+*(refreshed 2026-06-25)*
 
-Current evidence lives in [TRAINING_WIKI.md](../TRAINING_WIKI.md). The high-level
-read is:
+The era is now **15×15**, and the question has sharpened from "teach 9×9 to defend"
+to: **can we make WHITE (the defender) winnable, and can a net stand against native
+Rapfi-NNUE?** The 9×9 work (Z → WL series) is preserved *lineage*, not the live front.
+Chronological evidence lives in [TRAINING_WIKI.md](../TRAINING_WIKI.md) (read the
+tail); the reusable toolbox is in [capabilities.md](capabilities.md). High-level read:
 
-- The strongest current training lineage is the WL series. See
-  [topics/training-run-lineage.md](topics/training-run-lineage.md) for the
-  compact Z -> WL1 -> WL5 map and exact run IDs.
-- Local throughput work succeeded; distributed self-play made iteration much
-  faster.
-- Native MCTS plus eval-only Conv+BatchNorm fusion moved the self-play
-  bottleneck from Python tree churn toward evaluator and engine-boundary
-  questions. See [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
-- First engine scout says Core ML is slower than fused PyTorch/MPS for raw
-  small-model eval, but it hurts concurrent MPS training far less than a
-  competing PyTorch/MPS eval process. Treat the next step as a production
-  overlap experiment, not a naked eval microbench. See
+- **The binding wound is the white-defense gap.** The 15×15 champion ("Bruce",
+  128×10) plateaued ~50 Δelo; vs native Rapfi-NNUE @idx-2 it scores **black ~42% /
+  white 0/12** — the whole shortfall is white. See
+  [topics/white-side-defense-plan.md](topics/white-side-defense-plan.md).
+- **The yardstick was broken, now fixed** (#28/#40): native **Rapfi-NNUE** is the
+  registered anchor — but **gate "did this help?" on H2H vs the preserved champion,
+  not Rapfi** (the Rapfi number is a hint; absolute calibration pending #35/#30). See
+  [topics/external-engine-baselines.md](topics/external-engine-baselines.md).
+- **Two principled white fixes, both promising-not-proven.** (a) **swap2** rebalances
+  the GAME so white becomes winnable — confirmed at the DATA level (white ~27% of
+  decisive swap2 self-play vs ~0% empty-board), strength-vs-champion still ~parity
+  (early). (b) **fixed-fair-openings** (the live recipe) starts every game from a
+  known-fair Rapfi opening, sidestepping the unfair-opener black edge.
+  [topics/swap2-opening-protocol.md](topics/swap2-opening-protocol.md),
+  [cards/gomoku-15x15-fixed-fair-openings.md](cards/gomoku-15x15-fixed-fair-openings.md).
+- **Teacher distillation: one-hot HARMS, soft-target is the fix.** One-hot Rapfi
+  distillation flattens the policy head and regresses the net even gentle (#77/#86,
+  with a matched control). Soft-target winrate distillation (the designed fix) was
+  finally mined at scale + warm-started 2026-06-25 (the idx-2 "one-position" bet);
+  the over-specialized net climbs the low rungs but did **not** beat strong Rapfi by
+  ep250 — a multi-day climb, banked. Gate teacher runs on **H2H-vs-frozen-parent**.
+  [topics/rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md),
+  [topics/eval-teacher-sensei.md](topics/eval-teacher-sensei.md).
+- **Infrastructure matured into reusable capabilities**: mine Rapfi at scale (~700
+  moves/s), fast eval-gradient (~20 s; **think-time, not node budget, is the Rapfi
+  strength dial**), warm-start from distillation, the self-driving autolab, the uv
+  loop. See [capabilities.md](capabilities.md).
+
+Durable lessons (era-independent):
+
+- **Fast-attack collapse** is the main training failure mode: policy sharpens on
+  attacks, self-play opponents fail to punish missing defense, fixed
+  heuristic/lookahead opponents expose it. Watch `selfplay/plies_mean` — falling +
+  concave buffer-fill = collapse.
+- **Short evals are noisy** — strength claims need fixed baselines, enough games, and
+  explicit checkpoint/run IDs. Sibling H2H is non-transitive; use fixed rulers.
+- **Native MCTS + wave-batched eval** moved the self-play bottleneck off Python tree
+  churn toward the evaluator/engine boundary; Core ML/ANE is scouted, not yet a win.
+  [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md),
   [topics/ane-int8-inference.md](topics/ane-int8-inference.md).
-- The main training failure mode is fast-attack collapse: policy targets sharpen
-  around attacks, self-play opponents fail to punish missing defense, and fixed
-  heuristic/lookahead opponents expose the gap.
-- Short evals are noisy. Strength claims need fixed baselines, enough games, and
-  clear checkpoint/run IDs.
-- The next useful additions to the wiki should preserve evidence: command,
-  config, W&B run ID, checkpoint path, metrics, and the working-theory change.
+- **Preserve evidence** in every new entry: command, config, W&B run ID, checkpoint
+  path, metrics, and the working-theory change.
 
 ## Page Catalog
 
