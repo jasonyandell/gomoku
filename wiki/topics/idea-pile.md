@@ -105,3 +105,49 @@ but TTT is a live idea in the literature and idx-2's narrowness makes it cheap t
 autolab lane → record the verdict on the [research board](../ops/research-board.md) and a dated
 `TRAINING_WIKI` entry. Keep this pile append-friendly; prune only when an idea is genuinely
 settled (with evidence), not merely untried.
+
+---
+
+## 2026-06-25 addendum — measured perf reality + a new idea (batch-VCF guard-rail)
+
+**DAgger (imitation) was tried and is a NEGATIVE for the Rapfi wall** (TRAINING_WIKI 2026-06-25):
+it sharpens the prior but can't cross a *search-depth* wall. That promotes **#1 (out-search-and-
+distill)** to top priority — and surfaced two hard facts that shape how #1/#9 must be built.
+
+### Measured fact — the card is COMPUTE-bound, not memory-bound (microbench, M5 Max, 128×10 net)
+Net-eval throughput is **FLAT at ~11,500 boards/sec from batch 64 → 65,536** (no OOM even at 65k).
+So: you can hold *tens of thousands* of boards on the card, but **batching more buys ZERO
+throughput** — the GPU is compute-saturated at batch≈64. **The hard currency is net-evals/sec
+(~11.5k), not board count.** Consequences: (a) "search really hard" (#1) is bounded by total
+evals = states × sims; wave-batching cuts wall-clock LATENCY, not total compute. (b) The way to
+buy more search is FEWER, SMARTER evals (tactical pruning) or a cheaper search-net — not a bigger
+batch.
+
+### ⚠️ Open caveat on #1 (being measured 2026-06-25): does the net's DEEP search even beat Rapfi?
+Quick test: net-MCTS at sims 32 vs 200 vs the Rapfi gradient was **identical** (beats rapfi@25ms,
+loses 50ms+) — 6× more search didn't move the wall. sims=800/1600 pending. **If deeper search
+does NOT cross a higher Rapfi rung, the net's EVALUATION (policy+value) is the ceiling, not its
+search depth — and #1 (distill your own deep search) can't help, because there's no better search
+result to distill.** In that case the lever shifts to a better *evaluator* (#7 distill Rapfi-NNUE's
+eval; or #9's hard tactical truth) rather than more search. This caveat must be resolved before
+committing to #1.
+
+### 9. Batch-VCF "certain-death" guard-rail (Jason, 2026-06-25)  ⭐ — sidesteps the GPU ceiling
+`solve_vcf` is CPU/numpy (zero GPU evals) and CPU-parallelizable across cores, so it **does not
+touch the 11.5k eval ceiling** — it's "free" search relative to the card. Two uses, both fusing
+#1 and #2:
+- **Hard ground-truth teacher.** For states the net reaches at idx-2, run massively-parallel VCF
+  (CPU fan-out, the rapfimine harness pattern): if the side-to-move has a forced four-win → value
+  +1 and the policy target is that forcing move; if the OPPONENT has a VCF → this state is
+  **certain death**, value −1. These are *certain* labels (not Rapfi's heuristic), a perfect
+  tactical teacher exactly where tactics decide the game.
+- **Anti-guard-rail / move ranking.** Score candidate moves "good idea → terrible idea": a move
+  that hands the opponent a VCF is a **terrible idea** (prune it, teach the net to avoid it); a
+  move that gives *us* a VCF is #1. Use as an MCTS prior shaper or a distillation target — a cheap
+  decisiveness lever (cf. the research-board's "lookahead4 draw→win" gap, which was diagnosed as a
+  *decisiveness* problem, not a maturity one).
+- **The batchable primitive:** four/open-three detection is a **batched convolution over the 4
+  directions** — GPU-friendly if we ever want it on-card, but the CPU solver already sidesteps the
+  bottleneck. Reuses `gomoku/vcf.py` (`solve_vcf`, `has_four_threat`) + the rapfimine multiprocess
+  fan-out. Cost: low–medium; composes directly with the (built, tested) DAgger gather loop —
+  swap the Rapfi label for a VCF label.
