@@ -118,18 +118,24 @@ def pretrain(*, shards_dir: str, out_path: str, size: str = "large",
              epochs: int = 40, batch_size: int = 1024, lr: float = 3e-4,
              value_weight: float = 0.5, teacher_temp: float = 0.10,
              steps_per_epoch: int | None = None, device: str | None = None,
-             save_every: int = 5) -> str:
+             save_every: int = 5, global_pool: bool | int | None = True,
+             stem_padding: int | None = 1) -> str:
+    """``global_pool`` / ``stem_padding`` MUST match the warm-start cell's model
+    or run_sweep --resume can't load the weights. Defaults match the
+    G15-fixed-openings cell (global_pool=True, stem_padding=1, size large)."""
     import torch
     from gomoku.train import policy_loss, value_loss
 
     dev = device or ("mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"[pretrain] device={dev} size={size} board={BOARD_SIZE}", flush=True)
+    print(f"[pretrain] device={dev} size={size} global_pool={global_pool} "
+          f"stem_padding={stem_padding} board={BOARD_SIZE}", flush=True)
 
     planes, soft = load_shards(shards_dir)
     data = PretrainData(planes, soft, device=dev, teacher_temp=teacher_temp)
     steps = steps_per_epoch or max(1, data.n // batch_size)
 
-    model = build_model(size).to(dev)
+    model = build_model(size, global_pool=global_pool,
+                        stem_padding=stem_padding).to(dev)
     print(f"[pretrain] model {size}: {n_params(model):,} params, "
           f"{steps} steps/epoch x {epochs} epochs", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -179,14 +185,19 @@ def main(argv=None) -> int:
     ap.add_argument("--steps-per-epoch", type=int, default=None)
     ap.add_argument("--device", default=None)
     ap.add_argument("--save-every", type=int, default=5)
+    # Architecture — MUST match the warm-start cell (defaults = G15-fixed-openings).
+    ap.add_argument("--global-pool", type=int, default=1,
+                    help="1=on (G15-fixed-openings), 0=off, or trailing-K int")
+    ap.add_argument("--stem-padding", type=int, default=1)
     args = ap.parse_args(argv)
     if BOARD_SIZE != 15:
         print("WARNING: GOMOKU_BOARD_SIZE != 15", file=sys.stderr)
+    gp: bool | int = bool(args.global_pool) if args.global_pool in (0, 1) else args.global_pool
     pretrain(shards_dir=args.shards, out_path=args.out, size=args.size,
              epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
              value_weight=args.value_weight, teacher_temp=args.teacher_temp,
              steps_per_epoch=args.steps_per_epoch, device=args.device,
-             save_every=args.save_every)
+             save_every=args.save_every, global_pool=gp, stem_padding=args.stem_padding)
     return 0
 
 
