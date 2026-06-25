@@ -3,6 +3,16 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-25] New page: the Idea Pile (autolab seed bank) + idx-2 DAgger entry
+
+Created [topics/idea-pile.md](topics/idea-pile.md) — a parking lot for wild-but-grounded
+research directions (bigger swings than a derby cell), each with mechanism / rough cost /
+how-we'd-know, framed as seeds the incoming autolab can each give a shot. Seeded with 8 from
+a 2026-06-25 brainstorm (out-search-and-distill, solve-idx-2, blind-spot judo, the think-time
+ladder as a self-paced metric, move→value oracle, museum/disagreement dojo, + two moonshots).
+Added an index doorway row. Companion evidence: `TRAINING_WIKI` 2026-06-25 (the DAgger loop
+built + the history-mismatch bug found/fixed).
+
 ## [2026-06-19] autolab WENT LIVE → 15×15 era → first 15×15 champion (#64/#65/#67, epic #53)
 
 The night the self-driving lab proved itself, then pivoted to 15×15 — synthesized
