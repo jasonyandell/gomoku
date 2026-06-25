@@ -151,3 +151,22 @@ touch the 11.5k eval ceiling** — it's "free" search relative to the card. Two 
   bottleneck. Reuses `gomoku/vcf.py` (`solve_vcf`, `has_four_threat`) + the rapfimine multiprocess
   fan-out. Cost: low–medium; composes directly with the (built, tested) DAgger gather loop —
   swap the Rapfi label for a VCF label.
+
+#### Measured (2026-06-25) — GPU threat-detection is ~free; the TREE is the cost → batch it
+Jason's "put VCF on the GPU and measure it, the handoff may not be free" brainstorm, with hard
+numbers (M5 Max, 15×15; bench `scratchpad/bench_gpu_vcf.py`). The batchable VCF core =
+directional length-5 line-convolutions (four/five detection in the 4 directions):
+- **GPU threat-detect, data resident on MPS:** 0.66M b/s @256 → **12.7M b/s @65,536** — *light*
+  kernel, scales with batch (unlike the compute-bound net which flatlines at 11.5k). ~1100× the
+  net-eval rate and ~12,000× the CPU primitive.
+- **With the CPU↔GPU handoff** (transfer→conv→back→sync): ~20–35% slower (282k @256 →
+  **10.0M @65,536**) — the handoff is *real but negligible*; even shuttled, detection costs ~nothing
+  vs the 11.5k net bottleneck. **Inline-on-GPU detection wins; "CPU is free" is beaten by "GPU is
+  ~free AND resident."**
+- **CPU baselines:** `has_four_threat` primitive **1,057 b/s**; `solve_vcf` full forcing-tree search
+  **53 b/s**. So detection is NOT the cost — the **sequential forcing-TREE recursion** is.
+- **The opportunity:** detection being 12.7M/s means a **batched-frontier GPU-VCF** (run thousands
+  of VCF searches in lockstep; each ply, advance every search's forcing-move frontier through the
+  GPU detection kernel) could plausibly do **thousands of FULL solves/sec vs CPU's 53** — a ~100×
+  that turns VCF tactical truth from too-slow into a first-class real-time teacher/guard-rail.
+  This is the concrete build #9 points to; the per-ply primitive is proven free.
