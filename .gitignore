@@ -61,3 +61,5 @@ engines/rapfi/model210901.bin
 # (2026-05-28); on-disk copy is kept fresh by bd's auto-export. The canonical
 # store lives in .beads/embeddeddolt/ (also untracked).
 .beads/issues.jsonl
+
+mined/                 # rapfimine output (large npz shards; #86 idx-2 mine)
