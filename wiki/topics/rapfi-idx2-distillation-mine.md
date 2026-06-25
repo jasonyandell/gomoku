@@ -142,8 +142,17 @@ from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
   epoch 4 → pretrained weights confirmed loaded; 3 self-play workers; idx-2 only via
   `GOMOKU_DROP_OPENERS`). First trained epoch (18): games=8 buf=1584 pl=3.21 vl=0.39
   plies=27.8 — genuinely training on its own idx-2 games.
-- **Warm-started self-play H2H vs Rapfi @idx-2, by color over training:** _(accruing
-  every 30 min in `mined/az_vs_rapfi.log` — the verdict curve.)_
+- **Warm-started self-play H2H vs Rapfi @idx-2, by color over training** (verdict
+  curve, `mined/az_vs_rapfi.log`, accruing every 30 min):
+  - epoch ~70 (~35 min of self-play): **0/48, BLACK 0% / WHITE 0%** — still the
+    seed's baseline; ~70 epochs from a weak distilled seed is nowhere near enough
+    to challenge mature Rapfi-NNUE. self-play policy loss IS falling (pl 4.18→2.67),
+    so the net is learning; it just hasn't climbed yet.
+  - **Reference bar:** Bruce (the generalist, ~3700 epochs / 33 h) reached only
+    black ~42% / **white 0/12** vs Rapfi @idx-2 — the white-defense wall is the
+    known-hard part. The over-specialization bet is whether idx-2-only self-play
+    from a Rapfi-distilled seed can beat that, esp. crack white. This is a
+    multi-hour-to-multi-day climb; the probe loop measures it unattended.
 
 ## Crash recovery / resume (durability)
 
