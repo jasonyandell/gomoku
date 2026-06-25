@@ -63,6 +63,7 @@ Coordinate mapping. An action index is `row * BOARD_SIZE + col`
 
 from __future__ import annotations
 
+import queue
 import shlex
 import subprocess
 import threading
@@ -312,7 +313,28 @@ class ExternalEnginePlayer:
         except FileNotFoundError as e:
             raise ExternalEngineError(f"cannot launch engine: {config.cmd!r}: {e}") from e
 
+        # ONE persistent reader thread per engine drains stdout into a queue, so
+        # _read_line is a cheap queue.get instead of spawning a fresh thread PER
+        # LINE. A multiPV analysis emits ~2000 lines; the old thread-per-line cost
+        # (~0.024ms × 2000 ≈ 50ms) dominated each analyze and starved the engine.
+        # The reader exits on EOF (puts a None sentinel). daemon=True so it never
+        # blocks interpreter exit.
+        self._rq: "queue.Queue[str | None]" = queue.Queue()
+        self._reader = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader.start()
+
         self._handshake()
+
+    def _reader_loop(self) -> None:
+        out = self._proc.stdout
+        assert out is not None
+        try:
+            for line in out:            # blocks in C; yields complete lines
+                self._rq.put(line)
+        except (ValueError, OSError):
+            pass                        # stdout closed under us
+        finally:
+            self._rq.put(None)          # EOF sentinel
 
     # -- protocol I/O ----------------------------------------------------
 
@@ -324,22 +346,19 @@ class ExternalEnginePlayer:
         self._proc.stdin.flush()
 
     def _read_line(self, timeout_s: float) -> str:
-        """Read one stdout line, with a hard wall-clock timeout."""
-        assert self._proc.stdout is not None
-        result: list[str | None] = [None]
+        """Read one stdout line, with a hard wall-clock timeout.
 
-        def _do_read() -> None:
-            result[0] = self._proc.stdout.readline()  # type: ignore[union-attr]
-
-        t = threading.Thread(target=_do_read, daemon=True)
-        t.start()
-        t.join(timeout_s)
-        if t.is_alive():
+        Pulls from the persistent reader thread's queue (one thread per engine,
+        started in __init__) — NOT a fresh thread per line. Same semantics:
+        timeout -> 'timed out'; EOF sentinel -> 'closed stdout'.
+        """
+        try:
+            line = self._rq.get(timeout=timeout_s)
+        except queue.Empty:
             raise ExternalEngineError(
                 f"engine timed out after {timeout_s:.1f}s waiting for a reply"
             )
-        line = result[0]
-        if line == "" or line is None:
+        if line is None or line == "":
             raise ExternalEngineError("engine closed stdout (EOF) unexpectedly")
         return line.strip()
 
