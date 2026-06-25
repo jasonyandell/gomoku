@@ -92,12 +92,16 @@ answers back into the wiki so the next session doesn't re-derive them.
 
 ## Commands
 ```bash
-uv venv && source .venv/bin/activate && uv pip install -e ".[dev]"
-pytest                              # run before claiming a change works
-gomoku-train --help                # training loop (latest.pt embeds buffer for resume)
-gomoku-play --checkpoint checkpoints/latest.pt
-gomoku-web                         # FastAPI UI around a checkpoint
+uv sync --extra dev                # per-worktree env (auto-run at worktree creation); uv.lock-pinned
+uv run pytest                      # run before claiming a change works
+uv run gomoku-train --help         # training loop (latest.pt embeds buffer for resume)
+uv run gomoku-play --checkpoint checkpoints/latest.pt
+uv run gomoku-web                  # FastAPI UI around a checkpoint
 ```
+**`uv run <cmd>` — never `source .venv/bin/activate`.** Each worktree has its OWN
+`.venv` (uv, editable `gomoku` → that worktree); `uv run` resolves it from cwd, so
+you can never silently import the main checkout (the editable-install gotcha,
+`wiki/topics/worktree-hygiene.md`).
 Native hot-path extensions toggle off for A/B: `GOMOKU_DISABLE_NATIVE_MCTS=1`,
 `GOMOKU_DISABLE_NATIVE_STATE_OPS=1`. Prefer MPS over CPU paths. W&B project:
 `gomoku` — pull exact run histories rather than guessing from summaries.

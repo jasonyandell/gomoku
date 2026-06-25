@@ -31,6 +31,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -108,6 +109,29 @@ def write_records(worktree: str, branch: str) -> dict:
     return rec
 
 
+def provision_venv(worktree: str) -> None:
+    """Give the worktree its OWN uv-managed `.venv` (gomoku editable -> itself).
+
+    This is what makes `uv run` / a relative activate correct BY CONSTRUCTION
+    instead of silently importing the main checkout (the editable-install gotcha,
+    wiki/topics/worktree-hygiene.md). On APFS uv clones from cache: ~1-4s, ~0
+    incremental disk. Non-fatal: a provisioning hiccup must not strand the
+    worktree — the dev can re-run `uv sync --extra dev` by hand.
+    """
+    uv = shutil.which("uv")
+    if uv is None:
+        print("  ⚠ uv not found on PATH — skipping venv; run `uv sync --extra dev` "
+              "in the worktree by hand", file=sys.stderr)
+        return
+    print("  provisioning per-worktree env (uv sync --extra dev) ...")
+    r = subprocess.run([uv, "sync", "--extra", "dev"], cwd=worktree)
+    if r.returncode != 0:
+        print("  ⚠ `uv sync` failed — run it by hand in the worktree before working",
+              file=sys.stderr)
+    else:
+        print("  env ready: `cd` in and use `uv run <cmd>` (no activation needed)")
+
+
 def cmd_add(args) -> int:
     repo = os.getcwd()
     path = args.path or os.path.expanduser(f"~/code/gomoku-{args.slug}")
@@ -116,6 +140,8 @@ def cmd_add(args) -> int:
     if rc.returncode != 0:
         return rc.returncode
     rec = write_records(path, branch)
+    if not args.no_venv:
+        provision_venv(path)
     print(f"worktree {path} [{branch}] — owned by session {rec['session_id']}")
     print(f"  resume later: {rec['resume']}")
     return 0
@@ -158,6 +184,8 @@ def main(argv=None) -> int:
     p_add.add_argument("slug")
     p_add.add_argument("--path", help="worktree path (default ~/code/gomoku-<slug>)")
     p_add.add_argument("--branch", help="branch name (default feat/<slug>)")
+    p_add.add_argument("--no-venv", action="store_true",
+                       help="skip provisioning the per-worktree uv env")
     p_add.set_defaults(func=cmd_add)
 
     p_rec = sub.add_parser("record", help="record the current (already-created) worktree")
