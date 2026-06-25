@@ -147,19 +147,27 @@ from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
 
 ## Crash recovery / resume (durability)
 
-The run is crash-robust by checkpoint, not by a supervisor — the 10-min stall
-cron (or any fresh session reading this) is the recovery loop. If the AZ trainer
-dies, relaunch from the run-dir's `latest.pt` (weights **and** buffer), NOT the
-pretrain seed (that would discard self-play progress):
+The run is crash-robust by checkpoint, not by a supervisor — any fresh session
+reading this is the recovery loop. If the AZ trainer dies, relaunch resuming the
+run-dir's `latest.pt` (weights **+** the 1.4 GB buffer) when it exists, else the
+newest `epochNNNN.pt` (weights only; workers refill the buffer). NOT the pretrain
+seed — that discards self-play progress. **Note:** `latest.pt` is only written
+every `save_buffer_every=100` epochs, so for the first ~100 epochs only
+`epochNNNN.pt` exists (this also drives the probe target, below).
 
 ```bash
 cd <this worktree>; export GOMOKU_BOARD_SIZE=15
-# kill any orphaned workers first so run_sweep doesn't double them up:
-pkill -f 'sweep_runs/G15-idx2-warmstart-board15/' ; sleep 2
+pkill -f 'sweep_runs/G15-idx2-warmstart-board15/' ; sleep 2   # clear orphan workers
+CK=sweep_runs/G15-idx2-warmstart-board15/checkpoints
+RESUME=$CK/latest.pt; [ -f "$RESUME" ] || RESUME=$(ls -t $CK/epoch*.pt | head -1)
 GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8 \
-  uv run python scripts/run_sweep.py --cell G15-idx2-warmstart \
-    --resume sweep_runs/G15-idx2-warmstart-board15/checkpoints/latest.pt
+  uv run python scripts/run_sweep.py --cell G15-idx2-warmstart --resume "$RESUME"
 ```
+
+**Probe loop** (`mined/probe_loop.sh`, detached): every 30 min H2H's the **newest
+`epochNNNN.pt`** vs Rapfi @idx-2 (n=48) into `mined/az_vs_rapfi.log`. It targets
+`epoch*.pt`, NOT `latest.pt` (which is absent for the first ~100 epochs — the
+original driver bug that left the probe a no-op).
 The whole pipeline is also re-runnable cold via `bash mined/drive_pipeline.sh`
 (the mine-wait is a no-op once ≥1M is on disk; it re-pretrains → gates → AZ →
 probes). Mine shards (`mined/idx2_15x15/`) and the seed
