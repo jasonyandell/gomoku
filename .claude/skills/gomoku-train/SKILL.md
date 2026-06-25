@@ -12,9 +12,9 @@ The pipeline is a single-process self-play loop: model + MCTS generate games →
 ## Quick mental model
 
 - **Two launch paths** in this repo:
-  - **Production**: `python scripts/run_sweep.py --cell <CELL>` — spawns trainer + N self-play workers + 1 eval worker, all backgrounded. Uses wave-mode barrier, native MCTS, and (for WL2+) EMA self-play + past-checkpoint mix. This is what real runs use. See [Production launch — sweep cells](#production-launch--sweep-cells) below and the wiki runbook at `wiki/topics/launch-sequence-runbook.md`.
-  - **Single-process**: `python -m gomoku.train` — one trainer that does everything including self-play. Good for ad-hoc smoke tests and the small-buffer A-F cells; not how WL1/WL2/Z were run.
-- **One web server** (`python -m web.server`) loads any checkpoint on demand and exposes a play/replay UI.
+  - **Production**: `uv run python scripts/run_sweep.py --cell <CELL>` — spawns trainer + N self-play workers + 1 eval worker, all backgrounded. Uses wave-mode barrier, native MCTS, and (for WL2+) EMA self-play + past-checkpoint mix. This is what real runs use. See [Production launch — sweep cells](#production-launch--sweep-cells) below and the wiki runbook at `wiki/topics/launch-sequence-runbook.md`.
+  - **Single-process**: `uv run python -m gomoku.train` — one trainer that does everything including self-play. Good for ad-hoc smoke tests and the small-buffer A-F cells; not how WL1/WL2/Z were run.
+- **One web server** (`uv run python -m web.server`) loads any checkpoint on demand and exposes a play/replay UI.
 - **Both want MPS.** They CAN share, but it's noticeably slower. Default to running the web UI on CPU while training holds MPS — set `GOMOKU_DEVICE=cpu` for the server.
 - Checkpoints land per-cell at `~/code/gomoku/sweep_runs/<cell>/checkpoints/epochNNNN.pt` (single-process path uses `~/code/gomoku/checkpoints/`).
 - W&B credentials come from the macOS Keychain (service: `wandb-api-key`). The training script pulls it automatically; nothing to set up.
@@ -64,7 +64,7 @@ Useful background skills inside that playbook:
 
 When the user references "the previous run" or "Z" or "WL1", these are the canonical IDs.
 
-The current wandb workspace (4-run WL3/WL2/WL1/Z overlay): regenerate via `python scripts/wandb_workspace.py`; the URL changes each time (workspaces API doesn't update in place). Bookmark whatever the latest run prints.
+The current wandb workspace (4-run WL3/WL2/WL1/Z overlay): regenerate via `uv run python scripts/wandb_workspace.py`; the URL changes each time (workspaces API doesn't update in place). Bookmark whatever the latest run prints.
 
 ## Status check (always do this first)
 
@@ -91,10 +91,10 @@ W&B dashboard: project is `gomoku` under entity `jasonyandell-forge42`. The acti
 The defaults below are what we know works on Jason's M5 Max — ~28s/epoch in steady state, ~125 epochs/hour:
 
 ```bash
-cd ~/code/gomoku && source .venv/bin/activate
+cd ~/code/gomoku
 
 # RESUME (preferred — keeps W&B lineage via wandb_run_id in checkpoint)
-PYTORCH_ENABLE_MPS_FALLBACK=1 nohup python -u -m gomoku.train \
+PYTORCH_ENABLE_MPS_FALLBACK=1 nohup uv run python -u -m gomoku.train \
   --resume checkpoints/latest.pt \
   --epochs 1000 \
   --games-per-epoch 64 \
@@ -108,7 +108,7 @@ PYTORCH_ENABLE_MPS_FALLBACK=1 nohup python -u -m gomoku.train \
   > scratch/train.log 2>&1 &
 
 # FRESH START (new W&B run, fresh weights — use --run-name to label it)
-PYTORCH_ENABLE_MPS_FALLBACK=1 nohup python -u -m gomoku.train \
+PYTORCH_ENABLE_MPS_FALLBACK=1 nohup uv run python -u -m gomoku.train \
   --size small \
   --epochs 1000 \
   --games-per-epoch 64 \
@@ -144,7 +144,7 @@ The old `--eval-games` arg is gone; use `--eval-baseline-games` (fast) and `--ev
 - **Eval-distribution matters but less than you'd think**: WL3 trained with K=2 random openings; eval is from canonical start. We tested whether re-evaluating with K=2 openings (matched distribution) would show hidden strength. **It didn't** — same checkpoint scored ~35% at K=0 and ~34% at K=2 on a 40-game test (test run 2026-05-21). The eval-distribution mismatch is real but the signal hidden by it is small. Don't reach for "fix the eval" if win rates are slow — the model is genuinely slow, not just mis-measured.
 - **Native MCTS vs python MCTS**: the trainer eval uses the native engine (via `make_torch_evaluator`); CPU-only ad-hoc tests via `mcts_picker` use the python path. Strength may differ by a few percent. If you need bit-for-bit reproducibility, set `GOMOKU_DISABLE_NATIVE_MCTS=1` and rerun the trainer eval.
 
-**Always** use `python -u` (unbuffered) when redirecting to a file — otherwise per-epoch prints stay in the OS buffer and `tail -f` shows nothing. Wandb mirrors stdout to `wandb/run-*/files/output.log` which IS flushed, but that's not as obvious.
+**Always** use `python -u` (unbuffered) when redirecting to a file — otherwise per-epoch prints stay in the OS buffer and `tail -f` shows nothing. Wandb mirrors stdout to `wandb/run-*/files/output.log` which IS flushed, but that's not as obvious. (`uv run python -u ...` is the canonical form.)
 
 After starting, wait ~5s and verify:
 
@@ -170,10 +170,10 @@ A training run can be **time-capped** instead of epoch-capped. This is how the r
 
 ```bash
 # single-process (smoke / ad-hoc):
-python -m gomoku.train --resume checkpoints/latest.pt --max-wall-secs 600 ...
+uv run python -m gomoku.train --resume checkpoints/latest.pt --max-wall-secs 600 ...
 
 # production bundle (the real path — trainer + 8 workers + eval):
-python scripts/run_sweep.py --cell <CELL> \
+uv run python scripts/run_sweep.py --cell <CELL> \
   --resume sweep_runs/<CELL>/checkpoints/latest.pt \
   --max-wall-secs 600 --final-eval
 ```
@@ -189,7 +189,7 @@ This is the seam between **clean training** (this skill — the machine) and **c
 ```bash
 # Start (default port 8766, CPU eval so it doesn't fight training)
 PYTORCH_ENABLE_MPS_FALLBACK=1 GOMOKU_DEVICE=cpu nohup \
-  python -m web.server --port 8766 > scratch/web.log 2>&1 &
+  uv run python -m web.server --port 8766 > scratch/web.log 2>&1 &
 
 # Open in browser: http://127.0.0.1:8766
 ```
@@ -249,8 +249,8 @@ If the user says "publish epoch N" or "push the latest", ask whether they mean H
 `gomoku/hf.py` slims a training checkpoint (drops optimizer + replay buffer, ~69 MB → ~1.3 MB) and pushes:
 
 ```bash
-cd ~/code/gomoku && source .venv/bin/activate
-python -m gomoku.hf push --checkpoint checkpoints/epoch0NNN.pt
+cd ~/code/gomoku
+uv run python -m gomoku.hf push --checkpoint checkpoints/epoch0NNN.pt
 # Optional: --name <filename>  (default: model.pt — overwrites in place)
 # Optional: --repo <repo_id>   (default: jasonyandell/gomoku-9x9)
 ```
@@ -262,10 +262,10 @@ Each push updates `model.pt`, `config.json`, `training_state.json` (epoch + tota
 Three steps: re-export ONNX → commit `app/public/` → push (GH Actions does the deploy automatically). Total ~1-2 minutes including the workflow run.
 
 ```bash
-cd ~/code/gomoku && source .venv/bin/activate
+cd ~/code/gomoku
 
 # 1. Re-export ONNX from the target checkpoint
-python scripts/export_onnx.py --checkpoint checkpoints/epoch0NNN.pt
+uv run --extra export python scripts/export_onnx.py --checkpoint checkpoints/epoch0NNN.pt
 # Writes app/public/model.onnx + app/public/model.meta.json.
 # Prints an ONNX-vs-PyTorch fidelity check — both deltas should be < 1e-4.
 
@@ -289,8 +289,8 @@ curl -s https://gomoku.jasonyandell.workers.dev/model.meta.json
 ```bash
 EPOCH=100  # or whatever
 CKPT="checkpoints/epoch0${EPOCH}.pt"
-python -m gomoku.hf push --checkpoint "$CKPT" && \
-python scripts/export_onnx.py --checkpoint "$CKPT" && \
+uv run python -m gomoku.hf push --checkpoint "$CKPT" && \
+uv run --extra export python scripts/export_onnx.py --checkpoint "$CKPT" && \
 git add app/public/model.onnx app/public/model.meta.json && \
 git commit -m "bump model to epoch ${EPOCH}" && \
 git push
@@ -466,7 +466,7 @@ e92 where we had a chance to merge the C fix), then cold restart as
 | User says | Do |
 |---|---|
 | "start training" / "kick off a run" / "launch WLn" | **Follow the production launch runbook end-to-end** at `wiki/topics/launch-sequence-runbook.md`. Status check first. Title card before launching (present it; no ACK). Smoke if any new lever. Wiki + workspace updates after spin-up. |
-| "resume from latest" | Single-process path: see RESUME command below. **Cell-based runs DO support resume** via `python scripts/run_sweep.py --cell <CELL> --epochs N --resume sweep_runs/<CELL>/checkpoints/latest.pt` — keeps wandb lineage, keeps the 1.5M-position buffer (at the cost of up to `save_buffer_every` epochs of weight drift). This is the WL5 phase-2 resume pattern. |
+| "resume from latest" | Single-process path: see RESUME command below. **Cell-based runs DO support resume** via `uv run python scripts/run_sweep.py --cell <CELL> --epochs N --resume sweep_runs/<CELL>/checkpoints/latest.pt` — keeps wandb lineage, keeps the 1.5M-position buffer (at the cost of up to `save_buffer_every` epochs of weight drift). This is the WL5 phase-2 resume pattern. |
 | "how's it going" / "status" | Run the status check block. Tail recent epoch lines. Quote W&B URL. |
 | "stop training" | `pkill -f gomoku.train`. Confirm with status check. |
 | "play against the latest" | Make sure web UI is up. If training is running, server should already be on CPU. Print the URL. |
@@ -475,8 +475,8 @@ e92 where we had a chance to merge the C fix), then cold restart as
 | "make it stronger" | More `--n-simulations` (try 400), or step up `--size` (requires fresh start). Always with W&B for visibility. |
 | "publish" / "push to HF" / "share the model" | Ask: HF only, live demo only, or both? Default to both for "ship it" / "publish." Use the relevant block in the "Publishing snapshots" section. Always report the HF URL + epoch + total_games, and the live URL if deployed. |
 | "deploy the latest" / "update the live demo" | Re-export ONNX + commit `app/public/` + push (see CF SPA block). Watch `gh run watch`. Curl `/model.meta.json` to verify after. |
-| "let me see a self-play" without UI | `python -m web.server` is overkill for one game — instead a one-liner: `python -c "from gomoku.eval import play_vs_random; ..."` or just point them at the UI. |
-| "is the current eval actually measuring what we trained" / "ad-hoc match vs baseline" | Snapshot the live checkpoint aside (trainer's `keep_last_n=3` prunes fast): `cp sweep_runs/<cell>/checkpoints/$(ls -t sweep_runs/<cell>/checkpoints/epoch0*.pt \| head -1) $CLAUDE_JOB_DIR/test_ckpt.pt`. Then run a 40-game match on CPU (won't fight MPS training): `GOMOKU_DEVICE=cpu python -m gomoku.match "model:checkpoint=$CLAUDE_JOB_DIR/test_ckpt.pt,sims=200" vs heuristic --n-games 40`. For experiments with random openings or other off-by-default eval shapes, write the script into `$CLAUDE_JOB_DIR/` (one-off, not committed). 40 games gives much tighter CI than the trainer's default 16. |
+| "let me see a self-play" without UI | `uv run python -m web.server` is overkill for one game — instead a one-liner: `uv run python -c "from gomoku.eval import play_vs_random; ..."` or just point them at the UI. |
+| "is the current eval actually measuring what we trained" / "ad-hoc match vs baseline" | Snapshot the live checkpoint aside (trainer's `keep_last_n=3` prunes fast): `cp sweep_runs/<cell>/checkpoints/$(ls -t sweep_runs/<cell>/checkpoints/epoch0*.pt \| head -1) $CLAUDE_JOB_DIR/test_ckpt.pt`. Then run a 40-game match on CPU (won't fight MPS training): `GOMOKU_DEVICE=cpu uv run python -m gomoku.match "model:checkpoint=$CLAUDE_JOB_DIR/test_ckpt.pt,sims=200" vs heuristic --n-games 40`. For experiments with random openings or other off-by-default eval shapes, write the script into `$CLAUDE_JOB_DIR/` (one-off, not committed). 40 games gives much tighter CI than the trainer's default 16. |
 
 ## Don'ts
 
@@ -505,7 +505,7 @@ e92 where we had a chance to merge the C fix), then cold restart as
 │   ├── model.py           # ResNet (tiny/small/medium/large presets)
 │   ├── game.py            # 9x9 free-style rules, symmetries
 │   ├── eval.py            # vs random / vs other checkpoint
-│   ├── cli.py             # terminal play — `python -m gomoku.cli --checkpoint ...`
+│   ├── cli.py             # terminal play — `uv run python -m gomoku.cli --checkpoint ...`
 │   └── util.py            # device pick, keychain wandb-key pull
 ├── scripts/
 │   ├── run_sweep.py       # production launcher: cells (A-F, Z, Zc, WL1, WL2) + trainer/worker cmd builders
@@ -516,7 +516,7 @@ e92 where we had a chance to merge the C fix), then cold restart as
 │   ├── topics/wave-of-lockstep-design.md     # WL1 design
 │   └── topics/wl2-scale-emulation-design.md  # WL2 design
 ├── web/
-│   ├── server.py          # FastAPI server — `python -m web.server`
+│   ├── server.py          # FastAPI server — `uv run python -m web.server`
 │   └── static/            # index.html + app.js + style.css
 ├── checkpoints/           # single-process path artifacts (epochNNNN.pt + latest.pt symlink)
 ├── sweep_runs/<cell>/     # production-path per-cell artifacts (checkpoints + _records outbox)
@@ -530,19 +530,19 @@ e92 where we had a chance to merge the C fix), then cold restart as
 
 ```bash
 # Count games trained across all checkpoints
-ls checkpoints/epoch*.pt | tail -1 | xargs python -c "import sys,torch; print('total_games:', torch.load(sys.argv[1], weights_only=False, map_location='cpu').get('total_games'))"
+ls checkpoints/epoch*.pt | tail -1 | xargs uv run python -c "import sys,torch; print('total_games:', torch.load(sys.argv[1], weights_only=False, map_location='cpu').get('total_games'))"
 
 # Quick matchup vs any baseline (separate from training, doesn't touch its MPS)
-GOMOKU_DEVICE=cpu python -m gomoku.match \
+GOMOKU_DEVICE=cpu uv run python -m gomoku.match \
   "model:checkpoint=checkpoints/latest.pt,sims=200" vs heuristic --n-games 20
 
 # Full baseline matrix (random < heuristic < lookahead:d=2 < lookahead:d=4)
-GOMOKU_DEVICE=cpu python -m gomoku.match --matrix \
+GOMOKU_DEVICE=cpu uv run python -m gomoku.match --matrix \
   random heuristic "lookahead:depth=2" "lookahead:depth=4" --n-games 30
 
 # Tail per-epoch output from the active run (works around stdout-buffering)
 tail -f wandb/run-*/files/output.log 2>/dev/null | tail -F
 
 # Publish current snapshot to HF
-python -m gomoku.hf push --checkpoint checkpoints/latest.pt
+uv run python -m gomoku.hf push --checkpoint checkpoints/latest.pt
 ```

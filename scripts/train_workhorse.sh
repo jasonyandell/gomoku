@@ -24,7 +24,7 @@ while [ ! -f "$STOP" ]; do
   latest="$RUNDIR/checkpoints/latest.pt"
   if [ -f "$latest" ]; then resume="$latest"; else resume="$SEED"; fi
   echo "[workhorse] launch slice resume=$(basename "$resume") $(date)" >> "$WLOG"
-  ( source .venv/bin/activate; GOMOKU_BOARD_SIZE=15 python scripts/run_sweep.py \
+  ( GOMOKU_BOARD_SIZE=15 uv run python scripts/run_sweep.py \
       --cell "$KEY" --resume "$resume" --max-wall-secs "$SLICE" --foreground ) \
       >> "$REPO/sweep_logs/$NAME/slice.log" 2>&1 &
   RSPID=$!

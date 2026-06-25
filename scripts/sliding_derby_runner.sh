@@ -39,7 +39,7 @@ while [ ! -f "$STOP" ]; do
   lap=$((lap+1))
   if [ -f "$LATEST" ]; then resume="$LATEST"; else resume="$SEED"; fi
   echo "[runner] lap=$lap TRAIN slice resume=$(basename "$resume") $(date)" >> "$WLOG"
-  ( source .venv/bin/activate; GOMOKU_BOARD_SIZE=15 python scripts/run_sweep.py \
+  ( GOMOKU_BOARD_SIZE=15 uv run python scripts/run_sweep.py \
       --cell "$CELL_KEY" --resume "$resume" --max-wall-secs "$SLICE" --foreground ) \
       >> "$LOGDIR/slice.log" 2>&1
   if [ ! -f "$LATEST" ]; then
@@ -48,7 +48,7 @@ while [ ! -f "$STOP" ]; do
   cand="$RUNDIR/checkpoints/sliding_lap${lap}_candidate.pt"
   cp "$LATEST" "$cand"
   echo "[runner] lap=$lap GATE candidate=$(basename "$cand") vs frozen peak (n=$GATE_N) $(date)" >> "$WLOG"
-  ( source .venv/bin/activate; GOMOKU_BOARD_SIZE=15 python scripts/sliding_gate.py \
+  ( GOMOKU_BOARD_SIZE=15 uv run python scripts/sliding_gate.py \
       --candidate "$cand" --board "$BOARD" --verdict-log "$VLOG" --peak-out "$PEAKOUT" \
       --n-games "$GATE_N" --sims 200 --device mps --white-loss ) \
       >> "$LOGDIR/gate.log" 2>&1

@@ -18,7 +18,7 @@ ls -dt sweep_runs/*/checkpoints | head -3
 # Pick one (example: WL4 plateau end) and point the UI there.
 # Use MPS if no training is running; CPU if it is, to avoid contention.
 pkill -f "web.server" 2>/dev/null
-PYTORCH_ENABLE_MPS_FALLBACK=1 nohup .venv/bin/python -m web.server \
+PYTORCH_ENABLE_MPS_FALLBACK=1 nohup uv run python -m web.server \
   --port 8766 \
   --checkpoints-dir sweep_runs/WL4-no-random-openings.plateau-e4024/checkpoints \
   > scratch/web.log 2>&1 &
@@ -31,7 +31,7 @@ If training IS running, prepend `GOMOKU_DEVICE=cpu` so the UI doesn't fight the
 trainer for MPS:
 
 ```bash
-PYTORCH_ENABLE_MPS_FALLBACK=1 GOMOKU_DEVICE=cpu nohup .venv/bin/python -m web.server \
+PYTORCH_ENABLE_MPS_FALLBACK=1 GOMOKU_DEVICE=cpu nohup uv run python -m web.server \
   --port 8766 \
   --checkpoints-dir sweep_runs/<active-cell>/checkpoints \
   > scratch/web.log 2>&1 &

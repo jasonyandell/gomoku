@@ -72,14 +72,16 @@ def test_daemon_plists_keepalive_and_program(home):
         assert doc["KeepAlive"] == {"SuccessfulExit": False}
         assert "StartInterval" not in doc
         prog = doc["ProgramArguments"]
-        assert prog[0] == U.VENV_PY
-        assert prog[1] == "-m"
+        # #87: `uv run python -m <mod> ...` (launchd can't use PATH, so prog[0]
+        # is the absolute uv binary; uv resolves the per-worktree venv from cwd).
+        assert prog[0] == U.UV_BIN
+        assert prog[1:4] == ["run", "python", "-m"]
         assert doc["WorkingDirectory"] == U.WORKDIR
     train = plists["com.gomoku.autolab.train"]["ProgramArguments"]
-    assert train[2] == "gomoku.lab.trainer" and "--prod" in train
+    assert train[4] == "gomoku.lab.trainer" and "--prod" in train
     assert "--stop-file" in train and train[-1].endswith("/stop")
     arena = plists["com.gomoku.autolab.arena"]["ProgramArguments"]
-    assert arena[2] == "gomoku.lab.arena" and "--prod" not in arena
+    assert arena[4] == "gomoku.lab.arena" and "--prod" not in arena
     assert "--stop-file" in arena
 
 
@@ -87,11 +89,15 @@ def test_periodic_plists_startinterval_no_keepalive(home):
     plists = U.render_plists()
     mon = plists["com.gomoku.autolab.monitor"]
     assert mon["StartInterval"] == 600 and "KeepAlive" not in mon
-    assert mon["ProgramArguments"][1].endswith("autolab_monitor.py")
+    # uv run python <script> — autolab_monitor.py is the script (no -m).
+    assert mon["ProgramArguments"][0] == U.UV_BIN
+    assert mon["ProgramArguments"][1:3] == ["run", "python"]
+    assert mon["ProgramArguments"][3].endswith("autolab_monitor.py")
     res = plists["com.gomoku.autolab.research"]
     assert res["StartInterval"] == 1800 and "KeepAlive" not in res
     prog = res["ProgramArguments"]
-    assert prog[2] == "gomoku.lab.research" and "--once" in prog
+    assert prog[0] == U.UV_BIN and prog[1:4] == ["run", "python", "-m"]
+    assert prog[4] == "gomoku.lab.research" and "--once" in prog
 
 
 def test_plist_env_has_home_autolab_wandb(home):
@@ -103,7 +109,10 @@ def test_plist_env_has_home_autolab_wandb(home):
         assert env["AUTOLAB_HOME"] == str(home)        # resolved from AUTOLAB_HOME
         assert env["WANDB_MODE"] == "offline"
         assert env["PYTORCH_ENABLE_MPS_FALLBACK"] == "1"
-        assert ".venv/bin" in env["PATH"] and "/opt/homebrew/bin" in env["PATH"]
+        # #87: PATH no longer includes any .venv/bin (uv handles env resolution);
+        # /opt/homebrew/bin stays so child processes can find uv too.
+        assert "/opt/homebrew/bin" in env["PATH"]
+        assert ".venv/bin" not in env["PATH"]
     # periodics: minimal env (HOME + AUTOLAB_HOME for ledger + osascript), no MPS
     for label in ("com.gomoku.autolab.monitor", "com.gomoku.autolab.research"):
         env = plists[label]["EnvironmentVariables"]
