@@ -318,6 +318,16 @@ dream, on an M5 budget.
   structurally wrong). Caveat: covering *set* ≠ drawing *strategy* (k=5 is a first-player win, Allis '94) —
   it's a representation/shaping prior, never a static policy.
 
+- **Methods to do the discovering** → [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md):
+  a raid of computational-genetics tools mapped onto "discover non-line molecules / offensive fields" —
+  **DCA** (training-free non-line *bond map* of cells, disentangles direct from line-induced indirect
+  correlation), **cryo-EM 2-D class averaging** (unsupervised template dictionary, pose = the finite D4
+  group), **reciprocal-lattice spectral** detector (the claw = a Bragg peak at frequency (2/5,1/5); lines
+  light *different* bins), **TF-MoDISco** (discover motifs in value-head *importance* space → value-grounded
+  molecules), **MAP-Elites/novelty** (illuminate a periodic table of fields). Killer reframe: a board needs
+  no MSA, so these transfer *better* to us than to biology. (Turing reaction-diffusion = a lens only, NOT a
+  mechanism — the claw's period-5 is number-theoretic, not dynamical; see that page's caveat.)
+
 #### First stab — the "rediscover the claw" sandbox (the bitter-lesson probe)
 Goal: prove a **relation-general** representation can rediscover a KNOWN non-line molecule (the claw)
 *from compute*, where a line-based one provably can't — a measurable proving ground before hunting
@@ -342,3 +352,25 @@ encoding may rediscover it as a *spatial frequency*.
   pivot). **Then** remove the scaffold and point the validated representation at real idx-2 positions:
   high-value, zero-line-content residuals = candidate **unknown offensive fields**. Tracked as the first
   runnable step of #10's relation-general lane.
+- **v0 RESULT (2026-06-25): NEGATIVE — and the negative is load-bearing.** A relation-general transformer
+  (Fourier/relative PE) did NOT beat a plain CNN at the blocking task; the **CNN won every behavioral
+  signal** (claw-vs-scatter **+10.2 SD** vs the relation model's +0.06 SD = pure chance; the relation
+  model's gradient-ascent **collapsed 45 stones into a central blob**, the opposite of a density-1/5
+  lattice). **Why (the finding):** *blocking-score is itself a windowed line-convolution* — a length-5
+  directional conv literally computes it — so the task is **line-shaped**, plays straight to the
+  translation-equivariant CNN, and never *pressures* the relation substrate. The claw's line-invisibility
+  is about lack of **offensive** line content; *blocking* is still a per-window **line** quantity, so this
+  task can't force non-line vision. One weak PARTIAL for the thesis: a linear probe of `(2x+y) mod 5`
+  reached **27%** from the relation model's final layer (vs the CNN pinned at the **20%** chance floor —
+  translation-equivariance *structurally* can't hold absolute residue — and vs 16% in the relation model's
+  own pre-training substrate), so the substrate *can* hold mod-5; the task gives it no reason to. Method is
+  sound: TRUE-objective gradient-ascent recovers the claw (0.80 claw-ness, blocks 0.97/1.0). Script:
+  `scripts/claw_rediscovery.py`.
+- **PIVOT (what the negative dictates):** the discriminating task must be **position-dependent /
+  non-translation-invariant** — a translation-invariant *count* can never separate the architectures. E.g.
+  a per-cell "can the attacker ever make 5 through here" potential, or the **adversarial tempo-aware**
+  defensive question from [the-claw.md](the-claw.md) §3 ("attacker has the move — which cells stay safe?").
+  **Better: sidestep the learned-task trap entirely** with the **training-free** detectors in
+  [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) — #3 spectral (detect the claw by its
+  *frequency*, no task to accidentally make line-shaped) and #1 DCA (a non-line *bond map*). Those are the
+  recommended next stabs; run order on that page.
