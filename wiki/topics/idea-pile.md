@@ -290,3 +290,12 @@ dream, on an M5 budget.
 - **Runnable seed:** augment `gomoku/game.py to_planes()` with K threat channels computed by the #9 conv
   detectors (+ a `solve_vcf_batch` certain-death/birth channel); retrain at fixed net size; gate on the
   ms-ladder crossing. The moonshot (threat-graph + attention) is a separate, larger lane.
+- **Worked DEFENSE-axis example — "the claw"** ([the-claw.md](the-claw.md)): Jason's 1990s knight's-move
+  defensive pattern = the lattice `2x+y≡0 (mod 5)`, *proven* the unique-up-to-symmetry perfect 5-in-a-row
+  blocker — and *proven* invisible to Rapfi's line-organized representation (radius-4 classical engine
+  aliases it to lone stones; radius-1-conv mix9svq near-blind). Its invariant is a **periodic congruence
+  field**, not a line/shape feature, and a small conv can't express "position mod k" without absolute
+  coords. **Lesson:** the defense axis likely needs **explicit periodic/modular positional channels**, not
+  only threat detectors — and the claw is a concrete **#3 (judo)** target (a region where Rapfi's map is
+  structurally wrong). Caveat: covering *set* ≠ drawing *strategy* (k=5 is a first-player win, Allis '94) —
+  it's a representation/shaping prior, never a static policy.
