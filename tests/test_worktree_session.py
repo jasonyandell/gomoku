@@ -45,3 +45,46 @@ def test_session_id_defaults_to_unknown(monkeypatch):
     assert ws.session_id() == "unknown"
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
     assert ws.session_id() == SID
+
+
+def test_provision_venv_runs_uv_sync_in_worktree(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(ws.shutil, "which", lambda _: "/usr/bin/uv")
+
+    class _R:
+        returncode = 0
+
+    def _run(argv, cwd=None):
+        calls["argv"] = argv
+        calls["cwd"] = cwd
+        return _R()
+
+    monkeypatch.setattr(ws.subprocess, "run", _run)
+    ws.provision_venv("/Users/jason/code/gomoku-foo")
+    assert calls["argv"] == ["/usr/bin/uv", "sync", "--extra", "dev"]
+    assert calls["cwd"] == "/Users/jason/code/gomoku-foo"
+
+
+def test_provision_venv_no_op_without_uv(monkeypatch):
+    monkeypatch.setattr(ws.shutil, "which", lambda _: None)
+
+    def _boom(*a, **k):  # must not be called when uv is missing
+        raise AssertionError("subprocess.run should not run without uv")
+
+    monkeypatch.setattr(ws.subprocess, "run", _boom)
+    ws.provision_venv("/whatever")  # warns, returns cleanly
+
+
+def test_add_parses_no_venv_flag(monkeypatch):
+    seen = {}
+
+    def _capture(args):
+        seen["no_venv"] = args.no_venv
+        seen["slug"] = args.slug
+        return 0
+
+    monkeypatch.setattr(ws, "cmd_add", _capture)
+    assert ws.main(["add", "foo", "--no-venv"]) == 0
+    assert seen == {"no_venv": True, "slug": "foo"}
+    assert ws.main(["add", "bar"]) == 0
+    assert seen["no_venv"] is False  # default = provision

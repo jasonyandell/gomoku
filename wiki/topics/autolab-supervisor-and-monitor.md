@@ -81,19 +81,19 @@ is **not** long-lived.
 ```
 launchd (gui/$(id -u), uid 501)
 ├── com.gomoku.autolab.train     KeepAlive(SuccessfulExit=false), RunAtLoad
-│     └── .venv/bin/python -m gomoku.lab.trainer --prod --stop-file ~/data/autolab/stop
+│     └── uv run python -m gomoku.lab.trainer --prod --stop-file ~/data/autolab/stop
 │           └── (per slice) git worktree ~/data/autolab/worktrees/<row>/
 │                 └── python scripts/run_sweep.py --cell derby-v9-small
 │                        --max-wall-secs 3600 --final-eval --foreground [--resume <latest.pt>]
 │                        ├── gomoku.train            (the MPS tenant — torch loads HERE, not in the daemon)
 │                        └── N× gomoku.selfplay_worker
 ├── com.gomoku.autolab.arena     KeepAlive(SuccessfulExit=false), RunAtLoad
-│     └── .venv/bin/python -m gomoku.lab.arena --stop-file ~/data/autolab/stop
+│     └── uv run python -m gomoku.lab.arena --stop-file ~/data/autolab/stop
 │           └── (per eval) scripts.sliding_gate.run_gate(dry_run=True) + HF champion tag
 ├── com.gomoku.autolab.monitor   StartInterval=600, RunAtLoad
-│     └── .venv/bin/python scripts/autolab_monitor.py        (writes monitor/latest.md, notifies on change)
+│     └── uv run python scripts/autolab_monitor.py        (writes monitor/latest.md, notifies on change)
 └── com.gomoku.autolab.research  StartInterval=1800, RunAtLoad
-      └── .venv/bin/python -m gomoku.lab.research --once      (writes research/latest.md, appends ≤2 rows)
+      └── uv run python -m gomoku.lab.research --once      (writes research/latest.md, appends ≤2 rows)
 ```
 
 **Why this shape (decisions, not options):**
@@ -125,14 +125,14 @@ single source of env for the whole tree.
 |---|---|---|
 | `AUTOLAB_HOME` | `/Users/jason/data/autolab` | Drives ledger, lockfiles, runs/, worktrees/. Default already matches (`daemon.py:53`); set it so a future default change can't strand the run. |
 | `HOME` | `/Users/jason` | **Critical.** `huggingface_hub` reads the token from `~/.cache/huggingface/token` (no `HF_TOKEN` env on this box). Wrong/unset `HOME` ⇒ `push_slice` 401s silently — the "ran but nothing reached HF" failure. Also git config + MPS caches. |
-| `PATH` | `/Users/jason/code/gomoku/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin` | Trainer shells out to `git worktree` (`/opt/homebrew/bin/git`, trainer.py:117) and `pgrep` (`/usr/bin`, trainer.py:55). launchd's default PATH lacks homebrew. |
+| `PATH` | `/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin` | Trainer shells out to `git worktree` (`/opt/homebrew/bin/git`, trainer.py:117) and `pgrep` (`/usr/bin`, trainer.py:55). launchd's default PATH lacks homebrew. (#87: no `.venv/bin` — `uv run` is the python entry point, no activation needed.) |
 | `PYTORCH_ENABLE_MPS_FALLBACK` | `1` | `_run_slice` already `setdefault`s it (trainer.py:140); set at top for auditability. |
 | `HF_HUB_DISABLE_PROGRESS_BARS` | `1` | Matches `hf.py` setdefault; keeps launchd logs clean. |
 | `WANDB_MODE` | `offline` | **Decision below:** unattended slices record W&B locally (syncable) without ever touching the network or prompting `wandb login`. Keeps "W&B from day one" technically intact while removing the auth/network failure mode for the first-ever prod run. |
 
 **Not needed:** `WANDB_API_KEY` (in keychain; with `WANDB_MODE=offline` it isn't
-read), `VIRTUAL_ENV`/`PYTHONPATH` (invoke venv python by absolute path; editable
-install resolves `gomoku`), `HF_TOKEN` (the cache file is the auth path),
+read), `VIRTUAL_ENV`/`PYTHONPATH` (#87: `uv run` resolves the per-worktree
+`.venv` from cwd, then editable-install resolves `gomoku`), `HF_TOKEN` (the cache file is the auth path),
 `GOMOKU_BOARD_SIZE` (the seed cell is 9×9 — see Risk #1). `TMPDIR`: leave unset
 (launchd gives a private per-UID temp; `push_slice` uses `TemporaryDirectory`).
 
@@ -151,7 +151,8 @@ regardless; setting cwd to main just avoids relative-path surprises.
   <key>Label</key><string>com.gomoku.autolab.train</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/jason/code/gomoku/.venv/bin/python</string>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string><string>python</string>
     <string>-m</string><string>gomoku.lab.trainer</string>
     <string>--prod</string>
     <string>--stop-file</string><string>/Users/jason/data/autolab/stop</string>
@@ -164,7 +165,7 @@ regardless; setting cwd to main just avoids relative-path surprises.
   <dict>
     <key>AUTOLAB_HOME</key><string>/Users/jason/data/autolab</string>
     <key>HOME</key><string>/Users/jason</string>
-    <key>PATH</key><string>/Users/jason/code/gomoku/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>PYTORCH_ENABLE_MPS_FALLBACK</key><string>1</string>
     <key>HF_HUB_DISABLE_PROGRESS_BARS</key><string>1</string>
     <key>WANDB_MODE</key><string>offline</string>
@@ -179,7 +180,7 @@ regardless; setting cwd to main just avoids relative-path surprises.
 
 `com.gomoku.autolab.arena.plist` — **identical** except `Label` =
 `com.gomoku.autolab.arena`, `ProgramArguments` =
-`[.venv/bin/python, -m, gomoku.lab.arena, --stop-file, /Users/jason/data/autolab/stop]`,
+`[/opt/homebrew/bin/uv, run, python, -m, gomoku.lab.arena, --stop-file, /Users/jason/data/autolab/stop]`,
 and `Standard{Out,Err}Path` → `arena.{out,err}.log`. (No `--prod`; the arena has
 no MVP/prod cap.)
 
@@ -193,7 +194,8 @@ no MVP/prod cap.)
   <key>Label</key><string>com.gomoku.autolab.monitor</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/jason/code/gomoku/.venv/bin/python</string>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string><string>python</string>
     <string>/Users/jason/code/gomoku/scripts/autolab_monitor.py</string>
   </array>
   <key>RunAtLoad</key><true/>
@@ -203,7 +205,7 @@ no MVP/prod cap.)
   <dict>
     <key>AUTOLAB_HOME</key><string>/Users/jason/data/autolab</string>
     <key>HOME</key><string>/Users/jason</string>
-    <key>PATH</key><string>/Users/jason/code/gomoku/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>StandardOutPath</key><string>/Users/jason/data/autolab/monitor/launchd.out.log</string>
   <key>StandardErrorPath</key><string>/Users/jason/data/autolab/monitor/launchd.err.log</string>
@@ -213,7 +215,7 @@ no MVP/prod cap.)
 
 `com.gomoku.autolab.research.plist` — identical to monitor's shape except
 `Label` = `com.gomoku.autolab.research`, `ProgramArguments` =
-`[.venv/bin/python, -m, gomoku.lab.research, --once]`, `StartInterval` = `1800`,
+`[/opt/homebrew/bin/uv, run, python, -m, gomoku.lab.research, --once]`, `StartInterval` = `1800`,
 and `Standard{Out,Err}Path` → `research/launchd.{out,err}.log`. The monitor +
 research agents touch no GPU and need no MPS env (pure read + write + notify).
 
@@ -516,12 +518,12 @@ The first prod slice via the trainer has **never run**. De-risk the train → ev
 pgrep -fl 'selfplay_worker|gomoku\.train|run_sweep|eval_worker'
 # 1. seed the ledger (step 3 above), then one dry-run prod slice in the foreground:
 AUTOLAB_HOME=~/data/autolab WANDB_MODE=offline \
-  /Users/jason/code/gomoku/.venv/bin/python -m gomoku.lab.trainer --prod --no-hf --once
+  /Users/jason/code/gomoku/uv run python -m gomoku.lab.trainer --prod --no-hf --once
 # inspect: a DONE result row with eval/model_elo + a continuation + an eval row;
 #   ~/data/autolab/runs/9x9-champ-recipe/sweep_runs/*/checkpoints/latest.pt exists.
 # 2. prove HF delivery once (real push), still foreground:
 AUTOLAB_HOME=~/data/autolab WANDB_MODE=offline \
-  /Users/jason/code/gomoku/.venv/bin/python -m gomoku.lab.trainer --prod --once
+  /Users/jason/code/gomoku/uv run python -m gomoku.lab.trainer --prod --once
 # inspect: artifact_ref is hf://…  and the revision appears on jasonyandell/gomoku-9x9.
 ```
 Only after both pass: `python -m gomoku.lab.up up`.
@@ -648,28 +650,20 @@ launchd jobs wire the already-tested spine into a self-driving overnight lab.
 | `tests/test_lab_research.py` | Priority invariant (proposals < P_seed and `pick("train")` still returns the seed); idempotent ids; note render; cold-start refusal. |
 | `pyproject.toml` | Added `[project.scripts]` `gomoku-lab = gomoku.lab.up:main` + `gomoku-lab-research = gomoku.lab.research:main` (convenience; `-m` invocations are canonical and reinstall-free). |
 
-### Run the full suite (editable-install repoint recipe)
+### Run the full suite (`uv run pytest`)
 
-The shared venv's PEP 660 finder points `gomoku` at the **main** checkout, so a
-plain `pytest` from the worktree can't see the new `gomoku.lab.*` modules. Run
-in-process after repointing the finder MAPPING to the worktree:
+#87 root-fixed the editable-install gotcha — each worktree now gets its own
+uv-managed `.venv` (`gomoku` editable → that worktree). From the worktree:
 
 ```bash
-/Users/jason/code/gomoku/.venv/bin/python -c "
-import __editable___gomoku_0_1_0_finder as F
-F.MAPPING['gomoku'] = '/Users/jason/code/gomoku-autolab-p7-autolab/gomoku'
-import sys; sys.argv=['pytest',
-  'tests/test_lab_ledger.py','tests/test_lab_daemon.py','tests/test_lab_trainer.py',
-  'tests/test_lab_arena.py','tests/test_hf.py','tests/test_run_sweep_runbase.py',
-  'tests/test_lab_up.py','tests/test_autolab_monitor.py','tests/test_lab_research.py','-q']
-import os; os.chdir('/Users/jason/code/gomoku-autolab-p7-autolab')
-import pytest; raise SystemExit(pytest.main())
-"
+uv run pytest tests/test_lab_ledger.py tests/test_lab_daemon.py \
+  tests/test_lab_trainer.py tests/test_lab_arena.py tests/test_hf.py \
+  tests/test_run_sweep_runbase.py tests/test_lab_up.py \
+  tests/test_autolab_monitor.py tests/test_lab_research.py -q
 ```
 
-(`scripts/`- and `tests/`-resident modules load from the worktree by absolute
-path; the byte-identical spine modules `ledger`/`daemon`/`status` may still
-resolve from main — harmless while P7 leaves them unchanged.)
+(No editable-install finder repointing needed; `uv run` resolves the venv from
+cwd, so `gomoku` always points at the worktree you're standing in.)
 
 ### Attended PROD-slice proof — run BEFORE the unattended launch
 
@@ -681,15 +675,15 @@ train→eval→ledger→flywheel→HF path with one foreground slice, HF off fir
 # 0. confirm the box is free (the preflight defers on any of these):
 pgrep -fl 'selfplay_worker|gomoku\.train|run_sweep|eval_worker'
 # 1. seed the ledger + one dry-run prod slice in the foreground (no HF):
-python -m gomoku.lab.up up        # seeds the row + loads the jobs; OR seed-only then:
+uv run python -m gomoku.lab.up up        # seeds the row + loads the jobs; OR seed-only then:
 AUTOLAB_HOME=~/data/autolab WANDB_MODE=offline \
-  /Users/jason/code/gomoku/.venv/bin/python -m gomoku.lab.trainer --prod --no-hf --once
+  uv run python -m gomoku.lab.trainer --prod --no-hf --once
 # inspect: a DONE result row with eval/model_elo + a continuation + an eval row;
 #   ~/data/autolab/runs/9x9-champ-recipe/sweep_runs/*/checkpoints/latest.pt exists.
 # 2. prove HF delivery once (real push), still foreground:
 AUTOLAB_HOME=~/data/autolab WANDB_MODE=offline \
-  /Users/jason/code/gomoku/.venv/bin/python -m gomoku.lab.trainer --prod --once
+  uv run python -m gomoku.lab.trainer --prod --once
 # 3. read the digest by hand:
-python scripts/autolab_monitor.py --print --no-notify
-# Only after all pass: python -m gomoku.lab.up up
+uv run python scripts/autolab_monitor.py --print --no-notify
+# Only after all pass: uv run python -m gomoku.lab.up up
 ```

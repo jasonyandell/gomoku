@@ -5,7 +5,7 @@ epoch with a realistic mixed-ply distribution (NOT a tiny 60-opening toy), then
 profiles keygen vs add vs decay vs the full train.py ingest path.
 
 CPU-only, bounded. Run:
-    .venv/bin/python scripts/bench_crossgame_ingest.py
+    uv run python scripts/bench_crossgame_ingest.py
 """
 
 from __future__ import annotations

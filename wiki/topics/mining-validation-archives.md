@@ -19,9 +19,9 @@ For a 5-bucket archive (~1000-2000 positions) from a WL-series checkpoint,
 running on MPS:
 
 ```bash
-cd ~/code/gomoku && source .venv/bin/activate
+cd ~/code/gomoku
 PYTHONUNBUFFERED=1 GOMOKU_DEVICE=mps PYTORCH_ENABLE_MPS_FALLBACK=1 \
-  python -u scripts/mine_validation_archive.py \
+  uv run python -u scripts/mine_validation_archive.py \
     --wl4-checkpoint sweep_runs/<RUN-NAME>/checkpoints/latest.pt \
     --output archives/<NAME>_v1.pt \
     --target-per-bucket 200 \
