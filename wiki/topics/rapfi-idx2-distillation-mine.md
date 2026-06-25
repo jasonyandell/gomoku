@@ -10,7 +10,10 @@ and it all works. This page is the synthesis; raw run detail goes to `TRAINING_W
   crash) + one reader thread/engine (68→17 ms/analyze).
 - **Mining harness** (`gomoku/rapfimine/`): multiprocess flat-file BFS mine, D4
   canonical dedup, crash-robust resume. Maxed the machine at **~700 moves/s**;
-  **1,126,597 canonical idx-2 positions** banked to `mined/idx2_15x15/`.
+  **1,126,597 canonical idx-2 positions** (9.5 GB) banked durably OUTSIDE git at
+  **`/Users/jason/data/rapfimine/idx2_15x15/`**, symlinked from `mined/idx2_15x15`
+  so all tooling paths still resolve (`~/data` is the machine's data area alongside
+  `swap2/` and `autolab/`).
 - **Pretrain** (`pretrain.py`): supervised distillation → `checkpoints/idx2_pretrain.pt`
   (epoch-3 seed, policy_ce 2.04). Finding: GPU-bound; per-epoch on-device sync fix.
 - **Warm-start AZ** (`run_sweep` `G15-idx2-warmstart` cell): idx-2-only self-play
