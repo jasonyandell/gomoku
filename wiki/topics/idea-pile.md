@@ -210,6 +210,24 @@ Built the spike: `scripts/gpu_vcf_prototype.py` (`solve_vcf_batch(boards (B,2,15
 ## 2026-06-25 — the big swing: a threat-CHEMISTRY representation (Jason's nose)
 
 ### 10. Represent the board as threat-molecules, not stone-atoms  ⭐⭐ (representation-level swing)
+
+> **Headline principle (hold this tightest): a molecule ⊋ a line.** Line-threats (fours, threes,
+> VCF/VCT) are one *species* of molecule, not the genus — *"not all animals are dogs."* The moment a
+> representation is organized around the 4 line directions it has decided non-line molecules don't
+> exist — and is *provably blind* to them ([the-claw.md](the-claw.md)). So: **represent *relations*,
+> not lines; let lines *emerge* as the common species.** Classify molecules by **function** — *offense*
+> (force a line), *denial* (prevent lines: the claw), *shaping* (bias which molecules form next: "2s for
+> options") — and treat **geometry** (line / lattice / cluster / field) as *orthogonal* to function.
+> **The line is the win-*condition*, not the offense itself:** offense is the forcing pressure that
+> *collapses into* a line, and may itself be a **field** (double-threat branch-points, VCF-dense regions,
+> influence/thickness, catalytic gradients) that no line-vocabulary ever named (Jason, 2026-06-25 — "there
+> may be yet-unknown-to-us *offensive* fields"). **Unit test for non-line vision:** can a representation
+> tell the claw from a random same-count scatter? (A line rep provably cannot.) **The prize:** a
+> relation-general representation is not just a better *describer* — it's a **discovery engine** for
+> molecule-species we have no names for. Point it at high-value, *zero-line-content* residuals to surface
+> unknown **offensive fields** — offense that 30 years of line-shaped theory (human *and* engine) was
+> structurally unable to look at.
+
 The frame that reorganizes everything above. **Gomoku, as humans play it, is not about stones — it's
 about a stone's *relationship to future threats*.** You build 2s because 2s give you options; you
 *avoid* building 2s when they only feed the opponent's threats; the skill is balancing those. The
@@ -299,3 +317,28 @@ dream, on an M5 budget.
   only threat detectors — and the claw is a concrete **#3 (judo)** target (a region where Rapfi's map is
   structurally wrong). Caveat: covering *set* ≠ drawing *strategy* (k=5 is a first-player win, Allis '94) —
   it's a representation/shaping prior, never a static policy.
+
+#### First stab — the "rediscover the claw" sandbox (the bitter-lesson probe)
+Goal: prove a **relation-general** representation can rediscover a KNOWN non-line molecule (the claw)
+*from compute*, where a line-based one provably can't — a measurable proving ground before hunting
+UNKNOWN offensive fields. **Bitter-lesson stance:** don't hand-code the claw or mod-5; hand-code only a
+*task* whose optimum IS the claw, and see whether the structure **emerges** in a learned representation.
+The M5 Max is plenty for this (small board, tiny models, labels free) — *and* the efficiencies hide in
+surprising places (cf. GPU-VCF): the claw is a **frequency-domain** object, so a periodic positional
+encoding may rediscover it as a *spatial frequency*.
+- **Task (cheap, GPU-resident):** blocking score of a defender stone-set = #(5-windows, all 4 dirs,
+  containing ≥1 stone), via the length-5 directional conv kernels already in
+  `scratchpad/bench_gpu_vcf.py`. The claw (`2x+y≡0 mod 5`, density 1/5) is the *provable* optimum.
+- **Two representations predict the field-task from raw stone planes:** (a) **line/CNN baseline** (small
+  conv over stones — should plateau; it's the blind one); (b) **relation-general** (small self-attention
+  over stone/cell tokens with *relative* or *Fourier/periodic* positional encodings — capacity for
+  arbitrary offsets + periodicity).
+- **Did the claw emerge? (the dream signals):** (1) gradient-ascend a board through each learned model's
+  blocking-landscape → does the relation-general model lay down a mod-5/knight lattice while the CNN
+  can't? (2) linear-probe `2x+y mod 5` (cell residue) from hidden states → decodable for relation-general,
+  not for the line baseline; (3) claw-vs-scatter discriminability; (4) Fourier PE: does period-5 light up
+  in the learned positional spectrum?
+- **Cost: low**; falsifiable (no emergence → architecture insufficient, pivot — Jason pre-approved the
+  pivot). **Then** remove the scaffold and point the validated representation at real idx-2 positions:
+  high-value, zero-line-content residuals = candidate **unknown offensive fields**. Tracked as the first
+  runnable step of #10's relation-general lane.

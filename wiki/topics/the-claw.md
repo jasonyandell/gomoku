@@ -1,7 +1,13 @@
 # The Claw — a line-decorrelated defensive crystal (and a representational lever)
 
-**Provenance.** "The claw" is **Jason's name**, for a defensive pattern he discovered
-**by hand, through play, in the 1990s** — long before this project. He described it as:
+**Provenance & credit.** "The claw" is **Jason's name** for a defensive pattern he found
+**independently, by hand, through play, in the 1990s** — long before this project. The underlying
+*object* is known to combinatorial game theory — periodic blocking/pairing tilings of Z² for
+k-in-a-row (Györffy–Makay–Pluhár, Szeged; Beck, *Tic-Tac-Toe Theory*, 2008) — and credit for it goes
+to that prior art, loudly. (**Jason's rule:** *if it's been discovered, it goes to the discoverer, every
+time.*) Jason's contribution is the **independent rediscovery, the name, and — new — its use as a
+representational lever**: the claw as the canonical proof that *non-line molecules exist and are invisible
+to line-based engines.* He described it as:
 *impenetrable; no good player lets you keep it long, but it can confound them and shape
 the board in powerful ways.* Both halves of that lived intuition turn out to be **theorems**
 (see §2–§3). Surfaced into the wiki 2026-06-25 during a representation brainstorm; the math
