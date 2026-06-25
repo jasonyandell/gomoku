@@ -70,6 +70,32 @@ def test_shard_writer_roundtrip_and_resume(tmp_path):
     assert seen == set(keys)
 
 
+def test_pretrain_loads_shards_and_samples(tmp_path):
+    """load_shards concatenates shards; PretrainData.sample yields aligned
+    (planes, soft-policy target, value) batches on CPU."""
+    import torch  # noqa: F401  (skip cleanly if torch absent)
+    from gomoku.rapfimine.pretrain import PretrainData, load_shards
+
+    out = str(tmp_path / "mine")
+    w = ShardWriter(out, worker_id=0, shard_size=3)
+    for i in range(7):
+        s = _some_state([i, BOARD_SIZE + i, 2 * BOARD_SIZE + (i % 3)])
+        la = [int(a) for a in s.legal_actions()[:3]]
+        w.add(planes=np.asarray(s.to_planes(), dtype=np.float16),
+              winrates={la[0]: 0.8, la[1]: 0.5, la[2]: 0.2},
+              key=canonical_key(s), side=0, ply=3)
+    w.close()
+    planes, soft = load_shards(out)
+    assert planes.shape[0] == 7 and soft.shape == (7, N_ACTIONS)
+    data = PretrainData(planes, soft, device="cpu", augment=True)
+    p, pi, v = data.sample(4)
+    assert tuple(p.shape) == (4, planes.shape[1], BOARD_SIZE, BOARD_SIZE)
+    assert tuple(pi.shape) == (4, N_ACTIONS)
+    # soft target is a proper distribution; value in [-1,1].
+    assert np.allclose(pi.sum(-1).numpy(), 1.0, atol=1e-4)
+    assert ((v >= -1.0) & (v <= 1.0)).all()
+
+
 def test_shard_payload_matches_teacher_v2_format(tmp_path):
     out = str(tmp_path / "mine")
     w = ShardWriter(out, worker_id=1, shard_size=10)
