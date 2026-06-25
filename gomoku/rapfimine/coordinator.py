@@ -25,7 +25,7 @@ import subprocess
 import time
 
 from gomoku.game import GameState
-from gomoku.rapfimine.canonical import canonical_state, canonical_key
+from gomoku.rapfimine.canonical import canonical_state, canonical_key, drop_history
 from gomoku.rapfimine.store import (
     count_examples, load_frontier, load_seen_keys, save_frontier,
 )
@@ -54,7 +54,7 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
              cmd: str, board_size: int, max_node: int = 20_000, max_pv: int = 24,
              expand_k: int = 8, timeout_ms: int = 1000, shard_size: int = 2_000,
              queue_high: int | None = None, monitor_every_s: float = 5.0,
-             checkpoint_every_s: float = 60.0, frontier_cap: int = 2_000_000,
+             checkpoint_every_s: float = 60.0, frontier_cap: int = 1_200_000,
              ncpu: int | None = None) -> int:
     """Mine canonical idx-2 positions until ``total`` examples exist on disk.
 
@@ -81,13 +81,13 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
     # it against the seen-set so anything analyzed since the snapshot is dropped.
     # deque + popleft = BFS order; appendleft on restore preserves it.
     frontier = collections.deque(
-        b for b in load_frontier(out_dir) if canonical_key(b) not in seen
+        drop_history(b) for b in load_frontier(out_dir) if canonical_key(b) not in seen
     )
     if frontier:
         print(f"[mine] resume: restored {len(frontier)} pending frontier boards",
               flush=True)
     else:
-        canon_root, _ = canonical_state(start_state)
+        canon_root, _ = canonical_state(drop_history(start_state))
         root_key = canonical_key(canon_root)
         if root_key not in seen:
             seen.add(root_key)

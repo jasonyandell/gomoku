@@ -26,6 +26,21 @@ import numpy as np
 from gomoku.game import GameState, _sym_board
 
 
+def drop_history(s: GameState) -> GameState:
+    """A history-less copy (board + move_count only).
+
+    The mine carries MILLIONS of frontier states; each ``GameState.apply`` builds
+    up to ``HISTORY_PLY`` past frames (~4 KB/state) purely for the stored planes'
+    recency channels. That blew the coordinator to >7 GB and OOM-killed the
+    engines. Dropping history makes each state ~450 B (~9× smaller). It is
+    SOUND for this teacher set: Rapfi analyzes the board alone (history-blind),
+    and gomoku is fully observable from the current stones — so the soft target
+    is identical; the stored planes simply carry zero recency channels (the
+    warm-start self-play repopulates and adapts them).
+    """
+    return GameState(board=s.board, move_count=s.move_count, history=())
+
+
 def transform_state(s: GameState, sym: int) -> GameState:
     """Apply one D4 symmetry (0..7) to a whole state: board + every history frame.
 

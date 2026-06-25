@@ -25,7 +25,7 @@ from gomoku.external_engine import (
     ExternalEngineConfig, ExternalEnginePlayer, ExternalEngineError,
 )
 from gomoku.game import GameState
-from gomoku.rapfimine.canonical import canonical_state, canonical_key
+from gomoku.rapfimine.canonical import canonical_state, canonical_key, drop_history
 from gomoku.rapfimine.store import ShardWriter
 
 
@@ -93,7 +93,7 @@ def worker_main(*, worker_id: int, work_q, result_q, cmd: str, out_dir: str,
                         break
                     if int(a) not in legal:
                         continue
-                    child = state.apply(int(a))
+                    child = drop_history(state.apply(int(a)))  # bound coordinator RAM
                     canon, _sym = canonical_state(child)
                     children.append((canonical_key(canon), canon))
                     kept += 1
