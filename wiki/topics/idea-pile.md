@@ -204,3 +204,89 @@ Built the spike: `scripts/gpu_vcf_prototype.py` (`solve_vcf_batch(boards (B,2,15
   the cap-limited CPU, **not a false positive** — clean (non-capped) agreement stays **100%**.
   **Verdict: VCF tactical truth is now real-time → #9's ground-truth teacher / certain-death
   guard-rail is unblocked on throughput.**
+
+---
+
+## 2026-06-25 — the big swing: a threat-CHEMISTRY representation (Jason's nose)
+
+### 10. Represent the board as threat-molecules, not stone-atoms  ⭐⭐ (representation-level swing)
+The frame that reorganizes everything above. **Gomoku, as humans play it, is not about stones — it's
+about a stone's *relationship to future threats*.** You build 2s because 2s give you options; you
+*avoid* building 2s when they only feed the opponent's threats; the skill is balancing those. The
+stone-by-stone, cell-by-cell view is an **artifact of the search algorithm and of "the board is a grid
+of positions"** — it's the convenient atomization, not the real object. The real object is an **overlay
+of threat patterns with a learnable chemistry**: functional groups (twos, open-threes, fours) that
+**react, catalyze, and quench** in combinations that are emphatically *not* set-addition.
+
+**The crisp statement of "not set-addition":** two open-threes that *share a stone* (the fork) vs two
+open-threes in different corners — same stone count, same "two threes," utterly different value. **The
+value is in the bond, not the count.** Set-union of lines throws away exactly the information that
+decides the game.
+
+**This is not just metaphor — there's formal grounding we can build on (vocabulary + theory):**
+Allis's **threat-space search** (the framework VCF/VCT are special cases of, Victor Allis 1994,
+*Searching for Solutions in Games and AI* / the threat-space-search papers) already models every threat
+as a **gain square** (where you play) + **cost squares** (the cells the line requires / the opponent
+must answer in). That gives a real *reaction algebra*:
+- threats **react** (forcing combination) when one's gain square is another's cost square, or they share
+  squares such that a *single* defense can't cover both (→ double-threat / fork);
+- threats are **inert** (genuinely additive, boring) when their squares don't interact;
+- threats are **mutually quenched** when the defense to one kills the other;
+- opponent stones are **inhibitors** — one enemy stone in a line poisons that whole species (no five
+  possible there) permanently;
+- a two is a **precursor / activation energy** — not a threat, but one move from igniting into an
+  open three. Hence a **reactivity gradient** empty < stone < two < three < open-three < four < double,
+  each rung "closer to ignition." A *value* is what integrates that gradient (mine minus theirs).
+
+**Why this is also the DIAGNOSIS of our positional wall.** We concluded the wall is positional, not
+tactical (TRAINING_WIKI 2026-06-25: net+root-VCF identical to net-only, 0 forced-win hits; deeper MCTS
+search didn't move it). Restated in this frame: **our value head is computing chemistry over the wrong
+primitives.** It's fed 17 raw-stone planes (`game.py to_planes()`: current + 7-ply history per side +
+const) into a conv tower. Convolution is *good* at LOCAL pattern detection — a length-5 four IS a conv
+feature (that's literally our GPU-VCF detector). But the chemistry — two threats far apart that share a
+square — is a **long-range RELATIONAL** computation, and conv-over-a-grid is structurally weak at exactly
+that. The net sees atoms everywhere and must **re-derive every bond, every forward pass**, through
+stacked receptive fields — with no 5000-TPU budget to bake that re-derivation into the weights.
+*Testable corollary:* NNUE engines for renju/gomoku typically feed **line-pattern / shape features**,
+not raw stones (Rapfi's exact feature set unconfirmed — verify). If so, "Rapfi out-evaluates us
+positionally" has a concrete mechanism: **Rapfi does chemistry over molecules; we do it over atoms.**
+
+**The scrappy-team move — hand-code the cheap part, learn the expensive part:**
+- **Cheap part we already own (this-week experiment):** detecting atoms-and-bonds is just convolution —
+  the exact GPU machinery from #9. Precompute per board a stack of **threat-channel input planes**:
+  open-three-here, four-here, double-four-gain-square-here, **cost-square-overlap heat** (this cell is a
+  cost square for N of my threats = the bond/connectivity signal), and — the new toy — **"playing here
+  hands the opponent a VCF" / "playing here wins by VCF"** (from `solve_vcf_batch`, now real-time).
+  Feed those *alongside* the raw stones. The net stops re-deriving fours and spends capacity on the
+  reaction dynamics. **Cost: low** — detectors exist; it's a `to_planes()` augmentation + retrain.
+- **The expensive part worth net capacity:** the *reaction dynamics* — how functional groups combine
+  into wins — is the thing we DON'T know how to hand-code past VCF/VCT, and it's where the net should
+  spend its weights.
+- **The real swing (moonshot):** stop feeding a grid for the relational part. **Nodes = detected
+  threats, edges = their square-interactions (shared cost square / gain=cost coupling); run
+  attention / message-passing over that graph.** Every threat attends to every other; the model
+  *learns the reaction table*. Attention is the natural fit because "which pair/triple of threats is
+  reactive" is a learned, non-additive, all-pairs function — catalysis and double-threats fall right
+  out. **Cost: high** (new architecture + threat-graph builder), but it's the honest form of the idea.
+
+**The one risk, named:** engineered threat features can cap the net at *our* taxonomy (the classic
+"handcrafted features eventually lose to learned ones"). **Resolution — hybrid, not a cage:** keep the
+raw-stone planes in the input too, so the net can still discover species outside our vocabulary; the
+threat channels are a *scaffold and strong prior*, not a replacement. We hand it the atoms and bonds; it
+learns the chemistry and stays free to find new elements. Respects both the nose and the from-scratch
+dream, on an M5 budget.
+
+- **VCF/VCT are the boundary conditions, not the equation.** They are the two *fully-forcing* reactions
+  where the chemistry is exactly computable (and now, post-#9, real-time). The general equation this idea
+  names is: **position value as a learned function over the threat reaction-network**, with VCF/VCT as
+  the known-exact boundary. To our knowledge this has been used for *solving* (threat-space search) but
+  **not as a learned *representation*** — that's the open gap.
+- **Measure:** (a) does adding threat-channel input planes move the Rapfi ms-ladder crossing (idea #4)
+  vs the raw-stone baseline, holding net size fixed? Cleanest first probe. (b) ablate raw-stones-only
+  vs +threat-channels vs threat-graph. (c) the Rapfi-feature-set check (is its edge representational?).
+- **Composes with:** #9 (the threat/VCF detectors ARE the channel generators), #7 (if Rapfi's edge is
+  its shape features, distilling its eval and feeding shape features are two routes to the same fix),
+  #1/#4 (better evaluator → search has something better to surface and distill).
+- **Runnable seed:** augment `gomoku/game.py to_planes()` with K threat channels computed by the #9 conv
+  detectors (+ a `solve_vcf_batch` certain-death/birth channel); retrain at fixed net size; gate on the
+  ms-ladder crossing. The moonshot (threat-graph + attention) is a separate, larger lane.
