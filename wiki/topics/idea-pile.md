@@ -196,6 +196,11 @@ Built the spike: `scripts/gpu_vcf_prototype.py` (`solve_vcf_batch(boards (B,2,15
 - **Open items:** returns the *verdict* not `winning_move`/`mate_distance` yet (the block-index
   machinery is already there — easy add); **no child-board dedup yet** (a per-level hash dedup is the
   obvious next win on tactical batches); plain VCF only, **not VCT** (the threes solver). The
-  node-budget accounting differs (CPU DFS calls vs BFS frontier nodes) so the only *theoretically*
-  possible disagreements are cap-boundary cases — none observed. **Verdict: VCF tactical truth is now
-  real-time → #9's ground-truth teacher / certain-death guard-rail is unblocked on throughput.**
+  node-budget accounting differs (CPU DFS calls vs BFS frontier nodes) so the only possible
+  disagreements are cap-boundary cases — and across ~5,900 total positions **exactly ONE** appeared
+  (a later 600-dense-board run): a dense board where the CPU **hit its 200k-node DFS cap and returned
+  an *unproven* `False`** (`hit_cap=True` = "unproven", not proven-safe) while the GPU completed and
+  **proved a genuine forced win**. So the divergence is the GPU being strictly *more complete* than
+  the cap-limited CPU, **not a false positive** — clean (non-capped) agreement stays **100%**.
+  **Verdict: VCF tactical truth is now real-time → #9's ground-truth teacher / certain-death
+  guard-rail is unblocked on throughput.**
