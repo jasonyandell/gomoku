@@ -144,7 +144,11 @@ def pretrain(*, shards_dir: str, out_path: str, size: str = "large",
     model.train()
     t0 = time.time()
     for ep in range(epochs):
-        pl_sum = vl_sum = 0.0
+        # Accumulate losses ON-DEVICE and sync ONCE per epoch. A per-step
+        # float(loss) forced an MPS->CPU sync every step, flushing the command
+        # buffer and serializing the GPU (host sat ~7% CPU blocked on syncs).
+        pl_acc = torch.zeros((), device=dev)
+        vl_acc = torch.zeros((), device=dev)
         for _ in range(steps):
             p, pi, z = data.sample(batch_size)
             logits, value = model(p)
@@ -155,8 +159,10 @@ def pretrain(*, shards_dir: str, out_path: str, size: str = "large",
             loss.backward()
             opt.step()
             sched.step()
-            pl_sum += float(pl.detach())
-            vl_sum += float(vl.detach())
+            pl_acc += pl.detach()
+            vl_acc += vl.detach()
+        pl_sum = float(pl_acc)  # single sync per epoch
+        vl_sum = float(vl_acc)
         print(f"[pretrain] epoch {ep+1:>3d}/{epochs}  policy_ce={pl_sum/steps:.4f}  "
               f"value_mse={vl_sum/steps:.4f}  lr={sched.get_last_lr()[0]:.2e}  "
               f"{time.time()-t0:.0f}s", flush=True)
