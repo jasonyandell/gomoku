@@ -1,8 +1,10 @@
 # Rapfi idx-2 distillation mine — the "Bruce Lee one-position" experiment
 
-**Status: IN PROGRESS (2026-06-25).** Tool built + tuned; first 1M-position mine
-running; pretrain + warm-start to follow. This page is the synthesis; raw run
-detail goes to `TRAINING_WIKI.md`.
+**Status: IN PROGRESS (2026-06-25).** Mine DONE — **1,126,597 canonical idx-2
+positions on disk** (≥1M goal met, crash-robust). Pretrain running as a 12-epoch
+warm-start seed; AlphaZero warm-start + Rapfi-probe loop wired into the autonomous
+driver (`mined/drive_pipeline.sh`). This page is the synthesis; raw run detail
+goes to `TRAINING_WIKI.md`.
 
 ## Hypothesis (Jason's framing)
 
@@ -91,18 +93,41 @@ GOMOKU_BOARD_SIZE=15 uv run python -m gomoku.rapfimine.pretrain \
 only 8 scored and top-1 disagrees midgame (too shallow). **5000 is the
 quality-preserving sweet spot.** 1.2M positions ≈ ~28 min.
 
-## Pipeline
+## A third fix — pretrain per-epoch sync (perf, #86)
 
-1. **Mine** idx-2 to ≥1M canonical positions (`rapfimine run`, max_node 5000).
-2. **Pretrain** a `large` (128×10, "Bruce" size) net on the soft policy+value
-   (`rapfimine.pretrain`). Sanity gate: H2H vs Rapfi @idx-2 on the pretrained net.
-3. **Warm-start AlphaZero**: `run_sweep --resume` the pretrained checkpoint on an
-   **idx-2-only** cell (fixed opening, no random openings), overnight.
-4. **Verdict**: H2H vs native Rapfi-NNUE @idx-2, both colors separately (the
-   white side is the real bar). Standard champion-not-Rapfi gating still applies
-   for any cross-position claim — but here the *whole point* is the one position.
+The pretrain loop called `float(pl.detach())` **every step** to accumulate the
+running loss. On MPS each `float()` forces a device→host sync that flushes the
+command buffer and serializes the GPU — the host sat at **~7% CPU** blocked on
+syncs while a 432 s/epoch run looked "GPU-bound" but wasn't fully pipelined. Fix:
+accumulate `pl_acc/vl_acc` as on-device scalars and sync **once per epoch**.
+(Mirrors the mine's lesson: measure, find the host-side stall, remove it.)
+
+## Pipeline — autonomous driver (`mined/drive_pipeline.sh`)
+
+Sequential by design (each stage wants the machine): the driver waits for the
+mine to finish, then pretrains, gates, warm-starts AZ, and probes. Re-runnable
+from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
+
+1. **Mine** idx-2 to ≥1M canonical positions (`rapfimine run`, max_node 5000). ✅
+2. **Pretrain** a `large` (128×10, "Bruce" size) net on the soft policy+value —
+   **12 epochs** (a warm-START seed only needs Rapfi's idx-2 move preferences;
+   AZ self-play continues training). Gate: H2H vs Rapfi @idx-2 on the seed.
+3. **Warm-start AlphaZero**: the `G15-idx2-warmstart` cell (byte-identical to
+   `G15-fixed-openings`, own run-dir + wandb run) launched via
+   `run_sweep --cell G15-idx2-warmstart --resume checkpoints/idx2_pretrain.pt`
+   with `GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8` so self-play sees **only idx-2**
+   (`book[2] == ((3,2),(5,4),(4,5))`; D4 recovered by the trainer's augment).
+4. **Probe**: every 30 min the driver runs `rapfimine.eval_idx2` on the live
+   `latest.pt` vs native Rapfi-NNUE @idx-2 (n=48), logging one strength-vs-time
+   curve to `mined/az_vs_rapfi.log` — both colors separately (white is the real
+   bar; see [white-side-defense-plan.md](white-side-defense-plan.md)).
 
 ## Open results
 
-_(to be filled as the run completes — dataset size, pretrain CE/value curves,
-pretrained-net H2H vs Rapfi, warm-started self-play H2H vs Rapfi by color.)_
+- **Dataset:** 1,126,597 canonical idx-2 positions (577 shards, 8.6 GB f16),
+  ~28 min to mine at ~700/s on the M5 Max.
+- **Pretrain:** epoch 1 (pre-sync-fix run) policy_ce 2.87, value_mse 0.17
+  (vs ~5.4 uniform → already capturing Rapfi's top moves). Curves + seed H2H to
+  follow from the 12-epoch run.
+- **Warm-started self-play H2H vs Rapfi @idx-2, by color:** _(to be filled from
+  `mined/az_vs_rapfi.log`)._
