@@ -52,13 +52,20 @@ def _rapfi_cpu_percent() -> float:
 
 def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
              cmd: str, board_size: int, max_node: int = 20_000, max_pv: int = 24,
-             expand_k: int = 8, timeout_ms: int = 1000, shard_size: int = 50_000,
+             expand_k: int = 8, timeout_ms: int = 1000, shard_size: int = 2_000,
              queue_high: int | None = None, monitor_every_s: float = 5.0,
+             checkpoint_every_s: float = 60.0, frontier_cap: int = 2_000_000,
              ncpu: int | None = None) -> int:
     """Mine canonical idx-2 positions until ``total`` examples exist on disk.
 
-    Returns the final on-disk example count.
+    BFS (breadth) for diverse coverage of the idx-2 neighbourhood — a deep
+    narrow DFS line would be a poor 'master this position' dataset. ``frontier_cap``
+    bounds RAM + checkpoint cost: past it, analyzed boards are still stored but
+    not expanded (we already have ample pending breadth). Returns the final
+    on-disk example count.
     """
+    import collections
+
     os.makedirs(out_dir, exist_ok=True)
     ncpu = ncpu or (os.cpu_count() or 1)
     queue_high = queue_high or max(2 * workers, 64)  # frontier-in-flight ceiling
@@ -72,9 +79,10 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
     # ---- restore the frontier (pending work) from its checkpoint, else seed ---
     # The frontier checkpoint is the pending-work half of the durable log; filter
     # it against the seen-set so anything analyzed since the snapshot is dropped.
-    frontier: list[GameState] = [
+    # deque + popleft = BFS order; appendleft on restore preserves it.
+    frontier = collections.deque(
         b for b in load_frontier(out_dir) if canonical_key(b) not in seen
-    ]
+    )
     if frontier:
         print(f"[mine] resume: restored {len(frontier)} pending frontier boards",
               flush=True)
@@ -113,25 +121,25 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
     def _dispatch() -> None:
         nonlocal next_id
         while frontier and len(inflight) < queue_high:
-            board = frontier.pop()     # LIFO is fine; coverage, not order, matters
+            board = frontier.popleft()  # FIFO = BFS breadth (diverse coverage)
             bid = next_id
             try:
                 work_q.put_nowait((bid, board))
                 inflight[bid] = board
                 next_id += 1
             except queue.Full:
-                frontier.append(board)
+                frontier.appendleft(board)
                 break
 
     def _checkpoint_frontier() -> None:
         # Pending work = not-yet-dispatched frontier + in-flight boards (re-queued
-        # on resume). Bounded (~frontier + queue_high), so the pickle is cheap.
+        # on resume). Capped at frontier_cap, so the pickle stays bounded.
         save_frontier(out_dir, list(frontier) + list(inflight.values()))
         state["last_ckpt"] = time.time()
 
     def _maybe_monitor() -> None:
         now = time.time()
-        if now - state["last_ckpt"] >= 15.0:
+        if now - state["last_ckpt"] >= checkpoint_every_s:
             _checkpoint_frontier()
         if now - state["last_mon"] < monitor_every_s:
             return
@@ -159,11 +167,14 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
                 continue
             inflight.pop(res.board_id, None)
             produced += res.n_examples
-            for ckey, cstate in res.children:
-                if ckey in seen:
-                    continue
-                seen.add(ckey)
-                frontier.append(cstate)
+            # Past frontier_cap we keep STORING analyzed boards but stop expanding
+            # (ample breadth already pending) — bounds RAM + checkpoint cost.
+            if len(frontier) < frontier_cap:
+                for ckey, cstate in res.children:
+                    if ckey in seen:
+                        continue
+                    seen.add(ckey)
+                    frontier.append(cstate)
             _dispatch()
             _maybe_monitor()
     finally:

@@ -39,9 +39,13 @@ def main(argv=None) -> int:
     r.add_argument("--max-pv", type=int, default=24, help="scored support per board")
     r.add_argument("--max-node", type=int, default=20_000)
     r.add_argument("--timeout-ms", type=int, default=1000)
-    r.add_argument("--shard-size", type=int, default=50_000)
+    r.add_argument("--shard-size", type=int, default=2_000,
+                   help="examples per worker shard — small = frequent durability")
     r.add_argument("--opening", default="idx2")
-    r.add_argument("--monitor-every-s", type=float, default=5.0)
+    r.add_argument("--monitor-every-s", type=float, default=10.0)
+    r.add_argument("--checkpoint-every-s", type=float, default=60.0)
+    r.add_argument("--frontier-cap", type=int, default=2_000_000,
+                   help="stop expanding (still store) past this pending count")
 
     s = sub.add_parser("status", help="print on-disk example count for a mine dir")
     s.add_argument("--out", required=True)
@@ -63,7 +67,8 @@ def main(argv=None) -> int:
         start_state=_start_state(args.opening), out_dir=args.out, total=args.total,
         workers=args.workers, cmd=cmd, board_size=BOARD_SIZE, max_node=args.max_node,
         max_pv=args.max_pv, expand_k=args.expand_k, timeout_ms=args.timeout_ms,
-        shard_size=args.shard_size, monitor_every_s=args.monitor_every_s)
+        shard_size=args.shard_size, monitor_every_s=args.monitor_every_s,
+        checkpoint_every_s=args.checkpoint_every_s, frontier_cap=args.frontier_cap)
     return 0 if final >= args.total else 1
 
 
