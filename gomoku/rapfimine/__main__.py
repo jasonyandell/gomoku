@@ -44,8 +44,9 @@ def main(argv=None) -> int:
     r.add_argument("--opening", default="idx2")
     r.add_argument("--monitor-every-s", type=float, default=10.0)
     r.add_argument("--checkpoint-every-s", type=float, default=60.0)
-    r.add_argument("--frontier-cap", type=int, default=2_000_000,
-                   help="stop expanding (still store) past this pending count")
+    r.add_argument("--frontier-cap", type=int, default=1_200_000,
+                   help="stop expanding (still store) past this pending count "
+                        "(bounds coordinator RAM + checkpoint size)")
 
     s = sub.add_parser("status", help="print on-disk example count for a mine dir")
     s.add_argument("--out", required=True)

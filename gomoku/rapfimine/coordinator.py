@@ -22,6 +22,7 @@ import multiprocessing as mp
 import os
 import queue
 import subprocess
+import threading
 import time
 
 from gomoku.game import GameState
@@ -99,7 +100,11 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
 
     ctx = mp.get_context("spawn")
     work_q = ctx.Queue(maxsize=queue_high)
-    result_q = ctx.Queue()
+    # BOUNDED result_q (durability): an unbounded result_q let workers outrun a
+    # momentarily-slow coordinator and balloon memory with buffered results. A
+    # generous bound applies backpressure (workers briefly block on put) instead —
+    # safe because the drain loop never blocks (checkpoint is off-thread below).
+    result_q = ctx.Queue(maxsize=max(4 * queue_high, 256))
 
     procs = []
     for wid in range(workers):
@@ -116,7 +121,8 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
     inflight: dict[int, GameState] = {}  # board_id -> board, for frontier checkpoint
     next_id = 0
     t0 = time.time()
-    state = {"last_mon": t0, "last_produced": 0, "last_ckpt": t0}
+    state = {"last_mon": t0, "last_produced": 0, "last_ckpt": t0,
+             "ckpt_thread": None}
 
     def _dispatch() -> None:
         nonlocal next_id
@@ -131,11 +137,26 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
                 frontier.appendleft(board)
                 break
 
-    def _checkpoint_frontier() -> None:
+    def _checkpoint_frontier(blocking: bool = False) -> None:
         # Pending work = not-yet-dispatched frontier + in-flight boards (re-queued
-        # on resume). Capped at frontier_cap, so the pickle stays bounded.
-        save_frontier(out_dir, list(frontier) + list(inflight.values()))
+        # on resume). The slow part (pickle + multi-hundred-MB write) runs OFF the
+        # drain loop in a daemon thread: a synchronous checkpoint on the main loop
+        # was the stall mechanism (it stopped draining result_q -> workers blocked
+        # on put -> engines idled). We snapshot the refs on THIS thread (fast list
+        # copy) so the data is consistent, then hand the write to the thread. Only
+        # one checkpoint in flight; skip if the previous is still writing.
+        if not blocking and state.get("ckpt_thread") is not None \
+                and state["ckpt_thread"].is_alive():
+            return  # previous checkpoint still writing — don't pile up
+        snapshot = list(frontier) + list(inflight.values())  # fast (refs only)
         state["last_ckpt"] = time.time()
+        if blocking:
+            save_frontier(out_dir, snapshot)
+            return
+        th = threading.Thread(target=save_frontier, args=(out_dir, snapshot),
+                              daemon=True)
+        th.start()
+        state["ckpt_thread"] = th
 
     def _maybe_monitor() -> None:
         now = time.time()
@@ -178,7 +199,7 @@ def run_mine(*, start_state: GameState, out_dir: str, total: int, workers: int,
             _dispatch()
             _maybe_monitor()
     finally:
-        _checkpoint_frontier()  # final snapshot so a clean stop resumes exactly
+        _checkpoint_frontier(blocking=True)  # final snapshot must complete before exit
         # Stop workers: drain queue, send sentinels, join.
         for _ in procs:
             try:
