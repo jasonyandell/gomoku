@@ -5,7 +5,7 @@
 set -uo pipefail
 cd /Users/jason/code/gomoku-gentle-rapfi-teacher
 export GOMOKU_BOARD_SIZE=15
-SHARDS=mined/idx2_15x15
+SHARDS=/Users/jason/data/rapfimine/idx2_15x15
 CKPT=checkpoints/idx2_pretrain.pt
 LOG=mined/pipeline.log
 TARGET=1000000

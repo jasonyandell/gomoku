@@ -1,7 +1,7 @@
 """CLI for the idx-2 Rapfi mine.
 
     GOMOKU_BOARD_SIZE=15 uv run python -m gomoku.rapfimine run \\
-        --out mined/idx2_15x15 --total 1000000 --workers 30
+        --out /Users/jason/data/rapfimine/idx2_15x15 --total 1000000 --workers 30
 
 ``status`` prints the on-disk example count for a mine dir.
 """

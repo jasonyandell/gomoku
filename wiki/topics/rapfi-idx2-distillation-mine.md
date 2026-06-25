@@ -11,9 +11,9 @@ and it all works. This page is the synthesis; raw run detail goes to `TRAINING_W
 - **Mining harness** (`gomoku/rapfimine/`): multiprocess flat-file BFS mine, D4
   canonical dedup, crash-robust resume. Maxed the machine at **~700 moves/s**;
   **1,126,597 canonical idx-2 positions** (9.5 GB) banked durably OUTSIDE git at
-  **`/Users/jason/data/rapfimine/idx2_15x15/`**, symlinked from `mined/idx2_15x15`
-  so all tooling paths still resolve (`~/data` is the machine's data area alongside
-  `swap2/` and `autolab/`).
+  **`/Users/jason/data/rapfimine/idx2_15x15/`**. All tooling references this
+  absolute path directly (no symlink — symlinks don't resolve across worktrees;
+  `~/data` is the machine's data area alongside `swap2/` and `autolab/`).
 - **Pretrain** (`pretrain.py`): supervised distillation → `checkpoints/idx2_pretrain.pt`
   (epoch-3 seed, policy_ce 2.04). Finding: GPU-bound; per-epoch on-device sync fix.
 - **Warm-start AZ** (`run_sweep` `G15-idx2-warmstart` cell): idx-2-only self-play
@@ -81,10 +81,10 @@ policy+value)` pairs by BFS over a fixed opening. Built because the in-process
 CLI:
 ```bash
 GOMOKU_BOARD_SIZE=15 uv run python -m gomoku.rapfimine run \
-    --out mined/idx2_15x15 --total 1200000 --workers 24 --max-node 5000
-GOMOKU_BOARD_SIZE=15 uv run python -m gomoku.rapfimine status --out mined/idx2_15x15
+    --out /Users/jason/data/rapfimine/idx2_15x15 --total 1200000 --workers 24 --max-node 5000
+GOMOKU_BOARD_SIZE=15 uv run python -m gomoku.rapfimine status --out /Users/jason/data/rapfimine/idx2_15x15
 GOMOKU_BOARD_SIZE=15 uv run python -m gomoku.rapfimine.pretrain \
-    --shards mined/idx2_15x15 --out checkpoints/idx2_pretrain.pt --size large
+    --shards /Users/jason/data/rapfimine/idx2_15x15 --out checkpoints/idx2_pretrain.pt --size large
 ```
 
 ## Two correctness/perf fixes this surfaced (both committed, #86)
@@ -253,5 +253,5 @@ GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8 \
 original driver bug that left the probe a no-op).
 The whole pipeline is also re-runnable cold via `bash mined/drive_pipeline.sh`
 (the mine-wait is a no-op once ≥1M is on disk; it re-pretrains → gates → AZ →
-probes). Mine shards (`mined/idx2_15x15/`) and the seed
+probes). Mine shards (`/Users/jason/data/rapfimine/idx2_15x15/`) and the seed
 (`checkpoints/idx2_pretrain.pt`) are the durable artifacts.

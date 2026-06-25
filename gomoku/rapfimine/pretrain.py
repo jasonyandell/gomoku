@@ -18,7 +18,7 @@ float32 set on the device. D4 augment is applied per batch (planes rotated/
 flipped, the dense winrate target permuted by the SAME symmetry).
 
     GOMOKU_BOARD_SIZE=15 uv run python -m gomoku.rapfimine.pretrain \\
-        --shards mined/idx2_15x15 --out checkpoints/idx2_pretrain.pt \\
+        --shards /Users/jason/data/rapfimine/idx2_15x15 --out checkpoints/idx2_pretrain.pt \\
         --size large --epochs 40 --batch-size 1024 --lr 3e-4
 """
 from __future__ import annotations
