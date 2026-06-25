@@ -122,12 +122,25 @@ from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
    curve to `mined/az_vs_rapfi.log` — both colors separately (white is the real
    bar; see [white-side-defense-plan.md](white-side-defense-plan.md)).
 
-## Open results
+## Results so far (2026-06-25)
 
 - **Dataset:** 1,126,597 canonical idx-2 positions (577 shards, 8.6 GB f16),
   ~28 min to mine at ~700/s on the M5 Max.
-- **Pretrain:** epoch 1 (pre-sync-fix run) policy_ce 2.87, value_mse 0.17
-  (vs ~5.4 uniform → already capturing Rapfi's top moves). Curves + seed H2H to
-  follow from the 12-epoch run.
-- **Warm-started self-play H2H vs Rapfi @idx-2, by color:** _(to be filled from
-  `mined/az_vs_rapfi.log`)._
+- **Pretrain is GPU-bound, not host-bound.** Epoch = ~437 s at batch 1024 / 1100
+  steps (`large` net). The per-step-sync fix did NOT change wall-clock (436 s vs
+  432 s) — the host was already just waiting on the GPU; the net's forward+backward
+  IS the cost. The only real lever is fewer total steps, so the warm-start uses an
+  early checkpoint, not all 12 epochs.
+- **Pretrain CE curve (the seed learning Rapfi's idx-2 policy):**
+  epoch 1 ce=2.89 / vmse=0.173 → ep2 2.17 / 0.110 → **ep3 2.04 / 0.097** (flattening;
+  banked the epoch-3 checkpoint as the warm-start seed). vs ~5.4 uniform.
+- **Seed H2H vs Rapfi @idx-2 (n=48, MCTS-160):** **0/48, both colors 0%.** The raw
+  distilled seed does NOT stand a chance against full Rapfi-NNUE — expected, and the
+  baseline to beat. This is the experiment's whole question: can AZ self-play *from
+  this seed* close the gap (esp. the white-defense wound)?
+- **Warm-start AlphaZero: RUNNING** (`G15-idx2-warmstart`, resumed from the seed at
+  epoch 4 → pretrained weights confirmed loaded; 3 self-play workers; idx-2 only via
+  `GOMOKU_DROP_OPENERS`). First trained epoch (18): games=8 buf=1584 pl=3.21 vl=0.39
+  plies=27.8 — genuinely training on its own idx-2 games.
+- **Warm-started self-play H2H vs Rapfi @idx-2, by color over training:** _(accruing
+  every 30 min in `mined/az_vs_rapfi.log` — the verdict curve.)_
