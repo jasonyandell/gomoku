@@ -164,17 +164,17 @@ from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
 
 Max-strength Rapfi-NNUE is a wall: a climbing net reads **0/48 for hours** before
 denting it, so it can't show progress. `gomoku/rapfimine/eval_gradient.py` plays
-the net @idx-2 (white split) against a STANDARD strength ladder so improvement is
-visible as it clears rungs:
+the net @idx-2 (white split) against **native Rapfi graded purely by per-move
+think-time** so improvement is visible as it clears rungs:
 
-> heuristic < lookahead-d4 < rapfi@50ms < rapfi@200ms < rapfi@1000ms
+> rapfi@25ms < rapfi@50ms < rapfi@100ms < rapfi@250ms < rapfi@1000ms
 
-(all standard: `gomoku.baselines` via `parse_spec`, native Rapfi graded by per-move
-think-time — nothing invented). **Calibration finding (epoch ~145):** the net
-already **crushes random / heuristic / lookahead-d2 at 100% (both colors)** while
-reading **0% vs max Rapfi** — so the trivial rungs are saturated and the live
-ladder is lookahead-d4 → graded-Rapfi. Rapfi think-time is the dial that fills
-the gap between "beats classical search" and "touches max Rapfi".
+One clean strength dial (Rapfi's own engine, just less time), nothing invented.
+The classical baselines were dropped: at epoch ~145 the net already **crushes
+random / heuristic / lookahead-d2 at 100% (both colors)** (saturated), and
+lookahead-d4 is resource-heavy (negamax on 15×15). The 40× think-time spread
+localizes where the net sits and tracks its climb toward the 1000 ms bar (≈ the
+max-strength Rapfi the plain idx-2 gate reads 0 against).
 
 Driven by `mined/gradient_loop.sh` (detached, every 45 min on the newest
 `epoch*.pt`) → one `GRADIENT` line per pass in `mined/az_gradient.log`. In-session

@@ -31,18 +31,18 @@ from gomoku.eval_panel import (
 from gomoku.rapfi_pool import RapfiPool, rapfi_available
 
 
-# (label, opponent_spec, rapfi_timeout_ms | None) — weak → strong. Non-rapfi rungs
-# are gomoku.baselines specs; rapfi rungs lease a warm engine at the given think-time.
-# At epoch ~145 the warm-start net already CRUSHES random/heuristic/lookahead-d2
-# (100% both colors) while reading 0% vs max Rapfi — so the informative band is
-# lookahead-d4 → graded-Rapfi. Rapfi think-time (timeout_ms) is the strength dial
-# that fills the gap between "beats classical search" and "touches max Rapfi".
+# (label, opponent_spec, rapfi_timeout_ms | None) — weak → strong. One clean dial:
+# native Rapfi graded purely by per-move think-time. The classical baselines are
+# dropped — at epoch ~145 the net already crushes random/heuristic/lookahead-d2 at
+# 100% (saturated), and lookahead-d4 is resource-heavy (negamax on 15x15). A 40x
+# think-time spread localizes where the net sits and tracks its climb toward the
+# 1000ms bar (~the max-strength Rapfi the plain idx-2 gate reads 0 against).
 DEFAULT_RUNGS = [
-    ("heuristic",    "heuristic",         None),  # cheap canary (must stay ~1.0)
-    ("lookahead-d4", "lookahead:depth=4", None),  # strongest classical rung
-    ("rapfi@50ms",   "rapfi",             50),
-    ("rapfi@200ms",  "rapfi",             200),
-    ("rapfi@1000ms", "rapfi",             1000),   # ~the max-strength bar
+    ("rapfi@25ms",   "rapfi",   25),
+    ("rapfi@50ms",   "rapfi",   50),
+    ("rapfi@100ms",  "rapfi",  100),
+    ("rapfi@250ms",  "rapfi",  250),
+    ("rapfi@1000ms", "rapfi", 1000),   # ~the max-strength bar
 ]
 
 
