@@ -144,3 +144,23 @@ from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
   plies=27.8 — genuinely training on its own idx-2 games.
 - **Warm-started self-play H2H vs Rapfi @idx-2, by color over training:** _(accruing
   every 30 min in `mined/az_vs_rapfi.log` — the verdict curve.)_
+
+## Crash recovery / resume (durability)
+
+The run is crash-robust by checkpoint, not by a supervisor — the 10-min stall
+cron (or any fresh session reading this) is the recovery loop. If the AZ trainer
+dies, relaunch from the run-dir's `latest.pt` (weights **and** buffer), NOT the
+pretrain seed (that would discard self-play progress):
+
+```bash
+cd <this worktree>; export GOMOKU_BOARD_SIZE=15
+# kill any orphaned workers first so run_sweep doesn't double them up:
+pkill -f 'sweep_runs/G15-idx2-warmstart-board15/' ; sleep 2
+GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8 \
+  uv run python scripts/run_sweep.py --cell G15-idx2-warmstart \
+    --resume sweep_runs/G15-idx2-warmstart-board15/checkpoints/latest.pt
+```
+The whole pipeline is also re-runnable cold via `bash mined/drive_pipeline.sh`
+(the mine-wait is a no-op once ≥1M is on disk; it re-pretrains → gates → AZ →
+probes). Mine shards (`mined/idx2_15x15/`) and the seed
+(`checkpoints/idx2_pretrain.pt`) are the durable artifacts.
