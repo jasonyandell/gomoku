@@ -167,6 +167,35 @@ directional length-5 line-convolutions (four/five detection in the 4 directions)
   **53 b/s**. So detection is NOT the cost — the **sequential forcing-TREE recursion** is.
 - **The opportunity:** detection being 12.7M/s means a **batched-frontier GPU-VCF** (run thousands
   of VCF searches in lockstep; each ply, advance every search's forcing-move frontier through the
-  GPU detection kernel) could plausibly do **thousands of FULL solves/sec vs CPU's 53** — a ~100×
-  that turns VCF tactical truth from too-slow into a first-class real-time teacher/guard-rail.
-  This is the concrete build #9 points to; the per-ply primitive is proven free.
+  GPU detection kernel) could turn VCF tactical truth from too-slow into a first-class real-time
+  teacher/guard-rail. This is the concrete build #9 points to; the per-ply primitive is proven free.
+
+#### ✅ PROVEN (2026-06-25) — batched-frontier GPU-VCF BUILT and MEASURED: ~2,500× CPU, 100% correct
+Built the spike: `scripts/gpu_vcf_prototype.py` (`solve_vcf_batch(boards (B,2,15,15) bool) ->
+(won, hit_cap)`, MPS). **It crushed the projection** — not ~100×, but **~2,500×**.
+- **THE INSIGHT (why it's exact AND batchable):** plain VCF is a pure **OR / reachability** search,
+  not a real AND/OR tree — the defender is ALWAYS forced to the *unique* completion square of the
+  attacker's four, so every defender node has exactly one child. So "is there a forced win?" ==
+  "from the root, can the attacker reach (within max_depth) a node with an immediate five or a sound
+  double-four?". Run that as a **breadth-first frontier**: every node in the current frontier is an
+  attacker-to-move board at the *same depth*, so the whole frontier advances **in lockstep** and ALL
+  threat detection batches across the B searches at once (directional shift-products over `(F,15,15)`
+  bool planes). One host sync per BFS level (the child-gather `nonzero`); no `.item()` in the loop.
+- Four-detection is provably equal to `vcf._five_completions`: a four-move m + completion c ⟺ a
+  length-5 window of 3 own + the two empties {m,c} + 0 opp; each (direction, signed-offset) pair maps
+  to a *unique* completion cell, so the count of firing pairs == CPU's `len(comps)` (single vs double
+  four) and the single-four block square is `m+δ·d`. Forcing test == `_has_immediate_five(defender)`.
+- **CORRECTNESS: 100% agreement vs CPU `solve_vcf` across 5,300 positions** (500 spec + 2,400 random
+  midgame + 2,400 dense), incl. **121 deep mates up to mate-distance 15** — every verdict matched;
+  CPU `hit_cap`=0, the one GPU frontier-truncation case still agreed.
+- **THROUGHPUT (M5 Max MPS, random midgame mix):** scales to ~**130–146k FULL solves/sec at
+  B≈16k–65k** vs CPU's **53/s** = **~2,500× (peak 2,749× @ B=65,536, depth 8)**. Saturates near
+  B≈16k; small B is launch-overhead-bound (~8–10k/s @256). depth has little effect (random wins are
+  shallow). Throughput is position-mix-dependent — a batch of deep-tree forced-wins branches the
+  frontier wider and costs more (capped at `max_frontier=4M`, ~1.8 GB, flagged `hit_cap`).
+- **Open items:** returns the *verdict* not `winning_move`/`mate_distance` yet (the block-index
+  machinery is already there — easy add); **no child-board dedup yet** (a per-level hash dedup is the
+  obvious next win on tactical batches); plain VCF only, **not VCT** (the threes solver). The
+  node-budget accounting differs (CPU DFS calls vs BFS frontier nodes) so the only *theoretically*
+  possible disagreements are cap-boundary cases — none observed. **Verdict: VCF tactical truth is now
+  real-time → #9's ground-truth teacher / certain-death guard-rail is unblocked on throughput.**
