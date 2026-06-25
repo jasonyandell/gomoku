@@ -163,18 +163,36 @@ from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
 ## Eval GRADIENT — measuring progress below the max-Rapfi wall
 
 Max-strength Rapfi-NNUE is a wall: a climbing net reads **0/48 for hours** before
-denting it, so it can't show progress. `gomoku/rapfimine/eval_gradient.py` plays
-the net @idx-2 (white split) against **native Rapfi graded purely by per-move
-think-time** so improvement is visible as it clears rungs:
+denting it, so it can't show progress. The gradient plays the net @idx-2 (white
+split) against **native Rapfi graded by per-move think-time** so improvement shows
+as it clears rungs:
 
-> rapfi@25ms < rapfi@50ms < rapfi@100ms < rapfi@250ms < rapfi@1000ms
+> rapfi@25ms < rapfi@50ms < rapfi@100ms < rapfi@200ms
 
-One clean strength dial (Rapfi's own engine, just less time), nothing invented.
-The classical baselines were dropped: at epoch ~145 the net already **crushes
-random / heuristic / lookahead-d2 at 100% (both colors)** (saturated), and
-lookahead-d4 is resource-heavy (negamax on 15×15). The 40× think-time spread
-localizes where the net sits and tracks its climb toward the 1000 ms bar (≈ the
-max-strength Rapfi the plain idx-2 gate reads 0 against).
+One clean strength dial (Rapfi's own engine, just less time). The classical
+baselines were dropped (at epoch ~145 the net already crushes
+random/heuristic/lookahead-d2 at 100%, and lookahead-d4's negamax is resource-heavy).
+
+**FAST harness — `gomoku/rapfimine/fast_eval.py`** (supersedes the serial
+`eval_gradient.py`). The serial eval took **minutes**; this takes **~20 s** even
+while AZ trains, by reusing the project's two throughput tricks: net moves are
+**batched across every rung's net-to-move games** in one `run_batched_mcts` GPU
+pass, and Rapfi moves are **fanned out per-timeout** via `RapfiPool.label_states`,
+all rungs advancing in one concurrent lockstep loop (wall-clock ≈ the slowest
+rung's chain, not the sum). Driven by `mined/gradient_loop.sh` every 20 min at
+`--sims 32 --n-games 12`.
+
+Two calibration findings that shaped it:
+- **max_node is the wrong dial.** Even `max_node=2,000,000` Rapfi loses 100% to the
+  net, while `timeout=1000ms` (far more search) wins 0/48 — node budget never
+  reaches the wall. Think-time is the real-strength knob; the harness uses
+  `RapfiPool.label_states` (timed pick), not `analyze` (node-bounded).
+- **The live band is LOW timeouts, which are also fast.** At epoch ~210 the net
+  beats `rapfi@25ms` (100%) but loses to **50 ms+** (0%) — a sharp transition at
+  **25↔50 ms**. So the useful, *fast* ladder is 25–200 ms; the 0.5-crossing
+  migrates up it as the net climbs. `sims=32` gives the same transition as 160 →
+  a faithful, cheap progress proxy. (The 1000 ms bar stays the plain idx-2 gate's
+  job — too slow for a 20-min loop.)
 
 Driven by `mined/gradient_loop.sh` (detached, every 45 min on the newest
 `epoch*.pt`) → one `GRADIENT` line per pass in `mined/az_gradient.log`. In-session
