@@ -283,3 +283,67 @@ def test_can_turn_incremental_diff_logic():
         assert p._can_turn({(0, 0)}, set()) is False  # not a superset (new game)
     finally:
         p.close()
+
+
+def _mate_stream(*, n_pv: int, n_rounds: int) -> list[str]:
+    """A synthetic multiPV iterative-deepening stream: ``n_rounds`` deepening
+    rounds, each re-emitting all ``n_pv`` PV blocks (the real shape — a mate
+    position deepens far and re-prints every PV per depth), then the bare-coord
+    bestmove terminator. ~6 lines/PV/round, so n_pv=24, n_rounds=20 -> ~2880
+    lines, which OVERFLOWS the old fixed 2000-line cap (the crash) but is well
+    inside the pv-scaled cap. The deepest round's winrate is what _read_analysis
+    must keep per PV root."""
+    lines: list[str] = []
+    for d in range(2, 2 + n_rounds):
+        for pv in range(1, n_pv + 1):
+            # Distinct on-board cell per PV (board-size-agnostic: BOARD_SIZE>=9
+            # holds n_pv<=24 distinct cells).
+            x, y = pv % BOARD_SIZE, pv // BOARD_SIZE
+            wr = round(0.01 * pv, 4)  # distinct per PV; constant across rounds
+            lines += [
+                f"INFO PV {pv}",
+                f"INFO NUMPV {n_pv}",
+                f"INFO DEPTH {d}",
+                f"INFO WINRATE {wr}",
+                f"INFO BESTLINE {x},{y}",
+                "INFO PV DONE",
+            ]
+    lines.append("7,7")  # the bare-coord bestmove terminator
+    return lines
+
+
+def test_read_analysis_survives_mate_stream_past_old_2000_cap(monkeypatch):
+    """REGRESSION (#86 BFS-miner crash): a forced-mate position makes Rapfi's
+    iterative deepening re-emit all PV blocks to a deep DEPTH, legitimately
+    streaming >2000 lines before the bestmove terminator (measured: an 8-stone
+    EVAL=-M4 board ran to DEPTH 26 -> 2302 lines). The old fixed
+    _MAX_CHATTER_LINES=2000 cap tripped on this and raised
+    'no bestmove terminator', crashing the mine. _read_analysis now uses a
+    pv-scaled cap so the full stream parses."""
+    p = ExternalEnginePlayer(ExternalEngineConfig(cmd=_stub_cmd("lowest"), timeout_ms=200))
+    try:
+        stream = iter(_mate_stream(n_pv=24, n_rounds=20))  # ~2880 lines > 2000
+        assert len(_mate_stream(n_pv=24, n_rounds=20)) > 2000
+        monkeypatch.setattr(p, "_read_line", lambda deadline: next(stream))
+        out = p._read_analysis(pv_count=24)
+        # All 24 PV roots scored, winrates in [0,1] from the kept (deepest) block.
+        assert len(out) == 24
+        for a, w in out.items():
+            assert 0.0 <= w <= 1.0
+    finally:
+        p.close()
+
+
+def test_read_analysis_still_raises_on_genuine_runaway(monkeypatch):
+    """The pv-scaled cap must still backstop a truly non-terminating engine:
+    an endless INFO stream (no terminator ever) still raises rather than
+    looping forever."""
+    def _endless(deadline):
+        return "INFO PV 1"  # never a bare-coord terminator
+    p = ExternalEnginePlayer(ExternalEngineConfig(cmd=_stub_cmd("lowest"), timeout_ms=200))
+    try:
+        monkeypatch.setattr(p, "_read_line", _endless)
+        with pytest.raises(ExternalEngineError, match="without ending the multiPV"):
+            p._read_analysis(pv_count=1)
+    finally:
+        p.close()

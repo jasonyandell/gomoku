@@ -77,8 +77,22 @@ WRAPPER_VERSION = "2"
 
 # Safety cap on how many non-coordinate chatter lines we skip while waiting for
 # a single move/OK reply before giving up (guards against an engine that streams
-# diagnostics forever and never answers).
+# diagnostics forever and never answers). Sized for the QUIET single-reply
+# protocols (_expect_ok / _read_move / _read_swap2_reply): a few banner/MESSAGE
+# lines, never thousands.
 _MAX_CHATTER_LINES = 2000
+
+# A multiPV analysis stream is a DIFFERENT shape: iterative deepening RE-EMITS
+# all `pv_count` PV blocks every depth round, so its legitimate size scales with
+# pv_count × (number of emitting depth rounds). A forced-mate position deepens
+# FAR (measured: an 8-stone tactical board with EVAL -M4 ran to DEPTH 26 →
+# 2302 lines, terminator and all — past the 2000 quiet-belt, hence the crash).
+# So `_read_analysis` gets its OWN pv-scaled cap, not the quiet belt. Budget is
+# generous lines-per-PV (≈ deepening rounds × ~7 lines/block, ×safety): the real
+# terminator (a bare-coord bestmove) reliably arrives once max_node bounds the
+# search, so this is only a runaway backstop. Line-count (not wall-clock) keeps
+# it contention-immune — a saturated 60-engine pool won't false-trip a counter.
+_ANALYSIS_LINES_PER_PV = 600
 
 
 class ExternalEngineError(RuntimeError):
@@ -680,9 +694,9 @@ class ExternalEnginePlayer:
         # carry ~0 mass) while bounding cost so a warm pool stays saturated.
         pv_count = moves_left if max_pv is None else max(1, min(int(max_pv), moves_left))
         self._send(f"YXNBEST {pv_count}")
-        return self._read_analysis(legal_cap=moves_left)
+        return self._read_analysis(pv_count=pv_count)
 
-    def _read_analysis(self, *, legal_cap: int) -> dict[int, float]:
+    def _read_analysis(self, *, pv_count: int) -> dict[int, float]:
         """Parse the multiPV stream until the terminating bare ``x,y`` bestmove.
 
         Keeps, per ``PV <idx>``, the winrate from the LAST (deepest) block — the
@@ -690,8 +704,13 @@ class ExternalEnginePlayer:
         used only to recover a winrate when WINRATE is absent (mate/inf scores):
         ``+M<k>``/``VAL_INF+`` -> 1.0, ``-M<k>``/mated/``VAL_INF-`` -> 0.0.
         Returns ``{action: winrate}`` with winrate clamped to [0, 1].
+
+        The read is bounded by a pv-scaled line cap (``_ANALYSIS_LINES_PER_PV``),
+        NOT the quiet ``_MAX_CHATTER_LINES`` belt: a mate-driven deepening stream
+        legitimately runs into the thousands (see the constant's note).
         """
         deadline = self._read_deadline_s()
+        line_cap = max(_MAX_CHATTER_LINES, int(pv_count) * _ANALYSIS_LINES_PER_PV)
         # Per PV index, the latest (eval_winrate, root_action) seen.
         by_pv: dict[int, tuple[float | None, int | None]] = {}
         cur_pv: int | None = None
@@ -707,7 +726,7 @@ class ExternalEnginePlayer:
                 return
             by_pv[cur_pv] = (wr, cur_root)
 
-        for _ in range(_MAX_CHATTER_LINES):
+        for _ in range(line_cap):
             line = self._read_line(deadline)
             if not line:
                 continue
@@ -744,8 +763,8 @@ class ExternalEnginePlayer:
                     cur_root = _xy_to_action(*c) if c is not None else None
         else:
             raise ExternalEngineError(
-                f"engine emitted {_MAX_CHATTER_LINES}+ lines without ending the "
-                f"multiPV analysis (no bestmove terminator)"
+                f"engine emitted {line_cap}+ lines (pv_count={pv_count}) without "
+                f"ending the multiPV analysis (no bestmove terminator)"
             )
 
         out: dict[int, float] = {}
