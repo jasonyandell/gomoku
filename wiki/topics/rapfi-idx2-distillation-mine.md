@@ -180,6 +180,12 @@ Driven by `mined/gradient_loop.sh` (detached, every 45 min on the newest
 `epoch*.pt`) → one `GRADIENT` line per pass in `mined/az_gradient.log`. In-session
 a Monitor tails that log so new rungs surface without polling.
 
+**Gotcha — snapshot before eval.** The trainer keeps only `--keep-last-n 3`, so a
+checkpoint rotates out every ~7 min while a gradient eval takes ~5–8 min — picking
+`ls -t … | head -1` and evaluating it directly races and dies `FileNotFoundError`.
+The loop first `cp`s the checkpoint to a stable epoch-preserving name
+(`mined/_snap_epochNNNN.pt`), evals that, then removes it.
+
 ## Crash recovery / resume (durability)
 
 The run is crash-robust by checkpoint, not by a supervisor — any fresh session
