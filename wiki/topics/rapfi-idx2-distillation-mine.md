@@ -146,8 +146,14 @@ from scratch (mine-wait is a no-op once ≥1M is on disk) = crash-robust.
   curve, `mined/az_vs_rapfi.log`, accruing every 30 min):
   - epoch ~70 (~35 min of self-play): **0/48, BLACK 0% / WHITE 0%** — still the
     seed's baseline; ~70 epochs from a weak distilled seed is nowhere near enough
-    to challenge mature Rapfi-NNUE. self-play policy loss IS falling (pl 4.18→2.67),
-    so the net is learning; it just hasn't climbed yet.
+    to challenge mature Rapfi-NNUE.
+  - **Learning trajectory (leading indicator):** self-play policy loss rises to a
+    peak (~4.2 @ ep36, re-fitting from the Rapfi-softmax seed to MCTS-visit targets)
+    then falls steadily — 2.67 @ep57 → 1.89 @ep103 → **1.53 @ep125**; value_mse
+    0.39→0.16. The net IS improving; H2H gains lag net strength. Rate ≈ **27 s/epoch
+    (~133 epochs/hr)** on the M5 Max with the 3-worker cell. For scale, Bruce's
+    black-42% bar came after ~3,700 epochs — so a meaningful idx-2 verdict is a
+    **multi-hour-to-multi-day climb**, measured unattended by the 60-min probe loop.
   - **Reference bar:** Bruce (the generalist, ~3700 epochs / 33 h) reached only
     black ~42% / **white 0/12** vs Rapfi @idx-2 — the white-defense wall is the
     known-hard part. The over-specialization bet is whether idx-2-only self-play
