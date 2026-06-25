@@ -1,10 +1,31 @@
 # Rapfi idx-2 distillation mine — the "Bruce Lee one-position" experiment
 
-**Status: IN PROGRESS (2026-06-25).** Mine DONE — **1,126,597 canonical idx-2
-positions on disk** (≥1M goal met, crash-robust). Pretrain running as a 12-epoch
-warm-start seed; AlphaZero warm-start + Rapfi-probe loop wired into the autonomous
-driver (`mined/drive_pipeline.sh`). This page is the synthesis; raw run detail
-goes to `TRAINING_WIKI.md`.
+**Status: BANKED — successful infra/tooling run (2026-06-25).** Full pipeline ran
+end-to-end and is preserved in this worktree; training stopped by choice at AZ
+epoch 250 (a new experiment follows). The deliverable here was the *infrastructure*,
+and it all works. This page is the synthesis; raw run detail goes to `TRAINING_WIKI.md`.
+
+**What was banked (all committed on `feat/gentle-rapfi-teacher`):**
+- **Rapfi crash fix + perf** (`external_engine.py`): pv-scaled analysis cap (mate
+  crash) + one reader thread/engine (68→17 ms/analyze).
+- **Mining harness** (`gomoku/rapfimine/`): multiprocess flat-file BFS mine, D4
+  canonical dedup, crash-robust resume. Maxed the machine at **~700 moves/s**;
+  **1,126,597 canonical idx-2 positions** banked to `mined/idx2_15x15/`.
+- **Pretrain** (`pretrain.py`): supervised distillation → `checkpoints/idx2_pretrain.pt`
+  (epoch-3 seed, policy_ce 2.04). Finding: GPU-bound; per-epoch on-device sync fix.
+- **Warm-start AZ** (`run_sweep` `G15-idx2-warmstart` cell): idx-2-only self-play
+  from the seed. Final net banked → `checkpoints/idx2_warmstart_final.pt` (epoch 250,
+  pl 1.27, vl 0.10).
+- **FAST eval-gradient** (`fast_eval.py`): ~20 s vs minutes; batched net MCTS +
+  parallel Rapfi `label_states`. Established think-time as the strength dial and the
+  net's current transition at **rapfi 25↔50 ms**.
+- Orchestration scripts (`mined/{drive_pipeline,gradient_loop,probe_loop}.sh`) and a
+  `.gitignore` fix (inline-comment'd `mined/` pattern was silently not ignoring the
+  8.6 GB artifacts).
+
+Outcome on the science question (does it beat Rapfi @idx-2): **not yet** — at epoch
+250 it's still at the seed's wall vs strong Rapfi; the climb is a multi-day run not
+pursued here. The reusable value is the harness + the measurement gradient.
 
 ## Hypothesis (Jason's framing)
 
