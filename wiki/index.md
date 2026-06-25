@@ -33,8 +33,14 @@ Pick the doorway that matches the task. The big training notebook is still the
 source of chronological evidence; these routes keep future sessions from
 reading it front-to-back unless the work actually needs that.
 
+> 🧭 **New here, or "what can this repo DO?"** → start with **[capabilities.md](capabilities.md)**,
+> a one-screen synthesis of the toolbox (mine · pretrain/warm-start · train · evaluate ·
+> search · operate), each capability linked to its deep doc. It's the capability view;
+> the table below is the task view.
+
 | Need | Start with | Then read |
 |---|---|---|
+| **"What can this repo do?" (the capability map)** | [capabilities.md](capabilities.md) | the deep doc each capability row links to |
 | **Understand what AlphaZero taught us on this game (the learning artifact)** | [topics/alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) | [topics/15x15-training-campaign.md](topics/15x15-training-campaign.md), [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md). |
 | Current training story or "how did we get here?" | [topics/training-run-lineage.md](topics/training-run-lineage.md) | [TRAINING_WIKI.md](../TRAINING_WIKI.md) tail, then [log.md](log.md). |
 | Launch, resume, monitor, or stop a run | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | The relevant design page, then the latest run section in [TRAINING_WIKI.md](../TRAINING_WIKI.md). |
@@ -186,7 +192,11 @@ read is:
 
 ## Maintenance Rules
 
-- Read this index first, then drill into the pages it names.
+- Read this index first, then drill into the pages it names. For a capability-first
+  overview (vs the task-first table above), read [capabilities.md](capabilities.md).
+- **Close the spine on every significant run**: append a dated `TRAINING_WIKI.md`
+  entry AND update [capabilities.md](capabilities.md) if a capability changed — a
+  topic page + index row alone is not discoverable via the chronological read path.
 - Keep source records and artifacts immutable unless the user explicitly asks
   for cleanup.
 - Keep the training notebook append-oriented. When a conclusion changes, add a

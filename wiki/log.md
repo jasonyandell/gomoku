@@ -1350,3 +1350,18 @@ Docker: workflow scored HF-resolver 8 vs Docker 3). (2) The daemon/teacher are
 now-resolved operational notes (swap2 schema merged to main; `save_checkpoint` atomic
 #76). `available()`=no-network/test-gating vs `obtainable()`=may-fetch distinction
 documented.
+
+## 2026-06-25 — capabilities synthesis layer added + spine fixed (#86)
+A new session read `TRAINING_WIKI.md` and missed the entire 2026-06-25 idx-2
+distillation run — root cause: the work landed in a topic page + an index row, but
+the **chronological spine had no dated entry** (last was 2026-06-24), and the index's
+synthesis was a *page catalog* (by doc-type), not a *capability map*. Two additive
+fixes: (1) **fixed the spine** — appended the dated 2026-06-25 `TRAINING_WIKI.md`
+entry (mine 1.13M @ ~700/s, soft-target pretrain, warm-start AZ to ep250, fast
+eval-gradient; infra success / science inconclusive / banked), which also closes the
+open "soft target untested" thread. (2) Added **`capabilities.md`** — a one-screen
+"what can this repo DO" synthesis (mine · pretrain/warm-start · train · evaluate ·
+search · operate), each capability → how-to + deep doc, NEW rows tagged. Linked from
+the index Start-Here callout + table + read-order, plus a Maintenance Rule: **every
+significant run closes the spine AND updates capabilities**, not just a topic page
+(the discoverability bug this fixes). Purely additive — no existing topic deprecated.
