@@ -28,6 +28,15 @@ single overnight session; the science is the run-length distribution, not the wa
 
 ---
 
+> **Superseded as the canonical mining target (2026-06-26).** Walking back from the END only
+> ever finds the *last* VCT window the game rode to victory — but VCT-existence is **not
+> monotone across plies** (a forced win can open, close when unplayed, and reopen). The
+> canonical target is now the **guaranteed-FIRST VCT**: a forward scan from move 0, both
+> colors, with a trit verdict (WIN / NO-WIN / CAP) and defer-on-prefix-CAP so "first" is only
+> emitted with a *proven* negative prefix. See
+> [shape-library-engine.md](shape-library-engine.md) §3 and `scripts/threat_shapes/mine_first_vct.py`.
+> This page stays as the backward miner's record and the substrate it validated.
+
 ## 1. The two-stage plan (Jason's framing)
 
 - **Stage 1 — bank strong games fast.** Rapfi-vs-Rapfi via `RapfiPool`

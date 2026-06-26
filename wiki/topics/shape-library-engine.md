@@ -40,8 +40,9 @@ Date: 2026-06-26. Hardware: M5 Max, 48 GB, MPS/MLX-Metal. Game: **freestyle** 9�
 | Layer | State | Where |
 |---|---|---|
 | **L0 — exact GPU VCT solver** | ✅ DONE | [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8 |
-| **Stage-1 games + Stage-2 enabling-shape miner** | ✅ DONE — 63k shapes banked | [vct-backward-mining.md](vct-backward-mining.md) |
-| **L1 — minimal shapes / the library** | 🔲 NEW (§3) | this page |
+| **Stage-1 games + backward enabling-shape miner** | ✅ DONE — 63k shapes banked | [vct-backward-mining.md](vct-backward-mining.md) |
+| **First-VCT forward miner** (the §3 mining input) | ✅ DONE (2026-06-26) — `mine_first_vct.py`, append-only | §3 / §8 |
+| **L1 — stencil extraction / the library** | 🔲 NEW (§3) | this page |
 | **L2 — learned meta-VCT field** | 🔲 NEW (§4) | this page |
 | **The player — fork-seeking pursuit search** | 🔲 NEW (§5) | this page |
 
@@ -76,60 +77,112 @@ The failure modes **compound safely**: L2 can be wrong but only steers *where we
 matches are exact by construction; L0 verifies. The engine's worst case is looking in the
 wrong place, never believing a lie.
 
-## 3. L1 — minimal shapes (the new core)
+## 3. L1 — the stencil library (the new core)
 
-### The gift: VCT-win is monotone ⇒ a minimal shape is a prime implicant
+*(2026-06-26 brainstorm with Jason replaced the original "prime-implicant / monotone-DNF"
+framing of this section. The math underneath — monotonicity, the single-worst-case-board
+certificate — is unchanged; the framing is now first-VCT mining + a conservative, explicitly-
+typed, single-orientation **stencil**. The boolean-logic lineage is recorded under Naming.)*
 
-In **freestyle**, `VCT-win(board)` is **monotone increasing in attacker-occupancy** (an
-extra attacker stone never breaks a forced threat-win — it only ever makes/advances a five,
-and can't hand the defender tempo) and **monotone decreasing in defender-occupancy** (an
-extra defender stone can only block or counter). *(Renju's overline-forbidden rule would
-break attacker-monotonicity — freestyle is why this holds. We **verify it empirically** as
-free telemetry over the 63k shapes: random attacker-add / defender-add ablations should
-*never* flip a win the wrong way.)*
+### What we mine: the guaranteed-FIRST VCT, from real games
 
-Monotonicity makes the "exact minimum set of stones that makes the VCT inevitable" precisely
-a **prime implicant** of a monotone boolean function (ML name: an *Anchor* — Ribeiro's
-minimal sufficient explanation). Two clean consequences:
+The backward miner ([vct-backward-mining.md](vct-backward-mining.md)) walked won games from
+the END and read the contiguous won-suffix — an engineering shortcut from when proving "no
+VCT yet" on every position was unaffordable. But **VCT-existence is not monotone across
+plies**: a forced win opens at ply k, closes at k+2 (the player didn't take it; the
+opponent's reply blocked it), reopens later. The backward walk only ever sees the *last*
+window. With the tail-bound megakernel we can afford the honest target: **scan every position
+from move 0 and take the first ply where the side-to-move has a forced VCT** — the moment the
+game was first theoretically over, whoever was to move. Scope is **any VCT by anyone**:
+`GameState.board` is side-to-move-relative, so `board[0]` is the attacker frame at *every*
+ply (no swap), and both colors — decisive games and draws alike — fall out of one forward
+scan. `stm != winner` on an emitted shape ⇒ a **missed VCT** (a player had a forced win and
+didn't take it — exactly L2's fog set, §4).
 
-- **Three cell roles, not four.** Jason's `black / white / blank / either` collapses to
-  **attacker-required / defender-forbidden / don't-care**. "Must be blank" (exactly empty)
-  never survives as a minimal constraint: since an attacker stone never breaks the win,
-  "defender-forbidden" (allow attacker *or* empty) always suffices and is **strictly more
-  general** — it matches more boards, so the library compresses and generalizes for free.
-- **Validating a candidate shape is a single solver call.** By monotonicity the worst case
-  for a shape `(R = required-attacker, F = defender-forbidden)` is one specific board; if it
-  wins, *every* board matching the shape wins. Extraction is then **greedy sequential
-  ablation** (QuickXplain / Anchors): relax a cell, re-solve, commit if still a win. Both the
-  per-cell tests and the across-shape sweep are **embarrassingly batchable** on the
-  tail-bound L0 kernel — flip bits, re-solve a big batch, classify.
+"First" is trustworthy only with a **clean negative prefix**. Per position the kernel returns
+a **trit** — WIN / NO-WIN-proven / CAP (node budget exhausted, unknown) — and the first WIN
+at ply *w* counts as *first* only if every earlier ply is **proven** NO-WIN. A CAP in the
+prefix could itself hide an earlier VCT, so we **defer the whole game** to a fatter-budget
+queue rather than emit a maybe-wrong first. Pure `(game, budget) → first | defer`; the defer
+pile is re-mined later at a bigger budget (the deferred set *is* the population of genuinely
+deep games). Fail-safe: the kernel is 0-FP, so we never report a *false-early* first, we only
+postpone the hard games. Code: `scripts/threat_shapes/mine_first_vct.py` — append-only
+`first_vct.jsonl.gz` + `defer.jsonl.gz` + `manifest.txt`, trivially resumable.
 
-### Full-board, NOT local — for *soundness*, not just bitter-lesson compute
+### What we store: a relative, explicitly-typed, single-orientation stencil
 
-A far-away opponent stone can be a latent counter-four that decides whether the VCT is truly
-forced. A local window would ignore it and emit an **unsound** shape (a claimed win that
-isn't there). So shapes see the **whole board**. The elegance: a full-board representation
-does **not** make shapes dense — the prime-implicant minimization turns everything that
-doesn't matter into don't-care, so we get locality **exactly when the proof warrants it** and
-globality **exactly when it warrants it**, with no hand-set window. *Don't impose the
-structure; let minimization find it.* Two consequences fall out:
+A mined first-VCT is a full board; we reduce it to the **minimum specification that still
+guarantees the VCT** — a small **stencil** in *relative* coordinates. Absolute position is
+throwaway provenance (`p=(3,4)` doesn't matter); "`.BBBBp` fits here" is the asset. Three
+**conservative** cell types:
 
-- **Matching = 256-bit bitmask containment:** `R ⊆ attacker(B)` and `F ∩ defender(B) = ∅` —
-  two ANDs/compares, GPU-trivial.
-- **Drop translation-invariance; keep D4.** You can't translate a full-board shape (it falls
-  off the edge), but the board's dihedral symmetry is real — canonicalize under D4 for **8×
-  dedup**.
+- **`B`** — attacker stone required.
+- **`.`** — must be **empty** (open). These reserve the room the threat needs to develop.
+- **`p`** — the catalyst move (empty, distinguished).
+- everything else — implicit **don't-care** (not even stored).
 
-### The library = the monotone DNF of "you have a VCT"
+We deliberately take "empty" over the looser "attacker-or-empty": it matches fewer boards but
+every match is sound, and loosening can only *add* matches later — never invalidate a banked
+one. The `.` cells are load-bearing: they are what makes the stencil self-contained and
+**movable**.
 
-Dedup by D4-canonical key; **subsume** (a shape whose `R`,`F` are subsets of another's and
-still wins makes the bigger one redundant — keep only maximally-general prime implicants).
-The resulting set is literally the disjunctive normal form of the winning predicate. **Its
-size is the complexity of gomoku's winning vocabulary** — thousands of terms, or millions?
-Nobody knows. Mining it answers that. *(Discovery curve — unique minimal shapes vs games
-mined — rides along as free telemetry, §0; saturation would say the vocabulary is finite,
-growth says shapes aren't reducing enough and the representation needs rethinking. Not a
-gate — an observation we collect while building.)*
+### The minimization, and why one solver call certifies it
+
+Monotonicity (freestyle, no overline rule): VCT-win is monotone **up** in attacker stones (an
+extra attacker stone never breaks a forced win) and monotone **down** in defender stones (an
+extra defender stone only blocks/counters). So a candidate stencil has exactly one **meanest
+board**: keep `B` black and `.`/`p` empty, fill **every don't-care cell with a white
+(defender) stone** — the worst possible surroundings. If the attacker still wins *that*
+board, every board the stencil matches wins. **One solver call certifies the whole
+(exponential) match-set.** *(Monotonicity itself rides along as free telemetry — random
+attacker-add / defender-remove ablations over real shapes must never flip a win the wrong
+way; a violation means a freestyle edge case breaks the machinery, §7.)*
+
+Extraction is **greedy demotion, anchored on the move p** (so it can't drift onto an
+unrelated VCT elsewhere on the board): start from the mined board (every attacker stone `B`,
+every empty `.`); try demoting each cell to don't-care; rebuild the meanest board; re-solve;
+keep the demotion if it still wins. What survives is the stencil. Batched across thousands of
+shapes through the tail-bound kernel — the same throughput trick as mining. Walk the open
+four: `.BBBBp` → demote the far `.` → meanest board makes it white `OBBBBp` → p still makes
+five → drop it → land on `BBBBp`; try dropping any `B` → only a four, p makes no five → keep.
+The algorithm *finds* which cells matter; we never hand-set a window (bitter lesson, §0).
+
+### Prove once, match everywhere — and mobility falls out
+
+The minimization's final state **is** the proof: it won in the meanest environment. So a
+**structural fit** of the stencil anywhere on any board is sound for free — a real placement
+has the same `B`-black and `.`-empty cells, and its don't-cares are never meaner than the
+all-white board we already beat. "Where is this a VCT" becomes a **bitmask scan**, not a
+solver call per location. A stencil is **mobile to every on-board placement that fits**: the
+open four wins in many specific locations, while a *true* open four (six collinear cells)
+cannot even be **placed** on a 5×5 → not a guaranteed win there, exactly as the geometry
+demands. Edge-leaning wins handle themselves — their `.`/`p` cells fall off-board at interior
+placements, so they simply fit in fewer spots. This kills the per-placement solver sweep: one
+proof, structural matching forever.
+
+### Conservative on symmetry — on purpose
+
+We use **translation only**, which is provably safe (the meanest-test verdict depends on the
+stencil's relative geometry, invariant under translation as long as it fits on-board). We do
+**not** fold D4 (reflections / rotations / transposes) yet — not because it's wrong, but to
+keep correctness on ground we trust. Each found orientation is its own entry; an open four
+seen horizontally and vertically is two stencils today. We lose nothing: symmetry is a purely
+**additive** 8× dedup we can fold in later without invalidating a single banked stencil.
+*(Discovery curve — distinct stencils vs games mined — rides along as free telemetry, §0:
+saturation says the vocabulary is finite; runaway growth says the stencils aren't reducing
+enough and the representation needs rethinking.)*
+
+> **Naming (resolved 2026-06-26: stencil).** We wanted a word for "relative, explicitly-typed,
+> single-orientation reduction that is a *provable* VCT." Surveyed, as recorded lineage, none a
+> perfect single fit: *prime implicant* / *implicant* (boolean logic — a partial assignment that
+> forces a function true; exact, but drags in the monotone-DNF program Jason set aside); *Anchor*
+> (Ribeiro, ML interpretability — a minimal sufficient rule guaranteeing a prediction;
+> near-exact, but Anchors permit <100% precision and ours is *exact*); *certificate / witness*
+> (complexity — a compact proof object); *stencil* (grid computing — a relative-offset pattern
+> slid over a grid; captures the spatial/mobility form). Chosen: **stencil** — a relative-offset
+> typed mask laid down wherever it fits, which is exactly the mobility property; it cleanly
+> disambiguates from *shape* (the raw mined board). The framing: we reduce a board containing a
+> VCT to a stencil. *implicant* remains available as the formal handle.
 
 ## 4. L2 — the meta-VCT field (where we AlphaZero)
 
@@ -195,14 +248,22 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
 
 ## 8. Status / next
 
-- **DONE:** L0 ([gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8); Stage-1+2 miner, 63k
-  enabling shapes ([vct-backward-mining.md](vct-backward-mining.md)).
-- **OPEN (inherited):** catalyst-move extraction for the 63k shapes (GPU root-move output vs.
-  parallel-CPU positive proofs — [vct-backward-mining.md](vct-backward-mining.md) §5).
-- **NEXT (this plan):** (1) verify monotonicity (free telemetry); (2) **minimal-shape
-  extraction** over the 63k → the D4-canonical, subsumption-reduced **library**; (3) the v0
-  distance-field + fork player (leaf-verified by L0); (4) L2 meta-VCT field on verifiable
-  targets.
+- **DONE:** L0 ([gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8); backward Stage-1+2 miner,
+  63k enabling shapes ([vct-backward-mining.md](vct-backward-mining.md)).
+- **DONE (2026-06-26):** **first-VCT forward miner** — `scripts/threat_shapes/mine_first_vct.py`,
+  the §3 mining input. Forward scan, both colors, trit verdict + defer-on-prefix-CAP,
+  append-only/resumable. Smoke (100 games, `max_nodes=6000`): 12 certified firsts, 88 deferred
+  (the deferred rate confirms certifying "first" wants a fatter budget than the backward walk
+  ever needed — exactly the negative-prefix cost from [vct-backward-mining.md](vct-backward-mining.md) §3).
+  The catalyst move p is extracted at emit time (anchors minimization), so L1 does **not** wait
+  on the inherited move-extraction bottleneck.
+- **NEXT (this plan):** (1) **stencil minimization** (§3) — greedy demote-to-don't-care under
+  the meanest-board certificate, anchored on p → relative, explicitly-typed, single-orientation
+  stencils, cross-validated against the independent CPU `solve_vct`; (2) the structural-match
+  library + mobility sweep; (3) the v0 distance-field + fork player (leaf-verified by L0);
+  (4) L2 meta-VCT field on verifiable targets. Monotonicity telemetry rides along (1).
+- **DEFERRED (conservative, §3):** D4 / reflections / rotations — purely-additive 8× dedup,
+  folded in later; and the "empty → attacker-or-empty" loosening.
 
 **Cross-links:** [vct-backward-mining.md](vct-backward-mining.md) (the L1 mining substrate) ·
 [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8 (L0, the enabling tech) ·
