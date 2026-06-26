@@ -155,6 +155,11 @@ _SRC = """
 
     int maxnodes=max_nodes[0]; int nodes=0; bool hitcap=false;
     int sp=0; typ[0]=0; bool entering=true; int ret=0;
+    // winmove = a valid VCT first move at the ROOT (sp==0). For recursive wins it
+    // is mm[0] (the root's committed move); for the root's own inline wins
+    // (immediate five / sound double-four / fork-three) it is captured here, since
+    // those set ret=1 without ever pushing a child / setting mm[0].
+    int winmove=-1;
 
     while (true){
       if (entering){
@@ -162,7 +167,7 @@ _SRC = """
         if (sp>=MAXD-1 || nodes>maxnodes){ hitcap=true; ret=0; entering=false; continue; }
         if (typ[sp]==0){ // ---- OR node (attacker) ----
           ulong c0[4]; completion_mask(own, empty, c0);
-          if (any4(c0)){ ret=1; entering=false; continue; }       // immediate five
+          if (any4(c0)){ if(sp==0) winmove=lowbit4(c0); ret=1; entering=false; continue; }  // immediate five
           fmask[sp][0]=0ul;fmask[sp][1]=0ul;fmask[sp][2]=0ul;fmask[sp][3]=0ul;
           tmask[sp][0]=0ul;tmask[sp][1]=0ul;tmask[sp][2]=0ul;tmask[sp][3]=0ul;
           bool dwin=false;
@@ -180,7 +185,7 @@ _SRC = """
             if (gfive){ ulong oc[4]; completion_mask(opp, empty2, oc); if (any4(oc)) continue; } // unsound
             ulong cm[4]; completion_mask(own2, empty2, cm);
             int nc = popcount4(cm);
-            if (nc>=2){ dwin=true; break; }                        // sound double four
+            if (nc>=2){ if(sp==0) winmove=m; dwin=true; break; }    // sound double four
             setbit4(&fmask[sp][0], m);
           }
           // -- threes: only candidate cells, excluding four-moves --
@@ -195,7 +200,7 @@ _SRC = """
               int nt = gen_threes(own2, empty2, m, rm, &fk);
               if (nt>=1){
                 if (gtempo && def_tempo(opp, empty2)) continue;    // defender tempo
-                if (fk){ dwin=true; break; }                       // fork three
+                if (fk){ if(sp==0) winmove=m; dwin=true; break; }  // fork three
                 setbit4(&tmask[sp][0], m);
               }
             }
@@ -279,6 +284,7 @@ _SRC = """
       }
     }
     win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);
+    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);
 """
 
 
@@ -288,21 +294,37 @@ def _src():
 
 _KERNEL = mx.fast.metal_kernel(
     name="mega_vct_bb", input_names=["own_in", "opp_in", "max_nodes"],
-    output_names=["win", "hit"], source=_src(), header=_HEADER)
+    output_names=["win", "hit", "move"], source=_src(), header=_HEADER)
 
 
-def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 32):
-    """boards: (B,2,N,N) bool. Returns (win, hit_cap): (B,) bool. Fully on-device."""
+def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 32,
+                      return_move: bool = False):
+    """boards: (B,2,N,N) bool. Solves VCT for the side to move (board[0]=attacker).
+
+    Returns (win, hit_cap): (B,) bool by default. With ``return_move=True`` returns
+    (win, hit_cap, move): ``move`` is (B,) int32 — a VALID VCT first move (flat
+    row-major cell index in ``[0, N*N)``) on every won board, or -1 where no win
+    was proved. "A valid first move" because the kernel never reports a false win,
+    so the root move of the line it proves is always the start of a real forced
+    win; it is not necessarily the *shortest* mate's move (any sound VCT move).
+    Fully on-device.
+    """
     B = boards.shape[0]
     own, opp = bb.pack_words(boards)
     o = mx.array(own.reshape(-1))
     p = mx.array(opp.reshape(-1))
     mn = mx.array(np.array([max_nodes], dtype=np.int32))
-    win, hit = _KERNEL(inputs=[o, p, mn], grid=(B, 1, 1),
-                       threadgroup=(min(B, tg), 1, 1),
-                       output_shapes=[(B,), (B,)], output_dtypes=[mx.uint8, mx.uint8])
-    mx.eval(win, hit)
-    return np.array(win).astype(bool), np.array(hit).astype(bool)
+    win, hit, move = _KERNEL(
+        inputs=[o, p, mn], grid=(B, 1, 1),
+        threadgroup=(min(B, tg), 1, 1),
+        output_shapes=[(B,), (B,), (B,)],
+        output_dtypes=[mx.uint8, mx.uint8, mx.int32])
+    mx.eval(win, hit, move)
+    w = np.array(win).astype(bool)
+    h = np.array(hit).astype(bool)
+    if return_move:
+        return w, h, np.array(move).astype(np.int32)
+    return w, h
 
 
 if __name__ == "__main__":
