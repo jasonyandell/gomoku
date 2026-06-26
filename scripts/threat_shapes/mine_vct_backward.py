@@ -421,6 +421,12 @@ def main() -> None:
         ap.error("--games-dir is required unless --reduce")
 
     if args.loop:
+        # Become a session/process-group leader so the whole worker tree can be
+        # stopped with a single `kill -TERM -<PGID>` (macOS has no `setsid`).
+        try:
+            os.setsid()
+        except OSError:
+            pass  # already a group leader (e.g. launched under a job-control shell)
         print(f"[mine_vct_backward] LOOP start pid={os.getpid()} pgid={os.getpgrp()} "
               f"workers={args.workers} min_run={args.min_run}", flush=True)
         lifetime: Counter = Counter()
