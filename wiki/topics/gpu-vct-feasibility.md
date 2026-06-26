@@ -293,7 +293,15 @@ batching), so it is not the lever for this use case; the throughput knob is B an
 directions, only one through `m`), so the whole-board trial-move `gen_threes` is required
 (can't be replaced by cheap 1-D patterns). The remaining per-node cost is the whole-board
 `gen_forcing(own∪m)` per candidate; localizing it to `m`'s lines hits the same four-four-at-`f`
-completeness wall, so it stays whole-board.
+completeness wall, so it stays whole-board. **Negative result #2 (word width):** a 256-bit
+detector can be `ulong[4]` (64-bit words) or `uint[8]` (32-bit). A micro-benchmark of *pure*
+shift+AND favoured `uint[8]` 1.7× (Apple GPU 64-bit ALU is throughput-reduced), so the full
+kernel was rewritten to `uint[8]` and re-validated (0 disagreements) — but it ran **~20 %
+slower** (VCT 693 vs 854 solves/s @ B=16384; VCF 1.55 vs 1.40 ms/bd). The real kernels are
+bookkeeping-heavy (`popcount`/`lowbit`/`setbit`/`cpy`/`and`/frame management), and *all* of
+that doubles in word count (8 vs 4), outweighing the detection-only gain. **`ulong[4]` is the
+right representation** — reverted. (Lesson: micro-benchmark the hot path *in situ*, not in
+isolation.)
 
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
