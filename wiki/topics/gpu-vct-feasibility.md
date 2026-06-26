@@ -152,6 +152,41 @@ fanned across cores, or (b) the already-fast `solve_vcf_batch` for the four-only
 a CPU VCT pass only on the residual. The detection kernels and the exact-match harness here
 are reusable when someone takes the #1 lever.
 
+---
+
+## 7. REBUILD on MLX/Metal (2026-06-26) — bottom-up, oracle-validated, IN PROGRESS
+
+The v0 verdict (CPU-bound) motivated a from-scratch rebuild on a custom Metal path,
+pursuing Jason's three sharpenings: **(A) compiled line-threat grammar + (B)
+intersection (bitmask) defense generation + (C) work-first continuation stealing**,
+ultimately a persistent-epoch DFPN megakernel. Hermetic in `scripts/vct_metal/`
+(nothing else in the repo imports it). Vehicle: **MLX** `mx.fast.metal_kernel`
+(runtime-compiled MSL — no Xcode needed; bitwise/popcount + device atomics confirmed
+on the M5 Max). Every layer is validated against the CPU oracle `gomoku.vcf` before
+moving on; tests run on real Rapfi positions (`~/data/games_raphi/`) under a 2-min
+`timeout` cap.
+
+**Foundation (validated):**
+- `detect_ref.py` — batched whole-board detection (fives, four-structure with
+  completion counts, candidate mask, tempo guard). Matches `vcf` cell-for-cell over
+  900 boards. Subtlety: `four_structure` counts fours *created by the move* (m in the
+  five-window) — equals `vcf._completions_through` exactly in the no-immediate-five
+  regime the OR-node actually runs in (the OR-node tests immediate-five first).
+- `threes_ref.py` — forcing-threes + **(B) the bitmask defense**: defender reply-set =
+  OR of threats' `{f}∪comps` masks; **fork = a disjoint mask pair**. Matches
+  `vcf._has_disjoint_threats` + the reply-set union over ~9.7k threes. *This is the v0
+  70% (host tempo-guard + open-four assembly) reduced to parallel set-algebra.*
+- `detect_metal.py` — OR-node detection as a **Metal kernel** (one thread per
+  (board,cell)); matches the numpy spec on-GPU, ~1M boards/s incl. host transfer.
+- `search_ref.py` — the AND/OR solver **composed from the primitives**; verdict matches
+  `vcf.solve_vct` on clean (no-cap) cases. Slow (B=1 recursion, ~2.2 s/board) — which
+  is the point: the B=1 shape is exactly what batching/work-stealing fix.
+
+**Lesson so far:** (A) and (B) are *proven correct*; the only thing wrong with a correct
+composed solver is the recursion shape — i.e. the GPU-shape problem (C) targets. Next:
+batched wavefront search → `threes_metal` kernel (move the last host cost on-device) →
+the work-stealing DFPN megakernel. (Tracking the whole rebuild here as it lands.)
+
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
 (`scripts/gpu_vcf_prototype.py`) · `gomoku/vcf.py` (`solve_vct`).
