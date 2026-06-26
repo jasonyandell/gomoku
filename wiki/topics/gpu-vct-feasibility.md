@@ -238,6 +238,36 @@ touches; cf. §5.1), and (2) **work-stealing** to kill the single-deep-position 
 §5.4). Until those land, the wavefront (host-orchestrated, GPU primitives) is the throughput
 choice; the megakernel is the validated foundation they build on.
 
+## 8. Bitboard detection LANDS — lever (1) implemented (2026-06-26)
+
+The naive megakernel's #1 bottleneck (§7) was per-node detection by *cell scan* —
+O(N²)/node, and the per-move soundness check was O(N²) **per move** → O(N⁴)/node (a
+full board rescan inside the move loop). Lever (1) is now built: pack each colour into
+a **bitboard** (`ulong[4]`, 256 bits ≥ N²=225) and detect by shift-AND.
+
+- `bb_ref.py` / `bb.py` — `has_five` + `completion_mask` (five-completion cells) as
+  Python-bigint golden reference and as MSL `ulong[4]` helpers (`shr256`/`shl256`/…).
+  Validated bit-for-bit: ref vs `detect_ref` over 900 boards; MSL vs ref over **1 200
+  random + 600 real** boards, 0 mismatch.
+- `mega_vcf_bb.py` — the VCF megakernel rebuilt on bitboards: forcing-move gen by
+  hole-pair set-algebra (whole board at once), soundness + double-four via
+  `completion_mask`. **13–14× faster** than `mega_vcf` (84→**6.4 ms/bd** @B=512;
+  21→**1.48 ms/bd** @B=2048; wall 42.5 s→3.0 s), **0 clean disagreements** vs the
+  cell-scan kernel and **0 FP / 0 FN vs `gomoku.vcf.solve_vcf` over 360 real positions**.
+- `mega_vct_bb.py` — the full AND/OR VCT megakernel on bitboards. Two further levers
+  inside it: **fours generated once** by set-algebra (not per-cell), and the **threes
+  loop restricted to the Chebyshev-2 candidate set** (== `vcf`'s candidate domain, so
+  exact not heuristic), with the follow-up cell `f` restricted to
+  `vcf._collinear_empties(m)` (dist-4 collinear — without it, far pre-existing fours
+  over-generate spurious threes). Saturated throughput B=2048 ≈ **13 ms/bd @ mn=1500**
+  vs the cell-scan `mega_vct`'s ~1 556 ms/bd — a ~100× per-board step. (Correctness vs
+  `vcf.solve_vct` under validation; tail-bound — work-stealing, lever (2), still to come.)
+
+**Status of the two levers:** (1) bitboard/incremental detection — **DONE** (VCF
+validated; VCT in validation). (2) work-stealing for the single-deep-position tail —
+next. The megakernel is no longer "impractically slow naive"; it is a fast, mostly
+on-device VCT solver whose remaining cost is the tail + per-candidate detection.
+
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
 (`scripts/gpu_vcf_prototype.py`) · `gomoku/vcf.py` (`solve_vct`).
