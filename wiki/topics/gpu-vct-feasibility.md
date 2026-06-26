@@ -178,14 +178,19 @@ moving on; tests run on real Rapfi positions (`~/data/games_raphi/`) under a 2-m
   70% (host tempo-guard + open-four assembly) reduced to parallel set-algebra.*
 - `detect_metal.py` — OR-node detection as a **Metal kernel** (one thread per
   (board,cell)); matches the numpy spec on-GPU, ~1M boards/s incl. host transfer.
+- `threes_metal.py` — **forcing-threes + reply-mask + fork as a Metal kernel** (the
+  v0 70%): per (board,cell) it does the 2-ply threat assembly, building each threat's
+  `{f}∪comps` defeating bitmask in-kernel, OR-ing them into the AND-node reply mask and
+  flagging a disjoint pair as a fork. Matches `threes_ref` over ~1.8k threes.
 - `search_ref.py` — the AND/OR solver **composed from the primitives**; verdict matches
   `vcf.solve_vct` on clean (no-cap) cases. Slow (B=1 recursion, ~2.2 s/board) — which
   is the point: the B=1 shape is exactly what batching/work-stealing fix.
 
 **Lesson so far:** (A) and (B) are *proven correct*; the only thing wrong with a correct
-composed solver is the recursion shape — i.e. the GPU-shape problem (C) targets. Next:
-batched wavefront search → `threes_metal` kernel (move the last host cost on-device) →
-the work-stealing DFPN megakernel. (Tracking the whole rebuild here as it lands.)
+composed solver is the recursion shape — i.e. the GPU-shape problem (C) targets. With
+detection AND threes now on-device, every per-node primitive is GPU-resident and
+oracle-validated. Next: **batched wavefront search** (host orchestration + all-GPU
+primitives) → the work-stealing DFPN megakernel (C). (Tracking the rebuild as it lands.)
 
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
