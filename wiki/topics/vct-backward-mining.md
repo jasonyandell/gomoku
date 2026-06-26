@@ -96,20 +96,23 @@ read off the **contiguous VCT-won suffix from the end** = the enabling shape. On
 call replaces the whole walk; first flush in ~20 s instead of ~8 min. The "wasted" GPU
 work on obviously-lost early-game positions rides free in the tail-bound batch.
 
-**Result: ~20 games/s (~2500× the CPU serial), 63,000+ shapes**, run-lengths reaching
-**run-15** — the long forcing chains the depth-10 CPU miner physically cannot reach.
-Output: `scratchpad/vct_gpu_flat/` (unlabeled — see §5).
+**Result: ~20 games/s (~2500× the CPU serial).** The first `--once` pass completed the
+whole corpus: **200,242 shapes over 2,631 shards (263,100 games)**, run-lengths reaching
+**run-17** — the long forcing chains the depth-10 CPU miner physically cannot reach.
+**Canonical location: `~/data/vct_shapes/`** (`enable_serial.jsonl.gz` + `manifest.txt` +
+`README.md`; durable). The `manifest.txt` lets a re-run resume incrementally without
+recompute. (Working copy: `scratchpad/vct_gpu_flat/`.)
 
-**Run-length histogram (the science — a steep decay):**
+**Run-length histogram, full 200k corpus (the science — a steep ~1.6× decay per step):**
 
-| run | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| count | 28695 | 17635 | 7165 | 2775 | 1103 | 432 | 167 | 66 | 20 | 8 | 2 | 2 | 1 |
+| run | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 17 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| count | 98396 | 61203 | 25096 | 9339 | 3746 | 1517 | 579 | 217 | 84 | 44 | 13 | 5 | 2 | 1 |
 
 ## 5. The verdict-vs-move gap (OPEN — next step)
 
 The megakernel gives only **win/no-win** — enough for the walk-back, but NOT the catalyst
-move or mate distance. The GPU's 63k shapes currently carry **`move=-1`** (extraction off
+move or mate distance. The GPU's 200k shapes currently carry **`move=-1`** (extraction off
 for speed). Recovering the move needs a CPU `solve_vct` per shape — a *fast positive proof*
 individually, but per-shape serial ⇒ the extraction bottleneck, and at the wrong budget
 (depth-16 / 200k) it re-becomes the §3 CPU monster.
@@ -140,8 +143,9 @@ Jason is taking node/move extraction next and has ideas; record as the open next
 | Path | What |
 |---|---|
 | `~/data/games_raphi/` | Stage-1 banked Rapfi-vs-Rapfi games (~300k) |
+| `~/data/vct_shapes/` | **CANONICAL** GPU flat-batch corpus — **200,242** shapes, unlabeled (`move=-1`) + `manifest.txt` + `README.md` |
 | `scratchpad/vct_serial/` | CPU miner output — **184 move-labeled** shapes, the reference/oracle set |
-| `scratchpad/vct_gpu_flat/` | GPU flat-batch output — **63k+** shapes, unlabeled (`move=-1`) |
+| `scratchpad/vct_gpu_flat/` | GPU flat-batch working copy (source of the canonical landing) |
 | `~/.claude/jobs/9aac67d6/tmp/vct_final.txt` | GPU-vs-CPU validation (0 FP / 0 FN / 0 extra, 258 clean) |
 
 **Cross-links:** [gpu-vct-feasibility.md](gpu-vct-feasibility.md) (the megakernel this builds
