@@ -190,12 +190,25 @@ moving on; tests run on real Rapfi positions (`~/data/games_raphi/`) under a 2-m
   backup). **A working GPU VCT solver.** On real Rapfi positions the verdict matches `vcf`
   with **0 false-positive and 0 false-negative** clean disagreements; ~12 ms/board batched
   at B=50 (amortizes at larger batch).
+- `mega_vcf.py` — **fully on-device VCF megakernel** (one thread/position, iterative DFS with
+  make/unmake on a thread-local board, *no host orchestration per node*). Validated sound vs
+  `vcf.solve_vcf` (clean-agree 40/40, 0 FP/FN). Throughput amortizes with batch (71→**12
+  ms/board** at B=2048) but is **tail-bound**: B=512 and B=2048 take the same ~24.6 s wall —
+  one deep position serializes the batch (no work-stealing; per-node detection is O(N²)).
+- `mega_vct.py` — **fully on-device VCT megakernel** (the (C) vision: OR-frames = fours +
+  forcing threes, AND-frames = defender replies, all in-kernel). Compiles, runs, returns
+  plausible verdicts — **VCT fully on the GPU** — but **impractically slow naive** (~11
+  s/board): per-node detection is recomputed O(N³)-ish and there's no work-stealing.
 
-**Lesson so far:** (A) and (B) are *proven correct* and now GPU-resident, and the batched
-wavefront composes them into a **working, oracle-validated GPU VCT solver**. It is
-bulk-synchronous, though: deep/branchy nodes expand every branch (no cutoff) and hit the
-node cap → UNKNOWN. Next: throughput at corpus scale, then the work-stealing **DFPN
-megakernel (C)** — the selective, fully-on-device form for the deep tail.
+**Verdict (2026-06-26).** VCT is **on the GPU**: the **`wavefront` solver is the usable
+deliverable** (correct on real positions, ~12 ms/board, batched detection amortized across
+the frontier), and the **megakernel path is proven** — the fully-on-device search machine is
+correct (VCF: sound 40/40) and structurally complete for VCT. The naive megakernel is
+detection-bound + tail-bound, which **pins the two (C) levers precisely**: (1) **incremental /
+bitboard detection** (don't rescan the board O(N²–N³) per node — patch the ≤4 lines a move
+touches; cf. §5.1), and (2) **work-stealing** to kill the single-deep-position tail (cf. §5.2,
+§5.4). Until those land, the wavefront (host-orchestrated, GPU primitives) is the throughput
+choice; the megakernel is the validated foundation they build on.
 
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
