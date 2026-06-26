@@ -185,12 +185,17 @@ moving on; tests run on real Rapfi positions (`~/data/games_raphi/`) under a 2-m
 - `search_ref.py` — the AND/OR solver **composed from the primitives**; verdict matches
   `vcf.solve_vct` on clean (no-cap) cases. Slow (B=1 recursion, ~2.2 s/board) — which
   is the point: the B=1 shape is exactly what batching/work-stealing fix.
+- `wavefront.py` — **the batched wavefront solver** (host orchestration + all-GPU per-node
+  kernels: detect + threes + a swapped-detect tempo pass; single reverse-order AND/OR
+  backup). **A working GPU VCT solver.** On real Rapfi positions the verdict matches `vcf`
+  with **0 false-positive and 0 false-negative** clean disagreements; ~12 ms/board batched
+  at B=50 (amortizes at larger batch).
 
-**Lesson so far:** (A) and (B) are *proven correct*; the only thing wrong with a correct
-composed solver is the recursion shape — i.e. the GPU-shape problem (C) targets. With
-detection AND threes now on-device, every per-node primitive is GPU-resident and
-oracle-validated. Next: **batched wavefront search** (host orchestration + all-GPU
-primitives) → the work-stealing DFPN megakernel (C). (Tracking the rebuild as it lands.)
+**Lesson so far:** (A) and (B) are *proven correct* and now GPU-resident, and the batched
+wavefront composes them into a **working, oracle-validated GPU VCT solver**. It is
+bulk-synchronous, though: deep/branchy nodes expand every branch (no cutoff) and hit the
+node cap → UNKNOWN. Next: throughput at corpus scale, then the work-stealing **DFPN
+megakernel (C)** — the selective, fully-on-device form for the deep tail.
 
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
