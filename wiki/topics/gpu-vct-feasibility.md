@@ -254,19 +254,43 @@ a **bitboard** (`ulong[4]`, 256 bits ≥ N²=225) and detect by shift-AND.
   `completion_mask`. **13–14× faster** than `mega_vcf` (84→**6.4 ms/bd** @B=512;
   21→**1.48 ms/bd** @B=2048; wall 42.5 s→3.0 s), **0 clean disagreements** vs the
   cell-scan kernel and **0 FP / 0 FN vs `gomoku.vcf.solve_vcf` over 360 real positions**.
-- `mega_vct_bb.py` — the full AND/OR VCT megakernel on bitboards. Two further levers
-  inside it: **fours generated once** by set-algebra (not per-cell), and the **threes
-  loop restricted to the Chebyshev-2 candidate set** (== `vcf`'s candidate domain, so
-  exact not heuristic), with the follow-up cell `f` restricted to
+- `mega_vct_bb.py` — the full AND/OR VCT megakernel on bitboards, with five levers:
+  (i) **fours generated once** by set-algebra (not per-cell); (ii) **threes restricted to
+  Chebyshev-2 of OWN stones** (a three is own's threat, so its move is within radius-2 of
+  the own stones forming it — `vcf`'s radius-2 argument, per side — tighter than dilating
+  all stones, ~halves candidates: **1.65×**); (iii) follow-up `f` restricted to
   `vcf._collinear_empties(m)` (dist-4 collinear — without it, far pre-existing fours
-  over-generate spurious threes). Saturated throughput B=2048 ≈ **13 ms/bd @ mn=1500**
-  vs the cell-scan `mega_vct`'s ~1 556 ms/bd — a ~100× per-board step. (Correctness vs
-  `vcf.solve_vct` under validation; tail-bound — work-stealing, lever (2), still to come.)
+  over-generate spurious threes, a real correctness bug caught + fixed); (iv) **monotone
+  fast-paths** — defender five / tempo computed once per node (own@m only removes defender
+  options, never adds) and the per-move checks skipped when globally absent; (v) `rmask`
+  aliased into `fmask` (a frame is OR or AND, never both). Per-board algorithmic speedup at
+  **equal config** (B=24, mn=600): cell-scan `mega_vct` **38.4 s → 4.0 s = ~10×**, **0
+  verdict disagreements**. (Bitboard detection alone is ~10–14×, matching the VCF result;
+  candidate-own adds 1.65× on top.) The bigger practical win is *batchability*: the cell-scan
+  kernel's tail can't finish even B=64 at mn=1500 in 2 min, while the bitboard kernel batches
+  to B≈16k — see throughput below. **Validated 0 FP / 0 FN vs `vcf.solve_vct` over 320 real
+  positions** (258 clean agreements, 8 seeds).
 
-**Status of the two levers:** (1) bitboard/incremental detection — **DONE** (VCF
-validated; VCT in validation). (2) work-stealing for the single-deep-position tail —
-next. The megakernel is no longer "impractically slow naive"; it is a fast, mostly
-on-device VCT solver whose remaining cost is the tail + per-candidate detection.
+**Throughput characterization (the finding that matters for labeling).** The wall is
+**flat at ~16 s for B=128…2048** at mn=1500 — i.e. **completely tail-bound by the single
+deepest board** (it runs all `max_nodes`; the other thousands finish under its shadow).
+For batch corpus labeling this is a *feature*: throughput ∝ B at ~constant wall, so batch
+size is the throughput knob. Measured solves/s (mn=1500, real positions, M5 Max, fully
+on-device, RSS 0.3 GB): B=2048 → 127, 4096 → 209, 8192 → 382, 12288 → 514, **16384 → 583,
+24576 → 614** (saturating ≈ GPU concurrency). vs CPU `vcf.solve_vct` 0.64 solves/s that is
+**~900× aggregate**, with no host bottleneck (contrast the wavefront's 24–40 % GPU util).
+
+**Status of the levers.** (1) bitboard/incremental detection — **DONE** (VCF validated
+0 FP/FN over 360; VCT validated 0 FP/FN over 320 real positions, 258 clean agreements). (2) work-stealing: board-level is already handled by
+the GPU scheduler, and the real tail is a *single* deep board (one thread) — subtree-spill
+would cut single-board *latency* but **not** labeling *throughput* (already maximized by
+batching), so it is not the lever for this use case; the throughput knob is B and `max_nodes`.
+**Negative result:** generating three-moves by single-line open-three patterns is
+**incomplete** — it misses *four-four-at-`f`* threats (the follow-up makes fours in two
+directions, only one through `m`), so the whole-board trial-move `gen_threes` is required
+(can't be replaced by cheap 1-D patterns). The remaining per-node cost is the whole-board
+`gen_forcing(own∪m)` per candidate; localizing it to `m`'s lines hits the same four-four-at-`f`
+completeness wall, so it stays whole-board.
 
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
