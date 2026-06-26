@@ -188,8 +188,8 @@ moving on; tests run on real Rapfi positions (`~/data/games_raphi/`) under a 2-m
 - `wavefront.py` — **the batched wavefront solver** (host orchestration + all-GPU per-node
   kernels: detect + threes + a swapped-detect tempo pass; single reverse-order AND/OR
   backup). **A working GPU VCT solver.** On real Rapfi positions the verdict matches `vcf`
-  with **0 false-positive and 0 false-negative** clean disagreements; ~12 ms/board batched
-  at B=50 (amortizes at larger batch).
+  with **0 false-positive and 0 false-negative** clean disagreements across 150 positions
+  (3 seeds); throughput measured below — the bottleneck is **host orchestration, not the GPU**.
 - `mega_vcf.py` — **fully on-device VCF megakernel** (one thread/position, iterative DFS with
   make/unmake on a thread-local board, *no host orchestration per node*). Validated sound vs
   `vcf.solve_vcf` (clean-agree 40/40, 0 FP/FN). Throughput amortizes with batch (71→**12
@@ -200,9 +200,37 @@ moving on; tests run on real Rapfi positions (`~/data/games_raphi/`) under a 2-m
   plausible verdicts — **VCT fully on the GPU** — but **impractically slow naive** (~11
   s/board): per-node detection is recomputed O(N³)-ish and there's no work-stealing.
 
+**Throughput measured (2026-06-26, real positions, M5 Max).** Correctness gate re-run at
+B=50 × 3 seeds (150 positions): **0 FP / 0 FN** every seed, and `found_extra=0` (no wavefront
+WIN ever needed the vcf cap-lift recheck). GPU throughput (`max_depth=8`, `max_nodes=20000`):
+
+| B | ms/board | solves/s | gpu% (kernel wall) | cap% (unsolved) |
+|---|---|---|---|---|
+| 128 | 5.47 | 183 | 24% | 34% |
+| 512 | 0.53 | 1 893 | 40% | 42% |
+| 2048 | 0.28 | 3 528 | 25% | 47% |
+
+Two caveats that change the reading. **(1) Host-orchestration-bound at every scale** — only
+**24–40 %** of wall time is inside the MLX kernels; the other 60–76 % is the host Python
+per-node expand+backup loop (incl. host↔GPU transfer). **(2) `max_nodes` is a GLOBAL pool
+across the batch, not per-board** — so the falling ms/board is a *node-cap artifact* (each
+board gets 20000/B nodes; cap% climbs 34→42→47 %), **not** GPU amortization. For real corpus
+labeling, **scale `max_nodes` with B**. CPU baseline (single-thread `vcf.solve_vct`,
+max_nodes=20000): **0.64 solves/s aggregate** — sharply bimodal (median 30 ms ≈ 33 solves/s
+typical, but ~14 % of positions hit a ~90 s tail). **Speedup: 5.5× (typical 30 ms position) →
+286× (B=128 vs aggregate CPU)** — it clears the §6 "20–50× to pay for itself" bar **via the
+aggregate measure, because the GPU dodges the CPU's ~90 s-per-hard-position tail**, not via raw
+per-board speed.
+
+**This is the empirical case for the megakernel.** The wavefront being host-bound (60–76 % of
+wall *outside* the kernels) is exactly what a fully-on-device megakernel eliminates — the (C)
+direction isn't only elegant, it's where the measured time actually *is*. The megakernel's own
+remaining bottlenecks (incremental detection + work-stealing) attack the *other* end. Both ends
+are now measured, not guessed.
+
 **Verdict (2026-06-26).** VCT is **on the GPU**: the **`wavefront` solver is the usable
-deliverable** (correct on real positions, ~12 ms/board, batched detection amortized across
-the frontier), and the **megakernel path is proven** — the fully-on-device search machine is
+deliverable** (correct on real positions; throughput host-orchestration-bound — see table —
+clearing the 20–50× bar by the aggregate measure), and the **megakernel path is proven** — the fully-on-device search machine is
 correct (VCF: sound 40/40) and structurally complete for VCT. The naive megakernel is
 detection-bound + tail-bound, which **pins the two (C) levers precisely**: (1) **incremental /
 bitboard detection** (don't rescan the board O(N²–N³) per node — patch the ≤4 lines a move
