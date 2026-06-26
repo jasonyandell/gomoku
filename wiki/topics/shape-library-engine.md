@@ -122,19 +122,23 @@ postpone the hard games. Code: `scripts/threat_shapes/mine_first_vct.py` — app
 ### What we store: a relative, explicitly-typed, single-orientation stencil
 
 A mined first-VCT is a full board; we reduce it to the **minimum specification that still
-guarantees the VCT** — a small **stencil** in *relative* coordinates. Absolute position is
-throwaway provenance (`p=(3,4)` doesn't matter); "`.BBBBp` fits here" is the asset. Three
-**conservative** cell types:
+guarantees *this* VCT** — a small **stencil** in *relative* coordinates. Absolute position is
+throwaway provenance (`p=(3,4)` doesn't matter); "`.BBBBp` fits here" is the asset. **A stencil's
+identity is `(cells, mate-distance)`** — the cells *and* how long the forced win is (see the §3
+correction below: a load-bearing stone is one whose removal changes md, swapping the win for a
+different one). Four cell types:
 
 - **`B`** — attacker stone required.
 - **`.`** — must be **empty** (open). These reserve the room the threat needs to develop.
 - **`p`** — the catalyst move (empty, distinguished).
+- **`W`** — defender stone required — a **load-bearing** opponent stone that pins *this* line
+  (by monotonicity it is never needed for a win to *exist*; it is needed for the win to be
+  *this* win — it carries **identity, not existence**). Corrected in 2026-06-26 — see below.
 - everything else — implicit **don't-care** (not even stored).
 
-We deliberately take "empty" over the looser "attacker-or-empty": it matches fewer boards but
-every match is sound, and loosening can only *add* matches later — never invalidate a banked
-one. The `.` cells are load-bearing: they are what makes the stencil self-contained and
-**movable**.
+We take "empty" for `.` over the looser "attacker-or-empty": it matches fewer boards but every
+match is more conservative, and loosening can only *add* matches later. The `.` cells reserve the
+threat's room; the `W` cells fix which forced line is operative.
 
 ### The minimization — context ablation (the all-white certificate FAILED; corrected 2026-06-26)
 
@@ -149,14 +153,42 @@ one. The `.` cells are load-bearing: they are what makes the stencil self-contai
 > be. The lesson: the worst case must stay a **legal** board. (Evidence: `probe_meanest.py`,
 > 6 shapes, all-white → win=False, ~390–476 defender-5s each.)
 
-So we minimize by **context ablation** — remove stones from the *real, legal* mined board and
-keep what's load-bearing, never synthesizing a white sea. Start from the mined first-VCT board
-P0 (a proven win); greedily try removing each stone (attacker or defender → empty); re-solve
-the resulting **still-legal** board; keep the removal if it's still a VCT. What survives is the
-minimal in-context skeleton — the stencil. Anchor on the move p so the surviving win is the one
-we mined, not a drift onto another line. Defender stones fall away first (removing a defender
-only ever helps the attacker); the attacker skeleton plus the empties the forcing sequence
-needs are what remain. The algorithm *finds* which stones matter; we never hand-set a window (§0).
+So we minimize by **context ablation** — remove stones from the *real, legal* mined board,
+never synthesizing a white sea. Start from the mined first-VCT board P0 (a proven win); greedily
+try removing each stone; re-solve the **still-legal** board; keep the removal if the stone was
+genuinely irrelevant. **But the test is mate-distance invariance, NOT "still a win"** — see the
+correction below.
+
+> **Correction #2 — existence is the wrong invariant; ablate on mate-distance (2026-06-26,
+> Jason).** "Remove it if it's still a win" is broken, and the monotonicity lemma is exactly
+> why. *Existence*-monotonicity (proved: in freestyle, a white stone never makes a black win
+> *appear* — adding white only ever hurts or is neutral; the one exception is **renju**, where a
+> white stone can defuse black's *forbidden* double-three and so *enable* a win — which is why
+> freestyle is load-bearing) tells us only whether **some** win survives. It says nothing about
+> **which** win. A **load-bearing** stone is one whose removal **changes the mate distance**:
+> pull the white stone that was blocking the fast kills and a **17-ply** forced win collapses to
+> a **2-ply** one — *a different stencil entirely*, often one that doesn't even match the board it
+> came from (its now-required-`.` cell is where that white blocker sat). And by monotonicity this
+> is a **white-only** phenomenon (removing white can only shorten), so **load-bearing white is the
+> rule, not the exception, in the long VCTs** — the run-15s are long *precisely because* white
+> denies the short wins. Naive win-invariant ablation would shred every hard-won long VCT into a
+> trivial short stencil. So the criterion is **md-invariance**, three outcomes per removal:
+> - removal → **still wins at the same md** ⇒ irrelevant, drop it (a true don't-care);
+> - removal → **wins at a shorter md** ⇒ **load-bearing**, keep it (it forces *this* line — if a
+>   `W` stone, it becomes a `W` cell);
+> - removal → **no win** ⇒ existence-critical, keep it.
+>
+> The anchor is therefore the pair **`(p, md)`**, not just `p`: we are stencilizing "the 17-ply
+> VCT," and md is a coordinate of the object. **Hard dependency this creates:** the test needs
+> *depth*, but `solve_vct_mega_bb` returns only `(win, hit_cap)` and caps *nodes*, not depth. So
+> md-extraction (the move/depth-out-of-the-kernel work open since
+> [vct-backward-mining.md](vct-backward-mining.md) §5) moves from "nice to have" to a **blocking
+> prerequisite for L1** — or we depth-cap solves (e.g. "still win at `md−1`?" detects a
+> shortening). *Not cracked yet; written down. We try, we learn, we write it down.*
+
+What survives md-invariant ablation is the stencil: the attacker skeleton, the empties the
+forcing sequence needs, and the load-bearing `W` stones that pin this exact line. The algorithm
+*finds* which cells matter; we never hand-set a window (§0).
 
 ### Soundness: a candidate index that L0 verifies (corrected)
 
@@ -284,13 +316,19 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   ever needed — exactly the negative-prefix cost from [vct-backward-mining.md](vct-backward-mining.md) §3).
   The catalyst move p is extracted at emit time (anchors minimization), so L1 does **not** wait
   on the inherited move-extraction bottleneck.
-- **NEXT (this plan):** (1) **stencil minimization** (§3) — **context ablation** (remove stones
-  from the real legal board; the all-white "meanest" certificate FAILED, see §3 correction),
-  anchored on p, **bulk-synchronous** (~16k boards/call) with a capped `max_nodes`. GPU solver
-  is the sole oracle — **no CPU cross-validation** (the CPU `solve_vct` is incomplete vs the GPU
-  and ~15 min/query; Jason 2026-06-26). (2) the structural-match index + mobility sweep, each
-  match **L0-verified** (L1 proposes, L0 proves); (3) the v0 distance-field + fork player;
-  (4) L2 meta-VCT field on verifiable targets.
+- **BLOCKING PREREQUISITE (surfaced 2026-06-26):** **md-extraction** — stencil minimization
+  ablates on **mate-distance invariance**, not "still a win" (§3 correction #2), so we need depth
+  out of the solver. `solve_vct_mega_bb` returns only `(win, hit_cap)` and caps *nodes*, not
+  depth ⇒ either get md/depth from the kernel (the move/depth extraction open since
+  [vct-backward-mining.md](vct-backward-mining.md) §5) or depth-cap solves ("still win at md−1?").
+  This gates (1).
+- **NEXT (this plan):** (1) **stencil minimization** (§3) — **context ablation** on the real
+  legal board (the all-white "meanest" certificate FAILED), **md-invariant**, anchored on
+  **`(p, md)`**, keeping load-bearing `W` stones; **bulk-synchronous** (~16k boards/call), capped
+  `max_nodes`. GPU solver is the sole oracle — **no CPU cross-validation** (CPU `solve_vct` is
+  incomplete vs the GPU and ~15 min/query; Jason 2026-06-26). (2) the structural-match index +
+  mobility sweep, each match **L0-verified** (L1 proposes, L0 proves); (3) the v0 distance-field
+  + fork player; (4) L2 meta-VCT field on verifiable targets.
 - **DEFERRED (conservative, §3):** D4 / reflections / rotations — purely-additive 8× dedup,
   folded in later; and the "empty → attacker-or-empty" loosening.
 
