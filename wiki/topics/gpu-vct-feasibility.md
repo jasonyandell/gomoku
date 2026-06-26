@@ -303,6 +303,22 @@ that doubles in word count (8 vs 4), outweighing the detection-only gain. **`ulo
 right representation** — reverted. (Lesson: micro-benchmark the hot path *in situ*, not in
 isolation.)
 
+**Re-confirmed for the stencil minimizer (2026-06-26) — the cost is the tail, NOT startup.**
+A fresh timing breakdown (`probe_timing.py`, random boards): `import` 0.06 s; first call
+(compile + run) **0.10 s** — compile is negligible, so spawning a fresh `uv run` per query is
+fine. The wall is the per-call **tail**: B=1 → 0.03 s (a trivial board) but **B=16 → 24.6 s**
+(the batch now contains one hard board whose serial single-thread search sets the floor); then
+B=256 → 28.5 s, B=4096 → 40.5 s, **B=16384 → 71.7 s** — 1000× the boards for ~3× the wall.
+**Per-board cost swings ~350×**: 1.5 s/board at B=16 vs 0.0044 s/board at B=16384. Implication
+for any sequential, solve-in-the-loop consumer (the stencil minimizer's ablation): it **must be
+bulk-synchronous** — march all items in lockstep, one candidate per item per call, ~16k
+boards/call — or it pays the full tail for a near-empty batch (running the kernel at ~1 %
+efficiency). The second knob is **`max_nodes`**: it bounds the hard board's search, so capping
+it shrinks the tail directly; a CAP verdict is fail-safe for minimization (keep the cell). The
+floor itself (one weak thread per board, serial AND/OR search) would only move with a kernel
+rewrite that lets threads cooperate on the *single deepest* board — a real investment, deferred
+until batching + capping prove insufficient.
+
 **Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
 (`scripts/gpu_vcf_prototype.py`) · `gomoku/vcf.py` (`solve_vct`).

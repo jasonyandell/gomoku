@@ -128,48 +128,62 @@ every match is sound, and loosening can only *add* matches later — never inval
 one. The `.` cells are load-bearing: they are what makes the stencil self-contained and
 **movable**.
 
-### The minimization, and why one solver call certifies it
+### The minimization — context ablation (the all-white certificate FAILED; corrected 2026-06-26)
 
-Monotonicity (freestyle, no overline rule): VCT-win is monotone **up** in attacker stones (an
-extra attacker stone never breaks a forced win) and monotone **down** in defender stones (an
-extra defender stone only blocks/counters). So a candidate stencil has exactly one **meanest
-board**: keep `B` black and `.`/`p` empty, fill **every don't-care cell with a white
-(defender) stone** — the worst possible surroundings. If the attacker still wins *that*
-board, every board the stencil matches wins. **One solver call certifies the whole
-(exponential) match-set.** *(Monotonicity itself rides along as free telemetry — random
-attacker-add / defender-remove ablations over real shapes must never flip a win the wrong
-way; a violation means a freestyle edge case breaks the machinery, §7.)*
+> **Correction (probed 2026-06-26).** The original plan here was a one-call certificate: label
+> cells `B` / `.` / don't-care, build the **meanest board** by filling every don't-care with a
+> white (defender) stone, and let a single solve certify the whole match-set. **It does not
+> work.** A first-VCT board has ~200 empty cells; filling them all white hands the *defender*
+> ~400 five-in-a-rows — the defender has simply **won** — so the solver correctly returns
+> NO-WIN for *every* shape and no cell is ever removable. The monotonicity is real ("more
+> defender never helps the attacker") but **vacuous past the point the defender wins**: the
+> abstract worst case is an illegal, defender-won board that no legal matched position could
+> be. The lesson: the worst case must stay a **legal** board. (Evidence: `probe_meanest.py`,
+> 6 shapes, all-white → win=False, ~390–476 defender-5s each.)
 
-Extraction is **greedy demotion, anchored on the move p** (so it can't drift onto an
-unrelated VCT elsewhere on the board): start from the mined board (every attacker stone `B`,
-every empty `.`); try demoting each cell to don't-care; rebuild the meanest board; re-solve;
-keep the demotion if it still wins. What survives is the stencil. Batched across thousands of
-shapes through the tail-bound kernel — the same throughput trick as mining. Walk the open
-four: `.BBBBp` → demote the far `.` → meanest board makes it white `OBBBBp` → p still makes
-five → drop it → land on `BBBBp`; try dropping any `B` → only a four, p makes no five → keep.
-The algorithm *finds* which cells matter; we never hand-set a window (bitter lesson, §0).
+So we minimize by **context ablation** — remove stones from the *real, legal* mined board and
+keep what's load-bearing, never synthesizing a white sea. Start from the mined first-VCT board
+P0 (a proven win); greedily try removing each stone (attacker or defender → empty); re-solve
+the resulting **still-legal** board; keep the removal if it's still a VCT. What survives is the
+minimal in-context skeleton — the stencil. Anchor on the move p so the surviving win is the one
+we mined, not a drift onto another line. Defender stones fall away first (removing a defender
+only ever helps the attacker); the attacker skeleton plus the empties the forcing sequence
+needs are what remain. The algorithm *finds* which stones matter; we never hand-set a window (§0).
 
-### Prove once, match everywhere — and mobility falls out
+### Soundness: a candidate index that L0 verifies (corrected)
 
-The minimization's final state **is** the proof: it won in the meanest environment. So a
-**structural fit** of the stencil anywhere on any board is sound for free — a real placement
-has the same `B`-black and `.`-empty cells, and its don't-cares are never meaner than the
-all-white board we already beat. "Where is this a VCT" becomes a **bitmask scan**, not a
-solver call per location. A stencil is **mobile to every on-board placement that fits**: the
-open four wins in many specific locations, while a *true* open four (six collinear cells)
-cannot even be **placed** on a 5×5 → not a guaranteed win there, exactly as the geometry
-demands. Edge-leaning wins handle themselves — their `.`/`p` cells fall off-board at interior
-placements, so they simply fit in fewer spots. This kills the per-placement solver sweep: one
-proof, structural matching forever.
+Context ablation certifies a stencil **in the context it was mined / in isolation**, not against
+an adversary free to pre-place defender stones anywhere — that worst case is the illegal
+all-defender board above, untestable in one solve. For a short VCT (mate-in-1/2, the bulk of the
+corpus) the gap is nil: the attacker wins before the defender can act. For a longer VCT a
+pre-existing opponent counter-threat could in principle out-race it. So a stencil is best read as
+a **fast, high-precision index of known winning motifs, not a standalone proof** — which is
+exactly the §2 architecture: **L1 proposes, L0 verifies the leaf.** A stencil match flags "a known
+win is very likely here"; one cheap L0 solve on the real board confirms it before the engine ever
+claims the win. The **never-hallucinates** property lives entirely in L0, so an imperfect stencil
+costs a little search, never a false claim. Matching stays a structural bitmask scan over relative
+coords — every fit is a *candidate*, and L0 turns the candidate into truth. (This is a deliberate
+downgrade from the original "an L1 hit is a proof" claim, forced by the correction above.)
+
+> **Performance — the minimizer must be bulk-synchronous (measured 2026-06-26).** Both the
+> ablation sweep and match-verification are **tail-bound**: the call wall is set by the single
+> hardest board, ~24–72 s nearly independent of batch up to ~16k boards
+> ([gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8; compile/import is ~0.1 s — *not* the
+> cost). Per-board cost swings **~350×** between a 25-board call (1.5 s/board) and a 16k-board
+> call (0.0044 s/board), so row-at-a-time minimization is the trap. The minimizer marches **all
+> shapes in lockstep — one candidate-removal per shape per call, ~16k boards/call** — and **caps
+> `max_nodes`** to shrink the tail; a CAP verdict just keeps a cell (fail-safe, over-specific
+> never unsound).
 
 ### Conservative on symmetry — on purpose
 
-We use **translation only**, which is provably safe (the meanest-test verdict depends on the
-stencil's relative geometry, invariant under translation as long as it fits on-board). We do
-**not** fold D4 (reflections / rotations / transposes) yet — not because it's wrong, but to
-keep correctness on ground we trust. Each found orientation is its own entry; an open four
-seen horizontally and vertically is two stencils today. We lose nothing: symmetry is a purely
-**additive** 8× dedup we can fold in later without invalidating a single banked stencil.
+We use **translation only**: the same relative stencil laid down elsewhere is just another
+*candidate* placement, and L0 verifies each match anyway, so translation costs us nothing in
+soundness. We do **not** fold D4 (reflections / rotations / transposes) yet — not because it's
+wrong, but to keep the candidate set on ground we trust. Each found orientation is its own
+entry; an open four seen horizontally and vertically is two stencils today. We lose nothing:
+symmetry is a purely **additive** 8× dedup (more candidate generators) we can fold in later
+without invalidating a single banked stencil.
 *(Discovery curve — distinct stencils vs games mined — rides along as free telemetry, §0:
 saturation says the vocabulary is finite; runaway growth says the stencils aren't reducing
 enough and the representation needs rethinking.)*
@@ -243,8 +257,11 @@ L2 there.** Framing the envelope, not committing.
 - **Fork combinatorics explode** ⇒ need smart candidate generation for the conjunctions.
 - **Off-distribution opponent** steers into fog L2 hasn't covered ⇒ adversarial self-play to
   grow the library where it's thin.
-- **Monotonicity assumption false** in some freestyle edge case ⇒ the prime-implicant machinery
-  needs a guard. *(That's why §3 verifies it empirically first thing.)*
+- **The single-call "meanest board" certificate is vacuous** (DISCOVERED 2026-06-26): the
+  all-white worst case is a defender win, not a usable bound — minimization had to fall back to
+  legal-board **context ablation** (§3 correction). The deeper risk it exposes: a stencil is only
+  truly proof-grade *in isolation*; in real context a faster opponent threat can refute it ⇒
+  **L0 verifies every match** (§2), so the engine still never hallucinates.
 
 We'll know which one bites when it bites — and diagnose it with the whole system standing.
 
@@ -259,11 +276,13 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   ever needed — exactly the negative-prefix cost from [vct-backward-mining.md](vct-backward-mining.md) §3).
   The catalyst move p is extracted at emit time (anchors minimization), so L1 does **not** wait
   on the inherited move-extraction bottleneck.
-- **NEXT (this plan):** (1) **stencil minimization** (§3) — greedy demote-to-don't-care under
-  the meanest-board certificate, anchored on p → relative, explicitly-typed, single-orientation
-  stencils, cross-validated against the independent CPU `solve_vct`; (2) the structural-match
-  library + mobility sweep; (3) the v0 distance-field + fork player (leaf-verified by L0);
-  (4) L2 meta-VCT field on verifiable targets. Monotonicity telemetry rides along (1).
+- **NEXT (this plan):** (1) **stencil minimization** (§3) — **context ablation** (remove stones
+  from the real legal board; the all-white "meanest" certificate FAILED, see §3 correction),
+  anchored on p, **bulk-synchronous** (~16k boards/call) with a capped `max_nodes`. GPU solver
+  is the sole oracle — **no CPU cross-validation** (the CPU `solve_vct` is incomplete vs the GPU
+  and ~15 min/query; Jason 2026-06-26). (2) the structural-match index + mobility sweep, each
+  match **L0-verified** (L1 proposes, L0 proves); (3) the v0 distance-field + fork player;
+  (4) L2 meta-VCT field on verifiable targets.
 - **DEFERRED (conservative, §3):** D4 / reflections / rotations — purely-additive 8× dedup,
   folded in later; and the "empty → attacker-or-empty" loosening.
 
