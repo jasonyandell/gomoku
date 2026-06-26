@@ -43,15 +43,15 @@ inline void gen_forcing(thread const ulong* own, thread const ulong* empty, thre
     forcing[0]=0ul;forcing[1]=0ul;forcing[2]=0ul;forcing[3]=0ul;
     for(int d=0; d<4; d++){
         uint s = DSTEP[d];
-        ulong dm[4]; dm[0]=DMASK[d][0];dm[1]=DMASK[d][1];dm[2]=DMASK[d][2];dm[3]=DMASK[d][3];
+        // precompute the 5 shifts of own and empty once; reuse across 10 hole-pairs.
+        ulong Os[5][4]; ulong Es[5][4];
+        for(int i=0;i<5;i++){ shr256(own,(uint)i*s,Os[i]); shr256(empty,(uint)i*s,Es[i]); }
         for(int h=0; h<10; h++){
             int j=HP[h][0], k=HP[h][1];
-            ulong m[4]; cpy4(dm,m);
-            ulong sh[4];
+            ulong m[4]; m[0]=DMASK[d][0];m[1]=DMASK[d][1];m[2]=DMASK[d][2];m[3]=DMASK[d][3];
             for(int i=0;i<5;i++){
-                if(i==j||i==k) shr256(empty, (uint)i*s, sh);
-                else           shr256(own,   (uint)i*s, sh);
-                and4(m, sh);
+                if(i==j||i==k){ m[0]&=Es[i][0];m[1]&=Es[i][1];m[2]&=Es[i][2];m[3]&=Es[i][3]; }
+                else          { m[0]&=Os[i][0];m[1]&=Os[i][1];m[2]&=Os[i][2];m[3]&=Os[i][3]; }
             }
             ulong a[4]; shl256(m, (uint)j*s, a);
             forcing[0]|=a[0];forcing[1]|=a[1];forcing[2]|=a[2];forcing[3]|=a[3];

@@ -276,9 +276,12 @@ a **bitboard** (`ulong[4]`, 256 bits ≥ N²=225) and detect by shift-AND.
 deepest board** (it runs all `max_nodes`; the other thousands finish under its shadow).
 For batch corpus labeling this is a *feature*: throughput ∝ B at ~constant wall, so batch
 size is the throughput knob. Measured solves/s (mn=1500, real positions, M5 Max, fully
-on-device, RSS 0.3 GB): B=2048 → 127, 4096 → 209, 8192 → 382, 12288 → 514, **16384 → 583,
-24576 → 614** (saturating ≈ GPU concurrency). vs CPU `vcf.solve_vct` 0.64 solves/s that is
-**~900× aggregate**, with no host bottleneck (contrast the wavefront's 24–40 % GPU util).
+on-device, RSS 0.3 GB): B=8192 → 526, 12288 → ~640, **16384 → 891, 32768 → 1 020**
+(saturating ≈ GPU concurrency). vs CPU `vcf.solve_vct` 0.64 solves/s that is **~1 600×
+aggregate**, with no host bottleneck (contrast the wavefront's 24–40 % GPU util). A late
+**shift-precompute** (reuse each direction's five `shr256` of `own`/`empty` across the
+hole loops of `gen_forcing`/`completion_mask` instead of recomputing — verdict-preserving)
+lifted the saturated ceiling ~1.5× (583 → 891 @ B=16384) by cutting register/ALU pressure.
 
 **Status of the levers.** (1) bitboard/incremental detection — **DONE** (VCF validated
 0 FP/FN over 360; VCT validated 0 FP/FN over 320 real positions, 258 clean agreements). (2) work-stealing: board-level is already handled by

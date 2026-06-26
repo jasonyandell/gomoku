@@ -113,14 +113,14 @@ inline void completion_mask(thread const ulong* P, thread const ulong* empty, th
     comp[0]=0ul; comp[1]=0ul; comp[2]=0ul; comp[3]=0ul;
     for (int d=0; d<4; d++){
         uint s = DSTEP[d];
-        ulong dm[4]; dm[0]=DMASK[d][0];dm[1]=DMASK[d][1];dm[2]=DMASK[d][2];dm[3]=DMASK[d][3];
+        // precompute the 5 shifts of P and empty once; reuse across the 5 holes.
+        ulong Ps[5][4]; ulong Es[5][4];
+        for (int i=0;i<5;i++){ shr256(P,(uint)i*s,Ps[i]); shr256(empty,(uint)i*s,Es[i]); }
         for (int j=0; j<5; j++){
-            ulong m[4]; cpy4(dm, m);
-            ulong sh[4];
+            ulong m[4]; m[0]=DMASK[d][0];m[1]=DMASK[d][1];m[2]=DMASK[d][2];m[3]=DMASK[d][3];
             for (int i=0; i<5; i++){
-                if (i==j) shr256(empty, (uint)(i)*s, sh);
-                else      shr256(P,     (uint)(i)*s, sh);
-                and4(m, sh);
+                if (i==j){ m[0]&=Es[i][0];m[1]&=Es[i][1];m[2]&=Es[i][2];m[3]&=Es[i][3]; }
+                else     { m[0]&=Ps[i][0];m[1]&=Ps[i][1];m[2]&=Ps[i][2];m[3]&=Ps[i][3]; }
             }
             ulong shifted[4];
             shl256(m, (uint)(j)*s, shifted);
