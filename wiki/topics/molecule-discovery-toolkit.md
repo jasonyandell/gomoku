@@ -142,6 +142,63 @@ catalysts, quenching) stays useful as intuition + maps to influence fields; it j
 5. **#5 MAP-Elites / #1 Seed B Potts kernel / FANMOD census** — enumerate & name species once bonds are
    believed.
 
+## Applying it to THREATS — Allis's network + the forcing/residual split (the first experiment)
+Threats are the real quarry (offense), and **Victor Allis already built their formal ontology** —
+so we don't start from scratch. ([AHH93] = Allis, van den Herik, Huntjens, *Go-Moku and Threat-Space
+Search*, AAAI FS-93-02, 1993, defs §3.1/§4; Allis 1994 PhD thesis.)
+
+**Allis's formalism (the structure the bio tools run on).**
+- *Taxonomy* (§3.1): five / **straight four** (open four, already a double threat) / **four** (simple four,
+  exactly **1** forced cost square) / **three** (open, 2 cost squares) / **broken three** (3 cost squares).
+  Strength = #refutations: a four forces uniquely; threes give the defender 2–3 choices.
+- *Per-threat triple* (§4): **gain square** (attacker's move), **cost square(s)** (the forced block(s)),
+  **rest squares** (the other stones forming the threat).
+- *The chemistry* (§4): **dependency** A→B = "a *rest* square of A is the *gain* square of B" (directed);
+  **conflict** A–B = gain(A)=cost(B) or shared cost square (undirected). A **winning combination** = two
+  independent threats whose gain squares co-line into a straight four / double threat, dependency trees
+  non-conflicting. *This is literally the threat reaction-network of #10 — Allis defined the bonds in 1993.*
+- VCF = fours only → unique cost → **OR-only forced line** (cheap; what `solve_vcf`/`solve_vcf_batch` do).
+  VCT = threes+fours → defender **branches** → a real **AND/OR proof search** (`solve_vct`). Allis's result:
+  freestyle 15×15 is a first-player win (solution tree 138,790 nodes, 35 ply).
+
+**THE KEY INSIGHT (reshapes the program): forcing threats are collinear BY CONSTRUCTION.** Every VCF/VCT
+threat *is* a line. So **non-line structure can never appear in a single forcing-threat's geometry** — it
+can only live in (a) the *topology* of the dependency graph (a bond realized through a square on no shared
+line), or (b) the **residual**: positions that are **won but carry no VCF/VCT proof**. This splits the
+whole hunt cleanly, and turns Jason's "bound some threats with VCF/VCT" into a precise program:
+- **Forcing-won** (VCF/VCT proof exists) → the *named, line-bound* part → feed **FANMOD network-motif
+  census** on the dependency graph (find combination-rule motifs).
+- **Residual-won** (won, *no* forcing proof) → subtract the forcing bound, and the **leftover is exactly the
+  non-line frontier** (fields / denial / shaping) → feed **DCA / cryo-EM / MAP-Elites**. *This is where the
+  non-line molecules actually live; VCF is line-bound and cannot contain them.* Computable now: `solve_vcf_batch`
+  (sound forcing oracle, 130k/s; a `hit_cap` "no win" = *unproven*, correctly not trusted) ∧ a "won" label
+  (terminal self-play outcome, or a high-confidence value head) → `{won} ∧ {no proof}`.
+
+**First experiment (cheap, ~150 LOC, reuses `vcf.py` wholesale, ~1–2 days, no GPU-train contention):**
+1. **Threat-sequence replayer** (~40 LOC): `solve_vcf` returns only `winning_move`+`mate_distance`; recover
+   the line by replay — play the win move, get its forced block from `_completions_through` (= the cost
+   square), place it, recurse to five. Yields the (gain, cost, rest) triple per threat from existing helpers.
+2. **Dependency-graph builder** (~60 LOC, the only new object): nodes = typed threats; **dependency** edge =
+   rest(A)∩gain(B); **conflict** edge = gain/cost overlap. (Run on `solve_vct` too → adds open-three nodes +
+   real defender branching → richer, less path-like graphs.)
+3. **FANMOD colored-subgraph census** (binary or ~50 LOC): size-3/4 motifs vs a node-color-preserving,
+   degree-matched rewired null; z>2–3 over ≥200 samples; **require significance in both halves of the
+   corpus** (the Einstein-from-noise guard). Corpus: mine ~3–10k VCF-positive positions via `solve_vcf_batch`,
+   replay on CPU (minutes).
+- **Positive result:** the **fork** recurs (3-node shared-gain/cost-square motif = double threat) and the
+  **VCF-chain** recurs (directed dependency path) — both *validate the pipeline*; then **≥1 unnamed motif**
+  (e.g. a non-collinear rest-square coupling, or a recurring conflict-triangle) = a candidate molecule Allis
+  doesn't name.
+- **Honest failure mode (named up front):** VCF dependency trees are often *paths*, so the census may surface
+  only chains + the textbook fork. That **null is itself the signal**: *forcing offense is line-bound and
+  motif-poor — the non-line structure is exactly what VCF cannot see* (consistent with the claw being a
+  *defensive, non-forcing* object), and it cleanly tells us to pivot the tool stack onto the **residual
+  corpus** (DCA/cryo-EM), where non-line molecules can actually live.
+
+**Recommended sequencing:** build the shared plumbing (replayer + graph builder + the forcing/residual
+splitter — both lanes need it) → run FANMOD-on-forcing as cheap pipeline-validation → point **DCA at the
+residual corpus** for the actual non-line hunt. Forcing validates; the residual is the prize.
+
 ## Key sources
 Morcos 2011 DCA (PNAS 108:E1293); Ekeberg plmDCA (arXiv:1401.4832); CCMpred (PMC4201158); pydca.
 Scheres RELION/ML2D 2012 (J. Struct. Biol. 180:519). Voss 3-base periodicity; Stoffer spectral envelope
