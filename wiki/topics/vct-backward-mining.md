@@ -14,7 +14,10 @@ non-line "molecule" discovery.
 `scripts/threat_shapes/collect_rapfi.py` (stage-1 RapfiPool game generation).
 **Builds on:** the on-device VCT megakernel `scripts/vct_metal/mega_vct_bb.py`
 (`solve_vct_mega_bb`) — see [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8.
-**Feeds:** [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) /
+**Feeds:** [shape-library-engine.md](shape-library-engine.md) — these 63k enabling shapes
+are the **raw material for L1**: the engine reduces each to its minimal full-board prime
+implicant (the "exact minimum stones that make the VCT inevitable") and builds the library.
+Also feeds [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) /
 [idea-pile.md](idea-pile.md) #10 (the molecule ⊋ line program); the setup is exactly
 the *zero-line-content residual* that program hunts. **Threat theory:**
 [allis-threat-theory.md](allis-threat-theory.md) (VCF OR-only vs VCT AND/OR). **Non-line

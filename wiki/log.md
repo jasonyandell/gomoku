@@ -3,6 +3,26 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-26] New page: the Shape-Library Engine (the gomoku-AI plan) + gpu-vct row corrected
+
+Created [topics/shape-library-engine.md](topics/shape-library-engine.md) — the plan outline
+for **the gomoku AI Jason wants to build** (2026-06-26 brainstorm): mine the first-VCT
+*enabling shape* → reduce to its **minimal full-board prime implicant** (VCT-win is monotone
+in freestyle ⇒ 3 cell roles, "blank" collapses into defender-forbidden, validation = one
+solver call, extraction = batched ablation on L0) → a library = **the monotone DNF of "you
+have a VCT"** (bitmask-matched, D4-deduped) → a **two-player pursuit / df-pn** player that
+seeks an un-blockable **fork** of shapes and denies the opponent theirs, **leaf-verified by
+L0 so it never hallucinates a win**; **L2 = the AlphaZero layer** regressing the
+shape-reachability potential into the fog on *verifiable* targets. Captures Jason's binding
+working principles (go-all-the-way / no safe half-steps / negative-result-welcome;
+full-board for soundness not locality; forks day-1; telemetry rides along, not a gate). Sits
+on the **already-built** L0 ([gpu-vct-feasibility.md](topics/gpu-vct-feasibility.md) §8) and
+the **63k banked enabling shapes** ([vct-backward-mining.md](topics/vct-backward-mining.md));
+added the forward pointer from that page (the shapes are L1's raw material) and an index
+doorway row. Also **corrected the stale index row** for gpu-vct-feasibility — it still read
+"correct but CPU-bound v0," now reflects that **§8 overturned it** (on-device bitboard
+megakernel, ~1600× CPU, 0 FP/FN).
+
 ## [2026-06-25] New page: the Idea Pile (autolab seed bank) + idx-2 DAgger entry
 
 Created [topics/idea-pile.md](topics/idea-pile.md) — a parking lot for wild-but-grounded
