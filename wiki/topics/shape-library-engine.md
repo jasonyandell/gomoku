@@ -34,6 +34,14 @@ Date: 2026-06-26. Hardware: M5 Max, 48 GB, MPS/MLX-Metal. Game: **freestyle** 9�
 - **Bitter lesson.** Don't hand-engineer structure (a locality window, a pattern grammar)
   the compute can find. Previously-impossible amounts of VCT compute are now tractable
   (§1); spend them. Mac first; rent B200s ($4/hr, ~couple grand acceptable) only if we must.
+- **Performance is the enabling feature — the CALL-COST LAW (binding on every solver
+  consumer).** One `solve_vct_mega_bb` call costs **one tail**: ~24–72 s set by the *single
+  hardest board* in the batch, nearly **flat in batch size** up to ~16 k boards (compile is
+  ~0.1 s — not the cost). **Throughput is free; latency is fixed.** So every consumer is
+  **bulk-synchronous** — gather all boards into one ≤16 k call, *never* solve in a loop on a
+  small batch — and caps `max_nodes` to shrink the tail. This is not tuning trivia: million-
+  position VCT labeling and per-cell ablation are tractable *only* because the wall is ~flat in
+  B. Headline + numbers: [gpu-vct-feasibility.md](gpu-vct-feasibility.md) (top banner).
 
 ## 1. Where it sits — what already exists vs. what's new
 

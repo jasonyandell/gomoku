@@ -1,5 +1,32 @@
 # GPU/MPS-batched VCT solver — feasibility spike (verdict: correct but CPU-bound v0)
 
+> ## ⚡ THE CALL-COST LAW — read this before you call `solve_vct_mega_bb`
+>
+> **One call costs one _tail_: the wall is set by the single hardest board in the batch, and
+> it is almost flat in batch size.** An easy board is milliseconds; a hard board (a deep
+> _negative_ proof — proving "no VCT" exhausts the search) is the floor, **~24 s at
+> `max_nodes=2000`**, and that floor scales with `max_nodes`. Passing thousands more boards
+> alongside it is nearly free: measured **B=16 → 24.6 s, B=256 → 28.5 s, B=4096 → 40.5 s,
+> B=16384 → 71.7 s** — 1000× the boards for ~3× the wall. **Per-board cost collapses ~350×**
+> (1.5 s/board at B=16 → 0.0044 s/board at B=16384). **Throughput is free; latency is fixed.**
+> Compile/import is **~0.1 s** — *not* the cost; a fresh `uv run` per query is fine.
+>
+> **Binding rules for every caller:**
+> 1. **Never call the solver in a loop on a small batch.** A 25-board call wastes ~99 % of its
+>    wall. Be **bulk-synchronous**: gather every board you need solved (up to ~16 k) into *one*
+>    call. Sequential solve-in-the-loop code (e.g. stencil ablation) must march all items in
+>    lockstep, one candidate per item per call.
+> 2. **`max_nodes` is the tail knob** — lower it to shrink the floor; a CAP verdict is
+>    fail-safe wherever "couldn't prove it" can be treated conservatively (labeling, ablation).
+> 3. The floor itself (one weak GPU thread per board, serial AND/OR search) only moves with a
+>    kernel rewrite that lets threads cooperate on the *single deepest* board — a real
+>    investment, deferred until batching + capping prove insufficient.
+>
+> **This is not tuning trivia — it is the constraint the whole shape-library approach is built
+> on.** Million-position VCT labeling and per-cell ablation are tractable *only because the wall
+> is ~flat in B*. The on-device megakernel this law describes lands in **§8**; §1–§7 below are
+> the 2026-06-25 v0 spike (concluded CPU-bound, **superseded by §8**).
+
 **One-line verdict.** A GPU-batched VCT (Victory-by-Continuous-Threats) solver is
 **correctness-achievable** (matched CPU `solve_vct` exactly on every cleanly-resolved
 position, zero false positives) but the v0 prototype is **CPU-bound, not worth wiring
