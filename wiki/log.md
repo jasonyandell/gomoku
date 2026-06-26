@@ -1385,3 +1385,19 @@ distillation lesson (#77/#86); think-time-not-node strength dial; matured toolin
 `capabilities.md`. Kept the era-independent durable lessons (fast-attack collapse,
 noisy evals, native-MCTS bottleneck, preserve-evidence). Scoped refresh, not a full
 re-curation (status-tags / pruning still deferred).
+
+## 2026-06-26 — external reference page: standard gomoku strategy ("rule of priorities")
+Filed a new `topics/gomoku-standard-strategy.md` distilling a GomokuTV YouTube video
+(*"How to play Gomoku? — The rule of priorities"*, <https://youtu.be/1boqoa2rQfU>) that
+Jason flagged as a clear presentation of **standard, known** gomoku theory. Ingest was
+**transcript-only** — Gemini's `analyze_youtube` was down (Google IneligibleTier auth
+error on the local CLI); the spoken theory is captured, the on-screen shape diagrams are
+not (geometry cross-checked against `allis-threat-theory.md`, not read off the video).
+Content: the 5-depth **priority ladder** (overline/five → four/VCF → three/fukumi/VCT →
+two/yobi/VC2 → sh-win/positional/"ear-reddening") + a fukumi/yobi/cut/sh-win glossary
+mapping the community's terms to Allis's formalism and to `gomoku/vcf.py`. The page is
+explicitly framed as the **standard-theory foil for idea #10 (molecule ⊋ line)**: the
+ladder is fully line-organized through depth 4, and depth 5 ("positional / tempo /
+open-area moves with no direct connection") is exactly where standard theory *gestures
+at* non-line/field structure but **runs out of names** — the contrast we want. Added an
+index doorway row under the Allis row; purely additive.
