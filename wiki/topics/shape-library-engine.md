@@ -65,11 +65,13 @@ sufficient form.** That is L1.
 
 - **L0 — exact VCT (built).** Leaf truth. Never wrong. Has the last word at every leaf of
   the player's search, so nothing downstream can make the engine claim a false win.
-- **L1 — the shape library.** The minimal full-board **prime implicants** of won positions.
-  This *is* the **monotone DNF of "the side to move has a VCT."** Matching is exact (a
-  bitmask containment test), so an L1 hit is a *proof*, not an estimate.
+- **L1 — the stencil library.** The minimal **stencils** of won positions — each a relative,
+  explicitly-typed (`B` / `.` / `p`), single-orientation reduction of a board that is a
+  *provable* VCT (formal handle: a monotone-function *implicant*; see §3 Naming). Matching is
+  exact — a structural bitmask fit — so an L1 hit is a *proof*, not an estimate. (We mine one
+  stencil per VCT and bank others as free augmentation; we do **not** chase the full DNF, §3.)
 - **L2 — the learned meta-VCT field** (where we AlphaZero — Jason's instinct). In the
-  *fog* (no shape matches and exact search is too deep), regress the gradient toward
+  *fog* (no stencil matches and exact search is too deep), regress the gradient toward
   shape-reachability under strong play. Trained on **verifiable** targets from L0/L1, so no
   value-overestimation. **Guides and orders only**; L0 still verifies the leaves.
 
