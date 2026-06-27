@@ -109,6 +109,71 @@ def test_support_and_complete_invariants():
     run_support_complete(B=32, seed=0)
 
 
+# --------------------------------------------------------------------------- #
+# return_carriers — the load-bearing OWN stones (the `B` channel) complementing
+# support's required-openings (`./p`). Issue #88.
+# --------------------------------------------------------------------------- #
+def _board_from(own_cells, opp_cells=()):
+    b = np.zeros((2, N, N), bool)
+    for c in own_cells:
+        b[0, c // N, c % N] = True
+    for c in opp_cells:
+        b[1, c // N, c % N] = True
+    return b
+
+
+def test_carriers_golden_shapes():
+    """On immediate-five boards, carriers == EXACTLY the stones forming the five
+    and support == the required-opening cells — the literal `.BBBB.` ask of #88
+    (we wanted the four B's; support returns the `.`'s; carriers returns the B's)."""
+    open_four = [7 * N + 4 + i for i in range(4)]          # .BBBB. (ends = openings)
+    gapped = [5 * N + 2, 5 * N + 3, 5 * N + 5, 5 * N + 6]  # BB.BB  (gap  = opening)
+    batch = np.stack([_board_from(open_four), _board_from(gapped)])
+    win, hit, move, supp, carr = solve_vct_mega_bb(
+        batch, max_nodes=500, return_move=True, return_support=True, return_carriers=True)
+    for i, oc in enumerate([open_four, gapped]):
+        assert win[i] and not hit[i], f"golden board {i} not a clean win"
+        s = set(cells_from_words(supp[i]))
+        cr = set(cells_from_words(carr[i]))
+        assert cr == set(oc), f"carriers {sorted(cr)} != stones {sorted(oc)} @board{i}"
+        assert s, f"empty support @board{i}"
+        assert not (s & set(oc)), f"support hit a stone @board{i}"
+        assert not (s & cr), f"support/carriers overlap @board{i}"
+
+
+def run_carriers_invariants(B: int = 48, seed: int = 0, max_nodes: int = 500):
+    """Structural invariants for the return_carriers output:
+
+      * return_carriers leaves (win, hit, move, support) byte-identical
+      * carriers ⊆ occupied OWN stones at root (the `B` channel, not openings)
+      * carriers ∩ support == ∅ (stones vs played-empties are disjoint)
+      * a non-win (clean) has empty carriers
+    """
+    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
+    ws, hs, ms, supp = solve_vct_mega_bb(
+        st, max_nodes=max_nodes, return_move=True, return_support=True)
+    wk, hk, mk, sk, carr = solve_vct_mega_bb(
+        st, max_nodes=max_nodes, return_move=True, return_support=True, return_carriers=True)
+
+    assert np.array_equal(ws, wk) and np.array_equal(hs, hk) \
+        and np.array_equal(ms, mk) and np.array_equal(supp, sk), \
+        "return_carriers changed (win, hit, move, support)"
+
+    own = st[:, 0].reshape(B, -1)
+    for b in range(B):
+        cr = cells_from_words(carr[b])
+        s = set(cells_from_words(sk[b]))
+        assert all(own[b, c] for c in cr), f"carrier not an own stone @b{b}"
+        assert not (set(cr) & s), f"carrier overlaps support @b{b}"
+        if not (wk[b] and not hk[b]):
+            assert not cr, f"clean non-win has carriers @b{b}"
+    return B
+
+
+def test_carriers_invariants():
+    run_carriers_invariants(B=48, seed=0)
+
+
 if __name__ == "__main__":
     import sys
     if not FIXTURE.exists():
@@ -119,4 +184,7 @@ if __name__ == "__main__":
     test_winmask_matches_golden(data)
     run_support_complete(B=32, seed=0)
     run_support_complete(B=32, seed=1)
+    test_carriers_golden_shapes()
+    run_carriers_invariants(B=48, seed=0)
+    run_carriers_invariants(B=48, seed=1)
     print("FAST tier PASS")

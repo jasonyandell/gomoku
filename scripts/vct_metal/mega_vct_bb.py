@@ -319,14 +319,20 @@ def _src():
 #    With support also on, `support` is the UNION over all winning first moves
 #    (per-move support would need an (B,N*N,4) output — left as a non-goal).
 # ----------------------------------------------------------------------------
-def _build_src(support: bool, complete: bool) -> str:
+def _build_src(support: bool, complete: bool, carriers: bool = False) -> str:
     src = _src()
-    if not support and not complete:
+    if not support and not complete and not carriers:
         return src
+    # carriers are DERIVED from the proof-support mask, so the support
+    # accumulation runs whenever EITHER support or carriers is requested; the
+    # `support` flag still controls only whether that mask is itself OUTPUT.
+    # Consequence: _build_src(s, c, carriers=False) is byte-identical to the
+    # pre-carriers source for every (s, c) — existing variants never change.
+    acc = support or carriers
 
     # -- declarations (after `int winmove=-1;`) --
     decls = ""
-    if support:
+    if acc:
         decls += "\n    ulong fsupp[%d][4]; ulong supp[4]={0ul,0ul,0ul,0ul};" % MAXD
     if complete:
         decls += "\n    ulong wm[4]={0ul,0ul,0ul,0ul};"
@@ -334,7 +340,7 @@ def _build_src(support: bool, complete: bool) -> str:
                       "    int winmove=-1;" + decls + "\n", 1)
 
     # -- zero this frame's support on entry (once per node visit) --
-    if support:
+    if acc:
         anchor = ("        if (sp>=MAXD-1 || nodes>maxnodes){ hitcap=true; ret=0; "
                   "entering=false; continue; }\n")
         src = src.replace(anchor, anchor +
@@ -342,9 +348,9 @@ def _build_src(support: bool, complete: bool) -> str:
                           "fsupp[sp][2]=0ul;fsupp[sp][3]=0ul;\n", 1)
 
     # -- immediate five (OR inline win) --
-    five_supp = "cpy4(c0, fsupp[sp]); " if support else ""
+    five_supp = "cpy4(c0, fsupp[sp]); " if acc else ""
     if complete:
-        five_u = "or4(supp, c0); " if support else ""
+        five_u = "or4(supp, c0); " if acc else ""
         five_new = ("          if (any4(c0)){ if(sp==0){ or4(wm, c0); " + five_u +
                     "} else { winmove=lowbit4(c0); " + five_supp +
                     "ret=1; entering=false; continue; } }  // immediate five")
@@ -356,9 +362,9 @@ def _build_src(support: bool, complete: bool) -> str:
         "entering=false; continue; }  // immediate five", five_new, 1)
 
     # -- sound double-four (OR inline win) --
-    df_supp = ("setbit4(&fsupp[sp][0], m); or4(fsupp[sp], cm); " if support else "")
+    df_supp = ("setbit4(&fsupp[sp][0], m); or4(fsupp[sp], cm); " if acc else "")
     if complete:
-        df_u = "setbit4(&supp[0], m); or4(supp, cm); " if support else ""
+        df_u = "setbit4(&supp[0], m); or4(supp, cm); " if acc else ""
         df_new = ("            if (nc>=2){ if(sp==0){ setbit4(&wm[0], m); " + df_u +
                   "continue; } " + df_supp + "dwin=true; break; }    // sound double four")
     else:
@@ -369,9 +375,9 @@ def _build_src(support: bool, complete: bool) -> str:
         "// sound double four", df_new, 1)
 
     # -- fork three (OR inline win); rm = defender reply mask from gen_threes --
-    fork_supp = ("setbit4(&fsupp[sp][0], m); or4(fsupp[sp], rm); " if support else "")
+    fork_supp = ("setbit4(&fsupp[sp][0], m); or4(fsupp[sp], rm); " if acc else "")
     if complete:
-        fork_u = "setbit4(&supp[0], m); or4(supp, rm); " if support else ""
+        fork_u = "setbit4(&supp[0], m); or4(supp, rm); " if acc else ""
         fork_new = ("              if (fk){ if(sp==0){ setbit4(&wm[0], m); " + fork_u +
                     "continue; } " + fork_supp + "dwin=true; break; }  // fork three")
     else:
@@ -383,10 +389,10 @@ def _build_src(support: bool, complete: bool) -> str:
 
     # -- OR parent, winning child returns (ret==1) --
     orret_nonroot = (("or4(fsupp[sp], fsupp[sp+1]); setbit4(&fsupp[sp][0], mm[sp]); "
-                      "if(mb[sp]>=0) setbit4(&fsupp[sp][0], mb[sp]); ") if support else "")
+                      "if(mb[sp]>=0) setbit4(&fsupp[sp][0], mb[sp]); ") if acc else "")
     if complete:
         root_u = (("or4(supp, fsupp[1]); setbit4(&supp[0], mm[0]); "
-                   "if(mb[0]>=0) setbit4(&supp[0], mb[0]); ") if support else "")
+                   "if(mb[0]>=0) setbit4(&supp[0], mb[0]); ") if acc else "")
         # at the root: record the winning move, then FALL THROUGH to try the next
         # root candidate (no bubble).  Below the root: bubble as usual.
         orret_new = ("          if (ret==1){ if(sp==0){ setbit4(&wm[0], mm[0]); " + root_u +
@@ -400,7 +406,7 @@ def _build_src(support: bool, complete: bool) -> str:
         "// OR child won -> bubble", orret_new, 1)
 
     # -- AND parent: a reply just won; fold it into this frame's support --
-    if support:
+    if acc:
         and_anchor = ("          if (ret==0){ entering=false; continue; }                 "
                       "// a reply refutes -> AND NOWIN")
         src = src.replace(and_anchor, and_anchor +
@@ -413,12 +419,29 @@ def _build_src(support: bool, complete: bool) -> str:
                 "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);")
     move_line = ("    move[gid]=(int)(any4(wm)? lowbit4(wm) : -1);" if complete else
                  "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);")
+    # the proof-support mask per board: in complete mode the union over winning
+    # first moves (`supp`), else the root frame's accumulator on a win (else 0).
+    support_expr = "supp[w]" if complete else "(ret==1?fsupp[0][w]:0ul)"
     extra = ""
     if support:
-        sval = "supp[w]" if complete else "(ret==1?fsupp[0][w]:0ul)"
-        extra += "\n    for(uint w=0;w<4u;w++){ support[base+w] = " + sval + "; }"
+        extra += "\n    for(uint w=0;w<4u;w++){ support[base+w] = " + support_expr + "; }"
     if complete:
         extra += "\n    for(uint w=0;w<4u;w++){ winmask[base+w] = wm[w]; }"
+    if carriers:
+        # `own` here == the ROOT board: every proof move is unmade on the way back
+        # to sp==0 before the loop breaks, so `own` == own_in. carriers = root-own
+        # stones collinear-within-4 (COLLIN) of any support cell = the load-bearing
+        # stones the proof's five-lines run through (the `B` channel to support's
+        # `./p`). Over-inclusive, mirror of support: carriers ⊆ own, disjoint from
+        # support, all-zero on a non-win (support_expr is 0 there).
+        extra += (
+            "\n    ulong _sfin[4]; for(uint w=0;w<4u;w++){ _sfin[w] = " + support_expr + "; }"
+            "\n    ulong _carr[4]={0ul,0ul,0ul,0ul}; ulong _ct[4]; cpy4(_sfin,_ct);"
+            "\n    while(true){ int _c=lowbit4(_ct); if(_c<0) break; clrbit4(_ct,_c);"
+            " _carr[0]|=COLLIN[_c][0];_carr[1]|=COLLIN[_c][1];"
+            "_carr[2]|=COLLIN[_c][2];_carr[3]|=COLLIN[_c][3]; }"
+            "\n    and4(_carr, own);"
+            "\n    for(uint w=0;w<4u;w++){ carriers[base+w]=_carr[w]; }")
     src = src.replace(
         "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);\n"
         "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);",
@@ -429,8 +452,8 @@ def _build_src(support: bool, complete: bool) -> str:
 _KERNEL_CACHE: dict = {}
 
 
-def _get_kernel(support: bool, complete: bool):
-    key = (bool(support), bool(complete))
+def _get_kernel(support: bool, complete: bool, carriers: bool = False):
+    key = (bool(support), bool(complete), bool(carriers))
     k = _KERNEL_CACHE.get(key)
     if k is None:
         names = ["win", "hit", "move"]
@@ -438,10 +461,13 @@ def _get_kernel(support: bool, complete: bool):
             names.append("support")
         if complete:
             names.append("winmask")
+        if carriers:
+            names.append("carriers")
         k = mx.fast.metal_kernel(
-            name="mega_vct_bb_%d%d" % (int(support), int(complete)),
+            name="mega_vct_bb_%d%d%d" % (int(support), int(complete), int(carriers)),
             input_names=["own_in", "opp_in", "max_nodes"],
-            output_names=names, source=_build_src(support, complete), header=_HEADER)
+            output_names=names,
+            source=_build_src(support, complete, carriers), header=_HEADER)
         _KERNEL_CACHE[key] = k
     return k
 
@@ -468,11 +494,12 @@ def cells_from_words(words) -> list:
 
 def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 32,
                       return_move: bool = False, return_support: bool = False,
-                      complete: bool = False):
+                      complete: bool = False, return_carriers: bool = False):
     """boards: (B,2,N,N) bool. Solves VCT for the side to move (board[0]=attacker).
 
     Returns (win, hit_cap): (B,) bool by default. Optional outputs are appended in
-    a FIXED order — move, support, winmask — so existing callers never break:
+    a FIXED order — move, support, winmask, carriers — so existing callers never
+    break:
 
     * ``return_move=True`` appends ``move`` (B,) int32 — a VALID (sound, not
       necessarily shortest) VCT first move (flat cell index), -1 where no win was
@@ -480,27 +507,41 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
     * ``return_support=True`` appends ``support`` (B,4) uint64 — the union of cells
       the found proof line touches (relevance window / stencil seed; over-inclusive
       vs a minimal stencil), all-zero on a non-win. Unpack with ``cells_from_words``.
+      NB: support ⊆ EMPTY-at-root — it is the *required-openings* (the ``.``/``p``
+      cells the forcing line plays into), NOT the carrier stones. See ``carriers``.
     * ``complete=True`` (slower) changes ``win`` to "∃ a winning first move" and
       appends ``winmask`` (B,4) uint64 — the bitmask of ALL winning first moves
       (sound + complete). With ``return_support`` too, ``support`` is the union
       over every winning first move.
+    * ``return_carriers=True`` appends ``carriers`` (B,4) uint64 — the load-bearing
+      OWN stones the proof's five-lines run through: every root-own stone
+      collinear-within-4 of a support cell. The COMPLEMENT of ``support``
+      (carriers ⊆ occupied-own, support ⊆ empty) — the ``B`` channel of a typed
+      stencil to support's ``./p``. Over-inclusive (mirror of support), all-zero on
+      a non-win. Unpack with ``cells_from_words``. Computed from the support mask,
+      so it is available without ``return_support`` (the mask is accumulated either
+      way; ``return_support`` only controls whether that mask is also output).
 
     So e.g. ``solve_vct_mega_bb(b)`` -> (win, hit); ``return_move=True`` ->
     (win, hit, move); ``complete=True, return_move=True, return_support=True`` ->
-    (win, hit, move, support, winmask). Fully on-device.
+    (win, hit, move, support, winmask); adding ``return_carriers=True`` appends
+    ``carriers`` after all of the above. Fully on-device.
     """
     B = boards.shape[0]
     own, opp = bb.pack_words(boards)
     o = mx.array(own.reshape(-1))
     p = mx.array(opp.reshape(-1))
     mn = mx.array(np.array([max_nodes], dtype=np.int32))
-    kernel = _get_kernel(return_support, complete)
+    kernel = _get_kernel(return_support, complete, return_carriers)
     out_shapes = [(B,), (B,), (B,)]
     out_dtypes = [mx.uint8, mx.uint8, mx.int32]
     if return_support:
         out_shapes.append((B, 4))
         out_dtypes.append(mx.uint64)
     if complete:
+        out_shapes.append((B, 4))
+        out_dtypes.append(mx.uint64)
+    if return_carriers:
         out_shapes.append((B, 4))
         out_dtypes.append(mx.uint64)
     outs = kernel(
@@ -512,12 +553,15 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
     h = np.array(outs[1]).astype(bool)
     move = np.array(outs[2]).astype(np.int32)
     idx = 3
-    support = winmask = None
+    support = winmask = carriers = None
     if return_support:
         support = np.array(outs[idx]).astype(np.uint64).reshape(B, 4)
         idx += 1
     if complete:
         winmask = np.array(outs[idx]).astype(np.uint64).reshape(B, 4)
+        idx += 1
+    if return_carriers:
+        carriers = np.array(outs[idx]).astype(np.uint64).reshape(B, 4)
         idx += 1
     res = [w, h]
     if return_move:
@@ -526,6 +570,8 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
         res.append(support)
     if complete:
         res.append(winmask)
+    if return_carriers:
+        res.append(carriers)
     return tuple(res)
 
 
