@@ -5024,3 +5024,39 @@ terminus (a molecule candidate) AND a defense lesson (defender's natural-looking
 white-side wound). Only 68/400 shards consumed at the node cap ⇒ resumable, ~60× headroom on the
 full corpus. Next natural uses (Jason's call): D4-canonical dedup → distinct-shape count; feed L1
 stencil minimization; a non-VCF-aware Φ/defense target. On `feat/gentle-rapfi-teacher` (not merged).
+
+## 2026-06-27 — `mega_vct_bb`: support + complete outputs (+ a canonical solver wiki page)
+
+Extended the on-device VCT megakernel `scripts/vct_metal/mega_vct_bb.py :: solve_vct_mega_bb` with two
+optional outputs, mirroring the passive `return_move` style and keeping the default `(win, hit, move)`
+path **byte-identical** (asserted `_build_src(False,False)==_src()`; cross-check vs cell-scan `mega_vct`
+0 disagreements). Each flag compiles its **own** kernel variant (`_KERNEL_CACHE`), so the fast path pays
+nothing.
+
+- **`return_support=True`** → `(B,4)` uint64 `support`: the cells the found proof line touches — a
+  stencil seed / relevance window for the shape-library engine. Built by **return-path accumulation**: a
+  per-frame `fsupp[]` merged into its parent ONLY on a winning return (`ret==1`), so abandoned/refuted
+  branches never pollute it. OR-win adds move(+four-block); AND-win adds every defender reply; the three
+  inline OR wins add move + completion/threat cells. `support ⊆ root EMPTY cells` (played cells, not the
+  pre-existing threat stones — the ablation pass works the full board). Over-inclusive vs minimal, by design.
+- **`complete=True`** (slower) → `(B,4)` uint64 `winmask`: ALL winning FIRST MOVES. The root OR node stops
+  short-circuiting and records every winning forcing candidate; non-root nodes untouched (their
+  short-circuit IS the per-root-move verdict). Winmask = winning *forcing* first moves (fours +
+  tempo-guard-passing threes) = exactly the VCT first moves; non-forcing free-wins in already-won
+  positions are correctly excluded.
+
+**Validation (the work).** Invariants (B=32, budget per Jason = `max_nodes=500`, runs in seconds, added as
+`test_support_and_complete_invariants`): support-variant verdict/move identical; complete `win`==default
+`win` on clean boards; default move ∈ winmask; support cells empty/contain-move/zero-on-loss — all PASS.
+**Gold** (`~/.claude/jobs/d524d833/tmp/gold_complete.py`, 6 winning boards, all empties × all replies via
+the kernel, vs vcf's exact forcing-move generation): **0 unsound winmask moves, 0 winning-forcing-moves
+missing.** *Lesson banked:* my first completeness oracle FAILED (21 "misses") because I forgot vcf's
+**tempo guard** (`_defender_has_four_or_five`, vcf line 942) — a three where the defender has a counter
+four/five is NOT a forcing VCT move; `verify_one` (wins-vs-all-replies) still flags it in an overwhelmingly
+won position, but it is correctly absent from winmask. Adding the guard to the oracle → clean PASS. **The
+solver was right; the verifier was wrong** — exactly the kind of subtlety the move-verifier pattern exists
+to catch.
+
+New canonical wiki page **`wiki/topics/mega-vct-solver.md`** (the API/contract reference) + index doorway
+row; `gpu-vct-feasibility.md` §9 and `vct-backward-mining.md` §5 updated with pointers. On
+`feat/gpu-vct-support-complete` (not merged).

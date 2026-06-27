@@ -292,39 +292,241 @@ def _src():
     return _SRC.replace("__MAXD__", str(MAXD))
 
 
-_KERNEL = mx.fast.metal_kernel(
-    name="mega_vct_bb", input_names=["own_in", "opp_in", "max_nodes"],
-    output_names=["win", "hit", "move"], source=_src(), header=_HEADER)
+# ----------------------------------------------------------------------------
+# Source-variant builder.  The DEFAULT (support=False, complete=False) returns
+# _src() byte-for-byte, so the default kernel — and its (win, hit, move) verdict
+# and throughput — is literally unchanged.  Two optional, independent features
+# are injected only into the requested variant (each behind its own compiled
+# kernel, never costing the fast path a single instruction):
+#
+#  * SUPPORT (return_support=True): a per-frame `fsupp[MAXD][4]` accumulator that
+#    merges a child's support into its parent ONLY on a winning return (ret==1).
+#    Because the merge happens on the win-bubbling return path, abandoned/refuted
+#    branches never pollute it.  An OR node that wins contributes its move (+ the
+#    forced four-block); an AND node that wins contributes every defender reply;
+#    the three inline OR wins (immediate-five / sound double-four / fork-three)
+#    contribute the move + its completion/threat cells.  Output: `support` as
+#    4×uint64 per board = the union of cells the found proof line touches (an
+#    over-inclusive stencil seed, NOT a minimal stencil), 0 on a non-win.
+#
+#  * COMPLETE (complete=True, slower): the ROOT OR node no longer short-circuits
+#    at the first winning move — it records EVERY winning first move into a
+#    `winmask` (4×uint64) and keeps enumerating.  Non-root nodes are untouched
+#    (they still short-circuit, which is exactly the per-root-move verdict we
+#    want).  "All solutions" == all winning FIRST MOVES (sound: every reported
+#    move starts a real forced win; complete: no winning first move is missed),
+#    NOT all winning lines/trees (combinatorially larger — AND nodes branch).
+#    With support also on, `support` is the UNION over all winning first moves
+#    (per-move support would need an (B,N*N,4) output — left as a non-goal).
+# ----------------------------------------------------------------------------
+def _build_src(support: bool, complete: bool) -> str:
+    src = _src()
+    if not support and not complete:
+        return src
+
+    # -- declarations (after `int winmove=-1;`) --
+    decls = ""
+    if support:
+        decls += "\n    ulong fsupp[%d][4]; ulong supp[4]={0ul,0ul,0ul,0ul};" % MAXD
+    if complete:
+        decls += "\n    ulong wm[4]={0ul,0ul,0ul,0ul};"
+    src = src.replace("    int winmove=-1;\n",
+                      "    int winmove=-1;" + decls + "\n", 1)
+
+    # -- zero this frame's support on entry (once per node visit) --
+    if support:
+        anchor = ("        if (sp>=MAXD-1 || nodes>maxnodes){ hitcap=true; ret=0; "
+                  "entering=false; continue; }\n")
+        src = src.replace(anchor, anchor +
+                          "        fsupp[sp][0]=0ul;fsupp[sp][1]=0ul;"
+                          "fsupp[sp][2]=0ul;fsupp[sp][3]=0ul;\n", 1)
+
+    # -- immediate five (OR inline win) --
+    five_supp = "cpy4(c0, fsupp[sp]); " if support else ""
+    if complete:
+        five_u = "or4(supp, c0); " if support else ""
+        five_new = ("          if (any4(c0)){ if(sp==0){ or4(wm, c0); " + five_u +
+                    "} else { winmove=lowbit4(c0); " + five_supp +
+                    "ret=1; entering=false; continue; } }  // immediate five")
+    else:
+        five_new = ("          if (any4(c0)){ if(sp==0) winmove=lowbit4(c0); " + five_supp +
+                    "ret=1; entering=false; continue; }  // immediate five")
+    src = src.replace(
+        "          if (any4(c0)){ if(sp==0) winmove=lowbit4(c0); ret=1; "
+        "entering=false; continue; }  // immediate five", five_new, 1)
+
+    # -- sound double-four (OR inline win) --
+    df_supp = ("setbit4(&fsupp[sp][0], m); or4(fsupp[sp], cm); " if support else "")
+    if complete:
+        df_u = "setbit4(&supp[0], m); or4(supp, cm); " if support else ""
+        df_new = ("            if (nc>=2){ if(sp==0){ setbit4(&wm[0], m); " + df_u +
+                  "continue; } " + df_supp + "dwin=true; break; }    // sound double four")
+    else:
+        df_new = ("            if (nc>=2){ if(sp==0) winmove=m; " + df_supp +
+                  "dwin=true; break; }    // sound double four")
+    src = src.replace(
+        "            if (nc>=2){ if(sp==0) winmove=m; dwin=true; break; }    "
+        "// sound double four", df_new, 1)
+
+    # -- fork three (OR inline win); rm = defender reply mask from gen_threes --
+    fork_supp = ("setbit4(&fsupp[sp][0], m); or4(fsupp[sp], rm); " if support else "")
+    if complete:
+        fork_u = "setbit4(&supp[0], m); or4(supp, rm); " if support else ""
+        fork_new = ("              if (fk){ if(sp==0){ setbit4(&wm[0], m); " + fork_u +
+                    "continue; } " + fork_supp + "dwin=true; break; }  // fork three")
+    else:
+        fork_new = ("              if (fk){ if(sp==0) winmove=m; " + fork_supp +
+                    "dwin=true; break; }  // fork three")
+    src = src.replace(
+        "              if (fk){ if(sp==0) winmove=m; dwin=true; break; }  // fork three",
+        fork_new, 1)
+
+    # -- OR parent, winning child returns (ret==1) --
+    orret_nonroot = (("or4(fsupp[sp], fsupp[sp+1]); setbit4(&fsupp[sp][0], mm[sp]); "
+                      "if(mb[sp]>=0) setbit4(&fsupp[sp][0], mb[sp]); ") if support else "")
+    if complete:
+        root_u = (("or4(supp, fsupp[1]); setbit4(&supp[0], mm[0]); "
+                   "if(mb[0]>=0) setbit4(&supp[0], mb[0]); ") if support else "")
+        # at the root: record the winning move, then FALL THROUGH to try the next
+        # root candidate (no bubble).  Below the root: bubble as usual.
+        orret_new = ("          if (ret==1){ if(sp==0){ setbit4(&wm[0], mm[0]); " + root_u +
+                     "} else { " + orret_nonroot +
+                     "entering=false; continue; } }                 // OR child won")
+    else:
+        orret_new = ("          if (ret==1){ " + orret_nonroot +
+                     "entering=false; continue; }                 // OR child won -> bubble")
+    src = src.replace(
+        "          if (ret==1){ entering=false; continue; }                 "
+        "// OR child won -> bubble", orret_new, 1)
+
+    # -- AND parent: a reply just won; fold it into this frame's support --
+    if support:
+        and_anchor = ("          if (ret==0){ entering=false; continue; }                 "
+                      "// a reply refutes -> AND NOWIN")
+        src = src.replace(and_anchor, and_anchor +
+                          "\n          or4(fsupp[sp], fsupp[sp+1]); "
+                          "setbit4(&fsupp[sp][0], ar[sp]);", 1)
+
+    # -- outputs --
+    win_line = ("    win[gid]=(uchar)(any4(wm)?1:0); hit[gid]=(uchar)(hitcap?1:0);"
+                if complete else
+                "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);")
+    move_line = ("    move[gid]=(int)(any4(wm)? lowbit4(wm) : -1);" if complete else
+                 "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);")
+    extra = ""
+    if support:
+        sval = "supp[w]" if complete else "(ret==1?fsupp[0][w]:0ul)"
+        extra += "\n    for(uint w=0;w<4u;w++){ support[base+w] = " + sval + "; }"
+    if complete:
+        extra += "\n    for(uint w=0;w<4u;w++){ winmask[base+w] = wm[w]; }"
+    src = src.replace(
+        "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);\n"
+        "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);",
+        win_line + "\n" + move_line + extra, 1)
+    return src
+
+
+_KERNEL_CACHE: dict = {}
+
+
+def _get_kernel(support: bool, complete: bool):
+    key = (bool(support), bool(complete))
+    k = _KERNEL_CACHE.get(key)
+    if k is None:
+        names = ["win", "hit", "move"]
+        if support:
+            names.append("support")
+        if complete:
+            names.append("winmask")
+        k = mx.fast.metal_kernel(
+            name="mega_vct_bb_%d%d" % (int(support), int(complete)),
+            input_names=["own_in", "opp_in", "max_nodes"],
+            output_names=names, source=_build_src(support, complete), header=_HEADER)
+        _KERNEL_CACHE[key] = k
+    return k
+
+
+# eager default-kernel compile preserves prior import-time behavior (~0.1 s)
+_KERNEL = _get_kernel(False, False)
+
+
+def cells_from_words(words) -> list:
+    """Unpack a 4×uint64 cell mask into a sorted list of flat row-major cell
+    indices in [0, N*N).  Inverse of the kernel's bit packing (bit r*N+c)."""
+    out = []
+    for w in range(4):
+        x = int(words[w]) & ((1 << 64) - 1)
+        base = 64 * w
+        while x:
+            b = (x & -x).bit_length() - 1
+            c = base + b
+            if c < N * N:
+                out.append(c)
+            x &= x - 1
+    return sorted(out)
 
 
 def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 32,
-                      return_move: bool = False):
+                      return_move: bool = False, return_support: bool = False,
+                      complete: bool = False):
     """boards: (B,2,N,N) bool. Solves VCT for the side to move (board[0]=attacker).
 
-    Returns (win, hit_cap): (B,) bool by default. With ``return_move=True`` returns
-    (win, hit_cap, move): ``move`` is (B,) int32 — a VALID VCT first move (flat
-    row-major cell index in ``[0, N*N)``) on every won board, or -1 where no win
-    was proved. "A valid first move" because the kernel never reports a false win,
-    so the root move of the line it proves is always the start of a real forced
-    win; it is not necessarily the *shortest* mate's move (any sound VCT move).
-    Fully on-device.
+    Returns (win, hit_cap): (B,) bool by default. Optional outputs are appended in
+    a FIXED order — move, support, winmask — so existing callers never break:
+
+    * ``return_move=True`` appends ``move`` (B,) int32 — a VALID (sound, not
+      necessarily shortest) VCT first move (flat cell index), -1 where no win was
+      proved. In ``complete`` mode it is one winning move (lowest cell of winmask).
+    * ``return_support=True`` appends ``support`` (B,4) uint64 — the union of cells
+      the found proof line touches (relevance window / stencil seed; over-inclusive
+      vs a minimal stencil), all-zero on a non-win. Unpack with ``cells_from_words``.
+    * ``complete=True`` (slower) changes ``win`` to "∃ a winning first move" and
+      appends ``winmask`` (B,4) uint64 — the bitmask of ALL winning first moves
+      (sound + complete). With ``return_support`` too, ``support`` is the union
+      over every winning first move.
+
+    So e.g. ``solve_vct_mega_bb(b)`` -> (win, hit); ``return_move=True`` ->
+    (win, hit, move); ``complete=True, return_move=True, return_support=True`` ->
+    (win, hit, move, support, winmask). Fully on-device.
     """
     B = boards.shape[0]
     own, opp = bb.pack_words(boards)
     o = mx.array(own.reshape(-1))
     p = mx.array(opp.reshape(-1))
     mn = mx.array(np.array([max_nodes], dtype=np.int32))
-    win, hit, move = _KERNEL(
+    kernel = _get_kernel(return_support, complete)
+    out_shapes = [(B,), (B,), (B,)]
+    out_dtypes = [mx.uint8, mx.uint8, mx.int32]
+    if return_support:
+        out_shapes.append((B, 4))
+        out_dtypes.append(mx.uint64)
+    if complete:
+        out_shapes.append((B, 4))
+        out_dtypes.append(mx.uint64)
+    outs = kernel(
         inputs=[o, p, mn], grid=(B, 1, 1),
         threadgroup=(min(B, tg), 1, 1),
-        output_shapes=[(B,), (B,), (B,)],
-        output_dtypes=[mx.uint8, mx.uint8, mx.int32])
-    mx.eval(win, hit, move)
-    w = np.array(win).astype(bool)
-    h = np.array(hit).astype(bool)
+        output_shapes=out_shapes, output_dtypes=out_dtypes)
+    mx.eval(*outs)
+    w = np.array(outs[0]).astype(bool)
+    h = np.array(outs[1]).astype(bool)
+    move = np.array(outs[2]).astype(np.int32)
+    idx = 3
+    support = winmask = None
+    if return_support:
+        support = np.array(outs[idx]).astype(np.uint64).reshape(B, 4)
+        idx += 1
+    if complete:
+        winmask = np.array(outs[idx]).astype(np.uint64).reshape(B, 4)
+        idx += 1
+    res = [w, h]
     if return_move:
-        return w, h, np.array(move).astype(np.int32)
-    return w, h
+        res.append(move)
+    if return_support:
+        res.append(support)
+    if complete:
+        res.append(winmask)
+    return tuple(res)
 
 
 if __name__ == "__main__":

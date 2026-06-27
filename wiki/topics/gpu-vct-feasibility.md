@@ -346,6 +346,24 @@ floor itself (one weak thread per board, serial AND/OR search) would only move w
 rewrite that lets threads cooperate on the *single deepest* board — a real investment, deferred
 until batching + capping prove insufficient.
 
-**Cross-links:** [allis-threat-theory.md](allis-threat-theory.md) ·
+## 9. Optional solver outputs — `support` + `complete` (2026-06-27)
+
+`solve_vct_mega_bb` now exposes two optional outputs on top of the passive
+`return_move` (§7/§8): **`return_support=True`** → a `(B,4)` uint64 `support` mask =
+the cells the found proof line touches (relevance window / stencil seed, accumulated
+on the WINNING return path so refuted branches never pollute it; ⊆ root empties =
+played cells, over-inclusive vs minimal), and **`complete=True`** (slower) → a
+`(B,4)` uint64 `winmask` = ALL winning **first moves** (the root stops short-circuiting
+and records every winning forcing move; non-root nodes unchanged). Each flag compiles
+its **own kernel variant**, so the default `(win, hit, move)` path is byte-identical
+and the verdict/throughput is provably untouched. Validated 2026-06-27: invariants
+(support-variant verdict identical, complete `win`==default `win`, default move ∈
+winmask, support cells empty/contain-move) + a gold pass — winmask **0 unsound / 0
+winning-forcing-moves-missing** vs vcf's exact forcing-move generation *including the
+tempo guard* (the guard was the verifier-side subtlety; the solver was right).
+**Full API + invariants contract: [mega-vct-solver.md](mega-vct-solver.md).**
+
+**Cross-links:** [mega-vct-solver.md](mega-vct-solver.md) (the API/contract) ·
+[allis-threat-theory.md](allis-threat-theory.md) ·
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · GPU-VCF prototype
 (`scripts/gpu_vcf_prototype.py`) · `gomoku/vcf.py` (`solve_vct`).
