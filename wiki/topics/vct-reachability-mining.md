@@ -123,6 +123,13 @@ real combination, the molecule-shaped tactic ([shape-library-engine.md](shape-li
   boards. ~6% of those wins are gold; from 2,500 nodes we already get 14,380, so a corpus-scale
   defender-side fan (~50k nodes → a few **free**-GPU hours) yields **hundreds of thousands** of
   combinational forced-win boards.
+  - **RAN 2026-06-27 — banked to `~/data/molecule_gold/`** (`harvest_molecules.py`, the corpus
+    writer). 20,000 defender-side nodes / 68 shards / 25 min GPU → 4.01M fanned → **3.71M VCT
+    (92.4% — the defender-side knife-edge, sharper than §3's both-sides 81%)** → **146,655 non-VCF
+    gold (3.95% of VCT), 99.0% distinct, 100% move-labeled** (passive `return_move`). Boards are
+    **sparse** (winner mean 6.2 stones) and the gold **grows with distance** (dist-1/3/5 =
+    28.8k/51.7k/66.2k → the deeper win more genuinely *needs a three* = the purer molecule).
+    Only 68/400 shards consumed at the node cap ⇒ resumable, ~60× headroom on the full set.
 - **Each gold board pays twice:** it's a **non-trivial offense terminus** for the §1 distance field
   *and* a **hard defense lesson** (a natural-looking defensive move that walks into a combination) —
   aimed at the project's binding wound, the white-side **defense** gap ([white-side-defense-plan.md](white-side-defense-plan.md)).
@@ -152,6 +159,8 @@ real combination, the molecule-shaped tactic ([shape-library-engine.md](shape-li
 | Path | What |
 |---|---|
 | `scripts/threat_shapes/vct_fan.py` | the consolidated probe: framing integrity + knife-edge breakdown + VCF/non-VCF split (reproduces §2–§3) |
+| `scripts/threat_shapes/harvest_molecules.py` | the §4 corpus **writer** — defender-side fan → VCT∩¬VCF → move-labeled, chunked/incremental/resumable |
+| `~/data/molecule_gold/` (`gold.jsonl.gz`) | **CANONICAL** non-VCF combinational forced-win corpus — **146,655** move-labeled gold boards (first bank, 2026-06-27) + README |
 | `~/data/puzzle_miner/` (`puzzles.jsonl.gz` + `manifest.txt`) | the free per-ply verdicts (§1) |
 | (scratch this session) the `analyze_vct_field` distance-field characterization (§1 numbers) | not committed — reproducible from `puzzles.jsonl.gz`; promote to a real builder when we train Φ |
 

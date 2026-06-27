@@ -5001,3 +5001,26 @@ param-matched, epoch-alibi removed). Honest reach: it's the *realized-play proxy
 censored), single-position regression (not whole-game seeking), small/untuned. ρ on a proxy = green light,
 not strong play — that's the Phase C hybrid-play eval (gate w/ Jason). **Default L2 arch = the CNN.** Synthesis:
 `wiki/topics/phi-distance-field-learnability.md`. On `feat/gentle-rapfi-teacher` (not merged).
+
+### 2026-06-27 — Molecule corpus banked: 146,655 non-VCF combinational forced wins, move-labeled
+
+While Jason was at coffee (free GPU, his invite). Ran the corpus-scale writer of the §3 probe:
+`harvest_molecules.py --side defender` — fan opponent-to-move pre-onset non-VCT nodes of real
+Rapfi games, on each fanned (winner-to-move) board keep **VCT but NOT VCF** = forced wins needing
+a *three* = the combinational "molecules". Move-labeled via the kernel's passive `return_move`.
+GPU-only, 0 collector contention; banked to `~/data/molecule_gold/gold.jsonl.gz` (+ README, schema
+matches puzzles.jsonl.gz). Scripts committed (79d7ad2).
+
+**First bank:** 20,000 defender-side nodes / 68 of 400 shards / **25 min** → 4.01M fanned →
+**3.71M VCT (92.4%)** → **146,655 non-VCF gold (3.95% of VCT)**, **99.0% distinct boards**, **100%
+move-labeled**, from 3,438 source games. Boards **sparse** (winner mean 6.2 stones, median 6 — the
+clean "combination already forced" regime). Gold **grows with distance-to-onset** (dist-1/3/5 =
+28.8k/51.7k/66.2k): deeper = more genuinely *needs a three* = purer molecule (matches §3's
+distance trend). The 92.4% VCT rate (vs §3's both-sides 81%) is the **defender-side knife-edge** —
+nearly every pre-onset alt the defender could play loses by force.
+
+**Each gold board pays twice** (the §4 thesis, now realized as data): a non-trivial offense
+terminus (a molecule candidate) AND a defense lesson (defender's natural-looking losing move →
+white-side wound). Only 68/400 shards consumed at the node cap ⇒ resumable, ~60× headroom on the
+full corpus. Next natural uses (Jason's call): D4-canonical dedup → distinct-shape count; feed L1
+stencil minimization; a non-VCF-aware Φ/defense target. On `feat/gentle-rapfi-teacher` (not merged).

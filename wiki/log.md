@@ -1495,3 +1495,11 @@ is learnable + generalizes. NOT count-dominated (CNN ≫ ridge), and CNN beats a
 now param-matched on the global target with 3× the epochs, so the global-receptive-field bet does not
 cash out at this scale. Updated `vct-reachability-mining.md` §1 (Φ design → trained) and appended a
 `TRAINING_WIKI.md` entry. Scripts `gen_phi_dataset.py` / `train_phi.py` committed earlier (dc14555).
+
+## 2026-06-27 — Molecule corpus harvested (non-VCF combinational forced wins)
+
+New script `harvest_molecules.py` (the §4 corpus writer) + first bank to `~/data/molecule_gold/`:
+146,655 move-labeled non-VCF VCT boards (combinational forced wins = the molecule candidates),
+99% distinct, sparse, gold-grows-with-distance. Updated `vct-reachability-mining.md` §4 (RAN note)
++ §6 artifacts (canonical corpus row), the index row, and appended a `TRAINING_WIKI.md` entry.
+68/400 shards at the node cap ⇒ resumable with ~60× headroom.
