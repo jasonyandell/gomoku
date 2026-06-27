@@ -63,6 +63,7 @@ Coordinate mapping. An action index is `row * BOARD_SIZE + col`
 
 from __future__ import annotations
 
+import queue
 import shlex
 import subprocess
 import threading
@@ -77,8 +78,22 @@ WRAPPER_VERSION = "2"
 
 # Safety cap on how many non-coordinate chatter lines we skip while waiting for
 # a single move/OK reply before giving up (guards against an engine that streams
-# diagnostics forever and never answers).
+# diagnostics forever and never answers). Sized for the QUIET single-reply
+# protocols (_expect_ok / _read_move / _read_swap2_reply): a few banner/MESSAGE
+# lines, never thousands.
 _MAX_CHATTER_LINES = 2000
+
+# A multiPV analysis stream is a DIFFERENT shape: iterative deepening RE-EMITS
+# all `pv_count` PV blocks every depth round, so its legitimate size scales with
+# pv_count × (number of emitting depth rounds). A forced-mate position deepens
+# FAR (measured: an 8-stone tactical board with EVAL -M4 ran to DEPTH 26 →
+# 2302 lines, terminator and all — past the 2000 quiet-belt, hence the crash).
+# So `_read_analysis` gets its OWN pv-scaled cap, not the quiet belt. Budget is
+# generous lines-per-PV (≈ deepening rounds × ~7 lines/block, ×safety): the real
+# terminator (a bare-coord bestmove) reliably arrives once max_node bounds the
+# search, so this is only a runaway backstop. Line-count (not wall-clock) keeps
+# it contention-immune — a saturated 60-engine pool won't false-trip a counter.
+_ANALYSIS_LINES_PER_PV = 600
 
 
 class ExternalEngineError(RuntimeError):
@@ -108,6 +123,25 @@ def _parse_coord(line: str) -> tuple[int, int] | None:
     except ValueError:
         return None
     return x, y
+
+
+def _eval_to_winrate(token: str) -> float | None:
+    """Map an ``INFO EVAL`` token to a side-to-move winrate fallback.
+
+    Used ONLY when ``INFO WINRATE`` is absent (mate / infinite scores, where
+    Rapfi may emit a symbolic EVAL): ``+M<k>`` / ``VAL_INF`` with a ``+`` sign
+    -> 1.0 (we win), ``-M<k>`` / mated / ``VAL_INF`` with a ``-`` sign -> 0.0.
+    A plain integer EVAL returns None (the real WINRATE line is preferred and
+    always present alongside it); an unparseable token returns None.
+    """
+    if not token:
+        return None
+    t = token.strip().upper()
+    if t.startswith("+M") or t == "VAL_INF" or t.startswith("+VAL_INF"):
+        return 1.0
+    if t.startswith("-M") or t.startswith("-VAL_INF") or t == "MATED":
+        return 0.0
+    return None
 
 
 def _coord_to_xy(action: int) -> tuple[int, int]:
@@ -279,7 +313,28 @@ class ExternalEnginePlayer:
         except FileNotFoundError as e:
             raise ExternalEngineError(f"cannot launch engine: {config.cmd!r}: {e}") from e
 
+        # ONE persistent reader thread per engine drains stdout into a queue, so
+        # _read_line is a cheap queue.get instead of spawning a fresh thread PER
+        # LINE. A multiPV analysis emits ~2000 lines; the old thread-per-line cost
+        # (~0.024ms × 2000 ≈ 50ms) dominated each analyze and starved the engine.
+        # The reader exits on EOF (puts a None sentinel). daemon=True so it never
+        # blocks interpreter exit.
+        self._rq: "queue.Queue[str | None]" = queue.Queue()
+        self._reader = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader.start()
+
         self._handshake()
+
+    def _reader_loop(self) -> None:
+        out = self._proc.stdout
+        assert out is not None
+        try:
+            for line in out:            # blocks in C; yields complete lines
+                self._rq.put(line)
+        except (ValueError, OSError):
+            pass                        # stdout closed under us
+        finally:
+            self._rq.put(None)          # EOF sentinel
 
     # -- protocol I/O ----------------------------------------------------
 
@@ -291,22 +346,19 @@ class ExternalEnginePlayer:
         self._proc.stdin.flush()
 
     def _read_line(self, timeout_s: float) -> str:
-        """Read one stdout line, with a hard wall-clock timeout."""
-        assert self._proc.stdout is not None
-        result: list[str | None] = [None]
+        """Read one stdout line, with a hard wall-clock timeout.
 
-        def _do_read() -> None:
-            result[0] = self._proc.stdout.readline()  # type: ignore[union-attr]
-
-        t = threading.Thread(target=_do_read, daemon=True)
-        t.start()
-        t.join(timeout_s)
-        if t.is_alive():
+        Pulls from the persistent reader thread's queue (one thread per engine,
+        started in __init__) — NOT a fresh thread per line. Same semantics:
+        timeout -> 'timed out'; EOF sentinel -> 'closed stdout'.
+        """
+        try:
+            line = self._rq.get(timeout=timeout_s)
+        except queue.Empty:
             raise ExternalEngineError(
                 f"engine timed out after {timeout_s:.1f}s waiting for a reply"
             )
-        line = result[0]
-        if line == "" or line is None:
+        if line is None or line == "":
             raise ExternalEngineError("engine closed stdout (EOF) unexpectedly")
         return line.strip()
 
@@ -598,6 +650,148 @@ class ExternalEnginePlayer:
                 f"engine returned illegal/occupied move {x},{y} (action {action})"
             )
         return action
+
+    # -- whole-board analysis (multiPV soft-target distillation) ---------
+
+    def analyze(
+        self, state: GameState, *, max_node: int = 20000, max_pv: int | None = None
+    ) -> dict[int, float]:
+        """Score EVERY candidate root move for ``state`` -> ``{action: winrate}``.
+
+        Rapfi's gomocup protocol can emit a per-move EVAL+WINRATE for the whole
+        board (a multiPV search) — the signal the SOFT teacher distils. We DRIVE
+        the existing binary; nothing in the engine is rebuilt (GPL untouched).
+        Returns winrates in [0, 1] from the SIDE-TO-MOVE's perspective, keyed by
+        the flat action index ``y*BOARD_SIZE + x``. Pruned-away (far-from-action)
+        cells are simply absent — their mass is correctly ~0.
+
+        Drive sequence (a one-shot stateless BOARD dump; assumes RESTART-fresh):
+        set a small node budget + SHOW_DETAIL/CAUTION so the search both emits the
+        per-PV blocks and widens its candidate range, dump the position, then
+        ``YXNBEST 999`` to run multiPV = movesLeft(). ``DONE`` triggers a stray
+        default multiPV=1 think whose bestmove reply we DRAIN and discard. Each
+        ``INFO PV <idx>`` block carries an ``INFO EVAL`` / ``INFO WINRATE`` /
+        ``INFO BESTLINE <root> ...``; iterative deepening RE-EMITS every PV per
+        depth, so we keep the LAST block seen for each ``PV <idx>``. The whole
+        analysis is terminated by a bare ``x,y`` bestmove line.
+
+        Only meaningful for a stateless (``incremental=False``) engine: we always
+        RESTART + full-BOARD dump, carrying NO state between calls (the same
+        re-entrant contract the pool relies on for safe reuse).
+        """
+        n = self.config.board_size
+        own = state.board[0]  # side-to-move == this engine -> field 1
+        opp = state.board[1]  # opponent -> field 2
+        own_cells = {(x, y) for y in range(n) for x in range(n) if own[y, x]}
+        opp_cells = {(x, y) for y in range(n) for x in range(n) if opp[y, x]}
+        moves_left = n * n - len(own_cells) - len(opp_cells)
+        if moves_left <= 0:
+            return {}
+
+        # Configure multiPV-friendly analysis. max_node bounds the search so a
+        # whole-board scan stays fast; SHOW_DETAIL 2 emits the INFO PV/EVAL/WINRATE
+        # blocks; CAUTION_FACTOR widens the candidate set toward the whole board.
+        self._send(f"INFO max_node {int(max_node)}")
+        self._send("INFO SHOW_DETAIL 2")
+        self._send("INFO CAUTION_FACTOR 5")
+        # Re-entrant full-board dump (same contract as the move path's BOARD mode).
+        self._send("RESTART")
+        self._expect_ok()
+        self._send("BOARD")
+        for x, y in sorted(own_cells):
+            self._send(f"{x},{y},1")
+        for x, y in sorted(opp_cells):
+            self._send(f"{x},{y},2")
+        self._send("DONE")
+        # DONE triggers a default multiPV=1 think — read & discard its bestmove.
+        self._read_move()
+        # Now run the multiPV scan and parse it. ``max_pv`` caps the number of PV
+        # lines (the soft target's scored support): the whole-board scan is
+        # ``YXNBEST moves_left``, but on a near-empty board that is 200+ lines and
+        # the per-node cost balloons. Capping to the top ``max_pv`` moves keeps the
+        # support information-equivalent for a temperature-softmax target (far cells
+        # carry ~0 mass) while bounding cost so a warm pool stays saturated.
+        pv_count = moves_left if max_pv is None else max(1, min(int(max_pv), moves_left))
+        self._send(f"YXNBEST {pv_count}")
+        return self._read_analysis(pv_count=pv_count)
+
+    def _read_analysis(self, *, pv_count: int) -> dict[int, float]:
+        """Parse the multiPV stream until the terminating bare ``x,y`` bestmove.
+
+        Keeps, per ``PV <idx>``, the winrate from the LAST (deepest) block — the
+        root move is the FIRST token of that block's ``INFO BESTLINE``. EVAL is
+        used only to recover a winrate when WINRATE is absent (mate/inf scores):
+        ``+M<k>``/``VAL_INF+`` -> 1.0, ``-M<k>``/mated/``VAL_INF-`` -> 0.0.
+        Returns ``{action: winrate}`` with winrate clamped to [0, 1].
+
+        The read is bounded by a pv-scaled line cap (``_ANALYSIS_LINES_PER_PV``),
+        NOT the quiet ``_MAX_CHATTER_LINES`` belt: a mate-driven deepening stream
+        legitimately runs into the thousands (see the constant's note).
+        """
+        deadline = self._read_deadline_s()
+        line_cap = max(_MAX_CHATTER_LINES, int(pv_count) * _ANALYSIS_LINES_PER_PV)
+        # Per PV index, the latest (eval_winrate, root_action) seen.
+        by_pv: dict[int, tuple[float | None, int | None]] = {}
+        cur_pv: int | None = None
+        cur_winrate: float | None = None
+        cur_eval_wr: float | None = None
+        cur_root: int | None = None
+
+        def _commit() -> None:
+            if cur_pv is None or cur_root is None:
+                return
+            wr = cur_winrate if cur_winrate is not None else cur_eval_wr
+            if wr is None:
+                return
+            by_pv[cur_pv] = (wr, cur_root)
+
+        for _ in range(line_cap):
+            line = self._read_line(deadline)
+            if not line:
+                continue
+            # The whole analysis ends with a bare coordinate bestmove line.
+            if not line.startswith("INFO") and _parse_coord(line) is not None:
+                _commit()
+                break
+            if not line.startswith("INFO"):
+                continue  # MESSAGE / DEBUG / banner chatter
+            body = line[len("INFO"):].strip()
+            if body.startswith("PV "):
+                # Start of a new PV block: commit the previous block first.
+                _commit()
+                try:
+                    cur_pv = int(body[3:].strip())
+                except ValueError:
+                    cur_pv = None
+                cur_winrate = cur_eval_wr = cur_root = None
+            elif body == "PV DONE":
+                _commit()
+                cur_pv = None
+                cur_winrate = cur_eval_wr = cur_root = None
+            elif body.startswith("WINRATE"):
+                try:
+                    cur_winrate = float(body.split()[1])
+                except (IndexError, ValueError):
+                    cur_winrate = None
+            elif body.startswith("EVAL"):
+                cur_eval_wr = _eval_to_winrate(body.split()[1] if len(body.split()) > 1 else "")
+            elif body.startswith("BESTLINE"):
+                toks = body.split()
+                if len(toks) >= 2:
+                    c = _parse_coord(toks[1])
+                    cur_root = _xy_to_action(*c) if c is not None else None
+        else:
+            raise ExternalEngineError(
+                f"engine emitted {line_cap}+ lines (pv_count={pv_count}) without "
+                f"ending the multiPV analysis (no bestmove terminator)"
+            )
+
+        out: dict[int, float] = {}
+        for wr, root in by_pv.values():
+            if root is None or wr is None:
+                continue
+            out[int(root)] = float(min(1.0, max(0.0, wr)))
+        return out
 
     def close(self) -> None:
         if self._proc.poll() is None:

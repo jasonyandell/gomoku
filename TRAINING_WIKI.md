@@ -4743,3 +4743,284 @@ build and swap2 merge). Watch `worker_weights.pt` (atomically written) not `late
 **Caveats.** weight=0.3 unswept (can't separate "distillation harmful" from "0.3 too hot"); NO matched teacher-OFF control (warm-start/buffer-refresh transient not isolated from teacher harm); LR fixed, no freeze (#44 mitigations untested); H2H used full swap2 negotiation while teacher data was fair-opening-labeled (graded off-distribution); `run_h2h.py` hardcodes CPU. The 0/96 SIGN is certain; magnitude/attribution is what's caveated.
 
 **Process win.** Ran all night crash-free, but the Rapfi *cadence* eval (0% vs Rapfi throughout) was NON-discriminating — Bruce was already 0/16 vs Rapfi. The H2H-vs-frozen-parent + loss decomposition are what revealed the harm. Future overnight teacher runs must gate on H2H-vs-frozen-parent and auto-abort on regression (don't burn 362 epochs on a known-bad basin).
+
+## 2026-06-24 — #86 gentle one-hot teacher retry ALSO regressed (the one-hot SIGNAL is the culprit; soft target untested)
+
+**Setup (#86, follow-up to #77).** The #77 caveats said "the injection must be GENTLE." So two cells were run off the same warm-started Bruce (resume from `/Users/jason/data/swap2/teacher/bruce_e2659_warmstart.pt`, ~e2659), this time at **HALF learning rate** (`lr=5e-4`, the #44 mitigation), fixed-openings, board15, 30-min wall cap each, **with a matched OFF control** (the #77 caveat: no control then):
+- **`bruce-sensei-86-gentle-on`** (wandb `liy2dflw`, started 07:33): `teacher_weight=0.1`, ONE-HOT teacher npz (`teacher_bruce_e2659_fair9.npz`).
+- **`bruce-sensei-86-gentle-off`** (wandb `5briruqf`, 08:56 then resumed 09:27): `teacher_weight=0.0`, otherwise matched.
+
+**Verdict (#86 = NO; gentleness insufficient).** The gentle ON cell **COLLAPSED** anyway: by ~38 epochs in (~e2697) policy_acc fell to **0.18**, policy_net_entropy rose to **3.75** (vs the OFF control's 1.2; log81=4.39), loss/policy 3.76, selfplay/plies inflating (plies_mean ~60). loss/teacher was present (~0.13) and benign — the damage was again the **policy head flattening toward uniform**, same channel as #77. The matched OFF cell was **ROCK-STABLE**: policy_acc 0.69, net_entropy 1.2, no teacher loss.
+
+**Because the matched OFF control was stable, the ONE-HOT SIGNAL ITSELF is the culprit — not the LR, not the warm-start, not buffer-refresh transient.** Half-LR (5e-4) + weight 0.1 was NOT enough to prevent the collapse. This isolates what #77 could only caveat (it had no control): the harm rides the one-hot Rapfi target, and turning the LR/weight knobs down does not detoxify it. Confirms the #44 failure mode via the policy channel, and sharpens the #77 postmortem (same collapse there at weight 0.3 / full LR).
+
+**NOTE — no Elo/H2H this round.** These were 30-min slices and **no H2H/Elo was ever logged**; the H2H-vs-frozen-Bruce gate never fired. The collapse is read purely from the train-side policy metrics (policy_acc / net_entropy / plies). That is sufficient here ONLY because the matched OFF control isolates the cause — absent the control these train-side reads would not, by themselves, prove teacher harm (cf. #77's caveats).
+
+**The designed fix is coded but NEVER live-validated.** This branch's commit `8d12d95` implements **SOFT-target distillation** — distill Rapfi's per-move WINRATE as a soft policy target via a masked temperature-softmax, instead of a one-hot best move. It has **13 passing unit tests**, but was committed at 09:58, AFTER both runs had ended (~09:57). `soft_policy_weight=0` in every run that actually executed and **no soft npz was ever generated**, so the soft target is **untested** — the untried next step, still subject to the same gate: H2H-vs-frozen-parent, over hours, machine idle.
+
+## 2026-06-25 — #86 soft-target distillation, finally MINED AT SCALE + warm-started ("Bruce Lee one-position", idx-2 only) — infra SUCCESS, science inconclusive; run banked
+
+**This closes the open thread above** ("soft target untested, no soft npz ever generated"). Instead of distilling a handful of fair openings, we built a mining harness and generated Rapfi's SOFT-policy winrate map over the idx-2 neighbourhood at scale, pretrained on it, and warm-started AlphaZero from it — idx-2 ONLY (the over-specialization bet: master one position, not breadth). Full synthesis in **[wiki/topics/rapfi-idx2-distillation-mine.md](wiki/topics/rapfi-idx2-distillation-mine.md)**; reusable capabilities indexed in **[wiki/capabilities.md](wiki/capabilities.md)** (NEW synthesis layer this session).
+
+**Mine.** New `gomoku/rapfimine/` harness (multiprocess flat-file BFS, D4-canonical dedup, crash-robust resume) banked **1,126,597 canonical idx-2 positions** (soft_policy + value, teacher v2 npz) at **~700 moves/s** on the M5 Max (~75% machine). Two fixes surfaced: the long-undiagnosed Rapfi **multiPV mate-crash** (pv-scaled analysis cap — a forced-mate emits 2302 lines past the old 2000 cap) and a **thread-per-line** reader bug (68→17 ms/analyze). Data lives durably OUTSIDE git at `/Users/jason/data/rapfimine/idx2_15x15/` (9.5 GB; absolute paths, no symlink).
+
+**Pretrain (the soft target, finally exercised).** `rapfimine.pretrain` = supervised distillation of the masked temperature-softmax soft policy + `2·best_wr−1` value into a STANDARD checkpoint (`build_model`/`save_checkpoint`, no reinvention). Banked the epoch-3 seed `checkpoints/idx2_pretrain.pt` (policy_ce 2.04, vmse 0.097 — vs ~5.4 uniform, so it captured Rapfi's idx-2 policy). Finding: pretrain is **GPU-bound** (~437 s/epoch, batch 1024); a per-step `float(loss)` was forcing an MPS→CPU sync every step (host pinned ~7%) — fixed to sync once/epoch.
+
+**Warm-start AZ.** `run_sweep --cell G15-idx2-warmstart --resume checkpoints/idx2_pretrain.pt` with `GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8` (idx-2 only; D4 recovered by the trainer's augment). Byte-identical to Bruce's `G15-fixed-openings` cell except run-dir + run-name. wandb `idx2-warmstart-86`. Resumed at epoch 4 (pretrained weights confirmed loaded), trained to **epoch 250** (pl 4.18 peak → 1.27, vmse 0.10), banked `checkpoints/idx2_warmstart_final.pt`.
+
+**Outcome (science = inconclusive, by choice).** At epoch 250 the warm-started net **does NOT yet beat strong Rapfi @idx-2** — still 0/48 vs `timeout=1000ms`, the same wall the seed hit. Beating it is a multi-day climb (Bruce's black-42%/white-0% bar took ~3700 epochs); **not pursued** — Jason banked the run for its infrastructure value. The net DID climb the low end: it crushes random/heuristic/lookahead-d2 at 100% and beats `rapfi@25ms`, losing at `50ms+`.
+
+**Eval-gradient finding (reusable).** Max-strength Rapfi is a wall (0 for hours), so `fast_eval.py` measures progress vs a graded-Rapfi ladder — **~20 s/pass** (batched net MCTS across all games + parallel `RapfiPool.label_states`), vs minutes serial. Two lessons: (1) **think-time is the strength dial, NOT max_node** — even `max_node=2,000,000` loses 100% to the net while `timeout=1000ms` wins 0/48; (2) the live band is LOW timeouts (net's transition at **rapfi 25↔50 ms** @ ep250), which are also fast. `sims=32` gives the same transition as 160.
+
+**Banked & stopped (this is NOT a regression entry — the loop is healthy).** Training stopped cleanly by choice at ep250; nets in `checkpoints/`, data in `~/data/rapfimine/`, tooling + wiki committed on `feat/gentle-rapfi-teacher`. Also fixed a `.gitignore` bug (an inline comment silently broke the `mined/` rule → 9.5 GB of artifacts were not being ignored). The durable win: the mining + fast-eval + warm-start tooling, now a first-class capability.
+
+## 2026-06-25 — On-book DAgger for idx-2: loop BUILT, a critical bug FOUND+FIXED (history-less train/inference mismatch), no strength gain yet ⭐
+
+**The idea (Jason).** From ep250, run **on-book DAgger** (Ross/Gordon/Bagnell 2011): roll out the current net, have Rapfi label the states the net actually visits, AGGREGATE (never forget), and re-fit by **pure supervised imitation** — explicitly NOT the AZ teacher-mix that caused the #77 collapse. Stay on-book (no improvising), idx-2 only, **rollout vs Rapfi both seats, "partitioned and covered."** Hard constraint: the aggregator must run **≤ 2× slower than its constituent parts** (self-play gen + Rapfi labeling) — "don't waste a day testing something too slow." White is NOT specially targeted (the white weakness was likely an empty-board first-player artifact; from a Rapfi-seeded fixed opening it should wash out via balanced-seat coverage).
+
+**Built (`gomoku/rapfimine/dagger.py`, + `tests/test_dagger.py`, full suite green).** A reuse-not-reinvent loop: `rollout_once` (concurrent student-vs-Rapfi, both seats, batched MCTS on MPS + `RapfiPool` opponent on CPU — the `fast_eval` pattern) → canonical dedup → soft/hard label → `store.ShardWriter` (byte-identical to the mine schema) → warm-continue supervised train (the `pretrain` pipeline) → **net-vs-frozen-parent** gate (NOT vs Rapfi — that cadence was non-discriminating in #77). Plus a `loop` subcommand = the flywheel (round i+1 rolls from the BEST net so far, gates vs the FROZEN ep250, stateless reducer over on-disk result JSONs).
+
+**Perf gate PASSED (the 2× contract).** Microbench on the M5 Max: (A) student MCTS sims=32 batched ≈ **220 moves/s** (MPS); (B) `RapfiPool` label ≈ **872/s** @50ms/24w (the #86 reader-thread fix killed the old GIL ceiling); (C) the combined student-vs-Rapfi rollout ≈ **215 plies/s ≈ A** — the disjoint MPS/CPU compute genuinely overlaps, **no meaningful coupling penalty**, soft-labelling distinct states post-hoc adds <1 s on an ~8 s rollout. Coverage is balanced (both seats ~50/50 of stored states) and `rollout_temp_until_ply` sampling keeps novelty high (~800 fresh canonical/roll, no decay) — the funnelling I feared didn't bite.
+
+**THE WALL — every first round REGRESSED the net to 0/48 vs the parent.** Three round-0 variants, all → 0/48 (gate), all → **rapfi@25ms = 0.00** on the deployment-path gradient (the parent reads **1.00** there). Crucially the *training loss DECREASED* each time (policy_ce fell) while *play collapsed* — the tell of a **train/inference mismatch, not a strength/teacher problem**. The diagnosis chain:
+1. **First suspect (wrong as sole cause): weak teacher.** The SOFT label uses `analyze` (node-bounded, max_node 5000). This very notebook already records: *node-bounded Rapfi — even 2M nodes — loses 100% to the net; think-TIME is the strength dial.* So a soft label is a **sub-student teacher** → distilling it should drag the net down. Real, but **not the whole story**: a round with STRONG time-bounded HARD one-hot labels (`--label-timeout-ms 300`, on-book DAgger's actual classifier target) ALSO went 0/48.
+2. **Root cause (confirmed): the aggregate stored HISTORY-LESS planes.** The mine drops history (`drop_history`) — sound there because AZ self-play afterward repopulates the recency channels. **Pure-supervised DAgger has no such repair step.** Training the net on zero-recency planes and then *playing it with real recency planes* is an out-of-distribution input → garbage output → clean 0/48 regardless of teacher. Fix = **store the real history** (one line: `canonical_state(s)` not `canonical_state(drop_history(s))`; the D4 canonical transform already carries history under the same symmetry; the label stays board-only since Rapfi is history-blind). Round 0c (history fix + value-weight 0) holds at **rapfi@25ms = 1.00 = parent** — the catastrophic regression is GONE.
+3. **Second issue found: HARD one-hot labels corrupt the VALUE target.** `PretrainData` sets value = `2·best_winrate−1`; a one-hot `{move:1.0}` makes best_winrate≡1 → value target ≡ +1 everywhere → the value head collapses to constant "+1" (value_mse→0 trivially). Mitigation used: `--value-weight 0` (freeze the parent's already-good value head). The SOFT map's one virtue was a genuine value; a clean design decouples **strong timed pick for POLICY + soft winrate for VALUE** (or just freeze value).
+
+**State / verdict.** The DAgger machinery is correct, fast, and tested; the catastrophic-regression BUG is fixed; round 0c sits at ≈parent (gate 0.354 = black 0.458 / white 0.25, but only 6 gradient steps — a confirmation, not a real training run). **No strength GAIN demonstrated yet** — that needs a proper round now that the blocker is cleared. Recommended next round: history fix (done) + **HARD timed-pick policy labels** + **value frozen (or soft-sourced)** + bigger `--target-new` (≥30k) + enough steps + gentle LR, gated vs frozen ep250; then iterate the `loop`. Artifacts: `mined/dagger_*_r0.log`, `mined/dagger_*_r0_result.json`; throwaway round checkpoints in `checkpoints/dagger_r0.pt` (overwritten across variants — not banked). Branch `feat/gentle-rapfi-teacher`. This is a "stopped cleanly at a well-characterized wall" entry, not a success — the loop is ready; the science question (does idx-2 DAgger beat the self-play ceiling) is still open.
+
+### 2026-06-25 (later) — Proper DAgger rounds RUN: a clean NEGATIVE. Imitation sharpens the net but does NOT move the Rapfi ceiling (search-depth wall) ⭐
+
+Ran the real experiment with **every** fix in (real-history planes + Monte-Carlo value + strong 150ms timed-pick one-hot policy labels, dagger-only data, gentle lr=1e-4): one 20k-state round (`dagger_v2_r0`) then a 2-round `loop` (~38k cumulative aggregate, best-net rollout, frozen-ep250 gate). **Result — reproducible and clear:**
+- **Gate vs frozen parent (net-vs-net):** v2 **0.479** (black 0.79 / white 0.17) · loop r0 **0.458** (b0.79/w0.125) · loop r1 **0.438** (b0.83/w0.04). The net gets **markedly stronger as black and weaker as white** with each round — the asymmetry *intensifies* (b0.79→0.83, w0.17→0.04) while the aggregate sits ≈parity (the seat gains/losses cancel). More rounds did NOT compound toward beating the parent.
+- **The decisive check — think-time gradient vs Rapfi (the real ceiling):** parent and the most-trained dagger net are **byte-for-byte identical** — both beat rapfi@25ms (1.00) and lose at 50ms+ (0.00). **The Rapfi wall never moved**, across the single round AND ~38k of cumulative DAgger training.
+
+**Interpretation (the lesson).** Policy-imitation of Rapfi **sharpens the net's prior** (it beats its own past self, especially as black) but **cannot cross the rapfi@50ms wall, because that wall is a SEARCH-depth gap, not a prior gap** — Rapfi@50ms+ wins by *searching deeper at move time*, and distilling its *move* (a one-hot at sims=32) doesn't give the student that search. This is exactly what the project's own calibration predicted (think-time, not node budget, is Rapfi's strength dial). Corollary, from the seat asymmetry: **idx-2 looks black-favored** — imitation + MC outcomes double down on black's winning attack (sharper) while the white signal is mostly "you lose" (Rapfi's best white move still loses), so white play degrades. If idx-2 is a first-player win, "crush Rapfi from idx-2" is achievable only *as black*; white may be structurally lost (consistent with Jason's empty-board-artifact hypothesis being incomplete — the asymmetry is the *position's*, not a random-start's).
+
+**Verdict: DAgger is the wrong lever for THIS wall.** It's correct, fast, and bug-free, and it *does* shape the policy — but it can't out-search Rapfi. **Pivot recommendation → [idea-pile](topics/idea-pile.md) #1 (out-*search*-yourself-then-distill):** give the net a big test-time search budget at idx-2 (high sims / in-tree VCF), find where deep-net-search beats Rapfi, distill *those* policies — distill SEARCH, not the prior. And #2 (solve idx-2): if it's a black win, a threat-space tablebase is the perfect black teacher. Artifacts: `mined/dagger_loop.log`, `mined/dagger_r{0,1}_result.json`, `checkpoints/dagger_r{0,1}.pt` (not banked). DAgger code is committed/tested on `feat/gentle-rapfi-teacher` and ready to reuse (swap the Rapfi label for a deep-search label = idea #1).
+
+### 2026-06-25 (later still) — idea #1's premise FAILS: the net is EVAL-capped, not search-capped. + perf numbers (card is compute-bound; GPU VCF-detect is ~free)
+
+Before building idea #1 (out-search-then-distill), tested its premise directly: does the net's DEEP search find what its shallow search misses? **Net-MCTS at sims 32 / 200 / 800 / 1600 vs the Rapfi gradient is IDENTICAL — all read rapfi@25ms=1.00, 50ms+=0.00.** 50× more search moves the wall ZERO. **The net's EVALUATION (policy+value) is the ceiling, not its search depth** — so *vanilla* #1 ("distill the net's own deep search") is dead: searching harder finds the same thing, nothing better to distill. And 1600 sims is a LOT of search — if the gap were *tactical* (forced wins/losses), that much MCTS would usually stumble into them and cross a rung; it didn't, which leans toward a **positional evaluation** gap (Rapfi-NNUE just judges positions better) over a tactical one. (**Confirmed:** a net+root-VCF-overlay gradient is IDENTICAL to net-only — rapfi@50/100ms = 0.00 either way — and the overlay logged **0 forced-win hits** across ~180 net positions. The net is NOT leaving findable forced wins on the table; the gap is **positional**, not attacker-tactical. Caveat: this tested attacker-VCF only, not defense — the net could still be walking into Rapfi's threats, which a *defensive* VCF/eval would catch.)
+
+**The surviving form of #1:** search with a BETTER EVALUATOR (VCF tactics and/or Rapfi-NNUE eval at the leaves), then distill THAT — not the net's own eval-capped search.
+
+**Perf numbers (M5 Max, 15×15; benches in `scratchpad/bench_batch.py`, `bench_gpu_vcf.py`):**
+- **The card is COMPUTE-bound for the net, not memory-bound.** Net-eval throughput is FLAT at **~11,500 boards/s from batch 64 → 65,536** (no OOM at 65k). Batching more boards buys ZERO throughput — the GPU saturates at batch≈64. The hard currency is **net-evals/sec, not board count**; wave-batching cuts wall-clock latency, not total compute.
+- **GPU VCF threat-detection is ~free** (Jason's "put VCF on the GPU, measure the handoff" brainstorm, measured): directional length-5 line-convs run **12.7M boards/s resident** (10.0M with the CPU↔GPU handoff — real but negligible), vs CPU `has_four_threat` **1,057/s** and CPU `solve_vcf` full-tree **53/s**. So *detection* isn't the cost — the **sequential forcing-TREE recursion** is. The build that follows: a **batched-frontier GPU-VCF** (thousands of VCF searches in lockstep, GPU detection kernel per ply) for a plausible ~100× full-solve throughput → VCF tactical truth becomes a real-time teacher/guard-rail (idea-pile #9).
+
+**Net strategic read:** three things tried/measured — imitation (DAgger), more search (deep MCTS), attacker-tactics (VCF overlay) — all fail to cross the Rapfi wall; the wall is a **positional evaluation** ceiling (the net plays positions worse than rapfi@50ms; it isn't missing forced wins). So the front-runner lever is now **#7 (distill Rapfi-NNUE's positional evaluation)** — give the net a better static eval, not more search/tactics. **#9 (GPU-batched VCF)** is repurposed toward **DEFENSE** (don't walk into Rapfi's threats) + as a real-time guard-rail (the perf is proven: 12.7M detect/s). **#2 (solve idx-2)** remains the ground-truth option. Nothing further built this session pending Jason's read on the eval-lever fork.
+
+### 2026-06-25 (perf spike) — GPU batch-VCF CRACKED: full forced-win solves at ~2,500× CPU, 100% correct vs `solve_vcf` ⭐
+
+Built and measured the batched-frontier GPU-VCF that the prior entry and idea-pile #9 only projected (~100×). **It blew past the projection — ~2,500×, not ~100× — at 100% correctness.** Prototype: `scripts/gpu_vcf_prototype.py` (`solve_vcf_batch(boards (B,2,15,15) bool) -> (won, hit_cap)`, MPS). Run: `GOMOKU_BOARD_SIZE=15 uv run python scripts/gpu_vcf_prototype.py`.
+
+**THE INSIGHT (why it's exact AND batchable).** Plain VCF is a pure **OR / reachability** search, *not* a real AND/OR tree: the defender is ALWAYS forced to the *unique* completion square of the attacker's four, so every defender node has exactly one child. Hence "is there a forced win?" == "from the root, can the attacker reach (within max_depth) a node with an immediate five or a sound double-four?" — run as a **breadth-first frontier**: every node in the current frontier is an attacker-to-move board at the *same depth*, so the whole frontier advances **in lockstep** and ALL threat detection batches across the B searches at once (directional length-5 shift-products over `(F,15,15)` bool planes — the proven-free conv primitive, applied frontier-wide). One host sync per BFS level (the child-gather `nonzero`); no `.item()` in the inner loop. Four-detection is provably identical to `vcf._five_completions` (a four-move m+completion c ⟺ a 5-window of 3 own + {m,c} empty + 0 opp; each (dir, signed-offset) → a unique completion cell, so #firing pairs == CPU `len(comps)` and the single-four block is `m+δ·d`); the forcing test == `_has_immediate_five(defender)`.
+
+**CORRECTNESS — 100% agreement vs CPU `solve_vcf` across 5,300 positions** (500 spec + 2,400 random midgame + 2,400 dense), including **121 deep mates out to mate-distance 15** — every verdict matched. CPU `hit_cap`=0; the single GPU frontier-truncation case still agreed.
+
+**THROUGHPUT (M5 Max MPS, random midgame mix) — full solves/sec:** scales to **~130–146k solves/s at B≈16k–65k** vs CPU's **53/s** = **~2,500× (peak 2,749× @ B=65,536, depth 8; ~2,480× @ depth 16)**. Saturates near B≈16k; small B is kernel-launch-bound (~8–10k/s @256). depth barely matters (random wins are shallow). Throughput is position-mix-dependent: a batch of deep-tree forced-wins branches the frontier wider and costs more (capped `max_frontier=4M`, ~1.8 GB, flagged `hit_cap`).
+
+**What it unlocks.** VCF tactical TRUTH is now real-time at training scale — the throughput blocker on idea-pile #9 (ground-truth forced-win/certain-death teacher + anti-guard-rail move ranking) is GONE. Combined with the prior entry's strategic read, the highest-value use is **DEFENSE**: batch-VCF every state the net reaches to detect "the opponent has a forced four-win here" (certain-death, value −1, and the saving move via `vcf_refutations`) — directly attacking the net's positional/defensive wall in real time. **Open items:** returns the *verdict*, not `winning_move`/`mate_distance` yet (block-index machinery already present — easy add); **no child-board dedup yet** (per-level hash dedup is the obvious next win on tactical batches); plain VCF only, **not VCT** (the continuous-threes solver). Budget accounting differs (CPU DFS calls vs BFS frontier nodes) so the only possible disagreements are cap-boundary cases — and across ~5,900 total positions **exactly ONE** appeared (a later 600-dense-board run): a dense board where the CPU **hit its 200k-node DFS cap and returned an *unproven* `False`** (`hit_cap=True`) while the GPU completed and **proved a genuine forced win**. The divergence is the GPU being strictly *more complete* than the cap-limited CPU, **not a false positive** — clean (non-capped) agreement stays **100%** (598/598 in that run, incl. all 21 deep mates). Committed on `feat/gentle-rapfi-teacher` (not merged/pushed — left for Jason).
+
+## 2026-06-26 — VCT-GPU REBUILD: a working batched GPU VCT solver + the on-device megakernel path proven ⭐
+
+The v0 GPU-VCT spike hit the "this is not GPU-shaped" wall (correct but CPU-bound: ~84% host, the AND/OR orchestration fights the GPU — see `wiki/topics/gpu-vct-feasibility.md` §1–§6). This is a **from-scratch rebuild** pursuing Jason's three sharpenings — **(A) compiled line-threat grammar + (B) intersection (bitmask) defense generation + (C) work-first continuation stealing** — toward a persistent-epoch Metal megakernel. Hermetic in `scripts/vct_metal/` (nothing else imports it). **Vehicle: MLX** `mx.fast.metal_kernel` — runtime-compiled MSL, no Xcode needed; bitwise/popcount + device atomics confirmed on the M5 Max. Discipline: every layer validated against the CPU oracle `gomoku.vcf` before building the next; tests on **real Rapfi positions** (`~/data/games_raphi/`, a loader built this session) under a 2-min `timeout` cap. Full §7 lives in the wiki page.
+
+**What landed (all oracle-validated):**
+- `detect_ref` (numpy spec) + `detect_metal` (**Metal kernel**) — OR-node detection (fives, four-structure, candidates, tempo). Matches `vcf` cell-for-cell over 900 boards; ~1M boards/s on-GPU. Subtlety: `four_structure` counts fours *created by the move* (m in the five-window) = `vcf._completions_through` exactly in the no-immediate-five regime the OR-node runs in.
+- `threes_ref` + `threes_metal` (**Metal kernel**) — forcing-threes + **(B) bitmask defense**: reply-set = OR of threats' `{f}∪comps` masks, **fork = a disjoint mask pair**. The v0 70% (host tempo-guard + open-four assembly) reduced to set-algebra. Matches `vcf` over ~1.8k threes.
+- `search_ref` — the AND/OR solver *composed from the primitives*; verdict matches `vcf.solve_vct` on clean cases. Slow (B=1 recursion, 2.2 s/board) — the B=1 shape is exactly what batching fixes.
+- **`wavefront` — THE WORKING GPU VCT SOLVER.** Host orchestration + all-GPU per-node kernels (detect + threes + a swapped-detect tempo pass), single reverse-order AND/OR backup; detection amortized over the whole frontier per wave. On real Rapfi positions verdict matches `vcf` with **0 false-positive and 0 false-negative** clean disagreements; ~12 ms/board batched at B=50. Sound: four-soundness conservative (never a false win), three-tempo exact via batched materialisation.
+- **`mega_vcf` — fully on-device VCF megakernel** (one thread/position, iterative DFS with make/unmake on a thread-local board, NO host orchestration per node). Validated sound vs `vcf.solve_vcf`: clean-agree 40/40, 0 FP/FN. Throughput amortizes with batch (71→**12 ms/board** at B=2048) but is **tail-bound** — B=512 and B=2048 take the same ~24.6 s wall: one deep position serializes the batch (no work-stealing; per-node detection O(N²)).
+- **`mega_vct` — fully on-device VCT megakernel** (the (C) vision: OR-frames = fours + forcing threes, AND-frames = defender replies, all in-kernel). Compiles, runs, returns plausible verdicts — **VCT fully on the GPU** — but **impractically slow naive** (~11 s/board): per-node detection recomputed O(N³)-ish + no work-stealing → severely tail-bound.
+
+**Throughput measured (perfsweep subagent, real positions, M5 Max).** Correctness gate re-run B=50 × 3 seeds (150 positions): **0 FP / 0 FN** every seed, `found_extra=0` (no wavefront WIN ever needed the vcf cap-lift recheck). GPU throughput (`max_depth=8`, `max_nodes=20000`): B=128 → 5.47 ms/board / 183 solves/s; B=512 → 0.53 / 1893; B=2048 → 0.28 / 3528 (peak RSS 2.0 GB). **Two caveats that flip the naive reading:** (1) **host-orchestration-bound at every scale** — only **24–40 %** of wall time is inside the MLX kernels, the other 60–76 % is the host Python per-node expand+backup loop (incl. host↔GPU transfer); (2) **`max_nodes` is a GLOBAL pool across the batch, not per-board**, so the falling ms/board is a *node-cap artifact* (each board gets 20000/B nodes; cap% rises 34→42→47 %), **not** GPU amortization — for real corpus labeling, **scale `max_nodes` with B**. CPU baseline (single-thread `vcf.solve_vct`): **0.64 solves/s aggregate**, sharply bimodal (median 30 ms ≈ 33 solves/s typical; ~14 % of positions hit a ~90 s tail). **Speedup 5.5× (typical position) → 286× (B=128 vs aggregate CPU)** — clears the 20–50× "pay for itself" bar *via the aggregate measure, because the GPU dodges the CPU's ~90 s-per-hard-position tail*, not via raw per-board speed. **The punchline: the wavefront being host-bound (60–76 % of wall outside the kernels) is the empirical case FOR the megakernel** — the (C) direction is where the measured time actually is, and the megakernel's own bottlenecks (incremental detection + work-stealing) attack the other end. Both ends measured, not guessed.
+
+**Verdict.** VCT is **on the GPU**. The **`wavefront` solver is the usable deliverable** (correct on real positions; throughput host-orchestration-bound, clears the 20–50× bar by aggregate measure). The **megakernel path is proven** — the fully-on-device search machine is correct (VCF: sound 40/40) and structurally complete for VCT — and the naive megakernel's two bottlenecks **pin the (C) levers precisely**: (1) **incremental/bitboard detection** (patch the ≤4 lines a move touches instead of rescanning O(N²–N³)/node), and (2) **work-stealing** to kill the single-deep-position tail. (A) and (B) are *proven correct*; (C)'s orchestration is the remaining adversary, exactly as v0 predicted — but now with a working solver in hand and the levers measured, not guessed. All committed + pushed on `feat/gentle-rapfi-teacher`.
+
+## 2026-06-26 — VCT-GPU OPTIMIZED: bitboard megakernel, ~195× per-board, ~900× CPU throughput ⭐
+
+Goal: make GPU VCT *as fast as I can*. Lever (1) from the rebuild (incremental/bitboard detection) was the dominant cost — the naive megakernel rescanned the board O(N²)/node and the per-move soundness check was O(N²)/move → **O(N⁴)/node**. Rebuilt detection on **bitboards** (`bb_ref.py` golden Python-bigint ref + `bb.py` MSL `ulong[4]` helpers: `shr256`/`shl256`/`has_five`/`completion_mask`; validated bit-for-bit, 1200 random + 600 real boards, 0 mismatch). Five-completion sets and forcing-move generation become shift-AND set-algebra.
+
+- `mega_vcf_bb.py` (VCF): forcing-move gen by hole-pair set-algebra; soundness + double-four via `completion_mask`. **13–14× faster** than `mega_vcf` (84→6.4 ms/bd @B=512; 21→**1.48** @B=2048; wall 42.5→3.0 s). Validated **0 FP / 0 FN vs `gomoku.vcf.solve_vcf` over 360 real positions**.
+- `mega_vct_bb.py` (full AND/OR VCT): bitboard detection + four more levers — fours generated once by set-algebra; threes restricted to **Chebyshev-2 of OWN** (radius-2-per-side argument; ~halves candidates, **1.65×**); follow-up `f` restricted to `vcf._collinear_empties(m)` (**correctness fix** — without it, far pre-existing fours over-generate spurious threes, which I caught via a verdict shift between versions); monotone defender-five/tempo fast-paths (computed once/node, skipped when globally absent); `rmask` aliased into `fmask`. Per-board algorithmic speedup at **equal config** (B=24, mn=600): cell-scan `mega_vct` **38.4 s → 4.0 s = ~10×, 0 verdict disagreements** (bitboard detection ≈10–14× as in VCF, candidate-own ×1.65 on top). **Validated 0 FP / 0 FN vs `vcf.solve_vct` over 320 real positions** (258 clean agreements, 8 seeds). The bigger practical win is *batchability*: the cell-scan kernel's tail can't finish even B=64 @ mn=1500 in 2 min; the bitboard kernel batches to B≈16k (below).
+
+**The throughput finding.** Wall is **flat ~16 s for B=128…2048** at mn=1500 — completely **tail-bound by the single deepest board**. For batch labeling that's a *feature*: throughput ∝ B at constant wall. Measured solves/s (mn=1500, fully on-device, RSS 0.3 GB): 8192→526, 16384→**891**, 32768→**1 020** (saturating ≈ GPU concurrency). CPU `vcf.solve_vct` = 0.64 solves/s → **~1 600× aggregate**, and (unlike the wavefront's 24–40 % GPU util) there is **no host bottleneck** — fully on-device. A late **shift-precompute** (reuse each direction's five `shr256` of own/empty across the hole loops of `gen_forcing`/`completion_mask` — verdict-preserving, `test_*_bb` still pass) lifted the saturated ceiling ~1.5× (583→891 @ B=16384). NB: `load_position_stack` samples a *live-growing* corpus (`~/data/games_raphi/` is being collected), so raw win/cap counts drift between invocations — verdicts are deterministic within a process and bb always matches the oracle on the loaded set.
+
+**What is and isn't the lever (honest).** Work-stealing (lever 2): board-level is already done by the GPU scheduler; the real tail is *one* deep board (one thread), so subtree-spill would cut single-board latency but **not** labeling throughput (already maximized by batching) — so it is *not* the lever for this use case. **Negative result:** generating threes by single-line open-three patterns is **incomplete** (misses *four-four-at-`f`* threats — the follow-up makes fours in two directions, only one through `m`); localizing detection to `m`'s lines hits the same wall, so `gen_threes` stays whole-board. The throughput knobs for labeling are **B** (batch) and **`max_nodes`** (depth/quality vs wall). **Negative result #2 (word width, tried + reverted):** a 256-bit detector can be `ulong[4]` (64-bit) or `uint[8]` (32-bit); a micro-bench of *pure* shift+AND favoured `uint[8]` 1.7× (Apple GPU 64-bit ALU is throughput-reduced), so I rewrote the whole kernel to `uint[8]` and re-validated (0 disagreements) — but it ran **~20 % slower** (VCT 693 vs 854 solves/s @ B=16384; VCF 1.55 vs 1.40 ms/bd) because the real kernels are bookkeeping-heavy (`popcount`/`lowbit`/`setbit`/`cpy`/`and`/frames) and that all doubles in word count, outweighing the detection-only gain. `ulong[4]` kept. Lesson: micro-benchmark the hot path *in situ*. Committed + pushed on `feat/gentle-rapfi-teacher`.
+
+## [2026-06-26] is-VCT recognition is learnable on unseen games — but attention loses to a CNN
+
+**What.** First learnability probe on the VCT puzzle labels: can a net classify "side-to-move
+has a forced VCT?" from the raw 15×15 board, generalizing to **unseen games**? Full synthesis:
+`wiki/topics/vct-recognition-learnability.md`. Code: `scripts/threat_shapes/gen_isvct_dataset.py`,
+`scripts/threat_shapes/train_isvct_attn.py`. Artifacts: `~/data/puzzle_miner/isvct_exp/`.
+
+**Setup.** Labels reused from the forward puzzle miner (`~/data/puzzle_miner/`), NO re-solve —
+POSITIVE = `win&~cap`; NEGATIVE = manifest ply **absent** from `puzzles.jsonl.gz` (proven
+no-VCT); `cap` excluded. Split **by shard** (md5%10): 400 manifest shards → **367 train / 33
+test, overlap 0** (+49-shard val from train for early-stop). Train 1,167,002 (17.3% pos), test
+101,745 (14.2% pos), balanced training (60k). Negative boards CPU-replayed in the exact
+side-to-move frame, **0 frame mismatches**. Light enough (CPU replay + MPS train, no GPU solve)
+to run without competing with the live `collect_rapfi` producer.
+
+**Held-out result (AUROC, the fair metric):** majority 0.500 · logreg-on-counts 0.946 · **CNN
+(168k) 0.971** · **attention (339k) 0.924**. Attention val→test 0.933→0.924 (no leakage). Wall:
+gen 20s, train+eval(×4) 356s on MPS.
+
+**Read.** (1) Feasibility = **yes** — the win-condition is perceivable and generalizes across
+shards. (2) Attention is the **laggard** — beaten by a CNN with *half* the params and by linear
+logreg-on-counts. VCT structure is local + translation-equivariant ⇒ conv bias fits; the signal
+is count-dominated. (3) Strategic: recognition was always the **exact oracle's** job (cheap),
+so this *clarifies* rather than dents the plan — **attention's real audition is the seeker**
+(steering toward VCT-reachable regions), not recognition. Caveats: small/untuned (60k, ≤12 ep,
+attention still inching up); "no-VCT" = no VCT within the miner's 500-node budget; trivial
+early-game negatives inflate natural-accuracy (use AUROC/balanced).
+
+**Also (same session):** the megakernel now emits a **passive GPU root-move**
+(`solve_vct_mega_bb(return_move=True)`) — resolves the `vct-backward-mining.md` §5 move-extraction
+gap; 2.38M forward puzzles move-labeled (`solutions.jsonl.gz`), 400/400 independently verified.
+All on `feat/gentle-rapfi-teacher` (not yet merged).
+
+## [2026-06-26] Seeker steering is learnable on unseen games (seek-VCT thesis, Phase A) — CNN > attention again
+
+**What.** The **steering** half of the seek-VCT thesis (the recognizer half named the seeker as
+attention's real audition). One question: can a net behaviorally-clone the **quiet-phase (pre-onset)
+moves of the side that reaches the first forced VCT**, and generalize to **unseen games**? Full
+synthesis: `wiki/topics/seeker-steering-learnability.md`. Code:
+`scripts/threat_shapes/gen_seeker_dataset.py`, `scripts/threat_shapes/train_seeker.py`. Artifacts:
+`~/data/puzzle_miner/seeker_exp/`.
+
+**Setup.** Reuse the miner verdicts, NO re-solve. `onset(game)` = first ply with `win&~cap`; the
+mover there = the **seeker S** (kept whether S converts or misses — "you reached a winnable position"
+is the target). STEERING EXAMPLE = every pre-onset ply `p < onset` with `p%2==onset%2` (S to move);
+input = side-to-move-relative board (`board[0]`=S), target = the move S actually played. Boards
+CPU-replayed in the exact miner frame (`all_boards`), every present puzzle key cross-checked → **0
+frame mismatches over 400 shards**. Split **by shard** (md5%10, the recognizer's rule for
+comparability): **367 train / 33 test, overlap 0** (+49-shard val for early-stop). **500,747**
+examples from **38,927 onset games** (1,073 no-onset); 459,415 train (200k used) / 41,332 test; mean
+208 legal cells/board. Per-cell policy with legal-move masking; light (CPU gen + MPS train, no GPU
+solve) → ran `nice`d without competing with the live `collect_rapfi` fleet.
+
+**Held-out result (top-k legal-move-match = is the seeker's *actual* move in the policy's top-k):**
+
+| model | params | top-1 | top-3 | top-5 | CE |
+|---|---|---|---|---|---|
+| uniform (random legal) | — | 0.005 | 0.014 | 0.023 | 5.37 |
+| adjacency-to-stones | — | 0.025 | 0.072 | 0.121 | 4.78 |
+| **CNN** | **224k** | **0.386** | **0.597** | **0.696** | **2.26** |
+| attention | 339k | 0.263 | 0.457 | 0.569 | 2.76 |
+
+Wall: gen 15 s (CPU), train+eval 1,541 s on MPS (CNN early-stop ep8 ~13 s/ep; attention full 20 ep
+~71 s/ep).
+
+**Read.** (1) Feasibility = **yes** — the CNN matches the *exact* strong-engine steering move ~39%
+(top-1) / ~70% (top-5) on unseen games, **~15×** the adjacency prior at top-1; CE confirms genuine
+calibration over the move distribution. The steering signal is learnable and generalizes — the cheap
+green light the seek-VCT plan needed. (2) **CNN > attention again** (top-1 0.386 vs 0.263, fewer
+params) — next steering move is *local*, fits the conv prior. (3) **Two honest limits:** attention
+was **still climbing at the epoch cap** (val 0.066→0.253 monotone, undertrained not capped), AND
+next-move BC is local so it does **NOT** settle attention's *global-receptive-field* bet for
+*sequential* seeking; and top-1 match is a **weak proxy** (≠ strong play; conflates seeking with
+general engine strength). The architecture verdict for seeking is deferred to the decisive test.
+
+**Next (gated with Jason — the GPU-spending real tests).** **Phase B:** replace the imitation target
+with an oracle-*constructed* one — score each pre-onset candidate by **VCT-reachability gain** (does
+a forced win appear within k plies after move + best reply?); principled but costs k-step batched
+lookahead per candidate. **Phase C (decisive):** a **hybrid player** — oracle every ply for attack +
+defense, exact solver finishes any VCT, net steers only in the tactically-quiet region — played vs a
+**fixed baseline** (heuristic/lookahead, not sibling H2H). Phase C is where attention's global bet is
+actually adjudicated. On `feat/gentle-rapfi-teacher` (not merged).
+
+## [2026-06-26] The pre-onset band is a KNIFE-EDGE — seek-VCT thesis update + non-VCF gold
+
+**What.** Two search-free/GPU-only ways to mine VCT-reachability from the 500k Rapfi-v-Rapfi games,
+toward the seeker. Full synthesis: `wiki/topics/vct-reachability-mining.md`. Code:
+`scripts/threat_shapes/vct_fan.py` (consolidated probe). All solving on the Metal **GPU** kernels
+(`mega_vct_bb`, `mega_vcf_bb`) — zero contention with the CPU `collect_rapfi` fleet. **Both seats are
+strong Rapfi**; every "losing move" is a counterfactual we inject.
+
+**The method (off-path fan).** Ride each game; at known-non-VCT pre-onset nodes, fan every alternative
+move the side did NOT play and solve VCT on each. **Framing (load-bearing, code-verified):** a VCT
+belongs to the side-to-move, so after S plays alt `m` it's the opponent's turn → a fanned VCT is the
+**opponent's** forced win = `m` is a forced-LOSING move for S. The fan is a **defense/blunder + VCT
+miner, NEVER an offense detector** (S would need its own turn = the expensive ∀-reply search). Integrity:
+**0.000%** of fanned nodes are themselves VCT, 0 parity violations.
+
+**Finding 1 — the knife-edge (the headline, a thesis update).** Fraction of a side's alternatives that
+lose by force, by who's-to-move × distance-to-onset: opponent-to-move **98.3% (d1) / 92.7 / 84.6**;
+VCT-holder-to-move **89.4 (d2) / 52.7 / 45.7**. Even **6 plies before the VCT, ~half of moves lose**;
+the *winner* at onset−2 loses 89% if it deviates. **Both players walk a tightrope; sharpness ramps
+BEFORE the onset.** ⇒ the seek-VCT split's "pre-onset = the net's forgiving region" is **wrong** — that
+band is not approximation-tolerant; the net's safe domain is further back than onset−6, and the
+solver/lookahead must own the whole sharp ramp (the "oracle every ply" hybrid already does — now with
+the *why*).
+
+**Finding 2 — 96% of the wins are trivial; the gold is the winner's combinations.** VCF kernel on the
+406,202 fanned VCT-wins (81.1% of all fanned): **VCF 96.1%** (four-driven, trivial — the extreme is
+"you didn't block my five"), **non-VCF VCT 3.5%** (14,380; need a *three* = combinational molecules),
+VCF-cap 0.3%. The non-VCF gold splits by parity — concentrated on the **WINNER's** wins (defender
+perturbed): non-VCF rate 1.9/6.0/6.2% on the winner's rows vs 0.0/0.7/1.2% on the opponent's.
+**Combinations belong to the side with the initiative.** Harvest plan: **perturb the *defender*** at
+pre-onset opponent-to-move nodes → ~100k+ non-VCF VCT boards (a few free-GPU hours) = non-trivial
+offense termini for the distance field + hard defense lessons (the white-defense wound).
+
+**Also banked — the free distance-to-VCT field** (from the existing per-ply verdicts, no re-solve):
+terminal-VCT 99%, multi-window (lose-then-refind) 11.6% of games, offense coverage **49%** (an
+upper-bound, censored target — the realized game found *a* path, maybe not the shortest), cap holes
+13.9%. Proposed target Φ=γ^(my-moves-to-VCT) with Φ=0 floor + a defense channel (a value function for
+"force a win", global by construction). **Banked negatives:** both yield predictions were wrong (81%
+VCT / 5% cap, NOT cap-dominated as guessed); the 81% looks rich but is 96% trivial; a brief
+"VCT-where-one-already-existed → impossible!" alarm was a **labeling** confusion (all fanned nodes are
+pre-onset non-VCT). Separately this session: marked the slow CPU solver `gomoku/vcf.py` OBSOLETE
+(reference/history only; GPU kernel is the sound, 1600× one). On `feat/gentle-rapfi-teacher` (not merged).
+
+### 2026-06-27 — Φ distance-to-VCT field: the proof-frontier is learnable; CNN beats attention a 3rd time
+
+Trained the **first real L2 model** (overnight, MPS, zero GPU contention with the live collector).
+Target = the free dual potential from the VCT-reachability mine: `phi_off=γ^(my-moves-to-my-next-VCT)`
++ `phi_def=γ^(opp-moves-to-their-next-VCT)`, γ=0.8, read off the puzzle miner's per-ply verdicts (no
+re-solve), cap excluded. **The gradient of Φ IS Jason's question** "which moves move the proof frontier
+toward my VCT vs theirs". 40k games → 1.167M train / 101,745 held-out test, shard-disjoint (overlap 0),
+0 frame mismatches. Scripts `gen_phi_dataset.py` / `train_phi.py` (committed); metrics
+`~/data/puzzle_miner/phi_exp/phi_metrics.json`.
+
+**Result — learnable + generalizes:** held-out **CNN** offense ρ=0.719 / R²=0.761 / reach-AUROC=0.912,
+defense ρ=0.761 / R²=0.690 / 0.917; well-calibrated (top decile pred 0.91 → true 0.93). Two sharp
+secondaries: **(1) NOT count-dominated** — CNN nearly doubles a ridge-on-raw-board baseline (offense ρ
+0.36→0.72), unlike is-VCT recognition where logreg-on-counts nearly matched ⇒ closeness-to-a-fork is
+genuinely *spatial*, structure lives in **distance, not presence**. **(2) CNN beats attention a third
+time** — now param-matched (376k vs 348k) on the **global** target (attention's claimed home turf) with
+3×+ the gradient steps (CNN early-stops ep6, best val by ep1; attn plateaus ~0.72 at ep20) ⇒ the
+global-receptive-field bet **does not cash out** at this scale; conv tower + GAP wins. Surprise: defense
+reads *better* than offense (net sees incoming danger best — aimed at the white wound).
+
+**Banked negative + caveats:** the "global target is attention's chance" hypothesis was wrong (lost,
+param-matched, epoch-alibi removed). Honest reach: it's the *realized-play proxy* frontier (upper-bound,
+censored), single-position regression (not whole-game seeking), small/untuned. ρ on a proxy = green light,
+not strong play — that's the Phase C hybrid-play eval (gate w/ Jason). **Default L2 arch = the CNN.** Synthesis:
+`wiki/topics/phi-distance-field-learnability.md`. On `feat/gentle-rapfi-teacher` (not merged).
+
+### 2026-06-27 — Molecule corpus banked: 146,655 non-VCF combinational forced wins, move-labeled
+
+While Jason was at coffee (free GPU, his invite). Ran the corpus-scale writer of the §3 probe:
+`harvest_molecules.py --side defender` — fan opponent-to-move pre-onset non-VCT nodes of real
+Rapfi games, on each fanned (winner-to-move) board keep **VCT but NOT VCF** = forced wins needing
+a *three* = the combinational "molecules". Move-labeled via the kernel's passive `return_move`.
+GPU-only, 0 collector contention; banked to `~/data/molecule_gold/gold.jsonl.gz` (+ README, schema
+matches puzzles.jsonl.gz). Scripts committed (79d7ad2).
+
+**First bank:** 20,000 defender-side nodes / 68 of 400 shards / **25 min** → 4.01M fanned →
+**3.71M VCT (92.4%)** → **146,655 non-VCF gold (3.95% of VCT)**, **99.0% distinct boards**, **100%
+move-labeled**, from 3,438 source games. Boards **sparse** (winner mean 6.2 stones, median 6 — the
+clean "combination already forced" regime). Gold **grows with distance-to-onset** (dist-1/3/5 =
+28.8k/51.7k/66.2k): deeper = more genuinely *needs a three* = purer molecule (matches §3's
+distance trend). The 92.4% VCT rate (vs §3's both-sides 81%) is the **defender-side knife-edge** —
+nearly every pre-onset alt the defender could play loses by force.
+
+**Each gold board pays twice** (the §4 thesis, now realized as data): a non-trivial offense
+terminus (a molecule candidate) AND a defense lesson (defender's natural-looking losing move →
+white-side wound). Only 68/400 shards consumed at the node cap ⇒ resumable, ~60× headroom on the
+full corpus. Next natural uses (Jason's call): D4-canonical dedup → distinct-shape count; feed L1
+stencil minimization; a non-VCF-aware Φ/defense target. On `feat/gentle-rapfi-teacher` (not merged).

@@ -3,6 +3,99 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-26] New page: mining VCT-reachability from the Rapfi corpus (off-path fan + knife-edge)
+
+Created [topics/vct-reachability-mining.md](topics/vct-reachability-mining.md) — cheap ways to mine
+seek-VCT steering signal from the 500k Rapfi-v-Rapfi games, with a **thesis update** as the headline.
+The off-path fan (ride a game; at pre-onset non-VCT nodes fan the moves a side did NOT play; solve
+VCT) revealed: (1) **the pre-onset band is a knife-edge** — ~80% of alternative moves lose by force
+(~99% one ply before onset; ~half even 6 plies out), so the band we assumed was the net's *forgiving*
+steering region is **not** approximation-tolerant — sharpness ramps *before* the VCT, the net/solver
+boundary is fuzzy + earlier than assumed (the most valuable finding). (2) **Framing, code-verified:**
+a VCT belongs to the side-to-move, so fanning S's alternatives finds the **opponent's** forced wins
+= S's losing moves → the fan is a **defense/blunder + VCT-board miner, never an offense detector**;
+integrity check 0.000% of fanned nodes are VCT. (3) **Triviality split** (VCF kernel on the VCT-wins):
+of the 81% fanned VCT-wins, **96.1% are trivial VCF** (four-blocks), only **3.5% non-VCF VCT** (need a
+*three* = combinational molecules) — and the gold concentrates on the **winner's** wins (defender
+perturbed; combinations belong to the side with initiative). Harvest plan = perturb the *defender*
+for 100k+ non-VCF VCT boards = offense termini + defense lessons (the white-defense wound). Also banks
+the **free distance-to-VCT field** (terminal-VCT 99%, multi-window 11.6%, offense coverage 49%, an
+upper-bound/censored target) and the proposed Φ=γ^dist potential. Banked negatives: both yield
+predictions wrong (81% VCT / 5% cap, not cap-dominated); 81% looks rich but is mostly trivial; a
+"VCT-where-one-existed" alarm was a labeling confusion (all fanned nodes are pre-onset). Reusable
+script `scripts/threat_shapes/vct_fan.py`; reused the GPU VCF+VCT kernels (no CPU solver). Added an
+index row + cross-linked the seeker row. On `feat/gentle-rapfi-teacher`; not merged.
+
+## [2026-06-26] New page: seeker steering learnability (seek-VCT thesis, Phase A)
+
+Created [topics/seeker-steering-learnability.md](topics/seeker-steering-learnability.md) — the
+**steering** half of the seek-VCT thesis (the recognizer page named the seeker as attention's real
+audition). One question: can a net imitate the **quiet-phase (pre-onset) moves of the side that
+reaches the first forced VCT**, and generalize to **unseen games**? **Yes** — held-out,
+shard-disjoint **top-1 0.386 / top-5 0.696** (matching the *exact* strong-engine move) vs
+adjacency-to-stones 0.025/0.121 vs random-legal 0.005/0.023 ⇒ the steering signal is learnable and
+real. As with recognition, a **CNN (224k) beats attention (339k)** at *next-move* imitation (top-1
+0.386 vs 0.263) — **but** attention was still climbing at the epoch cap (undertrained, not capped),
+and next-move BC is *local*, so this does **NOT** settle attention's global-receptive-field bet for
+*sequential* seeking (that's Phase C). Honest framing recorded: top-1 match is a **weak proxy** (≠
+strong play; conflates seeking with general engine strength). onset/labels reused from the miner
+(`onset = first win&~cap` ply), no re-solve; 500,747 examples / 38,927 onset games; split by shard
+(367/33, overlap 0); **0 frame mismatches**. Code: `scripts/threat_shapes/{gen_seeker_dataset,train_seeker}.py`;
+artifacts `~/data/puzzle_miner/seeker_exp/`. Added an index row + linked the recognizer row to it.
+Next (gated): **Phase B** oracle-labeled VCT-reachability target, **Phase C** hybrid-play eval
+(oracle every ply + net steering) vs a fixed baseline. On `feat/gentle-rapfi-teacher`; not merged.
+
+## [2026-06-26] New page: is-VCT recognition learnability + move-extraction gap RESOLVED
+
+Created [topics/vct-recognition-learnability.md](topics/vct-recognition-learnability.md) — the
+first learnability probe on the VCT labels. A net **can** classify "side-to-move has a forced
+VCT" on **held-out, shard-disjoint** games (AUROC 0.92+, real generalization), but for these
+*local, translation-equivariant* shapes a **CNN (0.971, 168k params) beats a transformer
+(0.924, 339k)** and even **logreg-on-counts (0.946) beats attention** ⇒ recognition is easy +
+count-dominated, leave it to the exact oracle; **attention's bet is the SEEKER, not the
+recognizer**. Records Jason's **seek-VCT thesis** (learn the approximation-tolerant steering,
+solve the approximation-intolerant forcing finish — anti-correlated tractability). Methodology
+note for posterity: labels reused from the miner (**absence = proven no-VCT**, Jason's
+correction), no re-solve; split **by shard** (367 train / 33 test, overlap 0) so test games are
+unseen — the load-bearing guard against position-level leakage.
+
+Also marked [topics/vct-backward-mining.md](topics/vct-backward-mining.md) **§5 RESOLVED**: the
+verdict-only "catalyst-move extraction" gap is closed by **option 2** — a passive **GPU
+root-move output** on the megakernel (`solve_vct_mega_bb(return_move=True)`, no extra nodes);
+2.38M forward puzzles move-labeled (`solutions.jsonl.gz`), 400/400 moves independently verified.
+Updated both index rows (vct-backward "OPEN"→"RESOLVED"; added a recognition-learnability
+doorway). Code on `feat/gentle-rapfi-teacher`; not yet merged.
+
+## [2026-06-26] New page: the Shape-Library Engine (the gomoku-AI plan) + gpu-vct row corrected
+
+Created [topics/shape-library-engine.md](topics/shape-library-engine.md) — the plan outline
+for **the gomoku AI Jason wants to build** (2026-06-26 brainstorm): mine the first-VCT
+*enabling shape* → reduce to its **minimal full-board prime implicant** (VCT-win is monotone
+in freestyle ⇒ 3 cell roles, "blank" collapses into defender-forbidden, validation = one
+solver call, extraction = batched ablation on L0) → a library = **the monotone DNF of "you
+have a VCT"** (bitmask-matched, D4-deduped) → a **two-player pursuit / df-pn** player that
+seeks an un-blockable **fork** of shapes and denies the opponent theirs, **leaf-verified by
+L0 so it never hallucinates a win**; **L2 = the AlphaZero layer** regressing the
+shape-reachability potential into the fog on *verifiable* targets. Captures Jason's binding
+working principles (go-all-the-way / no safe half-steps / negative-result-welcome;
+full-board for soundness not locality; forks day-1; telemetry rides along, not a gate). Sits
+on the **already-built** L0 ([gpu-vct-feasibility.md](topics/gpu-vct-feasibility.md) §8) and
+the **63k banked enabling shapes** ([vct-backward-mining.md](topics/vct-backward-mining.md));
+added the forward pointer from that page (the shapes are L1's raw material) and an index
+doorway row. Also **corrected the stale index row** for gpu-vct-feasibility — it still read
+"correct but CPU-bound v0," now reflects that **§8 overturned it** (on-device bitboard
+megakernel, ~1600× CPU, 0 FP/FN).
+
+## [2026-06-25] New page: the Idea Pile (autolab seed bank) + idx-2 DAgger entry
+
+Created [topics/idea-pile.md](topics/idea-pile.md) — a parking lot for wild-but-grounded
+research directions (bigger swings than a derby cell), each with mechanism / rough cost /
+how-we'd-know, framed as seeds the incoming autolab can each give a shot. Seeded with 8 from
+a 2026-06-25 brainstorm (out-search-and-distill, solve-idx-2, blind-spot judo, the think-time
+ladder as a self-paced metric, move→value oracle, museum/disagreement dojo, + two moonshots).
+Added an index doorway row. Companion evidence: `TRAINING_WIKI` 2026-06-25 (the DAgger loop
+built + the history-mismatch bug found/fixed).
+
 ## [2026-06-19] autolab WENT LIVE → 15×15 era → first 15×15 champion (#64/#65/#67, epic #53)
 
 The night the self-driving lab proved itself, then pivoted to 15×15 — synthesized
@@ -1350,3 +1443,63 @@ Docker: workflow scored HF-resolver 8 vs Docker 3). (2) The daemon/teacher are
 now-resolved operational notes (swap2 schema merged to main; `save_checkpoint` atomic
 #76). `available()`=no-network/test-gating vs `obtainable()`=may-fetch distinction
 documented.
+
+## 2026-06-25 — capabilities synthesis layer added + spine fixed (#86)
+A new session read `TRAINING_WIKI.md` and missed the entire 2026-06-25 idx-2
+distillation run — root cause: the work landed in a topic page + an index row, but
+the **chronological spine had no dated entry** (last was 2026-06-24), and the index's
+synthesis was a *page catalog* (by doc-type), not a *capability map*. Two additive
+fixes: (1) **fixed the spine** — appended the dated 2026-06-25 `TRAINING_WIKI.md`
+entry (mine 1.13M @ ~700/s, soft-target pretrain, warm-start AZ to ep250, fast
+eval-gradient; infra success / science inconclusive / banked), which also closes the
+open "soft target untested" thread. (2) Added **`capabilities.md`** — a one-screen
+"what can this repo DO" synthesis (mine · pretrain/warm-start · train · evaluate ·
+search · operate), each capability → how-to + deep doc, NEW rows tagged. Linked from
+the index Start-Here callout + table + read-order, plus a Maintenance Rule: **every
+significant run closes the spine AND updates capabilities**, not just a topic page
+(the discoverability bug this fixes). Purely additive — no existing topic deprecated.
+
+**Follow-up same day:** refreshed the index's stale `## Current Synthesis` (it still
+framed the project as 9×9 defend-vs-imitate / WL-series / Core ML). Now reads the
+current 15×15 front — central question = make WHITE winnable / stand vs Rapfi-NNUE;
+binding wound = white-defense gap (Bruce: black ~42% / white 0/12 @idx-2); the two
+principled white fixes (swap2, fixed-fair-openings); the one-hot-harms / soft-target
+distillation lesson (#77/#86); think-time-not-node strength dial; matured tooling →
+`capabilities.md`. Kept the era-independent durable lessons (fast-attack collapse,
+noisy evals, native-MCTS bottleneck, preserve-evidence). Scoped refresh, not a full
+re-curation (status-tags / pruning still deferred).
+
+## 2026-06-26 — external reference page: standard gomoku strategy ("rule of priorities")
+Filed a new `topics/gomoku-standard-strategy.md` distilling a GomokuTV YouTube video
+(*"How to play Gomoku? — The rule of priorities"*, <https://youtu.be/1boqoa2rQfU>) that
+Jason flagged as a clear presentation of **standard, known** gomoku theory. Ingest was
+**transcript-only** — Gemini's `analyze_youtube` was down (Google IneligibleTier auth
+error on the local CLI); the spoken theory is captured, the on-screen shape diagrams are
+not (geometry cross-checked against `allis-threat-theory.md`, not read off the video).
+Content: the 5-depth **priority ladder** (overline/five → four/VCF → three/fukumi/VCT →
+two/yobi/VC2 → sh-win/positional/"ear-reddening") + a fukumi/yobi/cut/sh-win glossary
+mapping the community's terms to Allis's formalism and to `gomoku/vcf.py`. The page is
+explicitly framed as the **standard-theory foil for idea #10 (molecule ⊋ line)**: the
+ladder is fully line-organized through depth 4, and depth 5 ("positional / tempo /
+open-area moves with no direct connection") is exactly where standard theory *gestures
+at* non-line/field structure but **runs out of names** — the contrast we want. Added an
+index doorway row under the Allis row; purely additive.
+
+## 2026-06-27 — Φ distance-to-VCT field learnability (the trilogy's 3rd leg)
+
+New topic `phi-distance-field-learnability.md` + index doorway row (after the seeker row): the first
+trained L2 model. Regresses the dual proof-frontier potential Φ (offense+defense distance-to-VCT) off
+the free miner verdicts; held-out shard-disjoint CNN offense ρ=0.72 / reach-AUROC=0.91, defense
+ρ=0.76 / 0.92 ⇒ the field whose gradient = "which moves move the proof frontier toward mine vs theirs"
+is learnable + generalizes. NOT count-dominated (CNN ≫ ridge), and CNN beats attention a third time —
+now param-matched on the global target with 3× the epochs, so the global-receptive-field bet does not
+cash out at this scale. Updated `vct-reachability-mining.md` §1 (Φ design → trained) and appended a
+`TRAINING_WIKI.md` entry. Scripts `gen_phi_dataset.py` / `train_phi.py` committed earlier (dc14555).
+
+## 2026-06-27 — Molecule corpus harvested (non-VCF combinational forced wins)
+
+New script `harvest_molecules.py` (the §4 corpus writer) + first bank to `~/data/molecule_gold/`:
+146,655 move-labeled non-VCF VCT boards (combinational forced wins = the molecule candidates),
+99% distinct, sparse, gold-grows-with-distance. Updated `vct-reachability-mining.md` §4 (RAN note)
++ §6 artifacts (canonical corpus row), the index row, and appended a `TRAINING_WIKI.md` entry.
+68/400 shards at the node cap ⇒ resumable with ~60× headroom.

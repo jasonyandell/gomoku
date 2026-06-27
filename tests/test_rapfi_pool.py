@@ -141,3 +141,34 @@ def test_pool_plays_legal_block():
             s = s.apply(a)
         move = pool.pick(s)
         assert move in set(int(a) for a in s.legal_actions())
+
+
+# --------------------------------------------------------------------------
+# SOFT teacher: whole-board winrate analysis (real engine, gated)
+# --------------------------------------------------------------------------
+@requires_rapfi
+def test_pool_analyze_state_returns_winrate_map():
+    """The SOFT-teacher signal: analyze_state scores candidate moves with a
+    side-to-move winrate in [0, 1], keyed by legal flat action index."""
+    with RapfiPool(size=1, timeout_ms=1500, board_size=15) as pool:
+        s = _opening()
+        legal = set(int(a) for a in s.legal_actions())
+        m = pool.analyze_state(s, max_node=20000)
+        assert isinstance(m, dict) and len(m) >= 1
+        for a, w in m.items():
+            assert a in legal, f"scored action {a} is not legal"
+            assert 0.0 <= w <= 1.0, f"winrate {w} out of [0, 1] for action {a}"
+        # A multiPV scan should score many candidates (not a single best move).
+        assert len(m) >= 10
+
+
+@requires_rapfi
+def test_pool_analyze_states_parallel_order():
+    with RapfiPool(size=2, timeout_ms=1500, board_size=15) as pool:
+        states = [_opening() for _ in range(4)]
+        maps = pool.analyze_states(states, max_node=10000)
+        assert len(maps) == 4
+        legal = set(int(a) for a in states[0].legal_actions())
+        for m in maps:
+            assert len(m) >= 1
+            assert all(a in legal and 0.0 <= w <= 1.0 for a, w in m.items())

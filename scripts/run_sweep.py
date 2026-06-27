@@ -2457,6 +2457,47 @@ CELLS["G15-fixed-openings-teacher"] = _dc.replace(
                       "--run-name", "bruce-sensei-77"],
 )
 
+# --- #86: GENTLE teacher variant (the #77 follow-up) --------------------------
+# #77 showed teacher@0.3 + full lr (0.001) + no freeze regressed Bruce 0/96 H2H
+# by flattening the policy head (#44 confirmed via the policy channel). This
+# variant applies the #44 mitigation: HALF LR (BRUCE_TEACHER_LR, default 5e-4)
+# + a softer weight (BRUCE_GENTLE_WEIGHT, default 0.1). A run-dir TAG
+# (BRUCE_GENTLE_TAG: "on"/"off") + run-name (BRUCE_RUN_NAME) let the SAME cell
+# serve both the gentle-ON run AND the matched teacher-OFF control
+# (BRUCE_GENTLE_WEIGHT=0.0, BRUCE_GENTLE_TAG=off) with isolated run-dirs + wandb
+# runs, both warm-started from bruce_e2659_warmstart.pt. See #86 / #44 / #77.
+_GENTLE_LR = float(_os.environ.get("BRUCE_TEACHER_LR", "0.0005"))
+_GENTLE_WEIGHT = _os.environ.get("BRUCE_GENTLE_WEIGHT", "0.1")
+_GENTLE_TAG = _os.environ.get("BRUCE_GENTLE_TAG", "on")
+_GENTLE_RUN = _os.environ.get("BRUCE_RUN_NAME", "bruce-sensei-86-gentle-" + _GENTLE_TAG)
+CELLS["G15-fixed-openings-teacher-gentle"] = _dc.replace(
+    CELLS["G15-fixed-openings"],
+    name="G15-fixed-openings-teacher-gentle-" + _GENTLE_TAG + "-board15",
+    lr=_GENTLE_LR,
+    extra_train_args=[*CELLS["G15-fixed-openings"].extra_train_args,
+                      "--teacher-data-path", _TEACHER_NPZ,
+                      "--teacher-weight", _GENTLE_WEIGHT,
+                      "--run-name", _GENTLE_RUN],
+)
+
+# --- #86: idx-2 Bruce-Lee warm-start (the Rapfi-distillation pretrain payoff) ---
+# Byte-identical to G15-fixed-openings EXCEPT a distinct run-dir + run-name, so the
+# idx-2-only experiment is isolated from Bruce's own G15-fixed-openings-board15
+# lineage and opens a FRESH wandb run. Warm-started via CLI --resume from the
+# ~1.1M-position Rapfi-distillation pretrain seed (checkpoints/idx2_pretrain.pt,
+# same large/global-pool/stem-padding arch -> strict-loads). Self-play is restricted
+# to the SINGLE idx-2 opening via GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8 in the launch
+# env (the trainer's sample-time D4 augment recovers the 8x symmetry for free). The
+# question: can a net pretrained on Rapfi's idx-2 move-map then out-self-play stand
+# a chance vs Rapfi in THIS one position? (Bruce Lee's one kick, 10,000 times.)
+# See wiki/topics/rapfi-idx2-distillation-mine.md.
+CELLS["G15-idx2-warmstart"] = _dc.replace(
+    CELLS["G15-fixed-openings"],
+    name="G15-idx2-warmstart-board15",
+    extra_train_args=[*CELLS["G15-fixed-openings"].extra_train_args,
+                      "--run-name", "idx2-warmstart-86"],
+)
+
 
 def run_base() -> Path:
     """Root under which sweep_runs/ and sweep_logs/ live. Defaults to REPO_ROOT

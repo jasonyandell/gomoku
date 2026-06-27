@@ -15,6 +15,7 @@ dependencies = [
     "uvicorn>=0.32",
     "pydantic>=2.0",
     "huggingface-hub>=1.15",  # gomoku/hf.py + lab trainer/arena import at module top (was undeclared)
+    "mlx>=0.31.2",
 ]
 
 [project.optional-dependencies]
