@@ -37,9 +37,12 @@ per-game VCT-window structure is already on disk. Characterized over 400 shards 
   *in their own realized game* (the loser's positions mostly never do; plus draws); defense field
   (distance to the *opponent's* next VCT) covers 54.7%; **13.9%** of positions are `cap` holes (mask).
 
-**The proposed target (design, not yet trained).** A discounted potential
+**The proposed target (TRAINED 2026-06-27 → [phi-distance-field-learnability.md](phi-distance-field-learnability.md)).**
+A discounted potential
 **`Φ(s) = γ^(my-moves-to-nearest-future-VCT)`**, `Φ=0` where none (the floor — "no forcing win
-reachable here, this game"), `cap` masked, with a **second channel** for the defense field. Modulo
+reachable here, this game"), `cap` masked, with a **second channel** for the defense field.
+*(Result: the field is learnable + generalizes — held-out CNN offense ρ=0.72/reach-AUROC=0.91,
+defense ρ=0.76/0.92; NOT count-dominated; CNN beats attention a third time even on this global target.)* Modulo
 the runtime solver, *having a VCT **is** the value* (VCT ⟹ win), so Φ is a value function for the
 subgoal "force a win" — and because closeness-to-a-fork is a whole-board fact, the target is
 **global by construction** (the fair arena to re-audition attention vs a locality-biased CNN).

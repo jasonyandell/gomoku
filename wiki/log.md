@@ -1484,3 +1484,14 @@ ladder is fully line-organized through depth 4, and depth 5 ("positional / tempo
 open-area moves with no direct connection") is exactly where standard theory *gestures
 at* non-line/field structure but **runs out of names** — the contrast we want. Added an
 index doorway row under the Allis row; purely additive.
+
+## 2026-06-27 — Φ distance-to-VCT field learnability (the trilogy's 3rd leg)
+
+New topic `phi-distance-field-learnability.md` + index doorway row (after the seeker row): the first
+trained L2 model. Regresses the dual proof-frontier potential Φ (offense+defense distance-to-VCT) off
+the free miner verdicts; held-out shard-disjoint CNN offense ρ=0.72 / reach-AUROC=0.91, defense
+ρ=0.76 / 0.92 ⇒ the field whose gradient = "which moves move the proof frontier toward mine vs theirs"
+is learnable + generalizes. NOT count-dominated (CNN ≫ ridge), and CNN beats attention a third time —
+now param-matched on the global target with 3× the epochs, so the global-receptive-field bet does not
+cash out at this scale. Updated `vct-reachability-mining.md` §1 (Φ design → trained) and appended a
+`TRAINING_WIKI.md` entry. Scripts `gen_phi_dataset.py` / `train_phi.py` committed earlier (dc14555).

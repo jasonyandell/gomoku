@@ -4975,3 +4975,29 @@ VCT / 5% cap, NOT cap-dominated as guessed); the 81% looks rich but is 96% trivi
 "VCT-where-one-already-existed → impossible!" alarm was a **labeling** confusion (all fanned nodes are
 pre-onset non-VCT). Separately this session: marked the slow CPU solver `gomoku/vcf.py` OBSOLETE
 (reference/history only; GPU kernel is the sound, 1600× one). On `feat/gentle-rapfi-teacher` (not merged).
+
+### 2026-06-27 — Φ distance-to-VCT field: the proof-frontier is learnable; CNN beats attention a 3rd time
+
+Trained the **first real L2 model** (overnight, MPS, zero GPU contention with the live collector).
+Target = the free dual potential from the VCT-reachability mine: `phi_off=γ^(my-moves-to-my-next-VCT)`
++ `phi_def=γ^(opp-moves-to-their-next-VCT)`, γ=0.8, read off the puzzle miner's per-ply verdicts (no
+re-solve), cap excluded. **The gradient of Φ IS Jason's question** "which moves move the proof frontier
+toward my VCT vs theirs". 40k games → 1.167M train / 101,745 held-out test, shard-disjoint (overlap 0),
+0 frame mismatches. Scripts `gen_phi_dataset.py` / `train_phi.py` (committed); metrics
+`~/data/puzzle_miner/phi_exp/phi_metrics.json`.
+
+**Result — learnable + generalizes:** held-out **CNN** offense ρ=0.719 / R²=0.761 / reach-AUROC=0.912,
+defense ρ=0.761 / R²=0.690 / 0.917; well-calibrated (top decile pred 0.91 → true 0.93). Two sharp
+secondaries: **(1) NOT count-dominated** — CNN nearly doubles a ridge-on-raw-board baseline (offense ρ
+0.36→0.72), unlike is-VCT recognition where logreg-on-counts nearly matched ⇒ closeness-to-a-fork is
+genuinely *spatial*, structure lives in **distance, not presence**. **(2) CNN beats attention a third
+time** — now param-matched (376k vs 348k) on the **global** target (attention's claimed home turf) with
+3×+ the gradient steps (CNN early-stops ep6, best val by ep1; attn plateaus ~0.72 at ep20) ⇒ the
+global-receptive-field bet **does not cash out** at this scale; conv tower + GAP wins. Surprise: defense
+reads *better* than offense (net sees incoming danger best — aimed at the white wound).
+
+**Banked negative + caveats:** the "global target is attention's chance" hypothesis was wrong (lost,
+param-matched, epoch-alibi removed). Honest reach: it's the *realized-play proxy* frontier (upper-bound,
+censored), single-position regression (not whole-game seeking), small/untuned. ρ on a proxy = green light,
+not strong play — that's the Phase C hybrid-play eval (gate w/ Jason). **Default L2 arch = the CNN.** Synthesis:
+`wiki/topics/phi-distance-field-learnability.md`. On `feat/gentle-rapfi-teacher` (not merged).
