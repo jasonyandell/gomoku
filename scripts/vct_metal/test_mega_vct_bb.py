@@ -1,41 +1,78 @@
-"""Validate the bitboard VCT megakernel (mega_vct_bb) on real Rapfi positions.
+"""FAST-tier validation for the bitboard VCT megakernel (mega_vct_bb).
 
-    GOMOKU_BOARD_SIZE=15 timeout 115 uv run python -m scripts.vct_metal.test_mega_vct_bb
+    GOMOKU_BOARD_SIZE=15 uv run pytest scripts/vct_metal/test_mega_vct_bb.py
 
-Cross-checks solve_vct_mega_bb against the cell-scan mega_vct.solve_vct_mega (itself
-validated vs gomoku.vcf.solve_vct) on clean (non-cap) verdicts. mega_vct is slow, so
-this uses a small batch; a background run validated mega_vct_bb directly vs
-gomoku.vcf.solve_vct over real positions (see TRAINING_WIKI 2026-06-26).
+This tier touches NEITHER the retired CPU solver NOR the slow cell-scan
+``mega_vct``. It diffs ``solve_vct_mega_bb`` against a small COMMITTED golden
+fixture (``fixtures/vct_golden.npz``, regenerated on-demand by
+``regen_vct_fixture.py`` — the only place the CPU oracle is invoked), plus a
+self-oracle structural-invariants test on the support/complete outputs.
+
+Tiering: the live-vcf verdict check, the winmask soundness+completeness GOLD
+check, and the larger-n sweep all live in the DEEP tier
+``scripts/vct_metal/validate_deep.py`` (run on-demand, not in the gate). See
+wiki/topics/mega-vct-solver.md § CPU solver retired.
 """
 from __future__ import annotations
 
-import numpy as np
+from pathlib import Path
 
-from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb, cells_from_words, N
-from scripts.vct_metal.mega_vct import solve_vct_mega
+import numpy as np
+import pytest
+
+from scripts.vct_metal.mega_vct_bb import cells_from_words, solve_vct_mega_bb, N
 from scripts.vct_metal.positions import load_position_stack
 
-
-def run(B: int = 16, seed: int = 0, max_nodes: int = 600):
-    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
-    wb, hb = solve_vct_mega_bb(st, max_nodes=max_nodes)
-    wo, ho = solve_vct_mega(st, max_nodes=max_nodes)
-    clean = ~(hb | ho)
-    disagree = np.where(clean & (wb != wo))[0]
-    print(f"seed={seed} B={B} clean={int(clean.sum())}/{B} "
-          f"bb_wins={int(wb.sum())} old_wins={int(wo.sum())} "
-          f"bb_cap={int(hb.sum())} old_cap={int(ho.sum())} disagree={list(disagree)}")
-    return list(disagree)
+FIXTURE = Path(__file__).parent / "fixtures" / "vct_golden.npz"
+# Tight budget: a non-capped result at this budget is definitive and MUST match
+# the high-budget golden truth (non-capped verdicts are budget-independent).
+FAST_MAX_NODES = 500
 
 
-def test_mega_vct_bb_matches_mega_vct():
-    bad = run(B=16, seed=0)
-    assert not bad
+@pytest.fixture(scope="module")
+def golden():
+    if not FIXTURE.exists():
+        pytest.skip(f"missing {FIXTURE}; regenerate via regen_vct_fixture.py")
+    data = np.load(FIXTURE)
+    if int(data["board_size"]) != N:
+        pytest.skip(
+            f"fixture board_size={int(data['board_size'])} != active N={N} "
+            "(run with GOMOKU_BOARD_SIZE=15)"
+        )
+    return data
+
+
+def test_verdict_matches_golden(golden):
+    """GPU verdict at the tight budget matches the CPU-oracle golden truth on
+    every board the GPU does not cap (hit_cap -> skip)."""
+    boards = golden["boards"]
+    truth = golden["win"].astype(bool)
+    wg, hg = solve_vct_mega_bb(boards, max_nodes=FAST_MAX_NODES)
+    clean = ~hg
+    assert clean.any(), "every fixture board capped at the fast budget — fixture too hard"
+    fp = np.where(wg & ~truth & clean)[0]
+    fn = np.where(~wg & truth & clean)[0]
+    assert fp.size == 0, f"false positives vs golden on boards {list(fp)}"
+    assert fn.size == 0, f"false negatives vs golden on boards {list(fn)}"
+
+
+def test_winmask_matches_golden(golden):
+    """The kernel's `complete` winmask at the tight budget matches the stored
+    high-budget winmask on every board the GPU does not cap."""
+    boards = golden["boards"]
+    gold_wm = golden["winmask"].astype(np.uint64)
+    wc, hc, winmask = solve_vct_mega_bb(boards, max_nodes=FAST_MAX_NODES, complete=True)
+    clean = ~hc
+    bad = []
+    for b in np.where(clean)[0]:
+        if set(cells_from_words(winmask[b])) != set(cells_from_words(gold_wm[b])):
+            bad.append(int(b))
+    assert not bad, f"winmask diverged from golden on boards {bad}"
 
 
 def run_support_complete(B: int = 32, seed: int = 0, max_nodes: int = 500):
-    """Invariants for the return_support / complete outputs (fast, no per-move
-    gold — that is covered by tmp/gold_complete.py / TRAINING_WIKI 2026-06-27):
+    """Self-oracle structural invariants for the return_support / complete outputs
+    (fast; no per-move gold — that is the DEEP tier validate_deep.py):
 
       * return_support leaves (win, hit, move) byte-identical to default
       * complete `win` == default `win` on boards neither solve capped
@@ -74,11 +111,12 @@ def test_support_and_complete_invariants():
 
 if __name__ == "__main__":
     import sys
-    bad = 0
-    for s in (0, 1):
-        bad += len(run(B=16, seed=s))
+    if not FIXTURE.exists():
+        print(f"FAIL: missing {FIXTURE} (run regen_vct_fixture.py)")
+        sys.exit(1)
+    data = np.load(FIXTURE)
+    test_verdict_matches_golden(data)
+    test_winmask_matches_golden(data)
     run_support_complete(B=32, seed=0)
     run_support_complete(B=32, seed=1)
-    print("support/complete invariants PASS")
-    print("PASS" if not bad else f"FAIL ({bad})")
-    sys.exit(1 if bad else 0)
+    print("FAST tier PASS")
