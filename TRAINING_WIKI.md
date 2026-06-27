@@ -4882,3 +4882,53 @@ early-game negatives inflate natural-accuracy (use AUROC/balanced).
 (`solve_vct_mega_bb(return_move=True)`) — resolves the `vct-backward-mining.md` §5 move-extraction
 gap; 2.38M forward puzzles move-labeled (`solutions.jsonl.gz`), 400/400 independently verified.
 All on `feat/gentle-rapfi-teacher` (not yet merged).
+
+## [2026-06-26] Seeker steering is learnable on unseen games (seek-VCT thesis, Phase A) — CNN > attention again
+
+**What.** The **steering** half of the seek-VCT thesis (the recognizer half named the seeker as
+attention's real audition). One question: can a net behaviorally-clone the **quiet-phase (pre-onset)
+moves of the side that reaches the first forced VCT**, and generalize to **unseen games**? Full
+synthesis: `wiki/topics/seeker-steering-learnability.md`. Code:
+`scripts/threat_shapes/gen_seeker_dataset.py`, `scripts/threat_shapes/train_seeker.py`. Artifacts:
+`~/data/puzzle_miner/seeker_exp/`.
+
+**Setup.** Reuse the miner verdicts, NO re-solve. `onset(game)` = first ply with `win&~cap`; the
+mover there = the **seeker S** (kept whether S converts or misses — "you reached a winnable position"
+is the target). STEERING EXAMPLE = every pre-onset ply `p < onset` with `p%2==onset%2` (S to move);
+input = side-to-move-relative board (`board[0]`=S), target = the move S actually played. Boards
+CPU-replayed in the exact miner frame (`all_boards`), every present puzzle key cross-checked → **0
+frame mismatches over 400 shards**. Split **by shard** (md5%10, the recognizer's rule for
+comparability): **367 train / 33 test, overlap 0** (+49-shard val for early-stop). **500,747**
+examples from **38,927 onset games** (1,073 no-onset); 459,415 train (200k used) / 41,332 test; mean
+208 legal cells/board. Per-cell policy with legal-move masking; light (CPU gen + MPS train, no GPU
+solve) → ran `nice`d without competing with the live `collect_rapfi` fleet.
+
+**Held-out result (top-k legal-move-match = is the seeker's *actual* move in the policy's top-k):**
+
+| model | params | top-1 | top-3 | top-5 | CE |
+|---|---|---|---|---|---|
+| uniform (random legal) | — | 0.005 | 0.014 | 0.023 | 5.37 |
+| adjacency-to-stones | — | 0.025 | 0.072 | 0.121 | 4.78 |
+| **CNN** | **224k** | **0.386** | **0.597** | **0.696** | **2.26** |
+| attention | 339k | 0.263 | 0.457 | 0.569 | 2.76 |
+
+Wall: gen 15 s (CPU), train+eval 1,541 s on MPS (CNN early-stop ep8 ~13 s/ep; attention full 20 ep
+~71 s/ep).
+
+**Read.** (1) Feasibility = **yes** — the CNN matches the *exact* strong-engine steering move ~39%
+(top-1) / ~70% (top-5) on unseen games, **~15×** the adjacency prior at top-1; CE confirms genuine
+calibration over the move distribution. The steering signal is learnable and generalizes — the cheap
+green light the seek-VCT plan needed. (2) **CNN > attention again** (top-1 0.386 vs 0.263, fewer
+params) — next steering move is *local*, fits the conv prior. (3) **Two honest limits:** attention
+was **still climbing at the epoch cap** (val 0.066→0.253 monotone, undertrained not capped), AND
+next-move BC is local so it does **NOT** settle attention's *global-receptive-field* bet for
+*sequential* seeking; and top-1 match is a **weak proxy** (≠ strong play; conflates seeking with
+general engine strength). The architecture verdict for seeking is deferred to the decisive test.
+
+**Next (gated with Jason — the GPU-spending real tests).** **Phase B:** replace the imitation target
+with an oracle-*constructed* one — score each pre-onset candidate by **VCT-reachability gain** (does
+a forced win appear within k plies after move + best reply?); principled but costs k-step batched
+lookahead per candidate. **Phase C (decisive):** a **hybrid player** — oracle every ply for attack +
+defense, exact solver finishes any VCT, net steers only in the tactically-quiet region — played vs a
+**fixed baseline** (heuristic/lookahead, not sibling H2H). Phase C is where attention's global bet is
+actually adjudicated. On `feat/gentle-rapfi-teacher` (not merged).

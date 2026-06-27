@@ -3,6 +3,25 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-26] New page: seeker steering learnability (seek-VCT thesis, Phase A)
+
+Created [topics/seeker-steering-learnability.md](topics/seeker-steering-learnability.md) — the
+**steering** half of the seek-VCT thesis (the recognizer page named the seeker as attention's real
+audition). One question: can a net imitate the **quiet-phase (pre-onset) moves of the side that
+reaches the first forced VCT**, and generalize to **unseen games**? **Yes** — held-out,
+shard-disjoint **top-1 0.386 / top-5 0.696** (matching the *exact* strong-engine move) vs
+adjacency-to-stones 0.025/0.121 vs random-legal 0.005/0.023 ⇒ the steering signal is learnable and
+real. As with recognition, a **CNN (224k) beats attention (339k)** at *next-move* imitation (top-1
+0.386 vs 0.263) — **but** attention was still climbing at the epoch cap (undertrained, not capped),
+and next-move BC is *local*, so this does **NOT** settle attention's global-receptive-field bet for
+*sequential* seeking (that's Phase C). Honest framing recorded: top-1 match is a **weak proxy** (≠
+strong play; conflates seeking with general engine strength). onset/labels reused from the miner
+(`onset = first win&~cap` ply), no re-solve; 500,747 examples / 38,927 onset games; split by shard
+(367/33, overlap 0); **0 frame mismatches**. Code: `scripts/threat_shapes/{gen_seeker_dataset,train_seeker}.py`;
+artifacts `~/data/puzzle_miner/seeker_exp/`. Added an index row + linked the recognizer row to it.
+Next (gated): **Phase B** oracle-labeled VCT-reachability target, **Phase C** hybrid-play eval
+(oracle every ply + net steering) vs a fixed baseline. On `feat/gentle-rapfi-teacher`; not merged.
+
 ## [2026-06-26] New page: is-VCT recognition learnability + move-extraction gap RESOLVED
 
 Created [topics/vct-recognition-learnability.md](topics/vct-recognition-learnability.md) — the

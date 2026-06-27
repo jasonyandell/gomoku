@@ -114,7 +114,11 @@ learned recognizer (e.g. to prune before solving), a **CNN or even logreg** is t
 cheaper choice — **not** attention. Attention's interesting bet is the **seeker** (a global,
 sequential problem where whole-board receptive field may matter, and where this recognition
 result does **not** predict the outcome). Recommended next experiment: the seeker, not a
-fairer recognizer rematch.
+fairer recognizer rematch. **(DONE 2026-06-26 — Phase A:
+[seeker-steering-learnability.md](seeker-steering-learnability.md): the quiet-phase steering IS
+learnable on unseen games — held-out top-1 0.386 / top-5 0.696 vs adjacency 0.025/0.121. CNN again
+beats attention on *next-move* BC, but that proxy is local so it does **not** yet adjudicate the
+global-receptive-field bet — that waits for the hybrid-play eval, Phase C.)**
 
 ## 5. Caveats / honest edges
 
