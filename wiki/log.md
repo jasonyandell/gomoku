@@ -1540,3 +1540,29 @@ oracle path), DEEP (`validate_deep.py`, live vcf + winmask soundness/completenes
 deep completeness oracle must include vcf's tempo guard `_defender_has_four_or_five` (the solver was right;
 the verifier was the subtle part). Added a one-line pointer in `topics/conventions.md`; `TRAINING_WIKI.md`
 entry. On `feat/cpu-solver-retire` (not merged).
+
+## [2026-06-27] Solver `carriers` output (#88) + the stencil CERTIFICATE property
+
+Two linked additions, both merged/landing to `main`.
+
+**(1) `return_carriers` (#88, merged `ad4d52e`).** `return_support` was returning the required-**openings**
+(empty cells the forcing line plays into), not the **stones** that form the threat — a spec gap surfaced
+while mining VCT stencils (the `.BBBB.` ask gave back the two `.`s, not the four `B`s). Added a complementary
+`carriers` output: the load-bearing OWN stones (root-own ∩ collinear-within-4 of any support cell), the `B`
+channel to support's `./p`. Purely additive (every existing kernel variant byte-identical; golden
+`.BBBB.`/`BB.BB` → carriers == the four `B`). Documented in
+[topics/mega-vct-solver.md](topics/mega-vct-solver.md) (carriers section + invariants 5–6) and the index row.
+
+**(2) The certificate property — measured.** With `support ∪ carriers` now a complete replayable stencil,
+tested whether a stencil that wins **in isolation** is a context-free win. Result (harness
+`scripts/threat_shapes/certificate_falsification.py`, pool 4096, `max_nodes=500`): **660/660** mined attacker
+VCTs win from their carrier stones alone on an empty board (extraction is faithful); **0/2913** tempo-safe
+placements (random non-attacking defender stones) refute the win; the sole breaker is defender counter-tempo
+(control: defender-with-VCT refutes ~7%). This is Allis's dependency-based / threat-space search soundness
+([topics/allis-threat-theory.md](topics/allis-threat-theory.md) §3, principle 2) made operational + GPU-
+falsifiable, and it promotes L1 (self-contained subset) from "candidate index" toward a **certificate
+engine**. Written into [topics/shape-library-engine.md](topics/shape-library-engine.md) §3 (*Empirical
+certificate property*), §7, §8; pointer in [topics/allis-threat-theory.md](topics/allis-threat-theory.md)
+§3; index row. Honest bounds recorded: empirical not formal QED; the filter used ("no defender VCT") is
+stronger than the true *immediate-tempo* condition; self-contained/offensive subset only (W-dependent
+defensive shapes need the v2 `W` channel). On `feat/stencil-certificate`.

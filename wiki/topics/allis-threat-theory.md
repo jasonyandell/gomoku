@@ -100,6 +100,16 @@ appear in one winning sequence.
 tree of B; (2) the threat-space tree contains only *attacker* threats — after a candidate winning
 sequence is found, it is separately checked against counter-attack.
 
+> **Empirically confirmed on our GPU-mined stencils (2026-06-27, #88).** Principle (2) *is* the
+> certificate property we now measure: a VCT shape that wins **in isolation** transfers to any board
+> it fits **by the same forcing line** — 660/660 mined attacker VCTs win from their carrier stones
+> alone, and **0/2913 placements with non-attacking defender stones refute the win**; the *only*
+> refuter is a defender **counter-attack** (counter-tempo) — exactly the "separately checked against
+> counter-attack" caveat. So the forcing sequence is context-independent (compose it once, reuse it
+> everywhere); only the counter-attack check is board-specific. See
+> [shape-library-engine.md](shape-library-engine.md) §3 *Empirical certificate property* and
+> `scripts/threat_shapes/certificate_falsification.py`.
+
 ## 4. Winning threat sequence / winning combination ([AHH93] §3.1, §4)
 
 A **winning threat sequence** is a sequence of threats each of which forces the defender's reply,
