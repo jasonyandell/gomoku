@@ -4932,3 +4932,46 @@ lookahead per candidate. **Phase C (decisive):** a **hybrid player** — oracle 
 defense, exact solver finishes any VCT, net steers only in the tactically-quiet region — played vs a
 **fixed baseline** (heuristic/lookahead, not sibling H2H). Phase C is where attention's global bet is
 actually adjudicated. On `feat/gentle-rapfi-teacher` (not merged).
+
+## [2026-06-26] The pre-onset band is a KNIFE-EDGE — seek-VCT thesis update + non-VCF gold
+
+**What.** Two search-free/GPU-only ways to mine VCT-reachability from the 500k Rapfi-v-Rapfi games,
+toward the seeker. Full synthesis: `wiki/topics/vct-reachability-mining.md`. Code:
+`scripts/threat_shapes/vct_fan.py` (consolidated probe). All solving on the Metal **GPU** kernels
+(`mega_vct_bb`, `mega_vcf_bb`) — zero contention with the CPU `collect_rapfi` fleet. **Both seats are
+strong Rapfi**; every "losing move" is a counterfactual we inject.
+
+**The method (off-path fan).** Ride each game; at known-non-VCT pre-onset nodes, fan every alternative
+move the side did NOT play and solve VCT on each. **Framing (load-bearing, code-verified):** a VCT
+belongs to the side-to-move, so after S plays alt `m` it's the opponent's turn → a fanned VCT is the
+**opponent's** forced win = `m` is a forced-LOSING move for S. The fan is a **defense/blunder + VCT
+miner, NEVER an offense detector** (S would need its own turn = the expensive ∀-reply search). Integrity:
+**0.000%** of fanned nodes are themselves VCT, 0 parity violations.
+
+**Finding 1 — the knife-edge (the headline, a thesis update).** Fraction of a side's alternatives that
+lose by force, by who's-to-move × distance-to-onset: opponent-to-move **98.3% (d1) / 92.7 / 84.6**;
+VCT-holder-to-move **89.4 (d2) / 52.7 / 45.7**. Even **6 plies before the VCT, ~half of moves lose**;
+the *winner* at onset−2 loses 89% if it deviates. **Both players walk a tightrope; sharpness ramps
+BEFORE the onset.** ⇒ the seek-VCT split's "pre-onset = the net's forgiving region" is **wrong** — that
+band is not approximation-tolerant; the net's safe domain is further back than onset−6, and the
+solver/lookahead must own the whole sharp ramp (the "oracle every ply" hybrid already does — now with
+the *why*).
+
+**Finding 2 — 96% of the wins are trivial; the gold is the winner's combinations.** VCF kernel on the
+406,202 fanned VCT-wins (81.1% of all fanned): **VCF 96.1%** (four-driven, trivial — the extreme is
+"you didn't block my five"), **non-VCF VCT 3.5%** (14,380; need a *three* = combinational molecules),
+VCF-cap 0.3%. The non-VCF gold splits by parity — concentrated on the **WINNER's** wins (defender
+perturbed): non-VCF rate 1.9/6.0/6.2% on the winner's rows vs 0.0/0.7/1.2% on the opponent's.
+**Combinations belong to the side with the initiative.** Harvest plan: **perturb the *defender*** at
+pre-onset opponent-to-move nodes → ~100k+ non-VCF VCT boards (a few free-GPU hours) = non-trivial
+offense termini for the distance field + hard defense lessons (the white-defense wound).
+
+**Also banked — the free distance-to-VCT field** (from the existing per-ply verdicts, no re-solve):
+terminal-VCT 99%, multi-window (lose-then-refind) 11.6% of games, offense coverage **49%** (an
+upper-bound, censored target — the realized game found *a* path, maybe not the shortest), cap holes
+13.9%. Proposed target Φ=γ^(my-moves-to-VCT) with Φ=0 floor + a defense channel (a value function for
+"force a win", global by construction). **Banked negatives:** both yield predictions were wrong (81%
+VCT / 5% cap, NOT cap-dominated as guessed); the 81% looks rich but is 96% trivial; a brief
+"VCT-where-one-already-existed → impossible!" alarm was a **labeling** confusion (all fanned nodes are
+pre-onset non-VCT). Separately this session: marked the slow CPU solver `gomoku/vcf.py` OBSOLETE
+(reference/history only; GPU kernel is the sound, 1600× one). On `feat/gentle-rapfi-teacher` (not merged).

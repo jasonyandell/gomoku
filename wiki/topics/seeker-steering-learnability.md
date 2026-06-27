@@ -108,7 +108,10 @@ Wall: dataset gen **15 s** (CPU, niced), train+eval **1,541 s** on MPS (CNN earl
 ## 4. What it means for the plan (and what this does NOT prove)
 
 This is **Phase A** — the cheap offline behavioral-cloning go/no-go — and it passes. But be precise
-about its reach:
+about its reach. **Update — [vct-reachability-mining.md](vct-reachability-mining.md):** the off-path
+fan later showed the **pre-onset band is a knife-edge** (~80% of alternative moves lose by force), so
+the "net steers the *forgiving* quiet region" premise here is too clean — sharpness ramps *before*
+onset and the net's truly-safe domain is further back than this page assumes. The bullets still stand:
 
 - **It is a WEAK-BUT-HONEST proxy.** Top-1 move-match is *not* "good play": many quiet moves are
   reasonable, and exact-matching a strong engine is **not required** to steer well. Beating the dumb

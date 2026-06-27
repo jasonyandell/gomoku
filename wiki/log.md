@@ -3,6 +3,29 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-26] New page: mining VCT-reachability from the Rapfi corpus (off-path fan + knife-edge)
+
+Created [topics/vct-reachability-mining.md](topics/vct-reachability-mining.md) — cheap ways to mine
+seek-VCT steering signal from the 500k Rapfi-v-Rapfi games, with a **thesis update** as the headline.
+The off-path fan (ride a game; at pre-onset non-VCT nodes fan the moves a side did NOT play; solve
+VCT) revealed: (1) **the pre-onset band is a knife-edge** — ~80% of alternative moves lose by force
+(~99% one ply before onset; ~half even 6 plies out), so the band we assumed was the net's *forgiving*
+steering region is **not** approximation-tolerant — sharpness ramps *before* the VCT, the net/solver
+boundary is fuzzy + earlier than assumed (the most valuable finding). (2) **Framing, code-verified:**
+a VCT belongs to the side-to-move, so fanning S's alternatives finds the **opponent's** forced wins
+= S's losing moves → the fan is a **defense/blunder + VCT-board miner, never an offense detector**;
+integrity check 0.000% of fanned nodes are VCT. (3) **Triviality split** (VCF kernel on the VCT-wins):
+of the 81% fanned VCT-wins, **96.1% are trivial VCF** (four-blocks), only **3.5% non-VCF VCT** (need a
+*three* = combinational molecules) — and the gold concentrates on the **winner's** wins (defender
+perturbed; combinations belong to the side with initiative). Harvest plan = perturb the *defender*
+for 100k+ non-VCF VCT boards = offense termini + defense lessons (the white-defense wound). Also banks
+the **free distance-to-VCT field** (terminal-VCT 99%, multi-window 11.6%, offense coverage 49%, an
+upper-bound/censored target) and the proposed Φ=γ^dist potential. Banked negatives: both yield
+predictions wrong (81% VCT / 5% cap, not cap-dominated); 81% looks rich but is mostly trivial; a
+"VCT-where-one-existed" alarm was a labeling confusion (all fanned nodes are pre-onset). Reusable
+script `scripts/threat_shapes/vct_fan.py`; reused the GPU VCF+VCT kernels (no CPU solver). Added an
+index row + cross-linked the seeker row. On `feat/gentle-rapfi-teacher`; not merged.
+
 ## [2026-06-26] New page: seeker steering learnability (seek-VCT thesis, Phase A)
 
 Created [topics/seeker-steering-learnability.md](topics/seeker-steering-learnability.md) — the
