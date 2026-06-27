@@ -215,6 +215,50 @@ downgrade from the original "an L1 hit is a proof" claim, forced by the correcti
 > `max_nodes`** to shrink the tail; a CAP verdict just keeps a cell (fail-safe, over-specific
 > never unsound).
 
+### Empirical certificate property — measured, not just argued (2026-06-27, #88)
+
+The "candidate index, not a proof" verdict above stands *in general*, but we can now say
+**precisely when a stencil IS proof-grade**, and the answer is stronger than expected. Two
+things made it testable: (a) the solver's new **`carriers`** output (#88,
+[mega-vct-solver.md](mega-vct-solver.md)) — the load-bearing OWN stones, so the extracted
+shape `support ∪ carriers` is a *complete, replayable* object (not just the openings); and
+(b) the tail-bound oracle, which stamps a shape onto thousands of boards in a few calls.
+
+**Experiment** (`scripts/threat_shapes/certificate_falsification.py`; pool = 4096 real Rapfi
+positions, `max_nodes=500`):
+
+1. Mine clean attacker VCTs → **660** wins.
+2. **Self-containment** — rebuild each as *carriers alone* on an empty board (support empty,
+   nothing else): **660 / 660 (100%) still win.** For offense, `(carriers, support)` is a
+   *complete* description — no hidden own stone, no surrounding context needed.
+3. **Transfer** — bolt ≤12 random opponent stones (off support & carriers) onto each
+   self-contained shape, keep boards where the defender has **no VCT of its own**, re-solve:
+   **0 / 2913 refuted.** The attacker always still wins. **Control:** when the defender *does*
+   get a counter-VCT the attacker loses ~7% (266/287 won) — the filter is not vacuous, and
+   **counter-tempo is the sole breaker.**
+
+**What it means.** A stencil that wins in isolation wins on *any* board where it fits and the
+defender has no counter-threat — **by the same forcing line**, so the expensive AND/OR search
+runs **once per shape** and every placement wins *for the same reason*. This is the soundness
+of **Allis's dependency-based / threat-space search**
+([allis-threat-theory.md](allis-threat-theory.md) §3) — not new to the field, but now
+**operational and falsifiable** for our mined stencils, and **confirmed** (0 counterexamples).
+It promotes L1, *for the self-contained subset*, from "candidate index" toward a **certificate
+engine**: match the shape (structural) + confirm the defender has no counter-VCT (one cheap
+flipped L0 solve) ⇒ the win is proven, **without re-running the attacker search**.
+
+**Honest bounds.** (i) "0/2913" is strong evidence, not a mechanized QED — the proof *is* the
+forcing-sequence-composition argument (Allis), trusted but not formalized here. (ii) The safety
+filter used ("defender has no VCT") is *stronger than necessary*; the control shows even a
+defender-VCT usually fails to refute (the attacker moves first), so the true threshold is
+*immediate* defender tempo (a four/five arising mid-sequence) — the next thing to pin down
+(push the harness to the exact-tempo filter, near-edge translations, millions of placements).
+(iii) This is the **self-contained / offensive** subset (here 100% of attacker VCTs); a
+*defense*-flavored mining will surface **`W`-dependent** shapes that do NOT win in isolation —
+those need the v2 `W` channel before they earn a certificate. (iv) The shape tested is the
+**over-inclusive** `support ∪ carriers`, available **today** — the certificate property does
+**not** wait on the md-extraction blocker that gates *minimal* ablation.
+
 ### Conservative on symmetry — on purpose
 
 We use **translation only**: the same relative stencil laid down elsewhere is just another
@@ -301,7 +345,11 @@ L2 there.** Framing the envelope, not committing.
   all-white worst case is a defender win, not a usable bound — minimization had to fall back to
   legal-board **context ablation** (§3 correction). The deeper risk it exposes: a stencil is only
   truly proof-grade *in isolation*; in real context a faster opponent threat can refute it ⇒
-  **L0 verifies every match** (§2), so the engine still never hallucinates.
+  **L0 verifies every match** (§2), so the engine still never hallucinates. **MEASURED 2026-06-27
+  (§3 certificate property):** the in-isolation property is real and strong — 660/660 attacker
+  VCTs win from carriers alone, and **0/2913 *tempo-safe* placements refute**; the refuter is
+  *exclusively* defender counter-tempo, exactly as dependency-based-search theory predicts. So
+  the "risk" is now bounded and named: a stencil is a certificate up to defender counter-tempo.
 
 We'll know which one bites when it bites — and diagnose it with the whole system standing.
 
@@ -309,6 +357,13 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
 
 - **DONE:** L0 ([gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8); backward Stage-1+2 miner,
   63k enabling shapes ([vct-backward-mining.md](vct-backward-mining.md)).
+- **DONE (2026-06-27, #88):** solver **`return_carriers`** (the load-bearing-stone `B` channel;
+  [mega-vct-solver.md](mega-vct-solver.md)) ⇒ `support ∪ carriers` is a complete, replayable
+  stencil **now**, *without* the md blocker. And the **certificate property is measured** (§3,
+  2026-06-27): **660/660** attacker VCTs self-contained, **0/2913** tempo-safe placements refuted
+  ⇒ L1 is a *certificate engine* for the self-contained subset. Harness:
+  `scripts/threat_shapes/certificate_falsification.py`; stencil miner:
+  `scripts/threat_shapes/mine_support_shapes.py`.
 - **DONE (2026-06-26):** **first-VCT forward miner** — `scripts/threat_shapes/mine_first_vct.py`,
   the §3 mining input. Forward scan, both colors, trit verdict + defer-on-prefix-CAP,
   append-only/resumable. Smoke (100 games, `max_nodes=6000`): 12 certified firsts, 88 deferred
