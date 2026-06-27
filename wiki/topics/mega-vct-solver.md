@@ -34,7 +34,8 @@ corpus labeling, scale `max_nodes` with B. A CAP verdict is fail-safe wherever
 
 ```python
 solve_vct_mega_bb(boards, *, max_nodes=20000, tg=32,
-                  return_move=False, return_support=False, complete=False)
+                  return_move=False, return_support=False, complete=False,
+                  return_carriers=False)
 ```
 
 `boards`: `(B, 2, N, N)` bool, **side-to-move-relative** — `board[0]` is the
@@ -46,7 +47,8 @@ Free-style rules (overlines win). `N = GOMOKU_BOARD_SIZE` (15 here); the kernel 
 a 256-bit `ulong[4]` board so N²≤256.
 
 Returns a tuple. The default is `(win, hit_cap)`; optional outputs append in a
-**FIXED order — `move`, `support`, `winmask`** — so existing callers never break:
+**FIXED order — `move`, `support`, `winmask`, `carriers`** — so existing callers
+never break:
 
 | flag | appends | type | meaning |
 |---|---|---|---|
@@ -55,6 +57,7 @@ Returns a tuple. The default is `(win, hit_cap)`; optional outputs append in a
 | `return_move=True` | `move` | `(B,)` int32 | a VALID (sound, not necessarily shortest) VCT first move, flat cell index; `-1` on a non-win |
 | `return_support=True` | `support` | `(B,4)` uint64 | union of cells the found proof line touches (relevance window / stencil seed); all-zero on a non-win |
 | `complete=True` | `winmask` | `(B,4)` uint64 | bitmask of **ALL** winning first moves; also flips `win` to "∃ a winning first move" |
+| `return_carriers=True` | `carriers` | `(B,4)` uint64 | the load-bearing OWN **stones** the proof's five-lines run through (the `B` channel complementing `support`'s `./p`); all-zero on a non-win |
 
 Unpack a `(4,)` uint64 mask to flat cell indices with
 `mega_vct_bb.cells_from_words(words)` (inverse of the kernel's bit packing, bit
@@ -62,7 +65,8 @@ Unpack a `(4,)` uint64 mask to flat cell indices with
 
 Examples: `solve_vct_mega_bb(b)` → `(win, hit)`; `return_move=True` →
 `(win, hit, move)`; `complete=True, return_move=True, return_support=True` →
-`(win, hit, move, support, winmask)`.
+`(win, hit, move, support, winmask)`; adding `return_carriers=True` appends
+`carriers` after all of the above.
 
 **Each flag compiles its own kernel variant** (memoized in `_KERNEL_CACHE`). The
 default `(support=False, complete=False)` variant is built from a source string
@@ -94,7 +98,26 @@ node that wins adds **every** defender reply; the three inline OR wins add the m
 *played* cells of the proof (moves, blocks, replies, completions), NOT the
 pre-existing threat-carrier stones (those stay on the board for the ablation pass).
 All-zero on a non-win. Validated: cells empty-at-root, contain the move on every
-win, empty on every loss.
+win, empty on every loss. **`support` is the OPENINGS half of the proof shape; the
+complementary stone half is `carriers` (below).**
+
+### `carriers` (load-bearing stones) — `return_carriers=True`
+The complement of `support`: the **OWN stones the proof's five-lines run through** —
+the `B` channel to `support`'s `./p`. Where `support` answers *"which empty cells
+must the forcing line fill,"* `carriers` answers *"which already-placed stones make
+those lines win."* Defined as every **root-own** stone **collinear-within-4** (the
+`COLLIN` table — the same ≤4-along-axis domain a five spans) of any `support` cell,
+computed once at output time from the support mask (`own` is back to the root board
+there — every proof move is unmade before the search returns to `sp==0`).
+**`carriers` ⊆ occupied-own-at-root** (mirror of `support` ⊆ empty), disjoint from
+`support`, all-zero on a non-win. A typed stencil is `support ∪ carriers` — e.g.
+`.BBBB.` → carriers = the four `B`, support = the two ends. **Over-inclusive** (the
+relevance window's stones, not the minimal load-bearing set — that needs the L1
+ablation); defender (`W`) load-bearing stones are **not** included (a v2). Derived
+from the support mask, so available **without** `return_support` (the mask is
+accumulated regardless; `return_support` only controls whether it is *also* output).
+Added 2026-06-27 (issue #88) — `support` had been read as "which stones formed the
+VCT" when it is the required-openings; `carriers` is the stones half.
 
 ### `winmask` (all winning first moves) — `complete=True`
 The default search short-circuits at the root OR node (first winning move wins).
@@ -126,8 +149,15 @@ solver was right.
 2. On boards neither solve capped, **complete `win` == default `win`**.
 3. On a clean win, the default `move` is a member of `winmask`.
 4. `support` cells are empty at root, contain the move on a win, empty on a loss.
+5. `return_carriers` leaves `(win, hit, move, support)` **byte-identical**; indeed
+   `_build_src(s, c, carriers=False)` is byte-identical to the pre-carriers source
+   for every `(s, c)`, so **no existing variant changes** (carriers gates a brand
+   new compiled kernel only).
+6. `carriers` ⊆ occupied-own-at-root, disjoint from `support`, empty on a non-win;
+   on the `.BBBB.` / `BB.BB` golden boards `carriers` == exactly the four `B` stones.
 
-Covered by `scripts/vct_metal/test_mega_vct_bb.py :: test_support_and_complete_invariants`
+Covered by `scripts/vct_metal/test_mega_vct_bb.py` — `test_support_and_complete_invariants`,
+`test_carriers_golden_shapes`, `test_carriers_invariants`
 (run via `GOMOKU_BOARD_SIZE=15 uv run python -m scripts.vct_metal.test_mega_vct_bb`;
 **budget `max_nodes=500` captures ~90% of VCTs and runs in seconds** — Jason's test
 default). The default-verdict cross-check vs the cell-scan `mega_vct` (0
