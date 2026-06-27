@@ -174,6 +174,68 @@ def test_carriers_invariants():
     run_carriers_invariants(B=48, seed=0)
 
 
+# --------------------------------------------------------------------------- #
+# return_w — the OPP MIRROR of carriers: the (over-inclusive) load-bearing
+# DEFENDER stones (the `W` channel).  w = opp ∩ ⋃_support COLLIN.  Issue #90.
+# --------------------------------------------------------------------------- #
+def test_w_golden_shapes():
+    """`.BBBB.` open four with defender stones at known distances from a support
+    (open-end) cell: `w` returns EXACTLY the defenders collinear within 4 of a
+    support cell — the same COLLIN-within-4 domain as `carriers`, but on OPP.  The
+    attacker keeps its immediate five (the defenders sit off both open ends), so
+    win / support / carriers are unchanged by adding them."""
+    own = [7 * N + 4 + i for i in range(4)]      # .BBBB. at row 7, cols 4..7
+    # support is the two open ends, col 3 (=7N+3) and col 8 (=7N+8). Defenders:
+    near = [7 * N + 9, 7 * N + 12]               # col 9 (dist 1), col 12 (dist 4) -> in w
+    far = [7 * N + 13, 0]                         # col 13 (dist 5), corner         -> not in w
+    batch = np.stack([_board_from(own, near + far)])
+    win, hit, move, supp, carr, wch = solve_vct_mega_bb(
+        batch, max_nodes=500, return_move=True, return_support=True,
+        return_carriers=True, return_w=True)
+    assert win[0] and not hit[0], "golden W board not a clean win"
+    s = set(cells_from_words(supp[0]))
+    cr = set(cells_from_words(carr[0]))
+    wc = set(cells_from_words(wch[0]))
+    assert cr == set(own), f"carriers {sorted(cr)} != stones {sorted(own)}"
+    assert wc == set(near), f"w {sorted(wc)} != expected near defenders {sorted(near)}"
+    assert not (wc & set(far)), "w included a defender beyond collinear-within-4"
+    assert not (wc & s), "w overlaps support (must be disjoint: opp vs empty)"
+    assert not (wc & cr), "w overlaps carriers (must be disjoint: opp vs own)"
+
+
+def run_w_invariants(B: int = 48, seed: int = 0, max_nodes: int = 500):
+    """Structural invariants for the return_w output:
+
+      * return_w leaves (win, hit, move, support, carriers) byte-identical
+      * w ⊆ occupied OPP stones at root (the `W` channel, the defender mirror)
+      * a clean non-win has empty w
+    """
+    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
+    wc, hc, mc, sc, crc = solve_vct_mega_bb(
+        st, max_nodes=max_nodes, return_move=True, return_support=True,
+        return_carriers=True)
+    ww, hw, mw, sw, crw, wch = solve_vct_mega_bb(
+        st, max_nodes=max_nodes, return_move=True, return_support=True,
+        return_carriers=True, return_w=True)
+
+    assert np.array_equal(wc, ww) and np.array_equal(hc, hw) \
+        and np.array_equal(mc, mw) and np.array_equal(sc, sw) \
+        and np.array_equal(crc, crw), \
+        "return_w changed (win, hit, move, support, carriers)"
+
+    opp = st[:, 1].reshape(B, -1)
+    for b in range(B):
+        wcells = cells_from_words(wch[b])
+        assert all(opp[b, c] for c in wcells), f"w cell not an opp stone @b{b}"
+        if not (ww[b] and not hw[b]):
+            assert not wcells, f"clean non-win has w @b{b}"
+    return B
+
+
+def test_w_invariants():
+    run_w_invariants(B=48, seed=0)
+
+
 if __name__ == "__main__":
     import sys
     if not FIXTURE.exists():
@@ -187,4 +249,7 @@ if __name__ == "__main__":
     test_carriers_golden_shapes()
     run_carriers_invariants(B=48, seed=0)
     run_carriers_invariants(B=48, seed=1)
+    test_w_golden_shapes()
+    run_w_invariants(B=48, seed=0)
+    run_w_invariants(B=48, seed=1)
     print("FAST tier PASS")

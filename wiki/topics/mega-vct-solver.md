@@ -35,7 +35,7 @@ corpus labeling, scale `max_nodes` with B. A CAP verdict is fail-safe wherever
 ```python
 solve_vct_mega_bb(boards, *, max_nodes=20000, tg=32,
                   return_move=False, return_support=False, complete=False,
-                  return_carriers=False)
+                  return_carriers=False, return_w=False)
 ```
 
 `boards`: `(B, 2, N, N)` bool, **side-to-move-relative** — `board[0]` is the
@@ -47,7 +47,7 @@ Free-style rules (overlines win). `N = GOMOKU_BOARD_SIZE` (15 here); the kernel 
 a 256-bit `ulong[4]` board so N²≤256.
 
 Returns a tuple. The default is `(win, hit_cap)`; optional outputs append in a
-**FIXED order — `move`, `support`, `winmask`, `carriers`** — so existing callers
+**FIXED order — `move`, `support`, `winmask`, `carriers`, `w`** — so existing callers
 never break:
 
 | flag | appends | type | meaning |
@@ -58,6 +58,7 @@ never break:
 | `return_support=True` | `support` | `(B,4)` uint64 | union of cells the found proof line touches (relevance window / stencil seed); all-zero on a non-win |
 | `complete=True` | `winmask` | `(B,4)` uint64 | bitmask of **ALL** winning first moves; also flips `win` to "∃ a winning first move" |
 | `return_carriers=True` | `carriers` | `(B,4)` uint64 | the load-bearing OWN **stones** the proof's five-lines run through (the `B` channel complementing `support`'s `./p`); all-zero on a non-win |
+| `return_w=True` | `w` | `(B,4)` uint64 | the OPP mirror of `carriers`: the (over-inclusive) load-bearing DEFENDER **stones** on the proof's lines (the `W` channel) — `w = opp ∩ ⋃_support COLLIN`; all-zero on a non-win |
 
 Unpack a `(4,)` uint64 mask to flat cell indices with
 `mega_vct_bb.cells_from_words(words)` (inverse of the kernel's bit packing, bit
@@ -65,8 +66,8 @@ Unpack a `(4,)` uint64 mask to flat cell indices with
 
 Examples: `solve_vct_mega_bb(b)` → `(win, hit)`; `return_move=True` →
 `(win, hit, move)`; `complete=True, return_move=True, return_support=True` →
-`(win, hit, move, support, winmask)`; adding `return_carriers=True` appends
-`carriers` after all of the above.
+`(win, hit, move, support, winmask)`; adding `return_carriers=True` then
+`return_w=True` appends `carriers` then `w` after all of the above.
 
 **Each flag compiles its own kernel variant** (memoized in `_KERNEL_CACHE`). The
 default `(support=False, complete=False)` variant is built from a source string
@@ -119,6 +120,37 @@ accumulated regardless; `return_support` only controls whether it is *also* outp
 Added 2026-06-27 (issue #88) — `support` had been read as "which stones formed the
 VCT" when it is the required-openings; `carriers` is the stones half.
 
+### `w` (load-bearing defender stones) — `return_w=True`
+The **OPP mirror of `carriers`**: where `carriers` is `own ∩ ⋃_{support} COLLIN`,
+`w` is `opp ∩ ⋃_{support} COLLIN` — every **root-opp** stone **collinear-within-4**
+of a support cell, i.e. the **defender stones sitting on the proof's five-lines**
+(the `W` channel of a typed stencil). Computed at output time from the same support
+mask as `carriers`; `opp` is back to the root board there (every defender reply
+`ar[sp]` and forced four-block `mb[sp]` is unmade before the search returns to
+`sp==0` — verified in the source comment, exactly as `own==own_in` for `carriers`).
+**`w` ⊆ occupied-opp-at-root**, disjoint from `support` (opp vs empty) and from
+`carriers` (opp vs own), all-zero on a non-win. Derived from the support mask, so
+available without `return_support` **or** `return_carriers` (the mask is accumulated
+whenever any of support/carriers/w is requested).
+
+**IDENTITY, not EXISTENCE — and OVER-INCLUSIVE.** By **freestyle** monotonicity
+([shape-library-engine.md](shape-library-engine.md) §3) a defender stone **never
+makes an attacker VCT appear** — adding defender stones only hurts or is neutral.
+So `W` is **never needed for the win to EXIST**; it carries **identity** (which
+forced line / mate-distance). Measured (`scripts/threat_shapes/w_channel_probe.py`,
+pool 4096, `max_nodes=500`): of **660** clean attacker VCTs, **660/660 (100%)** still
+win after removing **every** defender stone (zero monotonicity violations; seed 1:
+697/698, the one miss a post-strip cap, not a violation) — yet **96%** had ≥1 `w`
+stone on their proof lines (mean `|w|`≈6). Defenders *sit on* the lines; none are
+*load-bearing for existence*. Like `carriers`, `w` is the **relevance window's**
+defender stones (collinear-near support), **not** the minimal set: the MINIMAL
+load-bearing `W` is the **md-ablation** program (a stone whose removal *shortens*
+the mate), which is **BLOCKED on md-extraction**
+([shape-library-engine.md](shape-library-engine.md) §3 correction #2 / §8) — `w`
+is the cheap, available-today over-approximation of it. This is the **v2 `W`
+channel** the certificate program flagged as needed for *defense-flavored* shapes
+that do **not** win in isolation. Added 2026-06-27 (issue #90).
+
 ### `winmask` (all winning first moves) — `complete=True`
 The default search short-circuits at the root OR node (first winning move wins).
 Complete mode instead tries **every** root candidate and records each winning
@@ -155,9 +187,18 @@ solver was right.
    new compiled kernel only).
 6. `carriers` ⊆ occupied-own-at-root, disjoint from `support`, empty on a non-win;
    on the `.BBBB.` / `BB.BB` golden boards `carriers` == exactly the four `B` stones.
+7. `return_w` leaves `(win, hit, move, support, carriers)` **byte-identical**;
+   `_build_src(s, c, carriers, w=False)` is byte-identical to the pre-W source for
+   every `(s, c, carriers)` (verified against a pre-edit snapshot of all 8 existing
+   variants), so **no existing variant changes** (`w` gates a brand new compiled
+   kernel only).
+8. `w` ⊆ occupied-opp-at-root, disjoint from `support` and `carriers`, empty on a
+   non-win; on the `.BBBB.` golden board with defenders at COLLIN distances 1/4/5
+   from a support cell, `w` == exactly the within-4 (distance 1 and 4) defenders.
 
 Covered by `scripts/vct_metal/test_mega_vct_bb.py` — `test_support_and_complete_invariants`,
-`test_carriers_golden_shapes`, `test_carriers_invariants`
+`test_carriers_golden_shapes`, `test_carriers_invariants`, `test_w_golden_shapes`,
+`test_w_invariants`
 (run via `GOMOKU_BOARD_SIZE=15 uv run python -m scripts.vct_metal.test_mega_vct_bb`;
 **budget `max_nodes=500` captures ~90% of VCTs and runs in seconds** — Jason's test
 default). The default-verdict cross-check vs the cell-scan `mega_vct` (0
@@ -236,7 +277,9 @@ the loop, not the kernel, which is 4 s flat at B=16384):
 
 `scripts/threat_shapes/`: `mine_vct_gpu_flat.py`, `mine_first_vct.py`,
 `solve_puzzles.py`, `mine_puzzles.py`, `harvest_molecules.py`, `vct_fan.py`,
-`probe_timing.py`. Feeds [shape-library-engine.md](shape-library-engine.md) (L1
+`probe_timing.py`, `certificate_falsification.py` (the `carriers` certificate),
+`w_channel_probe.py` (the `w` identity-not-existence probe, #90).
+Feeds [shape-library-engine.md](shape-library-engine.md) (L1
 stencils), [vct-backward-mining.md](vct-backward-mining.md),
 [vct-reachability-mining.md](vct-reachability-mining.md), and
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md).
