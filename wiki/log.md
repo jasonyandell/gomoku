@@ -1503,3 +1503,22 @@ New script `harvest_molecules.py` (the §4 corpus writer) + first bank to `~/dat
 99% distinct, sparse, gold-grows-with-distance. Updated `vct-reachability-mining.md` §4 (RAN note)
 + §6 artifacts (canonical corpus row), the index row, and appended a `TRAINING_WIKI.md` entry.
 68/400 shards at the node cap ⇒ resumable with ~60× headroom.
+
+## 2026-06-27 — `mega_vct_bb` gets a canonical solver page + two optional outputs
+
+New topic **[mega-vct-solver.md](topics/mega-vct-solver.md)** — the API/contract reference for the
+production on-device VCT solver `solve_vct_mega_bb` (previously only documented inside
+`gpu-vct-feasibility.md`, a feasibility-narrative page). It is the doorway every threat-shape/mining
+consumer should read: plane convention (side-to-move `board[0]`=attacker, NO swap), the call-cost law
+(bulk-synchronous only), the full output table, and the regression invariants. Added an index doorway
+row (after the gpu-vct-feasibility row).
+
+Also shipped two **optional** outputs on the solver, each behind its own compiled kernel variant so the
+default `(win, hit, move)` path is **byte-identical** (verdict/throughput provably untouched):
+`return_support=True` → a 4×uint64 `support` mask (proof relevance window / stencil seed, accumulated on
+the winning return path only ⇒ no pollution from refuted branches; ⊆ root empties = played cells) and
+`complete=True` → a 4×uint64 `winmask` of ALL winning **first moves** (root stops short-circuiting;
+non-root nodes unchanged). Validated 2026-06-27 (invariants + gold pass: winmask 0 unsound / 0
+winning-forcing-moves-missing; the tempo guard was a *verifier* subtlety, the solver was right). Updated
+`gpu-vct-feasibility.md` §9 + `vct-backward-mining.md` §5 with pointers; added a `TRAINING_WIKI.md` entry.
+On `feat/gpu-vct-support-complete` (not merged).

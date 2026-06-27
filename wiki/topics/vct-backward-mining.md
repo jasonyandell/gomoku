@@ -141,6 +141,13 @@ move to all **2,383,293** proven-win forward puzzles → `~/data/puzzle_miner/so
 (`move=-1`) can be relabeled identically with one batched pass — same kernel flag, no CPU
 `solve_vct` per shape, so the §3/§6 CPU "extraction monster" never materializes.
 
+**Two more solver outputs (2026-06-27).** The same passive style now also yields
+**`return_support=True`** (a 4×uint64 mask of the cells the proof line touches — the
+stencil seed / relevance window, accumulated on the winning return path only) and
+**`complete=True`** (a `winmask` of ALL winning first moves, not just the first found).
+Default `(win, hit, move)` is byte-identical (separate compiled variants). Full
+contract: [mega-vct-solver.md](mega-vct-solver.md).
+
 **Downstream.** With moves in hand, the first learnability probe on the labels is recorded in
 [vct-recognition-learnability.md](vct-recognition-learnability.md) (a net *can* recognize
 is-VCT on unseen shards; a CNN beats attention — recognition is the oracle's job, attention's
