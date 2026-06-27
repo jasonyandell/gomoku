@@ -4849,3 +4849,36 @@ Goal: make GPU VCT *as fast as I can*. Lever (1) from the rebuild (incremental/b
 **The throughput finding.** Wall is **flat ~16 s for B=128…2048** at mn=1500 — completely **tail-bound by the single deepest board**. For batch labeling that's a *feature*: throughput ∝ B at constant wall. Measured solves/s (mn=1500, fully on-device, RSS 0.3 GB): 8192→526, 16384→**891**, 32768→**1 020** (saturating ≈ GPU concurrency). CPU `vcf.solve_vct` = 0.64 solves/s → **~1 600× aggregate**, and (unlike the wavefront's 24–40 % GPU util) there is **no host bottleneck** — fully on-device. A late **shift-precompute** (reuse each direction's five `shr256` of own/empty across the hole loops of `gen_forcing`/`completion_mask` — verdict-preserving, `test_*_bb` still pass) lifted the saturated ceiling ~1.5× (583→891 @ B=16384). NB: `load_position_stack` samples a *live-growing* corpus (`~/data/games_raphi/` is being collected), so raw win/cap counts drift between invocations — verdicts are deterministic within a process and bb always matches the oracle on the loaded set.
 
 **What is and isn't the lever (honest).** Work-stealing (lever 2): board-level is already done by the GPU scheduler; the real tail is *one* deep board (one thread), so subtree-spill would cut single-board latency but **not** labeling throughput (already maximized by batching) — so it is *not* the lever for this use case. **Negative result:** generating threes by single-line open-three patterns is **incomplete** (misses *four-four-at-`f`* threats — the follow-up makes fours in two directions, only one through `m`); localizing detection to `m`'s lines hits the same wall, so `gen_threes` stays whole-board. The throughput knobs for labeling are **B** (batch) and **`max_nodes`** (depth/quality vs wall). **Negative result #2 (word width, tried + reverted):** a 256-bit detector can be `ulong[4]` (64-bit) or `uint[8]` (32-bit); a micro-bench of *pure* shift+AND favoured `uint[8]` 1.7× (Apple GPU 64-bit ALU is throughput-reduced), so I rewrote the whole kernel to `uint[8]` and re-validated (0 disagreements) — but it ran **~20 % slower** (VCT 693 vs 854 solves/s @ B=16384; VCF 1.55 vs 1.40 ms/bd) because the real kernels are bookkeeping-heavy (`popcount`/`lowbit`/`setbit`/`cpy`/`and`/frames) and that all doubles in word count, outweighing the detection-only gain. `ulong[4]` kept. Lesson: micro-benchmark the hot path *in situ*. Committed + pushed on `feat/gentle-rapfi-teacher`.
+
+## [2026-06-26] is-VCT recognition is learnable on unseen games — but attention loses to a CNN
+
+**What.** First learnability probe on the VCT puzzle labels: can a net classify "side-to-move
+has a forced VCT?" from the raw 15×15 board, generalizing to **unseen games**? Full synthesis:
+`wiki/topics/vct-recognition-learnability.md`. Code: `scripts/threat_shapes/gen_isvct_dataset.py`,
+`scripts/threat_shapes/train_isvct_attn.py`. Artifacts: `~/data/puzzle_miner/isvct_exp/`.
+
+**Setup.** Labels reused from the forward puzzle miner (`~/data/puzzle_miner/`), NO re-solve —
+POSITIVE = `win&~cap`; NEGATIVE = manifest ply **absent** from `puzzles.jsonl.gz` (proven
+no-VCT); `cap` excluded. Split **by shard** (md5%10): 400 manifest shards → **367 train / 33
+test, overlap 0** (+49-shard val from train for early-stop). Train 1,167,002 (17.3% pos), test
+101,745 (14.2% pos), balanced training (60k). Negative boards CPU-replayed in the exact
+side-to-move frame, **0 frame mismatches**. Light enough (CPU replay + MPS train, no GPU solve)
+to run without competing with the live `collect_rapfi` producer.
+
+**Held-out result (AUROC, the fair metric):** majority 0.500 · logreg-on-counts 0.946 · **CNN
+(168k) 0.971** · **attention (339k) 0.924**. Attention val→test 0.933→0.924 (no leakage). Wall:
+gen 20s, train+eval(×4) 356s on MPS.
+
+**Read.** (1) Feasibility = **yes** — the win-condition is perceivable and generalizes across
+shards. (2) Attention is the **laggard** — beaten by a CNN with *half* the params and by linear
+logreg-on-counts. VCT structure is local + translation-equivariant ⇒ conv bias fits; the signal
+is count-dominated. (3) Strategic: recognition was always the **exact oracle's** job (cheap),
+so this *clarifies* rather than dents the plan — **attention's real audition is the seeker**
+(steering toward VCT-reachable regions), not recognition. Caveats: small/untuned (60k, ≤12 ep,
+attention still inching up); "no-VCT" = no VCT within the miner's 500-node budget; trivial
+early-game negatives inflate natural-accuracy (use AUROC/balanced).
+
+**Also (same session):** the megakernel now emits a **passive GPU root-move**
+(`solve_vct_mega_bb(return_move=True)`) — resolves the `vct-backward-mining.md` §5 move-extraction
+gap; 2.38M forward puzzles move-labeled (`solutions.jsonl.gz`), 400/400 independently verified.
+All on `feat/gentle-rapfi-teacher` (not yet merged).

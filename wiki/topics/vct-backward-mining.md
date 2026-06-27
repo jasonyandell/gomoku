@@ -118,20 +118,33 @@ recompute. (Working copy: `scratchpad/vct_gpu_flat/`.)
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | count | 98396 | 61203 | 25096 | 9339 | 3746 | 1517 | 579 | 217 | 84 | 44 | 13 | 5 | 2 | 1 |
 
-## 5. The verdict-vs-move gap (OPEN — next step)
+## 5. The verdict-vs-move gap (RESOLVED 2026-06-26 — option 2 shipped)
 
-The megakernel gives only **win/no-win** — enough for the walk-back, but NOT the catalyst
-move or mate distance. The GPU's 200k shapes currently carry **`move=-1`** (extraction off
-for speed). Recovering the move needs a CPU `solve_vct` per shape — a *fast positive proof*
-individually, but per-shape serial ⇒ the extraction bottleneck, and at the wrong budget
-(depth-16 / 200k) it re-becomes the §3 CPU monster.
+The megakernel gave only **win/no-win** — enough for the walk-back, but NOT the catalyst
+move. **Fixed by option 2: a GPU root-move output on the megakernel** (`solve_vct_mega_bb(...,
+return_move=True)` → `(win, hit_cap, move)`). It is a **passive** read of the move the search
+already commits to (root `mm[0]`, or the captured cell for inline root wins — immediate five /
+sound double-four / fork-three): **no extra nodes, no extra search**, default return unchanged.
+`move` is a **valid** (sound, not necessarily *shortest*) VCT first move per won board, `-1`
+elsewhere — sound because the kernel never reports a false win, so the root of the line it
+proves always starts a real forced win. ("Any valid VCT move" is all the downstream stencil /
+training labels need.)
 
-**Options on the table (NOT YET DECIDED):**
-1. cheap **PARALLEL CPU extraction** (fan the positive proofs across cores); or
-2. add a one-`uint` **GPU root-move output** to the megakernel (cheap bandwidth, kills the
-   CPU step entirely).
+**Verification.** Win verdict unchanged (backward-compat test, 0 disagreements). Move
+soundness checked *independently of the kernel internals* on 400 real puzzles — play the move,
+then confirm the attacker wins against **every** defender reply (all empties, a sound superset
+of the defeating set): **400/400 valid, 0 bad.**
 
-Jason is taking node/move extraction next and has ideas; record as the open next step.
+**Applied to the forward puzzle corpus.** `scripts/threat_shapes/solve_puzzles.py` attached a
+move to all **2,383,293** proven-win forward puzzles → `~/data/puzzle_miner/solutions.jsonl.gz`
+(0 dups, 0 out-of-range, `non-reproduced=0`; ~5,400 boards/s). The backward 200k shapes here
+(`move=-1`) can be relabeled identically with one batched pass — same kernel flag, no CPU
+`solve_vct` per shape, so the §3/§6 CPU "extraction monster" never materializes.
+
+**Downstream.** With moves in hand, the first learnability probe on the labels is recorded in
+[vct-recognition-learnability.md](vct-recognition-learnability.md) (a net *can* recognize
+is-VCT on unseen shards; a CNN beats attention — recognition is the oracle's job, attention's
+bet is the seeker).
 
 ## 6. Lessons (path-dependent, worth keeping)
 

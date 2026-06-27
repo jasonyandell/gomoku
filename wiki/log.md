@@ -3,6 +3,27 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-06-26] New page: is-VCT recognition learnability + move-extraction gap RESOLVED
+
+Created [topics/vct-recognition-learnability.md](topics/vct-recognition-learnability.md) — the
+first learnability probe on the VCT labels. A net **can** classify "side-to-move has a forced
+VCT" on **held-out, shard-disjoint** games (AUROC 0.92+, real generalization), but for these
+*local, translation-equivariant* shapes a **CNN (0.971, 168k params) beats a transformer
+(0.924, 339k)** and even **logreg-on-counts (0.946) beats attention** ⇒ recognition is easy +
+count-dominated, leave it to the exact oracle; **attention's bet is the SEEKER, not the
+recognizer**. Records Jason's **seek-VCT thesis** (learn the approximation-tolerant steering,
+solve the approximation-intolerant forcing finish — anti-correlated tractability). Methodology
+note for posterity: labels reused from the miner (**absence = proven no-VCT**, Jason's
+correction), no re-solve; split **by shard** (367 train / 33 test, overlap 0) so test games are
+unseen — the load-bearing guard against position-level leakage.
+
+Also marked [topics/vct-backward-mining.md](topics/vct-backward-mining.md) **§5 RESOLVED**: the
+verdict-only "catalyst-move extraction" gap is closed by **option 2** — a passive **GPU
+root-move output** on the megakernel (`solve_vct_mega_bb(return_move=True)`, no extra nodes);
+2.38M forward puzzles move-labeled (`solutions.jsonl.gz`), 400/400 moves independently verified.
+Updated both index rows (vct-backward "OPEN"→"RESOLVED"; added a recognition-learnability
+doorway). Code on `feat/gentle-rapfi-teacher`; not yet merged.
+
 ## [2026-06-26] New page: the Shape-Library Engine (the gomoku-AI plan) + gpu-vct row corrected
 
 Created [topics/shape-library-engine.md](topics/shape-library-engine.md) — the plan outline
