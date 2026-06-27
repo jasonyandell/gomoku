@@ -1,5 +1,63 @@
 """Exact VCF (Victory-by-Continuous-Fours) solver for 9x9 freestyle gomoku.
 
+=============================================================================
+OBSOLETE — REFERENCE / HISTORY ONLY. Superseded by the GPU megakernel.
+=============================================================================
+This pure-CPU recursive AND/OR solver (``solve_vcf`` / ``solve_vct`` and their
+``*_from_planes`` wrappers) is SUPERSEDED for corpus VCT/VCF labeling and
+shape-mining by the fully on-device GPU megakernel
+``scripts/vct_metal/mega_vct_bb.py :: solve_vct_mega_bb`` (VCF twin:
+``scripts/vct_metal/mega_vcf_bb.py :: solve_vcf_mega_bb``). See
+``wiki/topics/gpu-vct-feasibility.md`` §8 and ``wiki/topics/vct-backward-mining.md``.
+
+WHY IT IS RETIRED (not merely slower):
+  * Soundness was proven EQUIVALENT, so the kernel no longer needs this oracle.
+    Validation (wiki §8): the bitboard megakernel matched this solver with
+    **0 false-positive / 0 false-negative** verdicts over **320 real VCT
+    positions** (258 clean, non-cap agreements, 8 seeds), and its VCF twin over
+    **360 real VCF positions** — never a phantom win in either direction. The
+    only divergences are cap-boundary positions (excluded from the "clean"
+    count), always the SAFE direction: the GPU's full expansion can PROVE a few
+    roots this DFS abandons at its node cap, never the reverse, never a false
+    positive. (One real over-generation bug in the kernel — far pre-existing
+    fours spawning spurious threes — was caught and fixed against this solver
+    during that bring-up; the equivalence above is the post-fix result.)
+  * Performance black-hole: single-thread ``solve_vct`` is **~0.64 solves/s
+    aggregate** and sharply BIMODAL — median ~30 ms (~33 solves/s typical) but
+    ~14% of positions hit a **~90 s tail** at the production cap
+    (``max_nodes=20000``); at the deeper depth-10 / ``max_nodes=100k`` mining
+    config that tail stretches to **4–16+ min ("~20-min") "monster" boards**.
+    The megakernel does ~850–1020 solves/s at B≈16k–32k (**~1600× aggregate**)
+    precisely because its flat-in-batch wall hides that single-deep-board tail.
+    This is the slow oracle Jason does NOT want to keep hand-syncing to an
+    actively-evolving kernel.
+
+RULES for this file going forward:
+  * Kept ONLY for reference / history / readable-spec value — the megakernel and
+    its ``scripts/vct_metal/*_ref.py`` validation scaffolding were derived from
+    these exact helpers and soundness rules.
+  * It will NOT be kept in sync as the megakernel evolves — expect it to DRIFT.
+  * Do NOT use it to verify or cross-check the GPU solver. That equivalence is
+    already established and archived (above); re-pinning the kernel to this
+    frozen reference would only hold it back.
+
+MIGRATION of the remaining callers (the eventual path):
+  * Offline VCT mining / labeling — ``scripts/threat_shapes/mine_first_vct.py``,
+    ``mine_vct_backward.py``, ``mine_vct_gpu.py``, ``mine_vct_gpu_flat.py``,
+    ``mine_parallel.py``, ``build_corpus.py``, ``threats.py`` (and the v0
+    ``scripts/gpu_vct_prototype.py``) — move to
+    ``solve_vct_mega_bb(..., return_move=True)`` (its passive GPU root-move
+    output, wiki §5). NB: that returns a *valid* (sound) first VCT move, not
+    necessarily the *shortest* one ``solve_vct`` reports — a benign behavioral
+    difference for move-extraction consumers.
+  * Still-LIVE in-loop callers use the cheaper VCF path (``solve_vcf`` /
+    ``has_four_threat``), NOT VCT: the self-play / MCTS / eval teachers
+    (``gomoku/self_play.py``, ``gomoku/mcts.py``, ``gomoku/eval.py``,
+    ``gomoku/white_defense.py``). They do single-position checks inside the
+    training loop where a per-process batch GPU call does not yet fit — the last
+    reason this module still imports, and the harder migration.
+=============================================================================
+
 Freestyle rules: first to >=5-in-a-row wins; no overline restriction; no
 opening restrictions. Under these rules a *four* (a line of attacker stones
 with at least one empty cell that would complete five) is an absolutely
@@ -210,6 +268,11 @@ def solve_vcf(
     max_nodes: int = DEFAULT_MAX_NODES,
 ) -> VCFResult:
     """Solve VCF for the side to move (plane 0 = attacker, plane 1 = defender).
+
+    OBSOLETE (see module banner): superseded for batch labeling by the GPU
+    megakernel ``scripts/vct_metal/mega_vcf_bb.py :: solve_vcf_mega_bb`` (0 FP/0 FN
+    vs this over 360 real positions). Still imported by the in-loop VCF teachers
+    (self_play / mcts / eval); NOT to be used as a GPU cross-check oracle.
 
     Returns a :class:`VCFResult`. ``has_forced_win`` is True only if an explicit
     continuous-four line to five was found. Never mutates ``board``.
@@ -711,6 +774,12 @@ def solve_vct(
     max_nodes: int = DEFAULT_VCT_MAX_NODES,
 ) -> VCFResult:
     """Solve VCT for the side to move (plane 0 = attacker, plane 1 = defender).
+
+    OBSOLETE (see module banner): superseded by the GPU megakernel
+    ``scripts/vct_metal/mega_vct_bb.py :: solve_vct_mega_bb`` (0 FP/0 FN vs this
+    over 320 real positions; ~1600× throughput). Use ``return_move=True`` there
+    for the winning-move extraction the mining scripts need. Reference/history
+    only — will drift; do NOT cross-check the kernel against it.
 
     Returns the same :class:`VCFResult` shape as :func:`solve_vcf`.
     ``has_forced_win`` is True only when an explicit forcing line (of fours
