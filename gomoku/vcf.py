@@ -97,11 +97,43 @@ depth (in attacker moves) and a global node cap so it can never hang.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
 
 from gomoku import state_ops
+
+
+class CpuSolverRetired(RuntimeError):
+    """Raised when a RETIRED CPU vcf solver entry point is reached at runtime.
+
+    The CPU solver (``solve_vcf`` / ``solve_vct`` and their ``*_from_planes``
+    wrappers) is retired as a *runtime* dependency. Set the env var
+    ``GOMOKU_ALLOW_CPU_SOLVER=1`` to deliberately use it as a bootstrap/oracle
+    (fixture regen / deep validation). See ``wiki/topics/mega-vct-solver.md``.
+    """
+
+
+_CPU_SOLVER_RETIRED_MSG = (
+    "The CPU vcf solver is RETIRED as a runtime dependency (slow: ~0.65 ms/node, "
+    "~90s tail on hard 15x15 boards). Use "
+    "scripts.vct_metal.mega_vct_bb.solve_vct_mega_bb — the on-device GPU solver "
+    "(~1600x, 0 FP/FN). The CPU solver is kept only as a bootstrap/oracle; to use "
+    "it deliberately (fixture regen / deep validation) set env "
+    "GOMOKU_ALLOW_CPU_SOLVER=1. See wiki/topics/mega-vct-solver.md."
+)
+
+
+def _check_cpu_solver_gate() -> None:
+    """Throw unless the deliberate-use override is set.
+
+    Bypassed iff ``GOMOKU_ALLOW_CPU_SOLVER == "1"``. Gates only the PUBLIC entry
+    points; every internal helper stays fully intact (the kernel/ref scaffolding
+    and the sanctioned fixture-gen / deep-validation paths import them directly).
+    """
+    if os.environ.get("GOMOKU_ALLOW_CPU_SOLVER") != "1":
+        raise CpuSolverRetired(_CPU_SOLVER_RETIRED_MSG)
 
 BOARD_SIZE = state_ops.BOARD_SIZE
 WIN_LEN = state_ops.WIN_LEN
@@ -280,6 +312,7 @@ def solve_vcf(
     The position is assumed non-terminal (no side already has five). If the
     attacker already has an immediate five it is reported as a depth-1 win.
     """
+    _check_cpu_solver_gate()
     board = np.ascontiguousarray(board, dtype=bool)
     attacker = board[0].copy()
     defender = board[1].copy()
@@ -571,6 +604,7 @@ def solve_vcf_from_planes(
     ``history_ply``. We reconstruct the ``(2, 9, 9)`` board from those two planes
     (mirrors ``self_play._gamestate_from_archive``) and solve.
     """
+    _check_cpu_solver_gate()
     planes = np.asarray(planes)
     attacker = planes[0].astype(bool)
     defender = planes[history_ply].astype(bool)
@@ -790,6 +824,7 @@ def solve_vct(
     Every VCF win is a VCT win (the four-only subset), so VCT is a strict
     superset of VCF: it solves all VCF positions plus continuous-threes mates.
     """
+    _check_cpu_solver_gate()
     board = np.ascontiguousarray(board, dtype=bool)
     attacker = board[0].copy()
     defender = board[1].copy()
@@ -1071,6 +1106,7 @@ def solve_vct_from_planes(
 ) -> VCFResult:
     """Convenience: solve VCT from a network input-plane stack (mirrors
     :func:`solve_vcf_from_planes`)."""
+    _check_cpu_solver_gate()
     planes = np.asarray(planes)
     attacker = planes[0].astype(bool)
     defender = planes[history_ply].astype(bool)

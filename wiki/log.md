@@ -1522,3 +1522,21 @@ non-root nodes unchanged). Validated 2026-06-27 (invariants + gold pass: winmask
 winning-forcing-moves-missing; the tempo guard was a *verifier* subtlety, the solver was right). Updated
 `gpu-vct-feasibility.md` §9 + `vct-backward-mining.md` §5 with pointers; added a `TRAINING_WIKI.md` entry.
 On `feat/gpu-vct-support-complete` (not merged).
+
+## [2026-06-27] CPU vcf solver retired (gated, not deleted) + fast/deep VCT test tiers
+
+Extended [topics/mega-vct-solver.md](topics/mega-vct-solver.md) with a **"CPU solver retired"** section.
+`gomoku/vcf.py` (`solve_vcf`/`solve_vct` + `*_from_planes`) is now a **runtime-gated** oracle: every
+public entry point raises `CpuSolverRetired` unless `GOMOKU_ALLOW_CPU_SOLVER=1`. Kept intact as a
+bootstrap/reference (all internals untouched); the GPU `solve_vct_mega_bb` is the runtime future. Runtime
+reaches (MCTS leaf-VCF, eval overlay, self-play teachers, web/play) are left to **throw** so Jason can
+triage them to the GPU solver place-by-place — no silent CPU parity wanted.
+
+Banked the **reusable fixture-based fast-test pattern**: commit a small golden npz of CPU-oracle truth on
+clean/non-capped boards (`regen_vct_fixture.py` → `fixtures/vct_golden.npz`), then diff the kernel against
+it at a tight budget with NO vcf at test time (a non-capped verdict is budget-independent). Three tiers —
+FAST (`test_mega_vct_bb.py`, no vcf, <15 s), GATE (`tests/` via `conftest.py` override, the sanctioned
+oracle path), DEEP (`validate_deep.py`, live vcf + winmask soundness/completeness gold, on-demand). The
+deep completeness oracle must include vcf's tempo guard `_defender_has_four_or_five` (the solver was right;
+the verifier was the subtle part). Added a one-line pointer in `topics/conventions.md`; `TRAINING_WIKI.md`
+entry. On `feat/cpu-solver-retire` (not merged).

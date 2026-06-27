@@ -5060,3 +5060,52 @@ to catch.
 New canonical wiki page **`wiki/topics/mega-vct-solver.md`** (the API/contract reference) + index doorway
 row; `gpu-vct-feasibility.md` §9 and `vct-backward-mining.md` §5 updated with pointers. On
 `feat/gpu-vct-support-complete` (not merged).
+
+## 2026-06-27 — CPU vcf solver RETIRED (gated, not deleted) + fast/deep VCT test tiers
+
+Two linked changes on `feat/cpu-solver-retire` (branches off the just-landed
+return_support/complete solver work; NOT merged).
+
+**(1) CPU solver retired as a runtime dependency.** `gomoku/vcf.py` is the slow CPU
+AND/OR solver (~0.65 ms/node, ~90s tail on hard 15×15). It was a wonderful bootstrap
+and stays fully intact as the kept oracle/reference, but Jason's standing intent —
+session after session he'd stop me reaching for it — is now enforced in code: the four
+public entry points (`solve_vcf`/`solve_vct` + `*_from_planes`) raise `CpuSolverRetired`
+with a message pointing at `scripts.vct_metal.mega_vct_bb.solve_vct_mega_bb` (the GPU
+solver). The ONLY sanctioned bypass is env `GOMOKU_ALLOW_CPU_SOLVER=1` (fixture-gen,
+deep validation, the kept-oracle test suite). All internals untouched; no CPU feature
+parity intended.
+
+**Runtime reaches surfaced for Jason's triage (all OPT-IN, so default runs are
+unaffected; isolated on a branch so nothing breaks until merge):**
+- `gomoku/self_play.py` — the VCF/VCT **teacher** (`vcf_teacher`/`_apply_vct_teacher`,
+  `configure_vcf_teacher`): `solve_vcf/vct_from_planes` + `solve_vcf`. Fires only when a
+  run enables the teacher (e.g. the `gentle-rapfi-teacher` line) → will throw unless
+  ported to the GPU solver or run with the override.
+- `gomoku/eval.py` — the VCF-**overlay** player (`solve_vcf` before/at MCTS leaf).
+- `gomoku/train.py` — the MCTS-leaf-VCF flag (derby-b3n) wiring into the above.
+These three are the triage list: port to `solve_vct_mega_bb`, set the override per-run,
+or retire the lever.
+
+**(2) Fast/deep test tiers (kills the minute-plus walls).** The slow test walls were never
+the GPU solver (4s flat at B=16k) — they were slow ORACLES in the loop (live `vcf` ~90s
+tail; the cell-scan `mega_vct`). Restructured:
+- `scripts/vct_metal/regen_vct_fixture.py` — one-shot, sets the override, solves a fixed
+  seeded real-position stack with the CPU oracle at high budget, keeps clean (non-cap)
+  boards, writes `(boards, win, hit, move, winmask)` truth to committed
+  `scripts/vct_metal/fixtures/vct_golden.npz` (seed+budget recorded inside).
+- `scripts/vct_metal/test_mega_vct_bb.py` — FAST tier: loads the npz (NO vcf, NO cell-scan
+  at test time), diffs `solve_vct_mega_bb` at `max_nodes=500` (cap→skip; non-cap verdicts
+  are budget-independent so they MUST match high-budget truth) + the support/complete
+  self-oracle invariants. Runs in seconds.
+- `scripts/vct_metal/validate_deep.py` — DEEP tier (sets override): live vcf at high budget,
+  larger n, the all-empties winmask soundness+completeness gold (oracle includes vcf's
+  tempo guard `_defender_has_four_or_five` — the subtlety from this session). Run on-demand
+  / when the verdict changes, not in the gate.
+
+**Validated:** fast tier PASS; gate tests 9/9 (`CpuSolverRetired` raised without override,
+runs with it); kept-oracle + overlay tests (`test_vcf`/`test_vct`/`test_eval_vcf_overlay`)
+green via the session-wide override in `tests/conftest.py` (at the DEFAULT board size 9 —
+they encode 9×9 cells). The reusable lesson banked on [topics/mega-vct-solver.md]: commit a
+golden fixture, never re-derive truth at test time; the GPU solver is fast, slow oracles are
+the test-wall.

@@ -151,6 +151,57 @@ disagreements) is the same module's `test_mega_vct_bb_matches_mega_vct`.
 
 ---
 
+## CPU solver retired (2026-06-27) — gate, env override, fast/deep test tiers
+
+The CPU oracle `gomoku/vcf.py` (`solve_vcf` / `solve_vct` + the `*_from_planes`
+wrappers) is **retired as a runtime dependency**. It is kept **intact** as a
+bootstrap/reference oracle (open source, every internal helper preserved), but
+every public entry point now **throws `gomoku.vcf.CpuSolverRetired`** at the top
+unless the deliberate-use override is set:
+
+```bash
+GOMOKU_ALLOW_CPU_SOLVER=1   # the ONLY sanctioned bypass (fixture-gen / deep validation)
+```
+
+The message names the replacement (`solve_vct_mega_bb`), the slowness reason
+(~0.65 ms/node, the ~90 s deep-search tail on hard 15×15 boards — the wall this
+retirement removes), and the override. **Why gate, not delete:** runtime reaches
+(MCTS leaf-VCF, eval overlay, self-play teachers, web/play) should *surface*
+themselves by throwing so they can be triaged to the GPU solver place-by-place —
+no silent CPU feature-parity is wanted. Internals stay untouched: the kernel/ref
+scaffolding and the fixture-gen / deep-validation paths import helpers
+(`_five_completions`, `_defender_has_four_or_five`, …) directly, which never trip
+the gate.
+
+**Test tiering** (the fix for the slow test walls — the walls were the *oracle* in
+the loop, not the kernel, which is 4 s flat at B=16384):
+
+| tier | file | oracle | gate? | wall |
+|------|------|--------|-------|------|
+| FAST | `scripts/vct_metal/test_mega_vct_bb.py` | committed golden npz (no vcf) | no | <15 s |
+| GATE | `tests/` (`uv run pytest`) | live vcf, `conftest.py` sets override | sanctioned | — |
+| DEEP | `scripts/vct_metal/validate_deep.py` | live vcf, high budget, larger n | sets override | on-demand |
+
+- **Reusable fast-test pattern — commit a golden fixture, never re-derive truth at
+  test time.** `regen_vct_fixture.py` (one-shot, sets the override) solves a fixed
+  seeded position stack with the CPU oracle at a bounded budget, keeps only
+  **clean / non-capped** boards (definitive truth), and banks
+  `(boards, win, move, winmask)` + seed/budget into a small compressed
+  `scripts/vct_metal/fixtures/vct_golden.npz`. The fast test loads the npz and
+  diffs `solve_vct_mega_bb` at `max_nodes=500` against it (a non-capped verdict is
+  budget-independent, so a tight budget must match the high-budget truth;
+  `hit_cap` → skip). The slow cell-scan `mega_vct` cross-check is **gone** from the
+  fast path; the support/complete **structural-invariants** test stays (the kernel
+  as its own oracle — fast).
+- **DEEP completeness needs vcf's tempo guard.** `validate_deep.py`'s forcing-move
+  oracle mirrors `_vct_attack` root candidate generation *including*
+  `_defender_has_four_or_five` — the subtlety that earlier made a *sound* kernel
+  look "incomplete" (the kernel was right; the verifier was missing the guard). A
+  verified-win move that is NOT forcing is a free win in an already-won position,
+  correctly absent from the winmask.
+- `tests/test_cpu_solver_gate.py` covers the gate itself (entry points raise when
+  the env is cleared; the override unblocks them).
+
 ## Consumers (who calls this)
 
 `scripts/threat_shapes/`: `mine_vct_gpu_flat.py`, `mine_first_vct.py`,
