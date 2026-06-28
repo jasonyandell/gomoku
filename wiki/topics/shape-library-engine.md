@@ -259,6 +259,77 @@ those need the v2 `W` channel before they earn a certificate. (iv) The shape tes
 **over-inclusive** `support ∪ carriers`, available **today** — the certificate property does
 **not** wait on the md-extraction blocker that gates *minimal* ablation.
 
+### Hardened — the EXACT immediate-tempo boundary, and the #88 filter was unsound (2026-06-27, #89)
+
+#88's honest bound (ii) flagged the "no defender VCT" filter as *stronger than necessary* and
+named the real threshold as **immediate defender tempo**. #89 replaces the filter with that
+exact condition, scales the falsification, and adds an **adversarial** test for the one case a
+start-of-board filter cannot see. The result is both a **harder-passed theorem** and a
+**correction to #88**: the start-of-board immediate-tempo theorem **held — 0 counterexamples**,
+and the adversarial mid-sequence attack did **not** break it.
+
+**The exact boundary.** A board is *tempo-unsafe* iff the defender has an **immediate four-move
+or five-completion** — precisely the megakernel's own `def_tempo(opp, empty) =
+completion_mask(opp) ∪ gen_forcing(opp)` (the guard it already uses to reject a non-forcing
+attacker three). #89 lifts this out as a **cheap per-board probe**
+`defender_has_four_or_five(boards)` (one set-algebra kernel, **no AND/OR search** — far cheaper
+than the flipped VCT solve #88 used), validated against `bb.probe`'s `completion_mask` plus a
+deterministic unit self-test (`--self-test`).
+
+**Numbers** (`certificate_falsification.py --pool 4096 --seeds 0,1,2 --cap 400`, `max_nodes=500`):
+- **Self-containment:** **2036 / 2037** (99.95%) attacker VCTs win from carriers alone (one
+  miss, seed 1) — confirming #88's 100% at scale, honestly not *literally* 100%.
+- **Random transfer, EXACT tempo filter:** **0 / 6613** tempo-safe placements refute.
+- **Adversarial mid-sequence:** **0 / 31636** tempo-safe placements refute (mechanism below).
+- **Near-edge:** **0 / 9075** fitting flush edge/corner translations fail.
+- **Theorem, machine-checked each run:** *every* refutation observed carries immediate defender
+  tempo; **tempo-safe refutations = 0** in every block.
+
+**The #88 filter is not sound (the correction).** A **lone defender four-move** (e.g. an
+incidental open-three from the bolted-on stones) is *immediate tempo but not a VCT*, so #88's
+"no defender VCT" filter **admits it** — seed 2 caught **2 / 8756** such boards refuting under
+#88, **both with immediate tempo**, exactly the ones #89 excludes. Symmetrically, #89 **admits**
+the boards #88 wrongly dropped: **11** boards (across seeds) are tempo-safe *but* hand the
+defender a **slower** VCT, and the attacker **wins all 11** — the attacker-moves-first dominance
+#88 only conjectured. So `def_tempo` is not merely a more-permissive filter; it is the
+**correct** decision boundary, and "no defender VCT" was simultaneously **too strong** (drops
+safe boards) *and* **too weak** (admits tempo refuters).
+
+**The mid-sequence subtlety, and why the start probe suffices (the part-C attack).** A forced
+defender **block** can itself create a counter-four mid-sequence — invisible to a start-of-board
+check. We attacked this head-on: for every support cell `s` (a forced-block candidate), place
+two defender stones collinear to `s` so that **if** the defender is ever forced to block at `s`,
+the block completes a defender three = a four-move (`def_tempo`). The construction is
+**verifiably live**: **~93%** (25776/27740) of these start-tempo-safe boards flip to
+tempo-**unsafe** the instant the anchor is blocked. Yet **0 / 31636** refute. Two reasons, one
+**proved** and one **measured**:
+- *(proved)* A defender **real four** (a *five-completion* — the only thing that defeats an
+  attacker **four**) built from a **single** forced block needs **three** pre-placed collinear
+  stones, which is already a `(3-own, 2-empty)` window = **immediate tempo at the start**. So
+  single-block real-fours are *always* start-visible; the probe is **exactly right** for
+  four-only (VCF-style) lines, which dominate the short mined corpus.
+- *(measured)* The only residual evasion — a single-block four-**move** (two pre-placed)
+  defeating an attacker **forcing-three** — never materialized across 31636 primed boards: where
+  `s` is genuinely the operative forced block, the attacker's continuation is a four or has an
+  alternative winning move. (Every refutation in the adversarial set — 134 in seed 2 — was a
+  start-tempo-**unsafe** board the probe correctly flags; the probe is a *perfect* refutability
+  classifier on this set.)
+
+**Near-edge (part D).** Stamping self-contained shapes **flush** against each edge and corner
+(breathing room cut by the **boundary**, not a stone), **0 / 9075** that fit (all
+`support ∪ carriers` in-bounds) lose. So **"the footprint fits on-board" is a sufficient
+placement-legality test** — the support window captures the room the forcing line needs; the
+boundary removes nothing extra.
+
+**Honest bounds (unchanged in spirit).** Still **measured-0, not a mechanized QED** — the proof
+remains the Allis forcing-composition argument. The one gap *not* closed by construction: a
+**two-block** real-four manufactured mid-sequence (forcing the defender through two specific
+blocks that together complete a four) would need move/line extraction to target deliberately; we
+reached it only incidentally. Defense-flavored **`W`-dependent** shapes remain out of scope
+(they don't self-contain). Net for the self-contained / offensive subset: the certificate is
+**match the shape + one cheap `def_tempo` probe ⇒ proven win, no attacker search** — and the
+probe boundary is now the *exact* one, not a conservative proxy.
+
 ### Conservative on symmetry — on purpose
 
 We use **translation only**: the same relative stencil laid down elsewhere is just another
@@ -350,6 +421,10 @@ L2 there.** Framing the envelope, not committing.
   VCTs win from carriers alone, and **0/2913 *tempo-safe* placements refute**; the refuter is
   *exclusively* defender counter-tempo, exactly as dependency-based-search theory predicts. So
   the "risk" is now bounded and named: a stencil is a certificate up to defender counter-tempo.
+  **HARDENED 2026-06-27 (#89):** the exact boundary is **immediate `def_tempo`** (a cheap
+  four/five probe, not a flipped VCT solve); **0** refutations across **38k** tempo-safe random +
+  adversarial placements and **9k** near-edge translations, the mid-sequence-block attack did not
+  break it, and the #88 "no-VCT" filter was shown *unsound* (it admits lone-four-move refuters).
 
 We'll know which one bites when it bites — and diagnose it with the whole system standing.
 
@@ -364,6 +439,14 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   ⇒ L1 is a *certificate engine* for the self-contained subset. Harness:
   `scripts/threat_shapes/certificate_falsification.py`; stencil miner:
   `scripts/threat_shapes/mine_support_shapes.py`.
+- **DONE (2026-06-27, #89):** **hardened** the certificate property (§3) — the exact boundary is
+  the megakernel's own **`def_tempo`** (immediate defender four/five), exposed as a cheap probe
+  `defender_has_four_or_five` (no AND/OR search). 3 seeds × pool 4096: **2036/2037**
+  self-contained, **0/6613** random + **0/31636** *adversarial* (mid-sequence forced-block)
+  tempo-safe placements refute, **0/9075** near-edge translations fail; **every** refutation
+  carries immediate tempo. Correction: the #88 "no-VCT" filter is **unsound** (admits
+  lone-four-move refuters) — `def_tempo` is the *correct* boundary. Still measured-0, not a
+  formal QED.
 - **DONE (2026-06-26):** **first-VCT forward miner** — `scripts/threat_shapes/mine_first_vct.py`,
   the §3 mining input. Forward scan, both colors, trit verdict + defer-on-prefix-CAP,
   append-only/resumable. Smoke (100 games, `max_nodes=6000`): 12 certified firsts, 88 deferred
