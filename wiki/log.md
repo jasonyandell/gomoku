@@ -1588,3 +1588,24 @@ bounds banked (md0=1 collapse dominance, defender-perturbation, vocabulary not y
 Pages: [topics/mega-vct-solver.md](topics/mega-vct-solver.md) (`max_depth` + invariant #9),
 [topics/shape-library-engine.md](topics/shape-library-engine.md) §1/§8, [capabilities.md](capabilities.md)
 (Search & solve), [TRAINING_WIKI.md](../TRAINING_WIKI.md) 2026-06-28.
+
+## [2026-06-28] New page: idx-2 forward VCT frontier + danger map ("solve the Bruce-Lee board for black")
+
+Created [topics/idx2-vct-frontier-map.md](topics/idx2-vct-frontier-map.md) for a one-session
+exploratory experiment (Jason: "I don't expect to accomplish this, but run it, capture the data,
+see what we learn"). Forward-expand idx-2 [white to move] as an AND/OR frontier where **Rapfi-top-8
+generates the moves for both sides** and the **mega GPU VCT solver is the only oracle** (black VCT =
+win-terminus, white VCT = black-fumble loss-terminus; no minimax/backup). Deliberate approximation,
+NOT a sound solve (the AND-node top-K gap). Three scripts under `scripts/idx2_vct/`: `frontier.py`
+(append-only, resumable, D4-content-addressed reducer-over-a-log, bulk-synchronous), `probe_capped.py`,
+`analyze_opening.py`. Findings: **run-a = 9.6M nodes / depth-11 / 90-min wall (TIME-bound, not space)**;
+**throughput dead-flat ~1,750 nodes/s** (bulk-sync + the 250-node cap clips the solver tail) ⇒ "8 nodes
+trivial, millions not a wall"; branching decelerates 3.0→1.66× (attacker ~5.1 Rapfi moves vs defender
+~2.8; terminus frac →39%); dedup only ~2–3%. **The 250-node cap hides almost nothing cheap** (<1% of
+capped flip to a win at 16× budget ⇒ a genuinely-hard third regime; the 2.4M win harvest is a near-floor).
+The **danger map** (depths 0–7, 149,627 nodes): per-move both-sides danger densities + nearest forced
+win/loss + honest cap/gap accounting + Rapfi-prior-vs-oracle-danger — idx-2 reads black-favourable
+(WT 0.28 vs BT 0.08) but ~half-unknown; Rapfi's mid-ranking is NOT danger-calibrated; low-danger+high-
+uncertainty ≠ safe. Also benchmarked the Rapfi cost knob (`max_node` binds; small-ms timeout truncates
+multiPV — the wrong tool). UI noted, not built. Added the index doorway row (VCT cluster) +
+[capabilities.md](capabilities.md) "Search & solve" row. Data (out-of-git): `~/data/idx2_solve/run-a/`.
