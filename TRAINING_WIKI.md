@@ -5189,9 +5189,30 @@ windowing risk the adversary flagged). One bulk call per ablation step, all boar
   collapse can hide a ≤2–3-ply shortening at constant `sp` (future fix = emit `md = sp +
   leaf_offset`, additive).
 
+**RESULTS — `enable_serial` contrast (the deep, real-game, UNPERTURBED control; 105 resolved of
+the 512 deepest-`run` boards, `max_nodes=1500`, frame-cap `hi=16`).** The W story flips from
+"rare" to "universal" exactly as the depth hypothesis predicts. md0 is **deep** (histogram spans
+6–13 frames; vs molecule's 1–9 with 73% at md0=1) — these are real enabling *setups*, not root
+collapses. **Load-bearing W is 100% at *every* md0 (6–13), mean ~10 W stones/stencil** (vs
+molecule ~0.5) — on *unperturbed* real-game data, so it is **not** a harvest artifact. Three sharp
+contrasts: **(1)** the `w` channel (#90) is **regime-dependent** — a ~10× over-approximation on
+shallow molecules (9.8% load-bearing) but only **~1.3×** on deep shapes (1106/1471 = **75%
+load-bearing**); the cheap `w` is a *good* approximation exactly where defensive structure is real.
+**(2)** deep stencils barely reduce (**37%** vs 63%) and the ablated `B+W` object (mean **20.6**)
+is **larger** than `support∪carriers` (14.0) — because for deep defensive shapes the baseline is
+**incomplete** (no W), not over-inclusive; ablation *adds* the ~10 load-bearing W the carriers
+heuristic cannot represent. **(3)** vocabulary does **NOT** saturate — **96% of deep stencils are
+distinct** (101/105, near-zero repetition) vs molecule's 6% — the §7 "library too specific" risk is
+**real for the deep regime** (shallow molecules form a finite vocabulary; deep enabling-shapes are
+nearly all unique). Honest costs banked: **407/512 deep boards capped** at this budget (the deep
+tail wants more nodes/depth than `max_nodes=1500`/`hi=16`), and no-window ablation took **590 s for
+105 boards** — the dense-board (32.6 stones) perf wall; **windowing is the fix** (§8 NEXT). The
+16,384-board `enable` run did not finish under no-window (killed) — that *is* the perf finding.
+
 **Net:** the §3/§8 blocker is gone, the L1 minimizer exists and produces typed minimal stencils
-`(B, W, support, md0)` today, and the load-bearing-W hypothesis is confirmed + the `w`-channel
-over-approximation is quantified. Next: the `enable_serial` contrast (deeper VCTs), then the v0
+`(B, W, support, md0)` today, and the load-bearing-W hypothesis is confirmed on BOTH a shallow
+perturbed corpus (W-rate 0%→100% with md0) and a deep unperturbed one (100% W, mean ~10), with the
+`w`-channel over-approximation quantified and shown regime-dependent. Next: the `enable_serial` contrast (deeper VCTs), then the v0
 distance-field + fork player (§5) and L2 (§4). Files: `scripts/vct_metal/mega_vct_bb.py`
 (`max_depth`/`solve_md_min`), `scripts/threat_shapes/md_minimize.py`,
 `scripts/vct_metal/regen_vct_md_fixture.py`, FAST tests; docs

@@ -487,9 +487,16 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   is **0% at md0=1** (degenerate inline win), **72% at md0=2, 100% at md0≥4**; and the cheap `w`
   channel (#90) is a **~10× over-approximation** of the true load-bearing W (88,637 → 8,694).
   Honest bounds banked: **73% of `molecule_gold` is md0=1** (root fork-three collapse ⇒ poor W
-  substrate; the deeper real-game `enable_serial` corpus is the cleaner control); the corpus is
-  defender-perturbed (inflates W); vocabulary **not fully saturated** at 16k (902 distinct,
-  decelerating). Full record: [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-06-28.
+  substrate); the corpus is defender-perturbed (inflates W); vocabulary **not fully saturated** at
+  16k (902 distinct, decelerating). **The `enable_serial` deep/real-game contrast (105 boards):**
+  md0 spans **6–13** frames, **100% load-bearing W at every md0** (mean ~10/stencil, unperturbed ⇒
+  not an artifact), the `w` channel is only **~1.3× over-inclusive** here (75% load-bearing, vs ~10×
+  on shallow molecules), the ablated `B+W` object is **larger** than `support∪carriers` (the
+  baseline is *incomplete* — no W — for deep defensive shapes), and vocabulary **does NOT saturate**
+  (96% distinct ⇒ the §7 "library too specific" risk is real for deep shapes). Perf wall: no-window
+  ablation is `maxlen`-round-bound, too slow on 32-stone deep boards (590 s/105; the 16k run didn't
+  finish) ⇒ **windowing is the next perf step**. Full record:
+  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-06-28.
 - **NEXT (this plan):** (1) ✅ **stencil minimization** — DONE above (md-invariant, GPU sole
   oracle, bulk-synchronous). Refinements: the `enable_serial` deep-VCT contrast; **windowing**
   for the dense/deep regime (no-window ablation is `maxlen`-round-bound — the perf cost seen on
