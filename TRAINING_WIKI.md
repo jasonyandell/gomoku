@@ -5218,3 +5218,55 @@ distance-field + fork player (§5) and L2 (§4). Files: `scripts/vct_metal/mega_
 `scripts/vct_metal/regen_vct_md_fixture.py`, FAST tests; docs
 [mega-vct-solver.md](wiki/topics/mega-vct-solver.md) (`max_depth` + invariant #9) +
 [shape-library-engine.md](wiki/topics/shape-library-engine.md) §3/§8.
+
+### 2026-06-28 (second pass) — calibration of the claims above (accuracy/durability; Jason: "null result is also fine")
+
+A same-day audit of the morning entry's conclusions. The **kernel/tool results stand**; several
+**interpretive claims were overstated** and are corrected here (originals left intact above per the
+append-only norm). New analysis is CPU-only on the banked stencil dumps (`scripts` in
+`$JOB/tmp/analyze_vocab.py`); no GPU.
+
+- **RETRACTED — "deep VCT shapes don't saturate / have no small vocabulary / the §7 'library too
+  specific' risk is real."** This was an **exact-match-on-large-objects artifact.** The banked
+  stencils are wildly **over-inclusive** (mean **41 cells** on `enable`: found-line `support`
+  openings, never ablated, + ~10 over-counted `w`-derived W + B), and *every* diversity metric is
+  size-dominated. Measured (matched n=105): exact-set distinct **enable 96% / molecule 10%**, but
+  **IoU≥0.5 clusters enable 2 (2%) / molecule 3 (3%)**, IoU≥0.3 → **1 each**. So exact-match
+  over-counts diversity (big objects rarely identical) and IoU under-counts (big dense blobs all
+  overlap); the truth is **unresolvable from these stencils.** Honest status: **the vocabulary /
+  saturation question is OPEN (a null result)** — it needs *minimal* stencils (ablate the support
+  openings, fold D4, use minimal-W) and a size-controlled metric before any saturation claim is
+  meaningful. The morning "matched-n ~10% vs ~97%" contrast is real but **not** evidence of a
+  tactical-vocabulary difference — it is mostly the ~4× size difference.
+- **TIGHTENED — the W-rate-by-md0 curve.** "0% at md0=1" is **definitional, not a finding** (md0=1
+  ⇒ the `md0−1=0` cap always returns nowin ⇒ no W is *testable*). For **deep** mates, "≥1
+  load-bearing W" is **near-definitional**: a long forced mate *is* the defender delaying, so
+  removing a delayer shortens it — "100% of deep boards have a load-bearing W" is close to what
+  "deep mate" means. The informative, non-trivial numbers are the mid-range rate (**md0=2 → 72%,
+  md0=3 → 59%**) and the **counts/ratios** below — not the 0%→100% sweep.
+- **TIGHTENED — "load-bearing W" is an operational, order-dependent definition:** a stone whose
+  *single* removal (under cumulative-greedy ablation) opens a win at `md0−1`. It can miss
+  *jointly* load-bearing sets and is order-sensitive; it is a reasonable proxy, **not** the unique
+  minimal load-bearing set. So the `w`-channel ratios (**~10×** over-inclusive on shallow molecules,
+  **~1.3×** on deep) compare `w` to *this* proxy; the regime-direction (w over-approximates far more
+  on shallow than deep) is the durable part, the exact multiplier is proxy-dependent.
+- **CLARIFIED — md_min validation scope.** Verified: byte-identical default vs HEAD (16/16),
+  depth-monotonicity (no counterexample; monotone by construction), the bracket, and md_min == an
+  independent **linear scan**. The linear scan uses the *same* kernel, so this is **internal
+  consistency + the depth-cap mechanism**, NOT a cross-check of md_min's *absolute value* against an
+  independent oracle (the morning entry's "validated" slightly oversells this). No well-calibrated
+  external md oracle exists — the CPU searches a *different* fragment (`candidate_own` own-only vs
+  any-stone) — except on the **VCF (four-only) subset**, where the fragments coincide and a gated
+  CPU `mate_distance` cross-check *would* be sound (an open, durable follow-up). The **FRAME unit**
+  (`md = F + 2T + 1`) is **source-traced, not independently measured.**
+- **TIGHTENED — causality.** The data show md-depth *correlates* with load-bearing-defender count;
+  "long *because* white denies the short wins" remains a **hypothesis** consistent with (not proven
+  by) the measurement.
+- **STANDS (solid):** the kernel primitive (byte-identical default, monotone depth-cap, order-
+  independent md_min), the validated FAST tests + golden fixture, and the **minimizer as a working
+  analytical tool**. The honest net is a **tool + a method**, with the headline tactical questions
+  (vocabulary, minimal-W) still open — which is a fine place to be.
+
+**Follow-ups updated (#92):** ablate the `support` openings (the dominant over-inclusion source) +
+fold D4 + minimal-W, THEN re-ask vocabulary on minimal stencils with a size-controlled metric; and
+the VCF-subset CPU md cross-check as a one-time absolute-value validation.

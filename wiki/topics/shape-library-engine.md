@@ -481,22 +481,26 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   Cumulative lockstep ablation, directional single-cap tests (freestyle monotonicity): OWN stone
   at cap `md0` (clean-win → redundant DROP / nowin → load-bearing `B` KEEP); OPP stone at cap
   `md0−1` (clean-win → a shorter mate opened → load-bearing `W` KEEP / nowin → DROP); cap → KEEP
-  (fail-safe). No windowing (sound; sidesteps the found-line-vs-shortest-line risk). **Results on
-  `molecule_gold` (16,345 boards):** md_min in 19.6 s, 0 ceiling pressure; orig 13.2 → **4.91**
-  (B+W) stones (63% ↓); **load-bearing W is the long-VCT phenomenon, MEASURED** — W-rate by md0
-  is **0% at md0=1** (degenerate inline win), **72% at md0=2, 100% at md0≥4**; and the cheap `w`
-  channel (#90) is a **~10× over-approximation** of the true load-bearing W (88,637 → 8,694).
-  Honest bounds banked: **73% of `molecule_gold` is md0=1** (root fork-three collapse ⇒ poor W
-  substrate); the corpus is defender-perturbed (inflates W); vocabulary **not fully saturated** at
-  16k (902 distinct, decelerating). **The `enable_serial` deep/real-game contrast (105 boards):**
-  md0 spans **6–13** frames, **100% load-bearing W at every md0** (mean ~10/stencil, unperturbed ⇒
-  not an artifact), the `w` channel is only **~1.3× over-inclusive** here (75% load-bearing, vs ~10×
-  on shallow molecules), the ablated `B+W` object is **larger** than `support∪carriers` (the
-  baseline is *incomplete* — no W — for deep defensive shapes), and vocabulary **does NOT saturate**
-  (96% distinct ⇒ the §7 "library too specific" risk is real for deep shapes). Perf wall: no-window
-  ablation is `maxlen`-round-bound, too slow on 32-stone deep boards (590 s/105; the 16k run didn't
-  finish) ⇒ **windowing is the next perf step**. Full record:
-  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-06-28.
+  (fail-safe). No windowing (sound; sidesteps the found-line-vs-shortest-line risk). "Load-bearing
+  W" = the *single*-removal (cumulative-greedy, order-dependent) operational set — a proxy, not the
+  unique minimal set. **Measured on `molecule_gold` (16,345):** md_min in 19.6 s, 0 ceiling pressure;
+  the W-count **rises with mate depth** — W-rate **0% at md0=1** (definitional: the `md0−1=0` cap
+  cannot test any W), **72% at md0=2, 59% at md0=3, ~100% by md0≥4** (the deep-end ~100% is
+  *near-definitional* — a long forced mate *is* the defender delaying, so a delayer removal shortens
+  it). The cheap `w` channel (#90) carried **88,637** stones, ablation kept **8,694** under the proxy
+  (so `w` is **~10×** the single-removal set on this shallow corpus). **`enable_serial` deep contrast
+  (105 boards, 407/512 capped at the tight budget):** md0 spans **6–13**, every board has ≥1
+  load-bearing W (mean ~10), and `w` is only **~1.3×** the proxy here (1106/1471) — i.e. the cheap
+  `w` is a *much better* approximation on deep defensive shapes than shallow ones (the durable
+  regime-direction; the exact multiplier is proxy-dependent). The ablated `B+W` is **larger** than
+  `support∪carriers` on deep boards (the baseline carries no W). **NULL result on vocabulary
+  (corrected, second pass):** these stencils are too **over-inclusive** (mean **41 cells** on deep:
+  un-ablated found-line openings + ~10 W + B) to read diversity from — exact-set distinct (96% deep
+  / 10% shallow at matched n=105) over-counts, IoU≥0.5 clustering collapses *both* to 1–3 clusters;
+  the metric is size-dominated and the saturation question is **open** until *minimal* (openings-
+  ablated, D4-folded) stencils exist. Perf: no-window ablation is `maxlen`-round-bound, too slow on
+  ~41-cell deep boards (590 s/105; the 16k run did not finish). Full record + the retraction:
+  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-06-28 (entry + second-pass calibration).
 - **NEXT (this plan):** (1) ✅ **stencil minimization** — DONE above (md-invariant, GPU sole
   oracle, bulk-synchronous). Refinements: the `enable_serial` deep-VCT contrast; **windowing**
   for the dense/deep regime (no-window ablation is `maxlen`-round-bound — the perf cost seen on

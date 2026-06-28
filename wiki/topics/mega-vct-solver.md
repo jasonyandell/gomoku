@@ -210,16 +210,27 @@ five / sound double-four / fork-three) sets `ret=1` at its detecting OR frame
 *without descending* = **collapses (+0)**. So `md_min = F + 2T + 1` for a
 defender-maximised line with `F` fours and `T` threes before the collapsed leaf.
 md_min is an affine, **coarser-at-the-leaf** measure than the CPU `mate_distance`
-(which *expands* the leaf the GPU collapses). Two honest, **length-over-estimating /
+(which *expands* the leaf the GPU collapses). The unit (`md = F + 2T + 1`) is
+**source-traced, not independently measured.** Two honest, **length-over-estimating /
 over-keeping** (never unsound — L0 re-verifies) bounds: (i) the `def_tempo` veto can
 inflate three-opening lines; (ii) the inline collapse can hide a ≤2–3-ply shortening
-at constant `sp` (a future fix = emit `md = sp + leaf_offset`, additive). **GPU-self
-validated** (monotonicity + bracket + byte-identical); **NO CPU cross-oracle** — a
-*live* CPU md is mis-calibrated here (the kernel's `candidate_own` own-only Cheb-2 is
-narrower than CPU's any-stone candidate set ⇒ `md_gpu > md_cpu` with no bug) and
-would re-summon the retired solver — so the verdict half is cross-checked against the
-already-committed `vct_golden.npz` labels instead. Drives the L1 **md-invariant stencil
-minimizer** ([shape-library-engine.md](shape-library-engine.md) §3/§8).
+at constant `sp` (a future fix = emit `md = sp + leaf_offset`, additive).
+
+**Validation SCOPE (don't oversell it).** What is checked: byte-identical default vs
+HEAD (16/16 flag combos), depth-**monotonicity** (`win(d)` never True→False — also true
+by construction: more budget can't delete a shallower proof), the **bracket**
+(`win@md` clean, `win@md−1` clean no-win), and `md_min == an independent **linear scan**`.
+The linear scan uses the *same* kernel, so this validates **internal consistency + the
+depth-cap mechanism**, NOT md_min's *absolute value* against an independent oracle. None
+is well-calibrated: a *live* CPU md searches a **different fragment** (the kernel's
+`candidate_own` own-only Cheb-2 is narrower than CPU's any-stone candidate set ⇒
+`md_gpu > md_cpu` with no bug), and using it re-summons the retired solver. The verdict
+half (`md≥1 ⟺ win`) is cross-checked against the committed `vct_golden.npz` labels. **One
+sound external check is open:** on the **VCF (four-only) subset** the two solvers'
+fragments coincide (the `candidate_own` gap only affects *threes*), so a gated CPU
+`mate_distance` cross-check there *would* independently pin the absolute md — a durable
+follow-up, not yet run. Drives the L1 **md-invariant stencil minimizer**
+([shape-library-engine.md](shape-library-engine.md) §3/§8).
 
 ---
 
