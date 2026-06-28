@@ -5270,3 +5270,43 @@ append-only norm). New analysis is CPU-only on the banked stencil dumps (`script
 **Follow-ups updated (#92):** ablate the `support` openings (the dominant over-inclusion source) +
 fold D4 + minimal-W, THEN re-ask vocabulary on minimal stencils with a size-controlled metric; and
 the VCF-subset CPU md cross-check as a one-time absolute-value validation.
+
+## 2026-06-28 (n=1225 streaming scale-out) — the vocabulary null holds at 10× scale; a resumable harness for unbounded n
+
+Jason: "run a larger sample, n=1000+, append-only, trivially resumable, to prove that out and set us
+up for unbounded n later." Built `scripts/threat_shapes/md_minimize_stream.py` (reducer-over-a-log:
+the JSONL output is the only state; each board content-addressed `sha1(corpus|atk|dfd)`, written once
+with status ok/capped/dead; resume = skip logged ids; capped ids recorded so they aren't retried) +
+`analyze_vocab_stream.py` (O(n) exact/D4 distinct over all n, IoU on a capped sample). Commit ca26b58.
+
+- **Input-order is the throughput lever (a real finding).** Deepest-first (the prior n=105 strategy)
+  cherry-picks pathologically-unsolvable boards: **256 → 51 ok / 205 md0-capped in 1109 s (~20% yield)**.
+  Shuffled (seeded, representative real-game sample): **256 → 237 ok / 19 capped in 287 s (93% yield,
+  4× faster)**. The capped boards are unusable anyway (no md0 ⇒ nothing to minimize), so deepest-first
+  spends ~80% of compute on dead ends. Full shuffled run: **1225 ok / 55 capped / 0 dead in 1278 s
+  (~21 min)**, log `~/data/md_stencils/stream_enable_shuf.jsonl`.
+- **The vocabulary null is now stable at n=1225 (10× the n=105 second-pass result).** mean stencil
+  **22.6 cells** (B 6.3, W 4.7); **exact-distinct 98% / D4-distinct 96%**, but **IoU≥0.5 → 19%
+  clusters / IoU≥0.3 → 0.25% (one blob)** — the "diversity" number swings ~400× with the threshold.
+  No stable vocabulary count exists because the metric is dominated by **stencil size + threshold**,
+  not tactical content. Confirms the second-pass retraction: the question is **unanswerable until the
+  stencils are minimal** (openings ablated).
+- **NEW sub-finding — D4 is NOT the dedup lever.** The second pass flagged D4-folding as a possible
+  ~8× deduplicator; at n=1225 it moves exact-distinct only **98% → 96%** (≈2% of stencils are D4
+  images of another). So the inflator is **over-inclusion** (un-ablated `support` openings → mean
+  22.6 cells), not missing symmetry. This re-prioritises #92: **ablate the support openings first**;
+  D4 is a rounding error by comparison.
+- **W findings reproduce cleanly + stably at scale.** W-rate **0% at md0=1 (definitional)**, **100%
+  at md0=2, 95% at md0=3, 100% at md0≥4**; `w`-channel **2.2×** the single-removal load-bearing set
+  — squarely between molecule's ~10× (shallow) and the deepest-band's ~1.3×, i.e. the `w`
+  over-approximation tightens monotonically with mate depth, now traced across three regimes.
+- **Honest scope caveat.** Shuffled enable is **moderate depth** — 91% of the 1225 are md0≤4 (mean 22.6
+  cells), vs the prior n=105 *deepest* band (mean 41 cells, IoU≥0.5 → 2 clusters). The deepest band
+  shows an even starker size-driven collapse; both regimes point the same way (over-inclusion
+  dominates), but the n=1225 sample under-represents the 41-cell tail. Unbounded-n on the deep tail
+  needs the #92 budget/windowing work (the deepest band caps at ~80%).
+
+Net: the **harness is the deliverable** (resumable, append-only, 96% yield, ready for unbounded n),
+and it **proves the second-pass null durable at 10× scale** while sharpening the path forward (ablate
+openings ≫ fold D4). Files: `scripts/threat_shapes/md_minimize_stream.py`,
+`analyze_vocab_stream.py`; log `stream_enable_shuf.jsonl` (+ `stream_enable.jsonl`, 51 deep stencils).

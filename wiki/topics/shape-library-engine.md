@@ -498,9 +498,16 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   un-ablated found-line openings + ~10 W + B) to read diversity from — exact-set distinct (96% deep
   / 10% shallow at matched n=105) over-counts, IoU≥0.5 clustering collapses *both* to 1–3 clusters;
   the metric is size-dominated and the saturation question is **open** until *minimal* (openings-
-  ablated, D4-folded) stencils exist. Perf: no-window ablation is `maxlen`-round-bound, too slow on
-  ~41-cell deep boards (590 s/105; the 16k run did not finish). Full record + the retraction:
-  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-06-28 (entry + second-pass calibration).
+  ablated) stencils exist. **Confirmed at 10× scale (n=1225, streaming):** a resumable append-only
+  minimizer (`md_minimize_stream.py`, reducer-over-a-log) ran 1225 real-game `enable` stencils in
+  ~21 min — exact-distinct **98%** but IoU≥0.5 **19%** / IoU≥0.3 **0.25%** (the number swings ~400×
+  with the threshold ⇒ no stable vocabulary count). Two scale-out findings: (a) **D4-folding is NOT
+  the lever** — it moves exact only 98→96% (~2% are D4 images), so **over-inclusion ≫ symmetry**;
+  ablate the `support` openings first. (b) **input order is the throughput lever** — deepest-first
+  caps ~80% of boards (md0 unsolvable at budget; 20% yield), shuffled gets **93% yield, 4× faster**.
+  Perf: no-window ablation is `maxlen`-round-bound (the deepest 41-cell band still needs #92
+  budget/windowing). Full record + the retraction:
+  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-06-28 (entry + second-pass + n=1225 scale-out).
 - **NEXT (this plan):** (1) ✅ **stencil minimization** — DONE above (md-invariant, GPU sole
   oracle, bulk-synchronous). Refinements: the `enable_serial` deep-VCT contrast; **windowing**
   for the dense/deep regime (no-window ablation is `maxlen`-round-bound — the perf cost seen on
