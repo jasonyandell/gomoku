@@ -35,7 +35,8 @@ corpus labeling, scale `max_nodes` with B. A CAP verdict is fail-safe wherever
 ```python
 solve_vct_mega_bb(boards, *, max_nodes=20000, tg=32,
                   return_move=False, return_support=False, complete=False,
-                  return_carriers=False, return_w=False)
+                  return_carriers=False, return_w=False, max_depth=None)
+solve_md_min(boards, *, max_nodes=20000, lo=1, hi=None, tg=32)  # -> (md, capped)
 ```
 
 `boards`: `(B, 2, N, N)` bool, **side-to-move-relative** — `board[0]` is the
@@ -59,6 +60,14 @@ never break:
 | `complete=True` | `winmask` | `(B,4)` uint64 | bitmask of **ALL** winning first moves; also flips `win` to "∃ a winning first move" |
 | `return_carriers=True` | `carriers` | `(B,4)` uint64 | the load-bearing OWN **stones** the proof's five-lines run through (the `B` channel complementing `support`'s `./p`); all-zero on a non-win |
 | `return_w=True` | `w` | `(B,4)` uint64 | the OPP mirror of `carriers`: the (over-inclusive) load-bearing DEFENDER **stones** on the proof's lines (the `W` channel) — `w = opp ∩ ⋃_support COLLIN`; all-zero on a non-win |
+
+There is also **one optional INPUT** (issue #91): `max_depth` (int or `(B,)` int32)
+caps the proof search at a per-board **frame depth** and adds NO output — it only
+restricts `win` to "∃ a forced VCT within `max_depth` frames" (cut branch → clean
+no-win, never `hit_cap`). It gates its own compiled variant (default verdict
+byte-identical). The wrapper **`solve_md_min(boards) -> (md, capped)`** binary-searches
+it to the **order-independent** mate distance md_min (see the `max_depth` / `md_min`
+section below).
 
 Unpack a `(4,)` uint64 mask to flat cell indices with
 `mega_vct_bb.cells_from_words(words)` (inverse of the kernel's bit packing, bit
@@ -173,6 +182,56 @@ missing**. The completeness oracle is vcf's exact root candidate generation
 — omitting that guard was a *verifier* bug that produced phantom "misses"; the
 solver was right.
 
+### `max_depth` (per-board frame cap) + `solve_md_min` (mate distance) — issue #91
+The **input** `max_depth` caps the search at a per-board **frame depth**: a branch
+that reaches frame `sp == max_depth` returns a **clean `ret=0`** (a definitive "no
+forced win within `sp < max_depth` frames") **without** descending and **without
+setting `hit_cap`**. The cut is placed *after* the node/structural cap, so an
+out-of-`max_nodes` board still latches `hit_cap` (inconclusive) and wins the race —
+the depth cut and the node cap are kept semantically distinct (one is "no win within
+this depth", the other is "couldn't afford to decide"). It makes **no move before
+cutting**, so the `own==own_in` / `opp==opp_in` at-break invariant carriers/`w` rely
+on is preserved. Its own compiled kernel variant; the **default verdict is
+byte-identical** and every prior variant is unchanged (invariant #9).
+
+**`md_min(b)` = `min{ d : solve_vct_mega_bb(b, max_depth=d).win }`** — read from the
+boolean verdict alone, so it is **ORDER-INDEPENDENT** (no move ordering / OR
+short-circuit can move a True/False threshold), **monotone** (`win(d) ⟹ win(d+1)`),
+and **minimax-correct** (OR = ∃ over attacker moves, AND = ∀ over the bounded reply
+set). `solve_md_min(boards) -> (md, capped)` finds it by a **per-board binary search**
+over `[lo, hi]` — every board marches its own bracket in one bulk call, so the whole
+corpus resolves in `⌈log2(hi−lo+1)⌉ ≈ 5` flat tails (the call-cost law). `md` is `-1`
+on a clean no-win or where `capped` (a probe hit `max_nodes`; re-run at higher budget
+— md is never silently wrong, only **withheld**).
+
+**FRAME unit — NOT attacker-plies-to-five.** A **four** advances OR→OR = **+1 frame**;
+a **forcing three** advances OR→AND→OR = **+2 frames**; an **inline win** (immediate
+five / sound double-four / fork-three) sets `ret=1` at its detecting OR frame
+*without descending* = **collapses (+0)**. So `md_min = F + 2T + 1` for a
+defender-maximised line with `F` fours and `T` threes before the collapsed leaf.
+md_min is an affine, **coarser-at-the-leaf** measure than the CPU `mate_distance`
+(which *expands* the leaf the GPU collapses). The unit (`md = F + 2T + 1`) is
+**source-traced, not independently measured.** Two honest, **length-over-estimating /
+over-keeping** (never unsound — L0 re-verifies) bounds: (i) the `def_tempo` veto can
+inflate three-opening lines; (ii) the inline collapse can hide a ≤2–3-ply shortening
+at constant `sp` (a future fix = emit `md = sp + leaf_offset`, additive).
+
+**Validation SCOPE (don't oversell it).** What is checked: byte-identical default vs
+HEAD (16/16 flag combos), depth-**monotonicity** (`win(d)` never True→False — also true
+by construction: more budget can't delete a shallower proof), the **bracket**
+(`win@md` clean, `win@md−1` clean no-win), and `md_min == an independent **linear scan**`.
+The linear scan uses the *same* kernel, so this validates **internal consistency + the
+depth-cap mechanism**, NOT md_min's *absolute value* against an independent oracle. None
+is well-calibrated: a *live* CPU md searches a **different fragment** (the kernel's
+`candidate_own` own-only Cheb-2 is narrower than CPU's any-stone candidate set ⇒
+`md_gpu > md_cpu` with no bug), and using it re-summons the retired solver. The verdict
+half (`md≥1 ⟺ win`) is cross-checked against the committed `vct_golden.npz` labels. **One
+sound external check is open:** on the **VCF (four-only) subset** the two solvers'
+fragments coincide (the `candidate_own` gap only affects *threes*), so a gated CPU
+`mate_distance` cross-check there *would* independently pin the absolute md — a durable
+follow-up, not yet run. Drives the L1 **md-invariant stencil minimizer**
+([shape-library-engine.md](shape-library-engine.md) §3/§8).
+
 ---
 
 ## Invariants (the regression contract)
@@ -195,10 +254,20 @@ solver was right.
 8. `w` ⊆ occupied-opp-at-root, disjoint from `support` and `carriers`, empty on a
    non-win; on the `.BBBB.` golden board with defenders at COLLIN distances 1/4/5
    from a support cell, `w` == exactly the within-4 (distance 1 and 4) defenders.
+9. **`max_depth` / depth_cap (#91) is purely additive.** `_build_src(s,c,cr,w,depth_cap=False)`
+   is **byte-identical** to today's `_build_src(s,c,cr,w)` for all 16 `(s,c,cr,w)`
+   (verified against `git HEAD`); `depth_cap=True` adds **exactly** one input
+   (`max_depth`) and the two injected strings, **zero outputs** — so no existing
+   compiled variant changes. Runtime: `max_depth=MAXD-1` reproduces the default
+   `(win,hit,move)` exactly (the structural cap fires first → the cut is dead code
+   there); `win(d)` is monotone non-decreasing; `solve_md_min` brackets it
+   (`win@md` clean, `win@md-1` clean no-win) and `md>=1 ⟺` the default clean win.
 
 Covered by `scripts/vct_metal/test_mega_vct_bb.py` — `test_support_and_complete_invariants`,
 `test_carriers_golden_shapes`, `test_carriers_invariants`, `test_w_golden_shapes`,
-`test_w_invariants`
+`test_w_invariants`, `test_depth_cap_byte_identical_and_composes`,
+`test_depth_cap_ceiling_equals_default`, `test_depth_monotonic`, `test_md_min_bracket`,
+`test_md_matches_golden`
 (run via `GOMOKU_BOARD_SIZE=15 uv run python -m scripts.vct_metal.test_mega_vct_bb`;
 **budget `max_nodes=500` captures ~90% of VCTs and runs in seconds** — Jason's test
 default). The default-verdict cross-check vs the cell-scan `mega_vct` (0
@@ -278,7 +347,8 @@ the loop, not the kernel, which is 4 s flat at B=16384):
 `scripts/threat_shapes/`: `mine_vct_gpu_flat.py`, `mine_first_vct.py`,
 `solve_puzzles.py`, `mine_puzzles.py`, `harvest_molecules.py`, `vct_fan.py`,
 `probe_timing.py`, `certificate_falsification.py` (the `carriers` certificate),
-`w_channel_probe.py` (the `w` identity-not-existence probe, #90).
+`w_channel_probe.py` (the `w` identity-not-existence probe, #90),
+`md_minimize.py` (the `max_depth`/`solve_md_min` md-invariant stencil minimizer, #91).
 Feeds [shape-library-engine.md](shape-library-engine.md) (L1
 stencils), [vct-backward-mining.md](vct-backward-mining.md),
 [vct-reachability-mining.md](vct-reachability-mining.md), and

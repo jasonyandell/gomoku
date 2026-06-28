@@ -50,7 +50,8 @@ Date: 2026-06-26. Hardware: M5 Max, 48 GB, MPS/MLX-Metal. Game: **freestyle** 9�
 | **L0 — exact GPU VCT solver** | ✅ DONE | [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8 |
 | **Stage-1 games + backward enabling-shape miner** | ✅ DONE — 63k shapes banked | [vct-backward-mining.md](vct-backward-mining.md) |
 | **First-VCT forward miner** (the §3 mining input) | ✅ DONE (2026-06-26) — `mine_first_vct.py`, append-only | §3 / §8 |
-| **L1 — stencil extraction / the library** | 🔲 NEW (§3) | this page |
+| **md-extraction** (the §3 ablation prerequisite) | ✅ DONE (2026-06-28, #91) — `max_depth`/`solve_md_min`, GPU-only, order-independent | [mega-vct-solver.md](mega-vct-solver.md) `max_depth` |
+| **L1 — md-invariant stencil minimizer** | 🟡 BUILT + measured (2026-06-28, §3/§8) — `md_minimize.py` | this page |
 | **L2 — learned meta-VCT field** | 🔲 NEW (§4) | this page |
 | **The player — fork-seeking pursuit search** | 🔲 NEW (§5) | this page |
 
@@ -466,19 +467,54 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   ever needed — exactly the negative-prefix cost from [vct-backward-mining.md](vct-backward-mining.md) §3).
   The catalyst move p is extracted at emit time (anchors minimization), so L1 does **not** wait
   on the inherited move-extraction bottleneck.
-- **BLOCKING PREREQUISITE (surfaced 2026-06-26):** **md-extraction** — stencil minimization
-  ablates on **mate-distance invariance**, not "still a win" (§3 correction #2), so we need depth
-  out of the solver. `solve_vct_mega_bb` returns only `(win, hit_cap)` and caps *nodes*, not
-  depth ⇒ either get md/depth from the kernel (the move/depth extraction open since
-  [vct-backward-mining.md](vct-backward-mining.md) §5) or depth-cap solves ("still win at md−1?").
-  This gates (1).
-- **NEXT (this plan):** (1) **stencil minimization** (§3) — **context ablation** on the real
-  legal board (the all-white "meanest" certificate FAILED), **md-invariant**, anchored on
-  **`(p, md)`**, keeping load-bearing `W` stones; **bulk-synchronous** (~16k boards/call), capped
-  `max_nodes`. GPU solver is the sole oracle — **no CPU cross-validation** (CPU `solve_vct` is
-  incomplete vs the GPU and ~15 min/query; Jason 2026-06-26). (2) the structural-match index +
-  mobility sweep, each match **L0-verified** (L1 proposes, L0 proves); (3) the v0 distance-field
-  + fork player; (4) L2 meta-VCT field on verifiable targets.
+- **DONE (2026-06-28, #91) — md-extraction, the blocker is GONE.** The depth-cap variant
+  `solve_vct_mega_bb(max_depth=)` + the wrapper `solve_md_min` give the **order-independent**
+  mate distance md_min on GPU, by binary-searching a per-board frame cap (the cut returns clean
+  `ret=0` without `hit_cap`, before any move ⇒ default verdict byte-identical, carriers/w safe).
+  See [mega-vct-solver.md](mega-vct-solver.md) `max_depth` / invariant #9. **GPU-self validated**
+  (byte-identical-vs-HEAD, depth-monotonicity, md bracket, md_min == an independent linear scan);
+  **NO CPU cross-oracle** — a *live* CPU md is mis-calibrated (kernel `candidate_own` own-only is
+  narrower than CPU's any-stone candidate set ⇒ `md_gpu > md_cpu` with no bug) and would
+  re-summon the retired solver. md is in **FRAME units** (four=+1, three=+2, inline win collapses)
+  — sufficient for shortening-detection, never reconciled to the CPU `mate_distance`.
+- **DONE (2026-06-28, #91) — the md-invariant minimizer, BUILT + MEASURED** (`md_minimize.py`).
+  Cumulative lockstep ablation, directional single-cap tests (freestyle monotonicity): OWN stone
+  at cap `md0` (clean-win → redundant DROP / nowin → load-bearing `B` KEEP); OPP stone at cap
+  `md0−1` (clean-win → a shorter mate opened → load-bearing `W` KEEP / nowin → DROP); cap → KEEP
+  (fail-safe). No windowing (sound; sidesteps the found-line-vs-shortest-line risk). "Load-bearing
+  W" = the *single*-removal (cumulative-greedy, order-dependent) operational set — a proxy, not the
+  unique minimal set. **Measured on `molecule_gold` (16,345):** md_min in 19.6 s, 0 ceiling pressure;
+  the W-count **rises with mate depth** — W-rate **0% at md0=1** (definitional: the `md0−1=0` cap
+  cannot test any W), **72% at md0=2, 59% at md0=3, ~100% by md0≥4** (the deep-end ~100% is
+  *near-definitional* — a long forced mate *is* the defender delaying, so a delayer removal shortens
+  it). The cheap `w` channel (#90) carried **88,637** stones, ablation kept **8,694** under the proxy
+  (so `w` is **~10×** the single-removal set on this shallow corpus). **`enable_serial` deep contrast
+  (105 boards, 407/512 capped at the tight budget):** md0 spans **6–13**, every board has ≥1
+  load-bearing W (mean ~10), and `w` is only **~1.3×** the proxy here (1106/1471) — i.e. the cheap
+  `w` is a *much better* approximation on deep defensive shapes than shallow ones (the durable
+  regime-direction; the exact multiplier is proxy-dependent). The ablated `B+W` is **larger** than
+  `support∪carriers` on deep boards (the baseline carries no W). **NULL result on vocabulary
+  (corrected, second pass):** these stencils are too **over-inclusive** (mean **41 cells** on deep:
+  un-ablated found-line openings + ~10 W + B) to read diversity from — exact-set distinct (96% deep
+  / 10% shallow at matched n=105) over-counts, IoU≥0.5 clustering collapses *both* to 1–3 clusters;
+  the metric is size-dominated and the saturation question is **open** until *minimal* (openings-
+  ablated) stencils exist. **Confirmed at 10× scale (n=1225, streaming):** a resumable append-only
+  minimizer (`md_minimize_stream.py`, reducer-over-a-log) ran 1225 real-game `enable` stencils in
+  ~21 min — exact-distinct **98%** but IoU≥0.5 **19%** / IoU≥0.3 **0.25%** (the number swings ~400×
+  with the threshold ⇒ no stable vocabulary count). Two scale-out findings: (a) **D4-folding is NOT
+  the lever** — it moves exact only 98→96% (~2% are D4 images), so **over-inclusion ≫ symmetry**;
+  ablate the `support` openings first. (b) **input order is the throughput lever** — deepest-first
+  caps ~80% of boards (md0 unsolvable at budget; 20% yield), shuffled gets **93% yield, 4× faster**.
+  Perf: no-window ablation is `maxlen`-round-bound (the deepest 41-cell band still needs #92
+  budget/windowing). Full record + the retraction:
+  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-06-28 (entry + second-pass + n=1225 scale-out).
+- **NEXT (this plan):** (1) ✅ **stencil minimization** — DONE above (md-invariant, GPU sole
+  oracle, bulk-synchronous). Refinements: the `enable_serial` deep-VCT contrast; **windowing**
+  for the dense/deep regime (no-window ablation is `maxlen`-round-bound — the perf cost seen on
+  `enable_serial`); ablate the **support openings** too (only stones are ablated today); emit
+  `md = sp + leaf_offset` to undo the inline collapse. (2) the structural-match index + mobility
+  sweep, each match **L0-verified** (L1 proposes, L0 proves); (3) the v0 distance-field + fork
+  player; (4) L2 meta-VCT field on verifiable targets.
 - **DEFERRED (conservative, §3):** D4 / reflections / rotations — purely-additive 8× dedup,
   folded in later; and the "empty → attacker-or-empty" loosening.
 

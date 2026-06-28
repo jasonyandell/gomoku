@@ -5109,3 +5109,204 @@ green via the session-wide override in `tests/conftest.py` (at the DEFAULT board
 they encode 9×9 cells). The reusable lesson banked on [topics/mega-vct-solver.md]: commit a
 golden fixture, never re-derive truth at test time; the GPU solver is fast, slow oracles are
 the test-wall.
+
+## 2026-06-28 — md-extraction CRACKED (#91): the §3 stencil-minimizer blocker is gone; load-bearing W measured
+
+The single named blocking prerequisite for the shape-library L1 minimizer
+([shape-library-engine.md](wiki/topics/shape-library-engine.md) §8) was **md-extraction**:
+the minimizer must ablate stones on **mate-distance invariance** (a load-bearing stone is one
+whose removal *shortens* the mate — §3 correction #2), but `solve_vct_mega_bb` returned only
+`(win, hit_cap)` and capped *nodes*, not depth. Cracked tonight on `feat/md-extraction` (NOT
+merged). Autonomous overnight run; Jason's charge was "try things that don't work and write
+them down so we learn" — both the wins and the honest bounds are below.
+
+**Approach (de-risked by a 7-agent design workflow first).** A background Workflow ran 5
+read-only design analysts (kernel audit, md theory, approach ranking, validation, minimizer) →
+an adversarial reviewer → a synthesizer, before any kernel surgery (the megakernel is the #1
+silent-wrong-answer trap). The adversary earned its keep: it killed the plan's CPU md_min
+cross-oracle as **mis-calibrated** — the kernel's `candidate_own` (own-only Chebyshev-2) is
+*narrower* than CPU `vcf`'s any-stone candidate set, so `md_gpu > md_cpu` can occur with **no
+bug** — and it would have re-summoned the retired CPU solver (against canon + the
+`feedback-trust-validated-oracle` memory). Dropped; validate **GPU-self** instead.
+
+**The kernel primitive (issue #91, the chosen "Approach C").** A new compiled variant gated by
+a `depth_cap` flag adds **one input** (`max_depth`, per-board int32) and **zero outputs**: a
+branch reaching frame `sp == max_depth` returns a clean `ret=0` (a definitive "no forced win
+within `sp < max_depth` frames") **without** setting `hit_cap` and **before making any move**
+(so `own==own_in`/`opp==opp_in` at break is preserved — carriers/w safe). Then
+**`md_min(b) = min{ d : solve(b, max_depth=d).win }`**, read from the boolean verdict alone, so
+it is **order-independent** (no move-ordering / OR short-circuit can move a True/False
+threshold), monotone, minimax-correct. `solve_md_min(boards)` binary-searches it per-board —
+every board marches its own bracket in **one** bulk call, so a whole corpus resolves in ~5 flat
+tails (the call-cost law). The edit is **purely additive**: `_build_src(s,c,cr,w,depth_cap=False)`
+is **byte-identical to git HEAD** for all 16 flag combos (verified) — no existing variant moves.
+
+**md is in FRAME units, not attacker-plies.** A four = +1 frame, a forcing three = +2 (it
+pushes an AND node), and an inline win (immediate-five / sound double-four / fork-three)
+**collapses** (ret=1 at its frame, +0). This is the right *consistent* measure for shortening-
+detection but is coarser than the CPU's `mate_distance`; never reconcile the two (banked as
+invariant #9 + a §metric note).
+
+**Validation — all green, GPU-only (no CPU).** A gate confirmed, in order: [1] byte-identical
+default vs HEAD; [2] depth_cap composes additively; [3] `max_depth=MAXD-1` reproduces the
+default `(win,hit,move)` exactly; [4] **depth monotonicity** `win(d)` never True→False (the
+adversary's "single most important" correctness gate); [5] `solve_md_min` brackets correctly
+**and equals an independent linear scan** on every uncapped board. Permanent FAST-tier tests +
+a GPU-self golden fixture (`regen_vct_md_fixture.py`, no CPU) added.
+
+**L1 md-invariant minimizer built + measured** (`scripts/threat_shapes/md_minimize.py`).
+Cumulative lockstep ablation, directional single-cap tests (exploiting freestyle monotonicity):
+OWN stone probed at cap `md0` (clean win → redundant DROP; nowin → load-bearing `B` KEEP); OPP
+stone at cap `md0−1` (clean win → a shorter mate opened → load-bearing `W` KEEP; nowin → DROP);
+hit_cap → KEEP (fail-safe). No windowing (sound; sidesteps the found-line-vs-shortest-line
+windowing risk the adversary flagged). One bulk call per ablation step, all boards in lockstep.
+
+**RESULTS — `molecule_gold` (16,345 non-VCF combinational VCTs, the first 16,384 by `dist`):**
+- **md_min over the corpus in 19.6 s; ablation 98 s.** 99.8% resolved, **zero ceiling pressure**
+  (max md0 = 9 ≪ MAXD=32). Reduction: orig 13.2 stones → **4.91** (B+W) ablated (63% ↓).
+- **Load-bearing W is the long-VCT phenomenon — MEASURED.** W-rate by md0: **md0=1 → 0%**
+  (correct: inline root wins are degenerate, defender-cap=0), md0=2 → 72%, **md0≥4 → 100%**.
+  Exactly the wiki's claim ("load-bearing white is the *rule* in long VCTs — they're long
+  *because* white denies the short wins"), now quantified.
+- **The `w` channel (#90) is a ~10× over-approximation.** It flagged 88,637 defender stones;
+  ablation distilled only **8,694 actually load-bearing** (9.8%). So the cheap `w` over-approx is
+  a real ~10× over-count of the minimal load-bearing W — md-ablation is *necessary* to get it.
+
+**Honest bounds / negatives (the "write it down" half):**
+- **73% of `molecule_gold` is md0=1** — root-collapsed inline wins (a fork-three detected at
+  frame 0 without descending). The R5 inline-collapse *dominates* this corpus, so it's a **poor
+  substrate for the W phenomenon** (the real W story lives in the md0≥2 tail). This is why the
+  denser/deeper real-game `enable_serial` corpus is the cleaner test (run in progress; contrast
+  to be appended).
+- **Corpus caveat:** `molecule_gold` was harvested by *perturbing the defender* (injecting a
+  blunder), which likely inflates the W-rate — `enable_serial` (real-game, unperturbed) is the
+  control.
+- **Vocabulary did NOT fully saturate at 16k** (902 distinct ablated stencils, curve decelerating
+  but still +35/800). Honest yellow flag for the "finite vocabulary" bet; needs more boards
+  (and/or the §3-deferred D4 fold to dedup 8×) to call.
+- Two accepted, *length-over-estimating / over-keeping* (never unsound — L0 re-verifies) md
+  bounds carried forward: the `def_tempo` veto can inflate three-opening lines; the inline
+  collapse can hide a ≤2–3-ply shortening at constant `sp` (future fix = emit `md = sp +
+  leaf_offset`, additive).
+
+**RESULTS — `enable_serial` contrast (the deep, real-game, UNPERTURBED control; 105 resolved of
+the 512 deepest-`run` boards, `max_nodes=1500`, frame-cap `hi=16`).** The W story flips from
+"rare" to "universal" exactly as the depth hypothesis predicts. md0 is **deep** (histogram spans
+6–13 frames; vs molecule's 1–9 with 73% at md0=1) — these are real enabling *setups*, not root
+collapses. **Load-bearing W is 100% at *every* md0 (6–13), mean ~10 W stones/stencil** (vs
+molecule ~0.5) — on *unperturbed* real-game data, so it is **not** a harvest artifact. Three sharp
+contrasts: **(1)** the `w` channel (#90) is **regime-dependent** — a ~10× over-approximation on
+shallow molecules (9.8% load-bearing) but only **~1.3×** on deep shapes (1106/1471 = **75%
+load-bearing**); the cheap `w` is a *good* approximation exactly where defensive structure is real.
+**(2)** deep stencils barely reduce (**37%** vs 63%) and the ablated `B+W` object (mean **20.6**)
+is **larger** than `support∪carriers` (14.0) — because for deep defensive shapes the baseline is
+**incomplete** (no W), not over-inclusive; ablation *adds* the ~10 load-bearing W the carriers
+heuristic cannot represent. **(3)** vocabulary does **NOT** saturate — **96% of deep stencils are
+distinct** (101/105, near-zero repetition) vs molecule's 6% — the §7 "library too specific" risk is
+**real for the deep regime** (shallow molecules form a finite vocabulary; deep enabling-shapes are
+nearly all unique). Honest costs banked: **407/512 deep boards capped** at this budget (the deep
+tail wants more nodes/depth than `max_nodes=1500`/`hi=16`), and no-window ablation took **590 s for
+105 boards** — the dense-board (32.6 stones) perf wall; **windowing is the fix** (§8 NEXT). The
+16,384-board `enable` run did not finish under no-window (killed) — that *is* the perf finding.
+
+**Net:** the §3/§8 blocker is gone, the L1 minimizer exists and produces typed minimal stencils
+`(B, W, support, md0)` today, and the load-bearing-W hypothesis is confirmed on BOTH a shallow
+perturbed corpus (W-rate 0%→100% with md0) and a deep unperturbed one (100% W, mean ~10), with the
+`w`-channel over-approximation quantified and shown regime-dependent. Next: the `enable_serial` contrast (deeper VCTs), then the v0
+distance-field + fork player (§5) and L2 (§4). Files: `scripts/vct_metal/mega_vct_bb.py`
+(`max_depth`/`solve_md_min`), `scripts/threat_shapes/md_minimize.py`,
+`scripts/vct_metal/regen_vct_md_fixture.py`, FAST tests; docs
+[mega-vct-solver.md](wiki/topics/mega-vct-solver.md) (`max_depth` + invariant #9) +
+[shape-library-engine.md](wiki/topics/shape-library-engine.md) §3/§8.
+
+### 2026-06-28 (second pass) — calibration of the claims above (accuracy/durability; Jason: "null result is also fine")
+
+A same-day audit of the morning entry's conclusions. The **kernel/tool results stand**; several
+**interpretive claims were overstated** and are corrected here (originals left intact above per the
+append-only norm). New analysis is CPU-only on the banked stencil dumps (`scripts` in
+`$JOB/tmp/analyze_vocab.py`); no GPU.
+
+- **RETRACTED — "deep VCT shapes don't saturate / have no small vocabulary / the §7 'library too
+  specific' risk is real."** This was an **exact-match-on-large-objects artifact.** The banked
+  stencils are wildly **over-inclusive** (mean **41 cells** on `enable`: found-line `support`
+  openings, never ablated, + ~10 over-counted `w`-derived W + B), and *every* diversity metric is
+  size-dominated. Measured (matched n=105): exact-set distinct **enable 96% / molecule 10%**, but
+  **IoU≥0.5 clusters enable 2 (2%) / molecule 3 (3%)**, IoU≥0.3 → **1 each**. So exact-match
+  over-counts diversity (big objects rarely identical) and IoU under-counts (big dense blobs all
+  overlap); the truth is **unresolvable from these stencils.** Honest status: **the vocabulary /
+  saturation question is OPEN (a null result)** — it needs *minimal* stencils (ablate the support
+  openings, fold D4, use minimal-W) and a size-controlled metric before any saturation claim is
+  meaningful. The morning "matched-n ~10% vs ~97%" contrast is real but **not** evidence of a
+  tactical-vocabulary difference — it is mostly the ~4× size difference.
+- **TIGHTENED — the W-rate-by-md0 curve.** "0% at md0=1" is **definitional, not a finding** (md0=1
+  ⇒ the `md0−1=0` cap always returns nowin ⇒ no W is *testable*). For **deep** mates, "≥1
+  load-bearing W" is **near-definitional**: a long forced mate *is* the defender delaying, so
+  removing a delayer shortens it — "100% of deep boards have a load-bearing W" is close to what
+  "deep mate" means. The informative, non-trivial numbers are the mid-range rate (**md0=2 → 72%,
+  md0=3 → 59%**) and the **counts/ratios** below — not the 0%→100% sweep.
+- **TIGHTENED — "load-bearing W" is an operational, order-dependent definition:** a stone whose
+  *single* removal (under cumulative-greedy ablation) opens a win at `md0−1`. It can miss
+  *jointly* load-bearing sets and is order-sensitive; it is a reasonable proxy, **not** the unique
+  minimal load-bearing set. So the `w`-channel ratios (**~10×** over-inclusive on shallow molecules,
+  **~1.3×** on deep) compare `w` to *this* proxy; the regime-direction (w over-approximates far more
+  on shallow than deep) is the durable part, the exact multiplier is proxy-dependent.
+- **CLARIFIED — md_min validation scope.** Verified: byte-identical default vs HEAD (16/16),
+  depth-monotonicity (no counterexample; monotone by construction), the bracket, and md_min == an
+  independent **linear scan**. The linear scan uses the *same* kernel, so this is **internal
+  consistency + the depth-cap mechanism**, NOT a cross-check of md_min's *absolute value* against an
+  independent oracle (the morning entry's "validated" slightly oversells this). No well-calibrated
+  external md oracle exists — the CPU searches a *different* fragment (`candidate_own` own-only vs
+  any-stone) — except on the **VCF (four-only) subset**, where the fragments coincide and a gated
+  CPU `mate_distance` cross-check *would* be sound (an open, durable follow-up). The **FRAME unit**
+  (`md = F + 2T + 1`) is **source-traced, not independently measured.**
+- **TIGHTENED — causality.** The data show md-depth *correlates* with load-bearing-defender count;
+  "long *because* white denies the short wins" remains a **hypothesis** consistent with (not proven
+  by) the measurement.
+- **STANDS (solid):** the kernel primitive (byte-identical default, monotone depth-cap, order-
+  independent md_min), the validated FAST tests + golden fixture, and the **minimizer as a working
+  analytical tool**. The honest net is a **tool + a method**, with the headline tactical questions
+  (vocabulary, minimal-W) still open — which is a fine place to be.
+
+**Follow-ups updated (#92):** ablate the `support` openings (the dominant over-inclusion source) +
+fold D4 + minimal-W, THEN re-ask vocabulary on minimal stencils with a size-controlled metric; and
+the VCF-subset CPU md cross-check as a one-time absolute-value validation.
+
+## 2026-06-28 (n=1225 streaming scale-out) — the vocabulary null holds at 10× scale; a resumable harness for unbounded n
+
+Jason: "run a larger sample, n=1000+, append-only, trivially resumable, to prove that out and set us
+up for unbounded n later." Built `scripts/threat_shapes/md_minimize_stream.py` (reducer-over-a-log:
+the JSONL output is the only state; each board content-addressed `sha1(corpus|atk|dfd)`, written once
+with status ok/capped/dead; resume = skip logged ids; capped ids recorded so they aren't retried) +
+`analyze_vocab_stream.py` (O(n) exact/D4 distinct over all n, IoU on a capped sample). Commit ca26b58.
+
+- **Input-order is the throughput lever (a real finding).** Deepest-first (the prior n=105 strategy)
+  cherry-picks pathologically-unsolvable boards: **256 → 51 ok / 205 md0-capped in 1109 s (~20% yield)**.
+  Shuffled (seeded, representative real-game sample): **256 → 237 ok / 19 capped in 287 s (93% yield,
+  4× faster)**. The capped boards are unusable anyway (no md0 ⇒ nothing to minimize), so deepest-first
+  spends ~80% of compute on dead ends. Full shuffled run: **1225 ok / 55 capped / 0 dead in 1278 s
+  (~21 min)**, log `~/data/md_stencils/stream_enable_shuf.jsonl`.
+- **The vocabulary null is now stable at n=1225 (10× the n=105 second-pass result).** mean stencil
+  **22.6 cells** (B 6.3, W 4.7); **exact-distinct 98% / D4-distinct 96%**, but **IoU≥0.5 → 19%
+  clusters / IoU≥0.3 → 0.25% (one blob)** — the "diversity" number swings ~400× with the threshold.
+  No stable vocabulary count exists because the metric is dominated by **stencil size + threshold**,
+  not tactical content. Confirms the second-pass retraction: the question is **unanswerable until the
+  stencils are minimal** (openings ablated).
+- **NEW sub-finding — D4 is NOT the dedup lever.** The second pass flagged D4-folding as a possible
+  ~8× deduplicator; at n=1225 it moves exact-distinct only **98% → 96%** (≈2% of stencils are D4
+  images of another). So the inflator is **over-inclusion** (un-ablated `support` openings → mean
+  22.6 cells), not missing symmetry. This re-prioritises #92: **ablate the support openings first**;
+  D4 is a rounding error by comparison.
+- **W findings reproduce cleanly + stably at scale.** W-rate **0% at md0=1 (definitional)**, **100%
+  at md0=2, 95% at md0=3, 100% at md0≥4**; `w`-channel **2.2×** the single-removal load-bearing set
+  — squarely between molecule's ~10× (shallow) and the deepest-band's ~1.3×, i.e. the `w`
+  over-approximation tightens monotonically with mate depth, now traced across three regimes.
+- **Honest scope caveat.** Shuffled enable is **moderate depth** — 91% of the 1225 are md0≤4 (mean 22.6
+  cells), vs the prior n=105 *deepest* band (mean 41 cells, IoU≥0.5 → 2 clusters). The deepest band
+  shows an even starker size-driven collapse; both regimes point the same way (over-inclusion
+  dominates), but the n=1225 sample under-represents the 41-cell tail. Unbounded-n on the deep tail
+  needs the #92 budget/windowing work (the deepest band caps at ~80%).
+
+Net: the **harness is the deliverable** (resumable, append-only, 96% yield, ready for unbounded n),
+and it **proves the second-pass null durable at 10× scale** while sharpening the path forward (ablate
+openings ≫ fold D4). Files: `scripts/threat_shapes/md_minimize_stream.py`,
+`analyze_vocab_stream.py`; log `stream_enable_shuf.jsonl` (+ `stream_enable.jsonl`, 51 deep stencils).

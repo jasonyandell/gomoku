@@ -320,9 +320,9 @@ def _src():
 #    (per-move support would need an (B,N*N,4) output — left as a non-goal).
 # ----------------------------------------------------------------------------
 def _build_src(support: bool, complete: bool, carriers: bool = False,
-               w: bool = False) -> str:
+               w: bool = False, depth_cap: bool = False) -> str:
     src = _src()
-    if not support and not complete and not carriers and not w:
+    if not support and not complete and not carriers and not w and not depth_cap:
         return src
     # carriers / w are DERIVED from the proof-support mask, so the support
     # accumulation runs whenever ANY of support / carriers / w is requested; the
@@ -469,6 +469,26 @@ def _build_src(support: bool, complete: bool, carriers: bool = False,
         "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);\n"
         "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);",
         win_line + "\n" + move_line + extra, 1)
+    # -- depth_cap (issue #91): per-board mate-distance cap, its OWN compiled
+    # variant. Injected LAST so the (s,c,carriers,w) source is byte-identical to
+    # the pre-depth_cap build for every flag combo (regression invariant #9). A
+    # branch whose frame depth sp reaches `maxd` returns a CLEAN ret=0 (NEVER
+    # sets hitcap) BEFORE making any move — so it makes nothing to unmake and the
+    # own==own_in / opp==opp_in at-break invariant (carriers/w rely on it) holds.
+    # The cut sits AFTER the node/structural cap (line `sp>=MAXD-1 ...`), so an
+    # out-of-nodes board still latches hitcap (inconclusive) and wins the race;
+    # the depth cut is a definitive "no win within sp<maxd frames". md_min(b) =
+    # min{ d : solve(b, max_depth=d).win } — read from the boolean verdict alone,
+    # so order-independent. See wiki/topics/mega-vct-solver.md `max_depth`.
+    if depth_cap:
+        src = src.replace(
+            "    int maxnodes=max_nodes[0]; int nodes=0; bool hitcap=false;",
+            "    int maxnodes=max_nodes[0]; int nodes=0; bool hitcap=false;"
+            " int maxd=max_depth[gid];", 1)
+        src = src.replace(
+            "        if (typ[sp]==0){ // ---- OR node (attacker) ----",
+            "        if (sp >= maxd){ ret=0; entering=false; continue; }\n"
+            "        if (typ[sp]==0){ // ---- OR node (attacker) ----", 1)
     return src
 
 
@@ -476,8 +496,8 @@ _KERNEL_CACHE: dict = {}
 
 
 def _get_kernel(support: bool, complete: bool, carriers: bool = False,
-                w: bool = False):
-    key = (bool(support), bool(complete), bool(carriers), bool(w))
+                w: bool = False, depth_cap: bool = False):
+    key = (bool(support), bool(complete), bool(carriers), bool(w), bool(depth_cap))
     k = _KERNEL_CACHE.get(key)
     if k is None:
         names = ["win", "hit", "move"]
@@ -489,12 +509,18 @@ def _get_kernel(support: bool, complete: bool, carriers: bool = False,
             names.append("carriers")
         if w:
             names.append("w")
+        # depth_cap adds ONE input (max_depth, per-board) and ZERO outputs.
+        # APPEND-ONLY after max_nodes — MLX binds inputs=[...] positionally to
+        # input_names, so the first three names must never be reordered.
+        inames = ["own_in", "opp_in", "max_nodes"]
+        if depth_cap:
+            inames.append("max_depth")
         k = mx.fast.metal_kernel(
-            name="mega_vct_bb_%d%d%d%d" % (
-                int(support), int(complete), int(carriers), int(w)),
-            input_names=["own_in", "opp_in", "max_nodes"],
+            name="mega_vct_bb_%d%d%d%d%d" % (
+                int(support), int(complete), int(carriers), int(w), int(depth_cap)),
+            input_names=inames,
             output_names=names,
-            source=_build_src(support, complete, carriers, w), header=_HEADER)
+            source=_build_src(support, complete, carriers, w, depth_cap), header=_HEADER)
         _KERNEL_CACHE[key] = k
     return k
 
@@ -522,7 +548,7 @@ def cells_from_words(words) -> list:
 def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 32,
                       return_move: bool = False, return_support: bool = False,
                       complete: bool = False, return_carriers: bool = False,
-                      return_w: bool = False):
+                      return_w: bool = False, max_depth=None):
     """boards: (B,2,N,N) bool. Solves VCT for the side to move (board[0]=attacker).
 
     Returns (win, hit_cap): (B,) bool by default. Optional outputs are appended in
@@ -561,6 +587,19 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
       EXISTENCE; the MINIMAL load-bearing ``W`` is the md-ablation program (see
       ``wiki/topics/shape-library-engine.md`` §3/§8), which ``w`` over-approximates.
 
+    * ``max_depth`` (int or (B,) int32, issue #91) caps the proof search at a
+      per-board FRAME depth: a branch reaching frame ``sp == max_depth`` returns a
+      clean no-win (never ``hit_cap``) without descending. Adds NO output and does
+      not change the returned tuple — it only restricts ``win`` to "∃ a forced VCT
+      within ``max_depth`` frames". The mate-distance md_min(b) is the smallest
+      ``d`` with ``solve_vct_mega_bb(b, max_depth=d).win`` (read from the boolean
+      verdict alone ⇒ order-independent). Its own compiled kernel variant; the
+      default verdict is byte-identical. Use a per-board ``(B,)`` array to march a
+      whole corpus through a binary search / ablation cap in one bulk call. Frame
+      unit: a four = +1 frame, a forcing three = +2, an inline win (five /
+      double-four / fork) collapses at its frame; NOT attacker-plies (see
+      ``wiki/topics/mega-vct-solver.md`` ``max_depth`` / invariant #9).
+
     So e.g. ``solve_vct_mega_bb(b)`` -> (win, hit); ``return_move=True`` ->
     (win, hit, move); ``complete=True, return_move=True, return_support=True`` ->
     (win, hit, move, support, winmask); adding ``return_carriers=True`` then
@@ -572,7 +611,9 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
     o = mx.array(own.reshape(-1))
     p = mx.array(opp.reshape(-1))
     mn = mx.array(np.array([max_nodes], dtype=np.int32))
-    kernel = _get_kernel(return_support, complete, return_carriers, return_w)
+    use_depth = max_depth is not None
+    kernel = _get_kernel(return_support, complete, return_carriers, return_w,
+                         use_depth)
     out_shapes = [(B,), (B,), (B,)]
     out_dtypes = [mx.uint8, mx.uint8, mx.int32]
     if return_support:
@@ -587,8 +628,13 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
     if return_w:
         out_shapes.append((B, 4))
         out_dtypes.append(mx.uint64)
+    inputs = [o, p, mn]
+    if use_depth:
+        md_arr = (np.full(B, int(max_depth), dtype=np.int32) if np.isscalar(max_depth)
+                  else np.asarray(max_depth, dtype=np.int32).reshape(B))
+        inputs.append(mx.array(md_arr))
     outs = kernel(
-        inputs=[o, p, mn], grid=(B, 1, 1),
+        inputs=inputs, grid=(B, 1, 1),
         threadgroup=(min(B, tg), 1, 1),
         output_shapes=out_shapes, output_dtypes=out_dtypes)
     mx.eval(*outs)
@@ -621,6 +667,49 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
     if return_w:
         res.append(w_out)
     return tuple(res)
+
+
+def solve_md_min(boards: np.ndarray, *, max_nodes: int = 20000, lo: int = 1,
+                 hi: int | None = None, tg: int = 32):
+    """Per-board shortest mate distance (FRAME units) via binary search over the
+    ``depth_cap`` variant. Returns ``(md, capped)``:
+
+    * ``md`` (B,) int32 = ``min{ d ∈ [lo, hi] : solve(b, max_depth=d).win & ~hit }``,
+      or ``-1`` where the board is a CLEAN no-win even at ``hi`` (genuinely no VCT
+      within ``hi`` frames) OR where the search was inconclusive (see ``capped``).
+    * ``capped`` (B,) bool = the verdict was ``hit_cap`` at ``hi`` (md unknown / the
+      board needs a deeper budget) OR a probe hit ``max_nodes`` mid-search and the
+      board was deferred. ``md`` is ``-1`` there; re-run those at a higher
+      ``max_nodes`` (fail-safe — md is never silently wrong, only withheld).
+
+    md_min reads only the boolean depth-capped verdict, so it is ORDER-INDEPENDENT
+    (no move ordering / OR short-circuit can move a True/False threshold) and
+    monotone. ``⌈log2(hi-lo+1)⌉`` bulk calls; every board marches its own
+    ``[LO, HI]`` bracket in one call (per the flat-in-B call-cost law). FRAME unit:
+    a four = +1, a forcing three = +2, an inline win collapses at its frame — NOT
+    attacker-plies (see wiki/topics/mega-vct-solver.md ``max_depth`` / invariant #9).
+    """
+    B = boards.shape[0]
+    if hi is None:
+        hi = MAXD - 2
+    wh, hh = solve_vct_mega_bb(boards, max_nodes=max_nodes, max_depth=hi)
+    alive = wh & ~hh                       # clean win within hi -> md ∈ [lo, hi]
+    capped = hh.copy()                     # inconclusive at the deepest probe
+    LO = np.where(alive, lo, hi).astype(np.int32)
+    HI = np.full(B, hi, dtype=np.int32)
+    deferred = np.zeros(B, dtype=bool)
+    while np.any((LO < HI) & ~deferred):
+        active = (LO < HI) & ~deferred
+        mid = np.where(active, (LO + HI) // 2, LO).astype(np.int32)
+        wd, hd = solve_vct_mega_bb(boards, max_nodes=max_nodes, max_depth=mid)
+        win_clean = wd & ~hd
+        nowin_clean = ~wd & ~hd
+        HI = np.where(active & win_clean, mid, HI)
+        LO = np.where(active & nowin_clean, mid + 1, LO)
+        deferred = deferred | (active & hd)   # node-cap mid-search -> defer (fail-safe)
+    md = np.where(alive & ~deferred, LO, -1).astype(np.int32)
+    capped = capped | deferred
+    return md, capped
 
 
 if __name__ == "__main__":

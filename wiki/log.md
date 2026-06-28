@@ -1566,3 +1566,25 @@ certificate property*), §7, §8; pointer in [topics/allis-threat-theory.md](top
 §3; index row. Honest bounds recorded: empirical not formal QED; the filter used ("no defender VCT") is
 stronger than the true *immediate-tempo* condition; self-contained/offensive subset only (W-dependent
 defensive shapes need the v2 `W` channel). On `feat/stencil-certificate`.
+
+## 2026-06-28 — md-extraction (#91): the §3 minimizer blocker cracked; load-bearing W measured
+
+Autonomous overnight run on `feat/md-extraction` (pushed, not merged). Goal: crack the single
+named blocking prerequisite for the shape-library L1 minimizer — **md-extraction** (ablate on
+mate-distance invariance, but the GPU solver returned only `(win, hit_cap)` and capped nodes,
+not depth). De-risked first by a 7-agent design Workflow (5 analysts → adversary → synthesizer)
+before any kernel surgery; the adversary killed the planned CPU md cross-oracle as mis-calibrated
+(kernel `candidate_own` narrower than CPU's any-stone set ⇒ `md_gpu>md_cpu` with no bug) + against
+the retired-solver canon.
+
+Shipped: a `depth_cap` kernel variant (`solve_vct_mega_bb(max_depth=)`, one new per-board input,
+zero new outputs, byte-identical default — invariant #9) + `solve_md_min` (order-independent
+binary search). GPU-self validated (byte-identical-vs-HEAD, depth-monotonicity, md bracket,
+md_min == an independent linear scan); FAST tests + a GPU-self golden fixture; full suite green.
+The md-invariant minimizer (`md_minimize.py`) on `molecule_gold` (16,345): orig 13.2 → 4.91 (B+W)
+stones; **load-bearing W is the long-VCT phenomenon, measured** (0% at md0=1 → 100% at md0≥4); the
+cheap `w` channel (#90) is a **~10× over-approximation** of the minimal load-bearing W. Honest
+bounds banked (md0=1 collapse dominance, defender-perturbation, vocabulary not yet saturated).
+Pages: [topics/mega-vct-solver.md](topics/mega-vct-solver.md) (`max_depth` + invariant #9),
+[topics/shape-library-engine.md](topics/shape-library-engine.md) §1/§8, [capabilities.md](capabilities.md)
+(Search & solve), [TRAINING_WIKI.md](../TRAINING_WIKI.md) 2026-06-28.
