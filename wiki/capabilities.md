@@ -51,7 +51,9 @@ here supersedes those. **NEW** = added in the 2026-06-25 idx-2 distillation run
 |---|---|---|
 | **Wave-batched MCTS** (PUCT; many games' leaf evals batched in one pass — the eval-throughput trick) | `gomoku.mcts.run_batched_mcts` | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) |
 | **Native MCTS / state-ops extensions** (A/B with `GOMOKU_DISABLE_NATIVE_MCTS=1`, `GOMOKU_DISABLE_NATIVE_STATE_OPS=1`) | env flags | [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) |
-| **VCF/VCT solver** (forced-win search; optional in-search overlay) | `gomoku.vcf` | [sources/gomocup-az-techniques-2026-05-27.md](sources/gomocup-az-techniques-2026-05-27.md) |
+| **On-device GPU VCT solver** (the whole AND/OR proof search on-device as a `ulong[4]` bitboard; ~1600× CPU, 0 FP/FN; bulk-synchronous per the call-cost law; outputs `move`/`support`/`carriers`/`w`/`winmask`/`max_depth`) | `scripts.vct_metal.mega_vct_bb.solve_vct_mega_bb` | [topics/mega-vct-solver.md](topics/mega-vct-solver.md) |
+| **Mate-distance (md_min) + md-invariant stencil minimizer** (#91; order-independent depth-cap binary search; reduces a proven VCT to a typed minimal stencil `(B, W, support, md0)` — load-bearing W = the long-VCT phenomenon, measured) | `solve_md_min`, `scripts/threat_shapes/md_minimize.py` | [topics/shape-library-engine.md](topics/shape-library-engine.md) §3/§8 |
+| **CPU VCF/VCT solver** (retired as a runtime dep — gated bootstrap oracle only; `GOMOKU_ALLOW_CPU_SOLVER=1`) | `gomoku.vcf` | [topics/mega-vct-solver.md](topics/mega-vct-solver.md) § CPU solver retired |
 
 ## Operate
 
