@@ -20,10 +20,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.vct_metal.mega_vct_bb import cells_from_words, solve_vct_mega_bb, N
+from scripts.vct_metal.mega_vct_bb import (
+    MAXD, cells_from_words, solve_md_min, solve_vct_mega_bb, N, _build_src, _src)
 from scripts.vct_metal.positions import load_position_stack
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vct_golden.npz"
+MD_FIXTURE = Path(__file__).parent / "fixtures" / "vct_md_golden.npz"
 # Tight budget: a non-capped result at this budget is definitive and MUST match
 # the high-budget golden truth (non-capped verdicts are budget-independent).
 FAST_MAX_NODES = 500
@@ -236,6 +238,106 @@ def test_w_invariants():
     run_w_invariants(B=48, seed=0)
 
 
+# --------------------------------------------------------------------------- #
+# depth_cap / max_depth — the per-board mate-distance variant (issue #91). md_min
+# is GPU-self-validated (order-independent depth-capped binary search), NO CPU
+# oracle.  See wiki/topics/mega-vct-solver.md `max_depth` / invariant #9.
+# --------------------------------------------------------------------------- #
+def _inject_depth_cap(src):
+    """The two strings _build_src injects for depth_cap — mirrored here so the test
+    fails loudly if the kernel injection drifts (a silent-wrong-answer guard)."""
+    src = src.replace(
+        "    int maxnodes=max_nodes[0]; int nodes=0; bool hitcap=false;",
+        "    int maxnodes=max_nodes[0]; int nodes=0; bool hitcap=false;"
+        " int maxd=max_depth[gid];", 1)
+    src = src.replace(
+        "        if (typ[sp]==0){ // ---- OR node (attacker) ----",
+        "        if (sp >= maxd){ ret=0; entering=false; continue; }\n"
+        "        if (typ[sp]==0){ // ---- OR node (attacker) ----", 1)
+    return src
+
+
+def test_depth_cap_byte_identical_and_composes():
+    """The depth_cap flag is purely additive: for every (support,complete,carriers,w)
+    the depth_cap=False source equals the default-arg source, and depth_cap=True adds
+    EXACTLY the two injected strings — so no existing compiled variant changes
+    (invariant #9)."""
+    combos = [(s, c, cr, w) for s in (0, 1) for c in (0, 1)
+              for cr in (0, 1) for w in (0, 1)]
+    for s, c, cr, w in combos:
+        base = _build_src(bool(s), bool(c), bool(cr), bool(w))
+        assert _build_src(bool(s), bool(c), bool(cr), bool(w), depth_cap=False) == base, \
+            f"depth_cap=False changed source @ {(s, c, cr, w)}"
+        assert _build_src(bool(s), bool(c), bool(cr), bool(w), depth_cap=True) \
+            == _inject_depth_cap(base), f"depth_cap injection drifted @ {(s, c, cr, w)}"
+    assert _build_src(False, False, False, False, True) == _inject_depth_cap(_src())
+
+
+def test_depth_cap_ceiling_equals_default(B: int = 48, seed: int = 0):
+    """max_depth=MAXD-1 reproduces the default (win,hit,move): at sp=MAXD-1 the
+    structural cap fires first, so the depth cut is provably dead code there."""
+    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
+    w0, h0, m0 = solve_vct_mega_bb(st, max_nodes=500, return_move=True)
+    wc, hc, mc = solve_vct_mega_bb(st, max_nodes=500, return_move=True, max_depth=MAXD - 1)
+    assert np.array_equal(w0, wc) and np.array_equal(h0, hc) and np.array_equal(m0, mc), \
+        "max_depth=MAXD-1 != default (win,hit,move)"
+
+
+def test_depth_monotonic(B: int = 48, seed: int = 0, dmax: int = 12):
+    """win(d) is monotone non-decreasing in d on boards clean at both d and d+1
+    (the single most important md-correctness gate — a True->False flip is a kernel
+    bug, e.g. hitcap leaking into the depth cut)."""
+    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
+    prev = None
+    for d in range(1, dmax + 1):
+        wd, hd = solve_vct_mega_bb(st, max_nodes=500, max_depth=d)
+        if prev is not None:
+            wp, hp = prev
+            clean = (~hp) & (~hd)
+            assert not (wp & ~wd & clean).any(), f"win({d-1})&~win({d}) on a clean board"
+        prev = (wd, hd)
+
+
+def test_md_min_bracket(B: int = 48, seed: int = 0):
+    """solve_md_min defines the mate distance: win@md is a clean win, win@(md-1) is a
+    clean no-win, md>=1 iff the board is a (clean) default win."""
+    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
+    w0, h0 = solve_vct_mega_bb(st, max_nodes=500)
+    md, capped = solve_md_min(st, max_nodes=500, hi=MAXD - 2)
+    alive = md >= 1
+    # md>=1 <=> default clean win, on boards neither solve withheld
+    ok = (~capped) & (~h0)
+    assert np.array_equal(alive[ok], w0[ok]), "md>=1 != default win on clean boards"
+    # bracket via per-board probes
+    wa, ha = solve_vct_mega_bb(st, max_nodes=500, max_depth=np.where(alive, md, 1))
+    assert all(wa[b] and not ha[b] for b in np.where(alive)[0]), "win@md not clean"
+    a2 = alive & (md >= 2)
+    wl, hl = solve_vct_mega_bb(st, max_nodes=500, max_depth=np.where(a2, md - 1, 1))
+    assert all((not wl[b]) and (not hl[b]) for b in np.where(a2)[0]), \
+        "win@(md-1) not a clean no-win"
+
+
+@pytest.fixture(scope="module")
+def md_golden():
+    if not MD_FIXTURE.exists():
+        pytest.skip(f"missing {MD_FIXTURE}; regenerate via regen_vct_md_fixture.py")
+    data = np.load(MD_FIXTURE)
+    if int(data["board_size"]) != N:
+        pytest.skip(f"md fixture board_size={int(data['board_size'])} != N={N}")
+    return data
+
+
+def test_md_matches_golden(md_golden):
+    """Tight-budget md_min matches the high-budget golden md on every board the
+    tight search does not cap (a non-capped md is budget-independent)."""
+    boards = md_golden["boards"]
+    gold_md = md_golden["md"].astype(np.int32)
+    md, capped = solve_md_min(boards, max_nodes=500, hi=MAXD - 2)
+    ok = (~capped) & (gold_md >= 1)            # compare on clean wins with known md
+    bad = [(int(b), int(md[b]), int(gold_md[b])) for b in np.where(ok)[0] if md[b] != gold_md[b]]
+    assert not bad, f"md != golden on {bad[:8]}"
+
+
 if __name__ == "__main__":
     import sys
     if not FIXTURE.exists():
@@ -252,4 +354,10 @@ if __name__ == "__main__":
     test_w_golden_shapes()
     run_w_invariants(B=48, seed=0)
     run_w_invariants(B=48, seed=1)
+    test_depth_cap_byte_identical_and_composes()
+    test_depth_cap_ceiling_equals_default()
+    test_depth_monotonic()
+    test_md_min_bracket()
+    if MD_FIXTURE.exists():
+        test_md_matches_golden(np.load(MD_FIXTURE))
     print("FAST tier PASS")

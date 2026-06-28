@@ -5109,3 +5109,91 @@ green via the session-wide override in `tests/conftest.py` (at the DEFAULT board
 they encode 9×9 cells). The reusable lesson banked on [topics/mega-vct-solver.md]: commit a
 golden fixture, never re-derive truth at test time; the GPU solver is fast, slow oracles are
 the test-wall.
+
+## 2026-06-28 — md-extraction CRACKED (#91): the §3 stencil-minimizer blocker is gone; load-bearing W measured
+
+The single named blocking prerequisite for the shape-library L1 minimizer
+([shape-library-engine.md](wiki/topics/shape-library-engine.md) §8) was **md-extraction**:
+the minimizer must ablate stones on **mate-distance invariance** (a load-bearing stone is one
+whose removal *shortens* the mate — §3 correction #2), but `solve_vct_mega_bb` returned only
+`(win, hit_cap)` and capped *nodes*, not depth. Cracked tonight on `feat/md-extraction` (NOT
+merged). Autonomous overnight run; Jason's charge was "try things that don't work and write
+them down so we learn" — both the wins and the honest bounds are below.
+
+**Approach (de-risked by a 7-agent design workflow first).** A background Workflow ran 5
+read-only design analysts (kernel audit, md theory, approach ranking, validation, minimizer) →
+an adversarial reviewer → a synthesizer, before any kernel surgery (the megakernel is the #1
+silent-wrong-answer trap). The adversary earned its keep: it killed the plan's CPU md_min
+cross-oracle as **mis-calibrated** — the kernel's `candidate_own` (own-only Chebyshev-2) is
+*narrower* than CPU `vcf`'s any-stone candidate set, so `md_gpu > md_cpu` can occur with **no
+bug** — and it would have re-summoned the retired CPU solver (against canon + the
+`feedback-trust-validated-oracle` memory). Dropped; validate **GPU-self** instead.
+
+**The kernel primitive (issue #91, the chosen "Approach C").** A new compiled variant gated by
+a `depth_cap` flag adds **one input** (`max_depth`, per-board int32) and **zero outputs**: a
+branch reaching frame `sp == max_depth` returns a clean `ret=0` (a definitive "no forced win
+within `sp < max_depth` frames") **without** setting `hit_cap` and **before making any move**
+(so `own==own_in`/`opp==opp_in` at break is preserved — carriers/w safe). Then
+**`md_min(b) = min{ d : solve(b, max_depth=d).win }`**, read from the boolean verdict alone, so
+it is **order-independent** (no move-ordering / OR short-circuit can move a True/False
+threshold), monotone, minimax-correct. `solve_md_min(boards)` binary-searches it per-board —
+every board marches its own bracket in **one** bulk call, so a whole corpus resolves in ~5 flat
+tails (the call-cost law). The edit is **purely additive**: `_build_src(s,c,cr,w,depth_cap=False)`
+is **byte-identical to git HEAD** for all 16 flag combos (verified) — no existing variant moves.
+
+**md is in FRAME units, not attacker-plies.** A four = +1 frame, a forcing three = +2 (it
+pushes an AND node), and an inline win (immediate-five / sound double-four / fork-three)
+**collapses** (ret=1 at its frame, +0). This is the right *consistent* measure for shortening-
+detection but is coarser than the CPU's `mate_distance`; never reconcile the two (banked as
+invariant #9 + a §metric note).
+
+**Validation — all green, GPU-only (no CPU).** A gate confirmed, in order: [1] byte-identical
+default vs HEAD; [2] depth_cap composes additively; [3] `max_depth=MAXD-1` reproduces the
+default `(win,hit,move)` exactly; [4] **depth monotonicity** `win(d)` never True→False (the
+adversary's "single most important" correctness gate); [5] `solve_md_min` brackets correctly
+**and equals an independent linear scan** on every uncapped board. Permanent FAST-tier tests +
+a GPU-self golden fixture (`regen_vct_md_fixture.py`, no CPU) added.
+
+**L1 md-invariant minimizer built + measured** (`scripts/threat_shapes/md_minimize.py`).
+Cumulative lockstep ablation, directional single-cap tests (exploiting freestyle monotonicity):
+OWN stone probed at cap `md0` (clean win → redundant DROP; nowin → load-bearing `B` KEEP); OPP
+stone at cap `md0−1` (clean win → a shorter mate opened → load-bearing `W` KEEP; nowin → DROP);
+hit_cap → KEEP (fail-safe). No windowing (sound; sidesteps the found-line-vs-shortest-line
+windowing risk the adversary flagged). One bulk call per ablation step, all boards in lockstep.
+
+**RESULTS — `molecule_gold` (16,345 non-VCF combinational VCTs, the first 16,384 by `dist`):**
+- **md_min over the corpus in 19.6 s; ablation 98 s.** 99.8% resolved, **zero ceiling pressure**
+  (max md0 = 9 ≪ MAXD=32). Reduction: orig 13.2 stones → **4.91** (B+W) ablated (63% ↓).
+- **Load-bearing W is the long-VCT phenomenon — MEASURED.** W-rate by md0: **md0=1 → 0%**
+  (correct: inline root wins are degenerate, defender-cap=0), md0=2 → 72%, **md0≥4 → 100%**.
+  Exactly the wiki's claim ("load-bearing white is the *rule* in long VCTs — they're long
+  *because* white denies the short wins"), now quantified.
+- **The `w` channel (#90) is a ~10× over-approximation.** It flagged 88,637 defender stones;
+  ablation distilled only **8,694 actually load-bearing** (9.8%). So the cheap `w` over-approx is
+  a real ~10× over-count of the minimal load-bearing W — md-ablation is *necessary* to get it.
+
+**Honest bounds / negatives (the "write it down" half):**
+- **73% of `molecule_gold` is md0=1** — root-collapsed inline wins (a fork-three detected at
+  frame 0 without descending). The R5 inline-collapse *dominates* this corpus, so it's a **poor
+  substrate for the W phenomenon** (the real W story lives in the md0≥2 tail). This is why the
+  denser/deeper real-game `enable_serial` corpus is the cleaner test (run in progress; contrast
+  to be appended).
+- **Corpus caveat:** `molecule_gold` was harvested by *perturbing the defender* (injecting a
+  blunder), which likely inflates the W-rate — `enable_serial` (real-game, unperturbed) is the
+  control.
+- **Vocabulary did NOT fully saturate at 16k** (902 distinct ablated stencils, curve decelerating
+  but still +35/800). Honest yellow flag for the "finite vocabulary" bet; needs more boards
+  (and/or the §3-deferred D4 fold to dedup 8×) to call.
+- Two accepted, *length-over-estimating / over-keeping* (never unsound — L0 re-verifies) md
+  bounds carried forward: the `def_tempo` veto can inflate three-opening lines; the inline
+  collapse can hide a ≤2–3-ply shortening at constant `sp` (future fix = emit `md = sp +
+  leaf_offset`, additive).
+
+**Net:** the §3/§8 blocker is gone, the L1 minimizer exists and produces typed minimal stencils
+`(B, W, support, md0)` today, and the load-bearing-W hypothesis is confirmed + the `w`-channel
+over-approximation is quantified. Next: the `enable_serial` contrast (deeper VCTs), then the v0
+distance-field + fork player (§5) and L2 (§4). Files: `scripts/vct_metal/mega_vct_bb.py`
+(`max_depth`/`solve_md_min`), `scripts/threat_shapes/md_minimize.py`,
+`scripts/vct_metal/regen_vct_md_fixture.py`, FAST tests; docs
+[mega-vct-solver.md](wiki/topics/mega-vct-solver.md) (`max_depth` + invariant #9) +
+[shape-library-engine.md](wiki/topics/shape-library-engine.md) §3/§8.
