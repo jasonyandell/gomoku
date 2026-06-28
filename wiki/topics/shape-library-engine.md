@@ -255,7 +255,12 @@ defender-VCT usually fails to refute (the attacker moves first), so the true thr
 (push the harness to the exact-tempo filter, near-edge translations, millions of placements).
 (iii) This is the **self-contained / offensive** subset (here 100% of attacker VCTs); a
 *defense*-flavored mining will surface **`W`-dependent** shapes that do NOT win in isolation —
-those need the v2 `W` channel before they earn a certificate. (iv) The shape tested is the
+those need the `W` channel before they earn a certificate. *(Update 2026-06-27, #90: the
+over-inclusive `W` channel now SHIPS — `solve_vct_mega_bb(return_w=True)`, the `opp` mirror of
+`carriers`; see [mega-vct-solver.md](mega-vct-solver.md) `w` section. It over-approximates the
+minimal load-bearing `W`, which still awaits md-extraction. And `W` is corroborated as
+identity-not-existence: removing ALL defender stones from clean attacker VCTs preserved
+**660/660** wins — `scripts/threat_shapes/w_channel_probe.py`.)* (iv) The shape tested is the
 **over-inclusive** `support ∪ carriers`, available **today** — the certificate property does
 **not** wait on the md-extraction blocker that gates *minimal* ablation.
 
@@ -447,6 +452,13 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
   carries immediate tempo. Correction: the #88 "no-VCT" filter is **unsound** (admits
   lone-four-move refuters) — `def_tempo` is the *correct* boundary. Still measured-0, not a
   formal QED.
+- **DONE (2026-06-27, #90):** the **`W` channel** ships — `solve_vct_mega_bb(return_w=True)`,
+  the `opp` mirror of `carriers` (`w = opp ∩ ⋃_support COLLIN`, the over-inclusive load-bearing
+  defender stones), additive + default byte-identical across all 8 prior variants; tests +
+  [mega-vct-solver.md](mega-vct-solver.md) `w` section. Empirically `W` is **identity, not
+  existence** (removing all defender stones kept **660/660** attacker VCTs;
+  `scripts/threat_shapes/w_channel_probe.py`). The *minimal* load-bearing `W` still needs the
+  md-extraction blocker below.
 - **DONE (2026-06-26):** **first-VCT forward miner** — `scripts/threat_shapes/mine_first_vct.py`,
   the §3 mining input. Forward scan, both colors, trit verdict + defer-on-prefix-CAP,
   append-only/resumable. Smoke (100 games, `max_nodes=6000`): 12 certified firsts, 88 deferred
