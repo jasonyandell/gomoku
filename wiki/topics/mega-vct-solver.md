@@ -324,6 +324,48 @@ threadgroup); `solve_vct_streaming` agrees with a single deepest-budget base cal
 every mutually-clean board and resolves ≥ as many. See
 `scripts/vct_metal/test_mega_vct_bb.py` (`test_work_steal_*`, `test_streaming_*`).
 
+### Where work_steal *does* win: the forced-wave tail + the width knob (#96)
+
+The #93/#94 "work_steal is a no-op" was measured in the one setup where it can't help — a
+single in-memory pool where **base and work_steal drain together and run dry at the same
+instant**. #96 ran the matchup that test never did: *forced waves*, where the board supply
+runs dry because you chopped the work into separate dispatches. Three contestants on one
+mixed pool (#94's `bench_pool_100k`, N=16384, cap=2000; parity 12324 resolved / 6555 wins):
+
+- **wait** — process the pool in W separate dispatches, drain each fully before the next
+  (pays W tails). **refill** — one work_steal cursor over the whole pool, `resident` lanes
+  refill across wave boundaries (pays 1 tail). **oneshot** — single dispatch (= wait W=1).
+
+**At matched width, refill beats relaunch-per-wave** — confirming the tail is real and the
+cursor erases it (the inter-wave ramp-down/up + tail, recovered by keeping the pipe full):
+
+| width (in flight) | wait (relaunch/wave) | refill (cursor) | refill speedup |
+|---|---|---|---|
+| 4096 (W=4) | 73.9s | 61.4s | **1.20×** |
+| 1024 (W=16) | 269.8s | 209.7s | **1.29×** |
+
+The finer you're forced to slice, the more tails refill erases ⇒ the bigger its win.
+
+**But the tail is the *small* cost — width dominates.** `resident` is a **width throttle**;
+refill throughput climbs ~linearly with it up to saturation, reaching oneshot at R≈N:
+
+| resident R | 1024 | 2048 | 4096 | 8192 | 16384(=N) | oneshot |
+|---|---|---|---|---|---|---|
+| vs oneshot | 0.12× | 0.22× | 0.40× | 0.66× | **0.96×** | 1.00× |
+
+(The 0.96× at full width = the atomic-cursor overhead, matching #94's 0.97×.) Going narrow
+costs ~0.34–0.40× *however* you handle the tail — far more than the 1.2–1.3× refill recovers.
+
+**Synthesis (resolves the whole work_steal arc):** *width is king* — if you can gather a big
+batch, run it wide (oneshot); that beats any narrow strategy by 3–8×, and is the quantified
+"make the pool huge" answer. **work_steal/refill is the right tool ONLY when you are forced
+narrow** — streaming, memory-bound, or waves you genuinely cannot merge — where it buys
+~1.2–1.3× over relaunch-per-wave. **Hard caveat:** refill only helps to the extent the next
+wave's boards are *already in hand*; a **gated** frontier (wave K+1 depends on K's verdicts)
+cannot be refilled — there the run-dry tail is unavoidable, and the only remaining lever is
+parallelizing a single proof across lanes (a major rewrite, worth only the final sliver).
+Bench: `scripts/vct_metal/bench_refill_vs_wait.py`; raw `~/data/idx2_solve/sweep/refill_vs_wait.{jsonl,log}`.
+
 ### Throughput characterization sweep (#95) — the runtime map
 
 Goal: map board-evals/min across the **whole mixed population**, which decomposes into
