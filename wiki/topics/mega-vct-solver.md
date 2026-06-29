@@ -35,8 +35,11 @@ corpus labeling, scale `max_nodes` with B. A CAP verdict is fail-safe wherever
 ```python
 solve_vct_mega_bb(boards, *, max_nodes=20000, tg=32,
                   return_move=False, return_support=False, complete=False,
-                  return_carriers=False, return_w=False, max_depth=None)
+                  return_carriers=False, return_w=False, max_depth=None,
+                  work_steal=False, resident=8192)
 solve_md_min(boards, *, max_nodes=20000, lo=1, hi=None, tg=32)  # -> (md, capped)
+solve_vct_streaming(boards, *, budgets=(250,1000,4000,20000),    # -> (win, hit[, move])
+                    resident=8192, tg=32, return_move=False, log=None)
 ```
 
 `boards`: `(B, 2, N, N)` bool, **side-to-move-relative** — `board[0]` is the
@@ -234,6 +237,69 @@ follow-up, not yet run. Drives the L1 **md-invariant stencil minimizer**
 
 ---
 
+## Streaming / work-stealing — `work_steal` + `solve_vct_streaming` (issue #93)
+
+**The problem.** The base kernel is `grid=(B,1,1)` — one GPU thread per board, each
+running the whole AND/OR DFS in a thread-local stack until it wins, loses, or hits
+`max_nodes`. So in the long tail, the wall is the *single hardest board* grinding to
+`max_nodes` while the lanes that drew easy boards have retired. That's the call-cost
+law restated: 1000× boards for ~3× wall ⇒ there's spare lane capacity during the tail.
+
+**`work_steal=True` (Option A) — a persistent dispatch.** Launch `resident` lanes
+(not `B`) and have each pull the next board index from a **shared atomic cursor**,
+looping until the pool drains. A lane that finishes an easy board immediately grabs
+another instead of idling. The per-board search is **byte-identical** to the base
+kernel — only the gid source (cursor vs thread id) and the output store change. The
+verdict is therefore bit-identical (regression-tested); `work_steal` is a *dispatch*
+optimization, not a search change.
+
+Mechanics that made it clean (all confirmed on MLX 0.31.2):
+- `mx.fast.metal_kernel(..., atomic_outputs=True)` emits every output as
+  `device atomic<T>*`; the cursor uses `atomic_fetch_add_explicit(&cursor[0], 1u,
+  memory_order_relaxed)`. Metal has **no `atomic<uchar>`**, so `win`/`hit` are widened
+  to `uint32` and `move` stays `int32`; the Python wrapper narrows them back, so the
+  returned tuple is dtype-identical to the base call.
+- The cursor is zeroed across all threadgroups by passing **`init_value=0`** on the
+  call (MLX zeroes the output buffer before the kernel runs) — no `threadgroup_barrier`
+  dance, so `resident` can span many threadgroups and saturate the GPU.
+- Fail-loud invariant: after the run, `cursor == B + resident` (B successful fetches
+  + one terminal overshoot per lane). A mismatch means the cursor wasn't zeroed (would
+  silently skip or over-run boards) and asserts rather than returns wrong data.
+- v1 is **base verdict only** — combining `work_steal` with
+  `return_support`/`complete`/`return_carriers`/`return_w`/`max_depth` raises
+  (the optional-output accumulators aren't wired through the loop yet).
+
+**Where it pays off — and where it doesn't.** The GPU hardware *already* backfills at
+*threadgroup-dispatch* granularity (a retired threadgroup's slot gets a pending one),
+which is *why* the call-cost law is flat. So for a single ~16 k batch the marginal win
+over the base kernel is **modest**. `work_steal`'s real, structural win is when the
+board pool is **far larger than one dispatch can hold** (memory-bound on
+`own_in`/`opp_in`): instead of N sequential launches each paying a terminal tail +
+launch overhead, one persistent dispatch streams **millions** of boards at full
+occupancy with a single tail at the very end. That is the **deep frontier-labeling**
+regime. The intra-simdgroup divergence tax remains (a hard lane stalls its ~31
+lock-step mates — measured at ~6% of lanes for a few hard boards in the spike); the
+cursor fixes inter-threadgroup idleness, not divergence.
+
+**`solve_vct_streaming` (Option B) — iterative deepening over the pool.** Round 0 solves
+**every** board at `budgets[0]` via `work_steal`; the subset still `hit_cap` is
+re-solved at `budgets[1]`, and so on. A board's verdict **latches** the first round it
+returns clean — sound because a non-capped verdict is **budget-independent** (a deeper
+search never flips a clean win/no-win; same property `solve_md_min` relies on). Only
+boards still capped at `budgets[-1]` stay `hit=True`. This attacks the hard tail
+directly — most "hard" boards resolve at a slightly higher budget, so the expensive
+deep budgets run on only the handful that truly need them, while the work-stealing
+dispatch keeps every lane busy draining each round's shrinking pool. A/B compose: A
+keeps lanes full *within* a round, B shrinks *what* the deep rounds run on.
+
+**Validated:** `work_steal` verdict is byte-identical to base across seeds × budgets ×
+`resident ∈ {256,1024,8192}` (i.e. resident `<`, `≈`, `≫` B) and `B ∈ {1,31,33}` (sub-
+threadgroup); `solve_vct_streaming` agrees with a single deepest-budget base call on
+every mutually-clean board and resolves ≥ as many. See
+`scripts/vct_metal/test_mega_vct_bb.py` (`test_work_steal_*`, `test_streaming_*`).
+
+---
+
 ## Invariants (the regression contract)
 
 1. `return_support` leaves `(win, hit, move)` **byte-identical** to default.
@@ -262,12 +328,21 @@ follow-up, not yet run. Drives the L1 **md-invariant stencil minimizer**
    `(win,hit,move)` exactly (the structural cap fires first → the cut is dead code
    there); `win(d)` is monotone non-decreasing; `solve_md_min` brackets it
    (`win@md` clean, `win@md-1` clean no-win) and `md>=1 ⟺` the default clean win.
+10. **`work_steal` (#93) is verdict-invariant.** `_build_src(False, False)` is unchanged
+    (`== _src()`); `work_steal=True` only wraps the body in the cursor-pull loop and
+    swaps the three base output writes for atomic stores — so `(win, hit, move)` is
+    **byte-identical** to the base kernel for every seed/budget and every
+    `resident ∈ {<B, ≈B, ≫B}`, down to sub-threadgroup `B`. Combining it with any
+    optional output raises. `solve_vct_streaming` latches budget-independent clean
+    verdicts ⇒ agrees with a deepest-budget base call on all mutually-clean boards.
 
 Covered by `scripts/vct_metal/test_mega_vct_bb.py` — `test_support_and_complete_invariants`,
 `test_carriers_golden_shapes`, `test_carriers_invariants`, `test_w_golden_shapes`,
 `test_w_invariants`, `test_depth_cap_byte_identical_and_composes`,
 `test_depth_cap_ceiling_equals_default`, `test_depth_monotonic`, `test_md_min_bracket`,
-`test_md_matches_golden`
+`test_md_matches_golden`, `test_work_steal_source_untouched_default`,
+`test_work_steal_rejects_optional_outputs`, `test_work_steal_byte_identical`,
+`test_streaming_consistent_with_base`
 (run via `GOMOKU_BOARD_SIZE=15 uv run python -m scripts.vct_metal.test_mega_vct_bb`;
 **budget `max_nodes=500` captures ~90% of VCTs and runs in seconds** — Jason's test
 default). The default-verdict cross-check vs the cell-scan `mega_vct` (0
