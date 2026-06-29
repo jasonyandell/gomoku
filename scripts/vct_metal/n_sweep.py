@@ -28,8 +28,8 @@ def manual_deepen(bd, budgets):
         if active.size == 0:
             break
         w, h = solve_vct_mega_bb(bd[active], max_nodes=int(b))
-        hit[active[~h]] = False
-        active = active[~h]
+        hit[active[~h]] = False        # ~h = resolved this round -> latch
+        active = active[h]             # keep the CAPPED ones for the next deeper round
     return ~hit
 
 

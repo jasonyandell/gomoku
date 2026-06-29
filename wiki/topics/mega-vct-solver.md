@@ -304,6 +304,12 @@ shrinking survivor set, not the whole pool.
 | deepening ladder `(250,500,1000,2000,4000)` | 1.10× | coarse ladder wins — each round **re-solves survivors from scratch**, so extra rungs pay that redundancy. |
 | deepening on **work_steal** `(250,1000,4000)` | **0.87× (a LOSS)** | work_steal's big-round-0 handicap eats the deepening win ⇒ **`solve_vct_streaming` deepens on the base kernel by default**; `work_steal=True` is an opt-in for pools too large to gather into one dispatch. |
 
+> **[2026-06-29 correction — #95]** The **1.60×** above is **conditional on N**, not general:
+> it was measured at N=83814. The N-sweep finds deepen-vs-base@4000 = **0.69× / 0.79× / 1.19×
+> / 1.63×** at N = 10k / 20k / 40k / 84k (crossover ≈30–35k boards). Deepening wins only when
+> the hard-survivor batch is dense enough to saturate the GPU. For pools below ~30k boards,
+> a single base@ceiling dispatch is faster. See § Throughput characterization sweep.
+
 Net map of the mega-VCT solver's runtime: **for an in-memory pool, one big base
 dispatch is optimal; deepening with a coarse ladder buys ~1.6× at high effective budget;
 work_steal is a no-op-to-slight-loss whose only justification is genuinely-streamed pools
@@ -368,18 +374,22 @@ oracle routing (re-solve tax) — which is *why* coarse ladders beat fine.
   generalizes across board shapes, as predicted.
 - **chunked@16384 loses on every pool** (0.63–0.66×) — the per-chunk-tail penalty is robust.
 
-**⚠ The sweep CONTRADICTS the #94 deepening result — a dated correction in the making.** At
-**N=20000, deepening LOSES to base@ceiling on every pool** (quiet coarse 0.80×, wide 0.80×,
-full_low 0.52×; capped coarse 0.78×, full_low 0.51×) — but #94 measured base-kernel
-deepening at **1.60×** on **N=83814**. The ratio flipped with pool size. Working hypothesis:
-deepening's real win is keeping the *deep* rounds **dense with hard boards** — the all-hard
-capped pool saturates the GPU at **~0.9M nodes/s** vs ~0.35–0.49M on mixed pools, so a deep
-round run on a dense survivor set is ~2× faster per node. That gain beats the re-solve tax
-ONLY when there are *enough* hard survivors to saturate; at N=20k the survivor batch is too
-sparse and the tax dominates. So #94's 1.60× is **real but conditional on large N / high
-hard-density**. An N-sweep (deepen vs base across N) will pin the crossover and trigger a
-dated correction to #94 + the `solve_vct_streaming` guidance. Oracle gap + MAXD study + the
-N-sweep land as the run completes.
+**Deepening's win is CONDITIONAL ON SCALE (resolves the #94 contradiction).** At N=20000
+deepening *loses* to base@ceiling on every pool (quiet coarse 0.80×, full_low 0.52×; capped
+coarse 0.78×), yet #94 measured **1.60×** at N=83814. The N-sweep (deepen `(250,1000,4000)`
+vs base@4000 on #94's *exact* pool, `n_sweep.py`) shows the speedup is **monotonic in N**:
+
+| N | 10000 | 20000 | 40000 | 83814 |
+|---|---|---|---|---|
+| deepen vs base@4000 | 0.69× | 0.79× | **1.19×** | **1.63×** |
+
+Crossover ≈ **30–35k boards**; at 83814 it reproduces #94's 1.60× exactly. Mechanism:
+deepening's value is keeping the *deep* rounds **dense with hard boards** — the all-hard
+capped pool saturates the GPU at **~0.9M nodes/s** vs ~0.35–0.49M mixed, so a deep round on a
+dense survivor set is ~2× faster per node, beating the re-solve tax *only* when there are
+enough hard survivors to saturate. Below ~30k the survivor batch is too sparse and the tax
+dominates. **So #94's 1.60× is real but conditional on large N / high hard-density — not a
+general win** (dated-corrected in the #94 table below).
 
 ---
 
