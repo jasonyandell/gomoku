@@ -324,7 +324,7 @@ threadgroup); `solve_vct_streaming` agrees with a single deepest-budget base cal
 every mutually-clean board and resolves ≥ as many. See
 `scripts/vct_metal/test_mega_vct_bb.py` (`test_work_steal_*`, `test_streaming_*`).
 
-### Throughput characterization sweep (#95) — IN PROGRESS (overnight run)
+### Throughput characterization sweep (#95) — the runtime map
 
 Goal: map board-evals/min across the **whole mixed population**, which decomposes into
 differently-shaped subproblems (easies / long-tails / deeps) we can't know a-priori in
@@ -390,6 +390,44 @@ dense survivor set is ~2× faster per node, beating the re-solve tax *only* when
 enough hard survivors to saturate. Below ~30k the survivor batch is too sparse and the tax
 dominates. **So #94's 1.60× is real but conditional on large N / high hard-density — not a
 general win** (dated-corrected in the #94 table below).
+
+**MAXD 32→64 (`maxd_study.py`, env `GOMOKU_VCT_MAXD`) — the caps are NODE-bound, not
+frame-bound; MAXD=32 is sufficient.** Solving the capped sample (15k) at both ceilings:
+
+| budget | resolved @MAXD32 (wins) | resolved @MAXD64 (wins) |
+|---|---|---|
+| 1000 | 479 (90) | 480 (90) |
+| 4000 | 757 (151) | 758 (151) |
+| 20000 | 972 (200) | 976 (197) |
+
+Identical within noise, and the monotone cross-check on the random pool is decisive:
+**`gained_by_64 = 0`** — raising the frame ceiling finds *exactly zero* new wins. So the
+near-bottomless caps are not waiting on >32 forcing frames; they are node-bound (astronomically
+wide ≤32-frame trees) or genuinely VCT-less but expensive to disprove. Real VCTs essentially
+never exceed 32 frames. MAXD=64 buys nothing and costs ~5% throughput ⇒ **keep MAXD=32**; the
+`GOMOKU_VCT_MAXD` knob stays (default 32 = byte-identical validated path) for future probes.
+
+### The synthesis — optimal throughput across a mixed population
+
+The population is **bimodal** (easy ≤250 nodes vs a near-bottomless hard tail), so the
+throughput-optimal recipe is **screen-cheap-then-batch-hard**, never one fixed budget:
+1. **Screen at a low budget (~10–100)** — flushes the 70–85% easy majority at *millions* of
+   boards/min and gives the highest *resolved/min* (a clean verdict resolves and stops well
+   before the cap; raising the budget on the easy mass is pure waste).
+2. **Collect the hard survivors and solve them as ONE dense high-budget dispatch.** A dense
+   all-hard batch saturates the GPU (~0.9M nodes/s); never chunk it (per-chunk tail, 0.66×)
+   and never work_steal it (in-memory no-op). If the survivor set is large (≳30k), deepening
+   *(coarse ladder)* over it adds ~1.6×; below that, a single base@ceiling dispatch wins.
+3. **Use the append-only logs.** Boards already characterized (run-a tags capped@250) can be
+   routed *directly* into the dense hard-batch, skipping re-screening — the oracle path. A full
+   fine ascending ladder pays ~1.8× the node-work of this oracle routing (the re-solve tax),
+   which is why coarse ladders and log-driven routing beat blind fine deepening.
+
+And the honest ceiling on ambition: **`max_nodes` cannot fill the caps** (6.5% resolved at 80×
+budget; 1.3% wins) and **`MAXD` cannot either** (frame ceiling is not the binding constraint).
+The capped tail is a genuinely-hard regime, not a budget away. Tools:
+`scripts/vct_metal/{sweep_throughput,analyze_sweep,n_sweep,maxd_study,bench_throughput}.py`;
+raw logs + `REPORT.md` under `~/data/idx2_solve/sweep/` (out-of-git).
 
 ---
 

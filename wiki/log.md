@@ -1645,3 +1645,22 @@ wave-chunking@16384 was 0.66× of one big dispatch. Bonus apples-to-apples: solv
 **Rapfi-bound, not solver-bound** (confirming work_steal could never have sped it up). We predicted, tried,
 measured, wrote it down. Full runtime-properties table in
 [topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Streaming / work-stealing → Measured runtime properties.
+
+## [2026-06-29] mega-VCT throughput characterization sweep (#95) — overnight
+Append-only/resumable sweep over 4 board-populations (quiet frontier / capped-only / random / deep,
+all Rapfi-free) × strategies × budgets + per-pool resolution profiles + an N-sweep + a MAXD 32→64 study
+(`scripts/vct_metal/{sweep_throughput,analyze_sweep,n_sweep,maxd_study}.py`). Findings: (1) **hardness is
+bimodal** — 71–83% resolve by budget 10; budget beyond ~250 buys almost nothing; the **capped tail is
+near-bottomless** (6.5% resolved at 20000 = 80× budget, 1.3% wins). (2) **work_steal and chunked lose on
+every pool** (0.6–0.8×) — confirms #93/#94 across board shapes. (3) **#94's deepening 1.60× is
+N-CONDITIONAL** (dated correction): deepen-vs-base@4000 = 0.69×/0.79×/1.19×/1.63× at N=10k/20k/40k/84k,
+crossover ~30–35k; the win needs a hard-survivor batch dense enough to saturate the GPU (~0.9M nodes/s
+all-hard vs ~0.4M mixed). (4) **MAXD 32→64 changes nothing** — caps are node-bound not frame-bound,
+`gained_by_64=0` on random, keep MAXD=32 (added env-gated `GOMOKU_VCT_MAXD`, default 32 = validated path).
+Synthesis: optimal throughput = **screen-cheap (budget ~10–100) then batch the hard survivors densely**;
+use the append-only logs to route known-hard boards straight into the dense batch (oracle, avoids the
+~1.8× re-solve tax). Neither `max_nodes` nor `MAXD` can fill the caps — a genuinely-hard regime.
+**Process note:** a self-referential `pgrep -f <name>` waiter bug stalled the MAXD=64 chain overnight (the
+waiter matched its own command line); the study jobs themselves were fine — rely on task-completion
+notifications, not pgrep waiters. Full tables in
+[topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Throughput characterization sweep.
