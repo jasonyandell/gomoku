@@ -1664,3 +1664,18 @@ use the append-only logs to route known-hard boards straight into the dense batc
 waiter matched its own command line); the study jobs themselves were fine — rely on task-completion
 notifications, not pgrep waiters. Full tables in
 [topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Throughput characterization sweep.
+
+## [2026-06-29] where work_steal DOES win — the forced-wave tail + the width knob (#96)
+Ran the matchup #93/#94 never did: *forced waves* (supply runs dry because you chopped the work into
+separate dispatches), where the question is whether refilling the queue across wave boundaries beats
+relaunch-per-wave. `bench_refill_vs_wait.py`, mixed pool N=16384, cap=2000, parity 12324/6555. **Two
+axes:** (1) **at matched width, refill beats relaunch-per-wave** — 1.20× at width 4096 (W=4), 1.29× at
+width 1024 (W=16); finer slicing = more inter-wave tails erased = bigger win. So the tail is real and the
+cursor erases it — Jason's original "feed the tail" intuition was right *for the forced-wave regime*.
+(2) **but width dominates** — `resident` is a width throttle (0.12/0.22/0.40/0.66/0.96× oneshot at
+R=1k/2k/4k/8k/16k); going narrow costs 0.34–0.40× *however* you handle the tail, far more than the
+1.2–1.3× refill recovers. **Synthesis:** width is king (gather a big batch, run wide = 3–8× any narrow
+strategy); work_steal/refill is the right tool ONLY when forced narrow (streaming / memory-bound / unmergeable
+waves), and even then only if the next boards are already in hand — a *gated* frontier can't be refilled.
+This resolves the #93/#94 "no-op" — it was a no-op *at full width*; the value lives at forced-narrow width.
+Full tables in [topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Where work_steal does win.
