@@ -304,6 +304,12 @@ shrinking survivor set, not the whole pool.
 | deepening ladder `(250,500,1000,2000,4000)` | 1.10× | coarse ladder wins — each round **re-solves survivors from scratch**, so extra rungs pay that redundancy. |
 | deepening on **work_steal** `(250,1000,4000)` | **0.87× (a LOSS)** | work_steal's big-round-0 handicap eats the deepening win ⇒ **`solve_vct_streaming` deepens on the base kernel by default**; `work_steal=True` is an opt-in for pools too large to gather into one dispatch. |
 
+> **[2026-06-29 correction — #95]** The **1.60×** above is **conditional on N**, not general:
+> it was measured at N=83814. The N-sweep finds deepen-vs-base@4000 = **0.69× / 0.79× / 1.19×
+> / 1.63×** at N = 10k / 20k / 40k / 84k (crossover ≈30–35k boards). Deepening wins only when
+> the hard-survivor batch is dense enough to saturate the GPU. For pools below ~30k boards,
+> a single base@ceiling dispatch is faster. See § Throughput characterization sweep.
+
 Net map of the mega-VCT solver's runtime: **for an in-memory pool, one big base
 dispatch is optimal; deepening with a coarse ladder buys ~1.6× at high effective budget;
 work_steal is a no-op-to-slight-loss whose only justification is genuinely-streamed pools
@@ -317,6 +323,111 @@ solver-bound** (so work_steal could never have sped it up — a prediction confi
 threadgroup); `solve_vct_streaming` agrees with a single deepest-budget base call on
 every mutually-clean board and resolves ≥ as many. See
 `scripts/vct_metal/test_mega_vct_bb.py` (`test_work_steal_*`, `test_streaming_*`).
+
+### Throughput characterization sweep (#95) — the runtime map
+
+Goal: map board-evals/min across the **whole mixed population**, which decomposes into
+differently-shaped subproblems (easies / long-tails / deeps) we can't know a-priori in
+general — but *can* know for already-computed boards via the append-only logs.
+`scripts/vct_metal/sweep_throughput.py` (append-only, resumable) sweeps **4 pools**
+(quiet-heavy frontier, capped-only, random, deep) × **strategies** (base @ 11 budgets,
+chunked, work_steal × 3 residents, deepening over 4 ladders) and builds a **per-pool
+resolution profile** (each board's min-resolving budget → hardness histogram → an oracle
+bound). `analyze_sweep.py` turns the logs into the map.
+
+**Two metrics, and the distinction matters:** *evals/min* = boards **screened**/min (high
+even at budget 10), vs *resolved/min* = boards given a **verdict**/min. Screening fast
+while leaving caps is not progress — the decision metric is resolved/min and the
+wall-to-resolve-to-ceiling.
+
+**Hardness profiles (done, N=30000/pool) — resolution is BIMODAL, and the hard tail is
+near-bottomless.** Cumulative % resolved by budget:
+
+| pool | @10 | @250 | @1000 | @20000 | still capped@20k |
+|---|---|---|---|---|---|
+| quiet (frontier) | 71% | 76% | 77% | 78% | **22%** |
+| capped-only | 0% | 0% | 3% | **6%** | **93.7%** |
+| random | 72% | 82% | 84% | 85% | 15% |
+| deep (high ply) | 83% | 92% | 94% | 95% | 5% |
+
+Two facts jump out:
+1. **Budget beyond ~250 buys almost nothing.** 71–83% resolve by budget *10*; then a steep
+   plateau (quiet 76%→78% from 250→20000). The population is bimodal — "easy" (≤250 nodes)
+   vs a hard tail that 80× the budget barely touches. There is very little *in between*.
+2. **The capped regime is near-bottomless: 93.7% of capped boards stay capped even at 20,000
+   nodes** (80× the frontier's 250). So escalating `max_nodes` to "fill in the caps" is
+   largely futile — these need ≫20k nodes **or are unprovable within `MAXD=32` frames**.
+   That distinction is exactly what the **MAXD 32→64 study** resolves: if more caps fall at
+   64 frames, the cap was *frame-depth-bound*, not node-bound. (Consistent with the earlier
+   cap-probe: <1% flipped to a *win* at 16× budget; here 6% reach *any* verdict at 80×.)
+
+Peak solver node-throughput shows on the all-hard pool (capped ~0.9M nodes/s — every lane
+stays deep; mixed pools lower). A full fine ascending ladder pays ~1.8× the node-work of
+oracle routing (re-solve tax) — which is *why* coarse ladders beat fine.
+
+**Throughput map (partial: quiet/capped/random done, N=20000/config):**
+- **Screening rate is enormous at low budget** — quiet base@10 = **7.9M ev/min** resolving
+  71%, vs base@250 = 358k ev/min resolving 76%. Because hardness is bimodal, pushing the
+  budget up resolves *few* more boards at cratering throughput. For max *resolved/min*, screen
+  low and accept the hard tail as deferred.
+- **work_steal loses on EVERY pool** (capped 0.72×, quiet 0.79× vs base@250) — the no-op
+  generalizes across board shapes, as predicted.
+- **chunked@16384 loses on every pool** (0.63–0.66×) — the per-chunk-tail penalty is robust.
+
+**Deepening's win is CONDITIONAL ON SCALE (resolves the #94 contradiction).** At N=20000
+deepening *loses* to base@ceiling on every pool (quiet coarse 0.80×, full_low 0.52×; capped
+coarse 0.78×), yet #94 measured **1.60×** at N=83814. The N-sweep (deepen `(250,1000,4000)`
+vs base@4000 on #94's *exact* pool, `n_sweep.py`) shows the speedup is **monotonic in N**:
+
+| N | 10000 | 20000 | 40000 | 83814 |
+|---|---|---|---|---|
+| deepen vs base@4000 | 0.69× | 0.79× | **1.19×** | **1.63×** |
+
+Crossover ≈ **30–35k boards**; at 83814 it reproduces #94's 1.60× exactly. Mechanism:
+deepening's value is keeping the *deep* rounds **dense with hard boards** — the all-hard
+capped pool saturates the GPU at **~0.9M nodes/s** vs ~0.35–0.49M mixed, so a deep round on a
+dense survivor set is ~2× faster per node, beating the re-solve tax *only* when there are
+enough hard survivors to saturate. Below ~30k the survivor batch is too sparse and the tax
+dominates. **So #94's 1.60× is real but conditional on large N / high hard-density — not a
+general win** (dated-corrected in the #94 table below).
+
+**MAXD 32→64 (`maxd_study.py`, env `GOMOKU_VCT_MAXD`) — the caps are NODE-bound, not
+frame-bound; MAXD=32 is sufficient.** Solving the capped sample (15k) at both ceilings:
+
+| budget | resolved @MAXD32 (wins) | resolved @MAXD64 (wins) |
+|---|---|---|
+| 1000 | 479 (90) | 480 (90) |
+| 4000 | 757 (151) | 758 (151) |
+| 20000 | 972 (200) | 976 (197) |
+
+Identical within noise, and the monotone cross-check on the random pool is decisive:
+**`gained_by_64 = 0`** — raising the frame ceiling finds *exactly zero* new wins. So the
+near-bottomless caps are not waiting on >32 forcing frames; they are node-bound (astronomically
+wide ≤32-frame trees) or genuinely VCT-less but expensive to disprove. Real VCTs essentially
+never exceed 32 frames. MAXD=64 buys nothing and costs ~5% throughput ⇒ **keep MAXD=32**; the
+`GOMOKU_VCT_MAXD` knob stays (default 32 = byte-identical validated path) for future probes.
+
+### The synthesis — optimal throughput across a mixed population
+
+The population is **bimodal** (easy ≤250 nodes vs a near-bottomless hard tail), so the
+throughput-optimal recipe is **screen-cheap-then-batch-hard**, never one fixed budget:
+1. **Screen at a low budget (~10–100)** — flushes the 70–85% easy majority at *millions* of
+   boards/min and gives the highest *resolved/min* (a clean verdict resolves and stops well
+   before the cap; raising the budget on the easy mass is pure waste).
+2. **Collect the hard survivors and solve them as ONE dense high-budget dispatch.** A dense
+   all-hard batch saturates the GPU (~0.9M nodes/s); never chunk it (per-chunk tail, 0.66×)
+   and never work_steal it (in-memory no-op). If the survivor set is large (≳30k), deepening
+   *(coarse ladder)* over it adds ~1.6×; below that, a single base@ceiling dispatch wins.
+3. **Use the append-only logs.** Boards already characterized (run-a tags capped@250) can be
+   routed *directly* into the dense hard-batch, skipping re-screening — the oracle path. A full
+   fine ascending ladder pays ~1.8× the node-work of this oracle routing (the re-solve tax),
+   which is why coarse ladders and log-driven routing beat blind fine deepening.
+
+And the honest ceiling on ambition: **`max_nodes` cannot fill the caps** (6.5% resolved at 80×
+budget; 1.3% wins) and **`MAXD` cannot either** (frame ceiling is not the binding constraint).
+The capped tail is a genuinely-hard regime, not a budget away. Tools:
+`scripts/vct_metal/{sweep_throughput,analyze_sweep,n_sweep,maxd_study,bench_throughput}.py`;
+raw logs + `REPORT.md` under `~/data/idx2_solve/sweep/` (out-of-git).
 
 ---
 
