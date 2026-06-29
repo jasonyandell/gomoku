@@ -334,14 +334,36 @@ even at budget 10), vs *resolved/min* = boards given a **verdict**/min. Screenin
 while leaving caps is not progress — the decision metric is resolved/min and the
 wall-to-resolve-to-ceiling.
 
-Early signal (smoke, n=300): the **quiet pool resolves 71% at budget 10** (219k ev/min)
-vs 76% at 250 (10k ev/min) — the easies flush ~20× cheaper, confirming most frontier
-nodes are trivially quiet. The **capped pool resolves 0% at 250, ~4% at 1000** — a
-genuinely-hard tail. Key prediction being tested: the low-end ladder `(10,25,50,100,250)`
-will *not* win (its ceiling 250 is already cheap → no expensive ceiling for the easies to
-dodge, and it pays a re-solve tax); deepening pays off only with a ladder spanning to a
-**high** ceiling (the `wide` ladder → 20000) that the easy majority avoids. Full results +
-oracle gap land here as the run completes.
+**Hardness profiles (done, N=30000/pool) — resolution is BIMODAL, and the hard tail is
+near-bottomless.** Cumulative % resolved by budget:
+
+| pool | @10 | @250 | @1000 | @20000 | still capped@20k |
+|---|---|---|---|---|---|
+| quiet (frontier) | 71% | 76% | 77% | 78% | **22%** |
+| capped-only | 0% | 0% | 3% | **6%** | **93.7%** |
+| random | 72% | 82% | 84% | 85% | 15% |
+| deep (high ply) | 83% | 92% | 94% | 95% | 5% |
+
+Two facts jump out:
+1. **Budget beyond ~250 buys almost nothing.** 71–83% resolve by budget *10*; then a steep
+   plateau (quiet 76%→78% from 250→20000). The population is bimodal — "easy" (≤250 nodes)
+   vs a hard tail that 80× the budget barely touches. There is very little *in between*.
+2. **The capped regime is near-bottomless: 93.7% of capped boards stay capped even at 20,000
+   nodes** (80× the frontier's 250). So escalating `max_nodes` to "fill in the caps" is
+   largely futile — these need ≫20k nodes **or are unprovable within `MAXD=32` frames**.
+   That distinction is exactly what the **MAXD 32→64 study** resolves: if more caps fall at
+   64 frames, the cap was *frame-depth-bound*, not node-bound. (Consistent with the earlier
+   cap-probe: <1% flipped to a *win* at 16× budget; here 6% reach *any* verdict at 80×.)
+
+Peak solver node-throughput shows on the all-hard pool (capped ~0.9M nodes/s — every lane
+stays deep; mixed pools lower). A full fine ascending ladder pays ~1.8× the node-work of
+oracle routing (re-solve tax) — which is *why* coarse ladders beat fine.
+
+Confirmed prediction so far: quiet base@10 = **7.9M ev/min** resolving 71%, vs base@250 =
+358k ev/min resolving 76% — the easies flush ~20× cheaper for ~6% more coverage. The
+low-end ladder `(10,25,50,100,250)` will *not* win (ceiling 250 is already cheap → nothing
+expensive to dodge + re-solve tax); deepening pays only with a ladder to a **high** ceiling
+(the `wide` ladder → 20000). Throughput map + oracle gap land as the sweep completes.
 
 ---
 
