@@ -320,8 +320,38 @@ def _src():
 #    (per-move support would need an (B,N*N,4) output — left as a non-goal).
 # ----------------------------------------------------------------------------
 def _build_src(support: bool, complete: bool, carriers: bool = False,
-               w: bool = False, depth_cap: bool = False) -> str:
+               w: bool = False, depth_cap: bool = False,
+               work_steal: bool = False) -> str:
     src = _src()
+    # -- WORK-STEAL (issue #93): a persistent kernel. Instead of one thread per
+    # board (grid=B), launch `resident` threads that each pull the NEXT unsolved
+    # board index from a shared atomic `cursor` and loop until the pool drains.
+    # A lane that finishes an easy board immediately grabs another, so the long
+    # tail (one hard board grinding to max_nodes) no longer leaves freed lanes
+    # idle. The per-board search body is BYTE-IDENTICAL to base — only the gid
+    # source (cursor vs thread id) and the output store (atomic, since
+    # atomic_outputs makes ALL outputs atomic<T> and Metal has no atomic<uchar>,
+    # so win/hit are widened to uint32) differ. v1 = base verdict only; exclusive
+    # with the optional-output variants (asserted by the caller).
+    if work_steal:
+        assert not (support or complete or carriers or w or depth_cap), \
+            "work_steal v1 supports the base (win, hit, move) verdict only"
+        src = src.replace(
+            "    uint gid = thread_position_in_grid.x;\n",
+            "    while (true) {\n"
+            "    uint gid = atomic_fetch_add_explicit(&cursor[0], 1u, "
+            "memory_order_relaxed);\n"
+            "    if (gid >= (uint)nboards[0]) break;\n", 1)
+        src = src.replace(
+            "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);\n"
+            "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);",
+            "    atomic_store_explicit(&win[gid], (uint)ret, memory_order_relaxed);\n"
+            "    atomic_store_explicit(&hit[gid], (uint)(hitcap?1u:0u), "
+            "memory_order_relaxed);\n"
+            "    atomic_store_explicit(&move[gid], (int)((ret==1) ? "
+            "(winmove>=0 ? winmove : mm[0]) : -1), memory_order_relaxed);\n"
+            "    }", 1)
+        return src
     if not support and not complete and not carriers and not w and not depth_cap:
         return src
     # carriers / w are DERIVED from the proof-support mask, so the support
@@ -496,31 +526,42 @@ _KERNEL_CACHE: dict = {}
 
 
 def _get_kernel(support: bool, complete: bool, carriers: bool = False,
-                w: bool = False, depth_cap: bool = False):
-    key = (bool(support), bool(complete), bool(carriers), bool(w), bool(depth_cap))
+                w: bool = False, depth_cap: bool = False, work_steal: bool = False):
+    key = (bool(support), bool(complete), bool(carriers), bool(w), bool(depth_cap),
+           bool(work_steal))
     k = _KERNEL_CACHE.get(key)
     if k is None:
-        names = ["win", "hit", "move"]
-        if support:
-            names.append("support")
-        if complete:
-            names.append("winmask")
-        if carriers:
-            names.append("carriers")
-        if w:
-            names.append("w")
-        # depth_cap adds ONE input (max_depth, per-board) and ZERO outputs.
-        # APPEND-ONLY after max_nodes — MLX binds inputs=[...] positionally to
-        # input_names, so the first three names must never be reordered.
-        inames = ["own_in", "opp_in", "max_nodes"]
-        if depth_cap:
-            inames.append("max_depth")
+        if work_steal:
+            # +`cursor` output (the shared atomic counter) and `nboards` input
+            # (the pool size). atomic_outputs=True makes EVERY output atomic<T>,
+            # so win/hit are emitted as uint32 (no atomic<uchar>) and move as
+            # int32 — the Python wrapper narrows them back to the usual dtypes.
+            names = ["win", "hit", "move", "cursor"]
+            inames = ["own_in", "opp_in", "max_nodes", "nboards"]
+        else:
+            names = ["win", "hit", "move"]
+            if support:
+                names.append("support")
+            if complete:
+                names.append("winmask")
+            if carriers:
+                names.append("carriers")
+            if w:
+                names.append("w")
+            # depth_cap adds ONE input (max_depth, per-board) and ZERO outputs.
+            # APPEND-ONLY after max_nodes — MLX binds inputs=[...] positionally to
+            # input_names, so the first three names must never be reordered.
+            inames = ["own_in", "opp_in", "max_nodes"]
+            if depth_cap:
+                inames.append("max_depth")
         k = mx.fast.metal_kernel(
-            name="mega_vct_bb_%d%d%d%d%d" % (
-                int(support), int(complete), int(carriers), int(w), int(depth_cap)),
+            name="mega_vct_bb_%d%d%d%d%d%d" % (
+                int(support), int(complete), int(carriers), int(w), int(depth_cap),
+                int(work_steal)),
             input_names=inames,
             output_names=names,
-            source=_build_src(support, complete, carriers, w, depth_cap), header=_HEADER)
+            source=_build_src(support, complete, carriers, w, depth_cap, work_steal),
+            header=_HEADER, atomic_outputs=work_steal)
         _KERNEL_CACHE[key] = k
     return k
 
@@ -548,7 +589,8 @@ def cells_from_words(words) -> list:
 def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 32,
                       return_move: bool = False, return_support: bool = False,
                       complete: bool = False, return_carriers: bool = False,
-                      return_w: bool = False, max_depth=None):
+                      return_w: bool = False, max_depth=None,
+                      work_steal: bool = False, resident: int = 8192):
     """boards: (B,2,N,N) bool. Solves VCT for the side to move (board[0]=attacker).
 
     Returns (win, hit_cap): (B,) bool by default. Optional outputs are appended in
@@ -605,9 +647,57 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
     (win, hit, move, support, winmask); adding ``return_carriers=True`` then
     ``return_w=True`` appends ``carriers`` then ``w`` after all of the above. Fully
     on-device.
+
+    * ``work_steal=True`` (issue #93) switches to a PERSISTENT work-stealing
+      dispatch: ``resident`` lanes (default 8192, rounded to a multiple of ``tg``)
+      drain the ``B``-board pool through a shared atomic cursor, so a lane that
+      finishes an easy board immediately pulls the next instead of idling behind
+      the single tail-bound hard board. The verdict is BIT-IDENTICAL to the base
+      kernel (same per-board search, same ``max_nodes``); only the dispatch shape
+      differs. v1 returns the base ``(win, hit[, move])`` only — combining it with
+      ``return_support``/``complete``/``return_carriers``/``return_w``/``max_depth``
+      raises. The win is largest when the pool is far larger than one dispatch can
+      hold (deep frontier labeling); for a single ~16 k batch the hardware already
+      backfills threadgroups, so the gain is modest. See ``solve_vct_streaming``
+      (the iterative-deepening driver built on top) and
+      ``wiki/topics/mega-vct-solver.md`` § Streaming / work-stealing.
     """
     B = boards.shape[0]
     own, opp = bb.pack_words(boards)
+    if work_steal:
+        # Option A (issue #93): persistent work-stealing dispatch. `resident`
+        # lanes drain the B-board pool through an atomic cursor; the tail-bound
+        # hard board no longer leaves freed lanes idle. Verdict is bit-identical
+        # to the base kernel (same per-board search, same max_nodes).
+        if return_support or complete or return_carriers or return_w \
+                or max_depth is not None:
+            raise ValueError(
+                "work_steal supports only the base (win, hit, move) verdict in "
+                "v1 — drop return_support/complete/return_carriers/return_w/max_depth")
+        resident = max(tg, (int(resident) // tg) * tg)   # multiple of tg, >= tg
+        kernel = _get_kernel(False, False, work_steal=True)
+        o = mx.array(own.reshape(-1))
+        p = mx.array(opp.reshape(-1))
+        mn = mx.array(np.array([max_nodes], dtype=np.int32))
+        nb = mx.array(np.array([B], dtype=np.int32))
+        outs = kernel(
+            inputs=[o, p, mn, nb], grid=(resident, 1, 1), threadgroup=(tg, 1, 1),
+            output_shapes=[(B,), (B,), (B,), (1,)],
+            output_dtypes=[mx.uint32, mx.uint32, mx.int32, mx.uint32],
+            init_value=0)        # init_value zeroes the cursor across threadgroups
+        mx.eval(*outs)
+        cur = int(np.array(outs[3])[0])
+        # B successful fetches + one terminal overshoot per lane; a mismatch means
+        # the cursor was not zeroed (would silently skip/over-run boards) — fail loud.
+        assert cur == B + resident, (
+            f"work-steal cursor={cur} != B+resident={B + resident}")
+        w = np.array(outs[0]).astype(bool)
+        h = np.array(outs[1]).astype(bool)
+        move = np.array(outs[2]).astype(np.int32)
+        res = [w, h]
+        if return_move:
+            res.append(move)
+        return tuple(res)
     o = mx.array(own.reshape(-1))
     p = mx.array(opp.reshape(-1))
     mn = mx.array(np.array([max_nodes], dtype=np.int32))
@@ -710,6 +800,54 @@ def solve_md_min(boards: np.ndarray, *, max_nodes: int = 20000, lo: int = 1,
     md = np.where(alive & ~deferred, LO, -1).astype(np.int32)
     capped = capped | deferred
     return md, capped
+
+
+def solve_vct_streaming(boards: np.ndarray, *, budgets=(250, 1000, 4000, 20000),
+                        resident: int = 8192, tg: int = 32,
+                        return_move: bool = False, log=None):
+    """Option B (issue #93): iterative-deepening VCT over a board pool, built on
+    the work-stealing kernel (Option A).
+
+    Round 0 solves EVERY board at ``budgets[0]`` via ``work_steal``; the subset
+    still ``hit_cap`` is re-solved at ``budgets[1]``, and so on. A board's verdict
+    LATCHES the first round it comes back clean (not capped) — sound because a
+    non-capped VCT verdict is budget-independent (a deeper search never flips a
+    clean win/no-win). Only boards still capped at ``budgets[-1]`` stay
+    ``hit=True``. This deepens the hard tail (most "hard" boards resolve at a
+    slightly higher budget; only a few need the full 20 k) while the work-stealing
+    dispatch keeps every lane busy draining each round's SHRINKING pool — so the
+    expensive deep budgets run on only the handful of boards that need them.
+
+    Returns ``(win, hit)`` — or ``(win, hit, move)`` with ``return_move=True`` —
+    (B,) arrays with the same dtypes/semantics as ``solve_vct_mega_bb``: ``win``
+    the VCT verdict, ``hit`` True only where still inconclusive at the deepest
+    budget, ``move`` a sound first move (-1 where no win / still capped). Pass a
+    callable ``log(msg)`` to trace per-round pool sizes.
+    """
+    B = boards.shape[0]
+    win = np.zeros(B, dtype=bool)
+    hit = np.ones(B, dtype=bool)           # capped until a clean round proves otherwise
+    move = np.full(B, -1, dtype=np.int32)
+    active = np.arange(B)                   # board indices still capped
+    for r, bud in enumerate(budgets):
+        if active.size == 0:
+            break
+        w, h, m = solve_vct_mega_bb(
+            boards[active], max_nodes=int(bud), work_steal=True, resident=resident,
+            tg=tg, return_move=True)
+        clean = ~h
+        sel = active[clean]
+        win[sel] = w[clean]
+        move[sel] = m[clean]
+        hit[sel] = False                    # latched: clean verdicts are final
+        if log is not None:
+            log(f"round {r} budget={bud}: {active.size} in, "
+                f"{int(clean.sum())} clean, {int((~clean).sum())} still capped")
+        active = active[~clean]             # recirculate the capped tail, deeper
+    res = [win, hit]
+    if return_move:
+        res.append(move)
+    return tuple(res)
 
 
 if __name__ == "__main__":

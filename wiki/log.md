@@ -1609,3 +1609,22 @@ win/loss + honest cap/gap accounting + Rapfi-prior-vs-oracle-danger — idx-2 re
 uncertainty ≠ safe. Also benchmarked the Rapfi cost knob (`max_node` binds; small-ms timeout truncates
 multiPV — the wrong tool). UI noted, not built. Added the index doorway row (VCT cluster) +
 [capabilities.md](capabilities.md) "Search & solve" row. Data (out-of-git): `~/data/idx2_solve/run-a/`.
+
+## [2026-06-28] mega-VCT streaming / work-stealing dispatch (#93)
+Attacks the call-cost-law tail: the base kernel is one thread per board, so in the long tail the wall is
+the *single hardest board* grinding to `max_nodes` while easy-board lanes have retired. **Option A —
+`solve_vct_mega_bb(..., work_steal=True, resident=N)`:** a persistent dispatch of `resident` lanes that
+each pull the next board index from a shared **atomic cursor** (MLX `atomic_outputs=True` →
+`device atomic<uint>*`; `init_value=0` zeroes the cursor across threadgroups, no barrier dance). The
+per-board AND/OR search is **byte-identical** to the base kernel — only the gid source + the (now-atomic,
+uint32-widened since Metal has no `atomic<uchar>`) output store change; the Python wrapper narrows the
+dtypes back. **Option B — `solve_vct_streaming(boards, budgets=...)`:** iterative deepening over the pool —
+solve all at the smallest budget via A, recirculate the still-capped subset at deeper budgets, latch the
+first clean verdict (clean verdicts are budget-independent). A keeps lanes full within a round; B shrinks
+what the deep rounds run on. **Validated** byte-identical to base across seeds × budgets × `resident`
+{<B, ≈B, ≫B} and sub-threadgroup `B` (regression invariant #10; `test_work_steal_*`/`test_streaming_*`).
+**Honest scope:** the GPU already backfills at threadgroup-dispatch granularity (why the law is flat), so
+for a single ~16k batch the gain is modest; A's real win is streaming pools **larger than one dispatch**
+(deep frontier labeling — millions of boards, one tail at the end). Feasibility spike + full rationale in
+[topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Streaming / work-stealing. Spawned by Jason's
+"introduce new boards as they complete" brainstorm.

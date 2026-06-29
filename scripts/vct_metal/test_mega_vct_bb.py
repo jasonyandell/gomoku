@@ -21,7 +21,8 @@ import numpy as np
 import pytest
 
 from scripts.vct_metal.mega_vct_bb import (
-    MAXD, cells_from_words, solve_md_min, solve_vct_mega_bb, N, _build_src, _src)
+    MAXD, cells_from_words, solve_md_min, solve_vct_mega_bb, solve_vct_streaming,
+    N, _build_src, _src)
 from scripts.vct_metal.positions import load_position_stack
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vct_golden.npz"
@@ -338,6 +339,66 @@ def test_md_matches_golden(md_golden):
     assert not bad, f"md != golden on {bad[:8]}"
 
 
+# --------------------------------------------------------------------------- #
+# work_steal (Option A, issue #93) — the persistent work-stealing dispatch must
+# leave the (win, hit, move) verdict BYTE-IDENTICAL to the base kernel (same
+# per-board search, same max_nodes); only the dispatch shape differs. And
+# solve_vct_streaming (Option B) must agree with the base verdict at its deepest
+# budget on every mutually-clean board.
+# --------------------------------------------------------------------------- #
+def test_work_steal_source_untouched_default():
+    """The default (non-work_steal) source is unchanged, and work_steal injects
+    exactly the cursor-pull loop + atomic output stores."""
+    assert _build_src(False, False) == _src(), "default source drifted"
+    ws = _build_src(False, False, work_steal=True)
+    assert "atomic_fetch_add_explicit(&cursor[0]" in ws
+    assert "if (gid >= (uint)nboards[0]) break;" in ws
+    assert "atomic_store_explicit(&win[gid]" in ws
+    assert "thread_position_in_grid.x" not in ws, "work_steal must not keep the thread-id gid"
+
+
+def test_work_steal_rejects_optional_outputs():
+    st = load_position_stack(4, seed=0, min_ply=6, max_ply=40)
+    for kw in (dict(return_support=True), dict(complete=True),
+               dict(return_carriers=True), dict(return_w=True), dict(max_depth=8)):
+        with pytest.raises(ValueError):
+            solve_vct_mega_bb(st, max_nodes=200, work_steal=True, **kw)
+
+
+def run_work_steal_identical(B=1200, seed=0, budget=500, resident=1024):
+    """work_steal verdict is byte-identical to the base kernel."""
+    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
+    wb, hb, mb = solve_vct_mega_bb(st, max_nodes=budget, return_move=True)
+    ww, hw, mw = solve_vct_mega_bb(st, max_nodes=budget, return_move=True,
+                                   work_steal=True, resident=resident)
+    assert np.array_equal(wb, ww), "work_steal win != base"
+    assert np.array_equal(hb, hw), "work_steal hit != base"
+    assert np.array_equal(mb, mw), "work_steal move != base"
+    return B
+
+
+def test_work_steal_byte_identical():
+    # resident < B (streaming), ~B, and >> B; plus B below a threadgroup.
+    for resident in (256, 1024, 8192):
+        run_work_steal_identical(B=1200, seed=0, budget=500, resident=resident)
+    for B in (1, 31, 33):
+        run_work_steal_identical(B=B, seed=7, budget=400, resident=1024)
+
+
+def test_streaming_consistent_with_base():
+    """solve_vct_streaming latches clean verdicts across deepening budgets; on any
+    board both it and a single deepest-budget base call leave clean, they agree —
+    and streaming resolves at least as many boards."""
+    budgets = (250, 1000, 4000)
+    st = load_position_stack(1500, seed=3, min_ply=6, max_ply=40)
+    sw, sh, sm = solve_vct_streaming(st, budgets=budgets, return_move=True)
+    wb, hb, mb = solve_vct_mega_bb(st, max_nodes=budgets[-1], return_move=True)
+    both_clean = ~sh & ~hb
+    assert np.array_equal(sw[both_clean], wb[both_clean]), "streaming win != base"
+    assert np.array_equal(sm[both_clean], mb[both_clean]), "streaming move != base"
+    assert int((~sh).sum()) >= int((~hb).sum()), "streaming resolved fewer than base"
+
+
 if __name__ == "__main__":
     import sys
     if not FIXTURE.exists():
@@ -358,6 +419,10 @@ if __name__ == "__main__":
     test_depth_cap_ceiling_equals_default()
     test_depth_monotonic()
     test_md_min_bracket()
+    test_work_steal_source_untouched_default()
+    test_work_steal_rejects_optional_outputs()
+    test_work_steal_byte_identical()
+    test_streaming_consistent_with_base()
     if MD_FIXTURE.exists():
         test_md_matches_golden(np.load(MD_FIXTURE))
     print("FAST tier PASS")
