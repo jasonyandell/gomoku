@@ -20,13 +20,21 @@ Validated vs gomoku.vcf.solve_vct and the cell-scan mega_vct in test_mega_vct_bb
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import mlx.core as mx
 
 from scripts.vct_metal import bb, bb_ref, mega_vcf_bb
 
 N = bb.N
-MAXD = 32
+# Explicit per-thread AND/OR stack depth (frame ceiling): "VCT within MAXD frames".
+# Default 32 = the validated path (golden fixtures + all invariants assume it).
+# GOMOKU_VCT_MAXD overrides it (issue #95 study): raising to 64 lets the search find
+# deeper proofs at ~2× the per-thread stack (lower occupancy) AND can flip a clean
+# no-win@32 to a win@64 — so verdicts are a MONOTONE SUPERSET, not byte-identical;
+# a non-default MAXD must be re-validated (monotone-superset check), never trusted blind.
+MAXD = int(os.environ.get("GOMOKU_VCT_MAXD", "32"))
 _BOARDMASK = bb_ref.BOARDMASK
 
 
