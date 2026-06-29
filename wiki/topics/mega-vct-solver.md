@@ -39,7 +39,7 @@ solve_vct_mega_bb(boards, *, max_nodes=20000, tg=32,
                   work_steal=False, resident=8192)
 solve_md_min(boards, *, max_nodes=20000, lo=1, hi=None, tg=32)  # -> (md, capped)
 solve_vct_streaming(boards, *, budgets=(250,1000,4000,20000),    # -> (win, hit[, move])
-                    resident=8192, tg=32, return_move=False, log=None)
+                    work_steal=False, resident=8192, tg=32, return_move=False, log=None)
 ```
 
 `boards`: `(B, 2, N, N)` bool, **side-to-move-relative** — `board[0]` is the
@@ -271,26 +271,46 @@ Mechanics that made it clean (all confirmed on MLX 0.31.2):
 
 **Where it pays off — and where it doesn't.** The GPU hardware *already* backfills at
 *threadgroup-dispatch* granularity (a retired threadgroup's slot gets a pending one),
-which is *why* the call-cost law is flat. So for a single ~16 k batch the marginal win
-over the base kernel is **modest**. `work_steal`'s real, structural win is when the
-board pool is **far larger than one dispatch can hold** (memory-bound on
-`own_in`/`opp_in`): instead of N sequential launches each paying a terminal tail +
-launch overhead, one persistent dispatch streams **millions** of boards at full
-occupancy with a single tail at the very end. That is the **deep frontier-labeling**
-regime. The intra-simdgroup divergence tax remains (a hard lane stalls its ~31
-lock-step mates — measured at ~6% of lanes for a few hard boards in the spike); the
-cursor fixes inter-threadgroup idleness, not divergence.
+which is *why* the call-cost law is flat. So for a single in-memory pool the marginal win
+over the base kernel is **none — measured 0.93–0.97× at best** (see the runtime table
+below); the cursor is pure overhead when all boards already fit one dispatch.
+`work_steal`'s *only* structural justification is a board pool **larger than one dispatch
+can hold or arriving incrementally** (so you cannot gather it up front): one persistent
+dispatch streams **millions** of boards at full occupancy with a single tail at the very
+end, instead of N sequential launches each paying a terminal tail + launch overhead. The
+intra-simdgroup divergence tax remains (a hard lane stalls its ~31 lock-step mates —
+measured at ~6% of lanes for a few hard boards in the spike); the cursor fixes
+inter-threadgroup idleness, not divergence.
 
 **`solve_vct_streaming` (Option B) — iterative deepening over the pool.** Round 0 solves
-**every** board at `budgets[0]` via `work_steal`; the subset still `hit_cap` is
-re-solved at `budgets[1]`, and so on. A board's verdict **latches** the first round it
-returns clean — sound because a non-capped verdict is **budget-independent** (a deeper
-search never flips a clean win/no-win; same property `solve_md_min` relies on). Only
-boards still capped at `budgets[-1]` stay `hit=True`. This attacks the hard tail
-directly — most "hard" boards resolve at a slightly higher budget, so the expensive
-deep budgets run on only the handful that truly need them, while the work-stealing
-dispatch keeps every lane busy draining each round's shrinking pool. A/B compose: A
-keeps lanes full *within* a round, B shrinks *what* the deep rounds run on.
+**every** board at `budgets[0]`; the subset still `hit_cap` is re-solved at `budgets[1]`,
+and so on. A board's verdict **latches** the first round it returns clean — sound because
+a non-capped verdict is **budget-independent** (a deeper search never flips a clean
+win/no-win; same property `solve_md_min` relies on). Only boards still capped at
+`budgets[-1]` stay `hit=True`. This attacks the hard tail directly — most "hard" boards
+resolve at a slightly higher budget, so the expensive deep budgets run on only the
+shrinking survivor set, not the whole pool.
+
+### Measured runtime properties (#94) — the benchmark that mapped the niche
+
+84k real idx-2 frontier boards (replayed from `run-a` move-sequences, **no Rapfi**;
+24% capped@250), solver-only, `scripts/vct_metal/bench_throughput.py`:
+
+| regime | result | takeaway |
+|---|---|---|
+| **work_steal vs base, single pool** (budget 250/500/1000) | best **0.93 / 0.95 / 0.97×** (resident=16384); 0.34× @ resident=4096 | work_steal **never beats** base on a single in-memory pool — the hardware already backfills one dispatch, the cursor is overhead. Too-small `resident` underutilizes badly. |
+| **base chunked@16384** (the frontier's old wave pattern) | **0.66–0.69×** | a dispatch tail **per chunk**; the real lever is *one big dispatch*, not many small ones. |
+| **deepening on BASE** `(250,1000,4000)` vs single `@4000` | **1.60×**, identical verdicts (64539/64539) | ✅ **the niche.** The deep budget only touches the survivor tail. |
+| deepening ladder `(250,500,1000,2000,4000)` | 1.10× | coarse ladder wins — each round **re-solves survivors from scratch**, so extra rungs pay that redundancy. |
+| deepening on **work_steal** `(250,1000,4000)` | **0.87× (a LOSS)** | work_steal's big-round-0 handicap eats the deepening win ⇒ **`solve_vct_streaming` deepens on the base kernel by default**; `work_steal=True` is an opt-in for pools too large to gather into one dispatch. |
+
+Net map of the mega-VCT solver's runtime: **for an in-memory pool, one big base
+dispatch is optimal; deepening with a coarse ladder buys ~1.6× at high effective budget;
+work_steal is a no-op-to-slight-loss whose only justification is genuinely-streamed pools
+you cannot gather up front.** The earlier `~1,750 nodes/s` frontier figure was
+*whole-pipeline* (Rapfi + solve + bookkeeping); the solver **alone** does ~6,900 boards/s
+@ budget 250 — ~3.9× the frontier rate, i.e. the frontier was **Rapfi-bound, not
+solver-bound** (so work_steal could never have sped it up — a prediction confirmed).
 
 **Validated:** `work_steal` verdict is byte-identical to base across seeds × budgets ×
 `resident ∈ {256,1024,8192}` (i.e. resident `<`, `≈`, `≫` B) and `B ∈ {1,31,33}` (sub-

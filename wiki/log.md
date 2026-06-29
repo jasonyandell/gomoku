@@ -1628,3 +1628,20 @@ for a single ~16k batch the gain is modest; A's real win is streaming pools **la
 (deep frontier labeling — millions of boards, one tail at the end). Feasibility spike + full rationale in
 [topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Streaming / work-stealing. Spawned by Jason's
 "introduce new boards as they complete" brainstorm.
+
+## [2026-06-28] Benchmarked the work-stealing/streaming solver — mapped its niche (#94)
+Apples-to-apples on 84k real idx-2 `run-a` boards (replayed from move-sequences, **no Rapfi**; 24%
+capped@250), solver-only (`scripts/vct_metal/bench_throughput.py`). Findings — and a design bug caught by
+measuring: (1) **work_steal NEVER beats base** on a single in-memory pool (0.93–0.97× at resident=16384;
+0.34× at 4096) — the GPU already backfills one dispatch, so the cursor is overhead; its only justification
+is pools too large/incremental to gather up front. (2) **Iterative deepening on the BASE kernel is 1.60×**
+vs a single budget-4000 dispatch (identical verdicts) — the deep budget only touches the shrinking survivor
+tail. **The niche.** (3) **The shipped `solve_vct_streaming` was built on work_steal → 0.87× (a LOSS)**;
+work_steal's big-round-0 handicap ate the deepening win. **Fix:** `solve_vct_streaming` now deepens on the
+base kernel by default (`work_steal=True` opt-in for the streamed regime). (4) Coarse ladder beats fine
+(3 rungs 1.60× vs 5 rungs 1.10× — each round re-solves survivors from scratch). (5) The frontier's old
+wave-chunking@16384 was 0.66× of one big dispatch. Bonus apples-to-apples: solver alone ≈ 6,900 boards/s
+@ budget 250 = ~3.9× the prior ~1,750 nodes/s *whole-pipeline* frontier rate ⇒ the frontier was
+**Rapfi-bound, not solver-bound** (confirming work_steal could never have sped it up). We predicted, tried,
+measured, wrote it down. Full runtime-properties table in
+[topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Streaming / work-stealing → Measured runtime properties.
