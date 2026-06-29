@@ -318,6 +318,31 @@ threadgroup); `solve_vct_streaming` agrees with a single deepest-budget base cal
 every mutually-clean board and resolves ≥ as many. See
 `scripts/vct_metal/test_mega_vct_bb.py` (`test_work_steal_*`, `test_streaming_*`).
 
+### Throughput characterization sweep (#95) — IN PROGRESS (overnight run)
+
+Goal: map board-evals/min across the **whole mixed population**, which decomposes into
+differently-shaped subproblems (easies / long-tails / deeps) we can't know a-priori in
+general — but *can* know for already-computed boards via the append-only logs.
+`scripts/vct_metal/sweep_throughput.py` (append-only, resumable) sweeps **4 pools**
+(quiet-heavy frontier, capped-only, random, deep) × **strategies** (base @ 11 budgets,
+chunked, work_steal × 3 residents, deepening over 4 ladders) and builds a **per-pool
+resolution profile** (each board's min-resolving budget → hardness histogram → an oracle
+bound). `analyze_sweep.py` turns the logs into the map.
+
+**Two metrics, and the distinction matters:** *evals/min* = boards **screened**/min (high
+even at budget 10), vs *resolved/min* = boards given a **verdict**/min. Screening fast
+while leaving caps is not progress — the decision metric is resolved/min and the
+wall-to-resolve-to-ceiling.
+
+Early signal (smoke, n=300): the **quiet pool resolves 71% at budget 10** (219k ev/min)
+vs 76% at 250 (10k ev/min) — the easies flush ~20× cheaper, confirming most frontier
+nodes are trivially quiet. The **capped pool resolves 0% at 250, ~4% at 1000** — a
+genuinely-hard tail. Key prediction being tested: the low-end ladder `(10,25,50,100,250)`
+will *not* win (its ceiling 250 is already cheap → no expensive ceiling for the easies to
+dodge, and it pays a re-solve tax); deepening pays off only with a ladder spanning to a
+**high** ceiling (the `wide` ladder → 20000) that the easy majority avoids. Full results +
+oracle gap land here as the run completes.
+
 ---
 
 ## Invariants (the regression contract)
