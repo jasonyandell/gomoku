@@ -388,15 +388,19 @@ def test_work_steal_byte_identical():
 def test_streaming_consistent_with_base():
     """solve_vct_streaming latches clean verdicts across deepening budgets; on any
     board both it and a single deepest-budget base call leave clean, they agree —
-    and streaming resolves at least as many boards."""
+    and streaming resolves at least as many boards. Checked for BOTH the default
+    base-kernel deepening (#94) and the work_steal=True opt-in — they must give
+    identical verdicts (the substrate is a perf choice, not a correctness one)."""
     budgets = (250, 1000, 4000)
     st = load_position_stack(1500, seed=3, min_ply=6, max_ply=40)
-    sw, sh, sm = solve_vct_streaming(st, budgets=budgets, return_move=True)
     wb, hb, mb = solve_vct_mega_bb(st, max_nodes=budgets[-1], return_move=True)
-    both_clean = ~sh & ~hb
-    assert np.array_equal(sw[both_clean], wb[both_clean]), "streaming win != base"
-    assert np.array_equal(sm[both_clean], mb[both_clean]), "streaming move != base"
-    assert int((~sh).sum()) >= int((~hb).sum()), "streaming resolved fewer than base"
+    for ws in (False, True):
+        sw, sh, sm = solve_vct_streaming(st, budgets=budgets, work_steal=ws,
+                                         return_move=True)
+        both_clean = ~sh & ~hb
+        assert np.array_equal(sw[both_clean], wb[both_clean]), f"streaming win != base (ws={ws})"
+        assert np.array_equal(sm[both_clean], mb[both_clean]), f"streaming move != base (ws={ws})"
+        assert int((~sh).sum()) >= int((~hb).sum()), f"streaming resolved fewer (ws={ws})"
 
 
 if __name__ == "__main__":

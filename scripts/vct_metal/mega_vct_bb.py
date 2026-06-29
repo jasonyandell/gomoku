@@ -803,20 +803,29 @@ def solve_md_min(boards: np.ndarray, *, max_nodes: int = 20000, lo: int = 1,
 
 
 def solve_vct_streaming(boards: np.ndarray, *, budgets=(250, 1000, 4000, 20000),
-                        resident: int = 8192, tg: int = 32,
+                        work_steal: bool = False, resident: int = 8192, tg: int = 32,
                         return_move: bool = False, log=None):
-    """Option B (issue #93): iterative-deepening VCT over a board pool, built on
-    the work-stealing kernel (Option A).
+    """Option B (issue #93): iterative-deepening VCT over a board pool.
 
-    Round 0 solves EVERY board at ``budgets[0]`` via ``work_steal``; the subset
-    still ``hit_cap`` is re-solved at ``budgets[1]``, and so on. A board's verdict
-    LATCHES the first round it comes back clean (not capped) — sound because a
-    non-capped VCT verdict is budget-independent (a deeper search never flips a
-    clean win/no-win). Only boards still capped at ``budgets[-1]`` stay
-    ``hit=True``. This deepens the hard tail (most "hard" boards resolve at a
-    slightly higher budget; only a few need the full 20 k) while the work-stealing
-    dispatch keeps every lane busy draining each round's SHRINKING pool — so the
-    expensive deep budgets run on only the handful of boards that need them.
+    Round 0 solves EVERY board at ``budgets[0]``; the subset still ``hit_cap`` is
+    re-solved at ``budgets[1]``, and so on. A board's verdict LATCHES the first
+    round it comes back clean (not capped) — sound because a non-capped VCT verdict
+    is budget-independent (a deeper search never flips a clean win/no-win). Only
+    boards still capped at ``budgets[-1]`` stay ``hit=True``. This deepens the hard
+    tail: most boards resolve at the cheap first budget, so the EXPENSIVE deep
+    budgets run on only the shrinking survivor set, not the whole pool. **Measured
+    1.60× faster** than a single ``budgets[-1]`` dispatch on a capped-heavy pool
+    (84k idx-2 boards, 24% capped@250, effective budget 4000), identical verdicts
+    (#94).
+
+    **Each round uses the BASE kernel by default** (``work_steal=False``). The
+    benchmark (#94) found base deepening 1.60× vs a single deep dispatch, but
+    deepening on ``work_steal`` only 0.87× (a LOSS) — work_steal's big-round-0
+    handicap (0.62× at default resident) outweighs the deepening win, and for an
+    in-memory pool base is never slower than work_steal. Set ``work_steal=True``
+    only when a round's pool is too large to gather into one dispatch (then
+    ``resident``/``tg`` apply). Use a COARSE ladder: 3 rungs (250,1000,4000) beat 5
+    (250,500,1000,2000,4000) because each round re-solves survivors from scratch.
 
     Returns ``(win, hit)`` — or ``(win, hit, move)`` with ``return_move=True`` —
     (B,) arrays with the same dtypes/semantics as ``solve_vct_mega_bb``: ``win``
@@ -829,12 +838,12 @@ def solve_vct_streaming(boards: np.ndarray, *, budgets=(250, 1000, 4000, 20000),
     hit = np.ones(B, dtype=bool)           # capped until a clean round proves otherwise
     move = np.full(B, -1, dtype=np.int32)
     active = np.arange(B)                   # board indices still capped
+    kw = dict(work_steal=True, resident=resident, tg=tg) if work_steal else {}
     for r, bud in enumerate(budgets):
         if active.size == 0:
             break
         w, h, m = solve_vct_mega_bb(
-            boards[active], max_nodes=int(bud), work_steal=True, resident=resident,
-            tg=tg, return_move=True)
+            boards[active], max_nodes=int(bud), return_move=True, **kw)
         clean = ~h
         sel = active[clean]
         win[sel] = w[clean]
