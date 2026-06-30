@@ -405,8 +405,18 @@ terminus.
   lose it, but measure. Defender still needs the "no VCT for me, avoid giving you one"
   lessons, which this preserves (the terminal credits the side that achieved the VCT).
 - **Cost:** low-ish. The solver already runs in/near the MCTS loop (batch-VCF
-  guard-rail, idea #9); reuse it as a terminal test each ply (cap small, ~50 nodes
-  catches 87% of the corpus) and end the game on the first hit.
+  guard-rail, idea #9); reuse it as a terminal test each ply at **cap50** and end the
+  game on the first hit.
+- **⭐ MEASURED 2026-06-30 — cap50 is a near-complete first-VCT detector, so this is
+  CHEAP:** 98.8% of all 27.4M corpus VCTs resolve at 50 nodes; a 50-node seeker finds
+  a forced win in **96.1% of all games** (99.7% of vct-games), about as early as an
+  infinitely-patient solver (median first-VCT ply 20 @ cap50 vs 19 @ cap2000 — 40×
+  the budget buys ~1 ply). Only 0.3% of vct-games have a VCT invisible at 50 nodes.
+  ⇒ a **cap50 mate-seeker** gives up almost nothing (0.3% of decidable games, ~1 ply)
+  for 40–850× faster iteration than deep search. The deep tail (>2000 nodes, 9.8% of
+  the corpus) is a wall dominated by hard-to-confirm no-wins, not cheap deep wins —
+  skip it. Full numbers: [vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md)
+  § "50 nodes is a near-complete first-VCT detector".
 - **Measure:** plies/game in self-play (expect ~2× drop), value-head calibration on
   held-out oracle verdicts, and the #4 ms-ladder crossing vs a five-terminated
   control at equal wall-clock.
