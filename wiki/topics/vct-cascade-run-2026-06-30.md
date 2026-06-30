@@ -20,8 +20,12 @@ next rung. Throughput = cascade-only perf rows (last night's sweep filtered out 
 | rung | input boards | steady width | peak b/s | median b/s | GPU wall | win | no_win | cap (→next) | win% | cap% |
 |-----:|-------------:|-------------:|---------:|-----------:|---------:|----:|-------:|------------:|-----:|-----:|
 | cap50 | 56,121,658 | 524,288 | 43,089 | 42,496 | 22.5 min | 26,837,059 | 21,605,369 | 7,130,052 | 48.3 | 12.8 |
+| cap100 | 7,200,627 | 262,144 | 9,257 | 9,176 | 13.2 min | 108,070 | 450,445 | 6,642,112 | 1.5 | 92.2 |
 
 *(rows appended as each rung completes)*
+
+> **cap50→cap100 survivor count grew 7,130,052 → 7,200,627**: cap50 was still
+> flushing its last shards when first sampled; 7.20M is the true cap50 survivor set.
 
 ## Width-ramp curve at scale (cap50 — where throughput saturates)
 The cascade auto-doubles batch width from 2,048 until throughput stops climbing,
@@ -47,7 +51,24 @@ gains nothing at cap50, so the ramp correctly stopped early.
 ## Notes / anomalies
 - cap50 resolved **87.2%** of the whole corpus definitively (48.3% win + 38.9%
   no_win) at just 50 nodes — confirming most rapfi positions are tactically
-  shallow. The interesting tail is the **12.8% (7.13M)** that cap and fall through.
+  shallow. The interesting tail is the **12.8% (7.20M)** that cap and fall through.
+- **THE KEY AT-SCALE FINDING — survivor-rung throughput collapses far below the
+  single-shot knee.** The standalone sweep measured the knee on the *natural*
+  rapfi mix; each cascade rung after cap50 runs only on the *hard survivors* (boards
+  that already capped at the prior budget), which run the **full** node budget with
+  no early-out. So measured b/s per rung << the sweep knee:
+
+  | rung | survivor-rung b/s (this run) | single-shot knee (natural mix) | ratio |
+  |-----:|-----------------------------:|-------------------------------:|------:|
+  | cap50 | 43,089 | 43,397 | 0.99× (cap50 IS the natural mix) |
+  | cap100 | 9,257 | 23,822 | **0.39×** |
+  | cap250 | ~3,800 | 10,107 | **~0.38×** |
+
+  Plan deep-rung wall-clock off the *survivor* rate (~0.4× the knee), not the knee.
+- **The deeper you go, the less budget buys.** cap100 (2× the nodes) converted only
+  **7.8%** of cap50's survivors to a definitive verdict (1.5% win + 6.3% no_win);
+  the other 92.2% still cap. The tail is hard, not slow — the deep-win gold is rare
+  and lives only at the high-budget rungs, exactly as the cascade was built to find.
 
 **Cross-links:** [vct-cascade-labeler.md](vct-cascade-labeler.md) (architecture +
 knee sweep) · [mega-vct-solver.md](mega-vct-solver.md) ·
