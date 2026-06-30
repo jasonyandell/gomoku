@@ -1,0 +1,165 @@
+# VCT cascade — at-scale run record (2026-06-30, full rapfi corpus) (#97)
+
+Live, append-only record of the **actual full-corpus labeling run** — what each
+ladder rung does *at scale* on the real 56.1M-position rapfi corpus: where width
+settles, sustained boards/s, wall time, and the verdict split (how many resolve
+vs. how many cap and fall through to the next rung). This is the deepening curve
+the throughput-knee sweep ([[vct-cascade-labeler]]) could only sample.
+
+- **Corpus:** `~/data/raphi_vct/positions/` — 56,121,658 unique D4-canonical positions.
+- **Run root:** `~/data/raphi_vct/` (`results/cap<N>/`, `survivors/cap<N>/`, `perf/`).
+- **Launched:** 2026-06-30 06:58 (after the 06:53 reboot cleared the Metal wedge).
+- **Execution:** `watchdog.sh` → `cascade.py`, all proof-outputs ON
+  (move+support+carriers+w), `complete=OFF`, work-bounded (no `timeout` kills).
+- **Ladder:** planned `50…100000`; **STOPPED AT CAP2000** (Jason's call, 2026-06-30
+  14:12) once the deep-ladder projection showed cap4000→100k as a ~10-day grind.
+
+## ✅ Closing summary — run complete through cap2000 (2026-06-30)
+The ≤2000 ladder finished cleanly (`[cascade] complete`, no wedge) in **~7.2 h
+wall** (06:58→14:12). Final ledger over the whole 56,121,658-position corpus:
+
+| outcome | positions | % of corpus |
+|---|---:|---:|
+| **win** (side-to-move has a VCT) | 27,428,327 | **48.9%** |
+| **no_win** (proven none ≤ its budget) | 23,178,975 | **41.3%** |
+| **resolved subtotal** | **50,607,302** | **90.2%** |
+| **deep tail** (still cap at 2000 nodes) | 5,514,356 | **9.8%** |
+
+Ledger is exact and complete: 27,428,327 + 23,178,975 + 5,514,356 = 56,121,658 ✓
+(every position has a row; nothing is "absence = state").
+
+**The deep tail — `survivors/cap2000/` (5,514,356 positions)** — is the preserved,
+content-addressed seed for a future targeted deep run (caps 4000→100000, or a
+sampled probe of the depth limits). It was deferred, not abandoned: the cascade is
+resume-by-row-offset, so a later run just adds `4000,10000,…` to the ladder and
+picks up exactly here. Projection said the full deep ladder ≈ **~10 days** of GPU
+on these ~5.5M stubborn boards (each rung resolves only ~3–4%); that's a separate
+deliberate run, not part of this one.
+
+**Net:** 90.2% of the rapfi corpus now carries an exact VCT verdict + proof outputs
+(move/support/carriers/w), and the hard 9.8% is cleanly isolated for later.
+
+## 🎯 The first VCT arrives at median ply 19 — games are decided FAR earlier than they end
+Joining every game's per-ply positions (`positions_raw`: shard/game_idx/ply → id)
+back to the win-ledger, for the **first ply at which the side-to-move has a VCT**:
+
+- **Mean 21.6 · median 19** plies to first VCT (min 6, max 119; p10–p90 = **12–31**).
+- **96.4%** of the 1,194,662 games contain a VCT at all (3.6% never do = draws /
+  cut-short). Distribution: 2.0% by ply 9, **49.6% in plies 10–19**, 36.5% in 20–29,
+  11.9% at 30+.
+- **First-move advantage is visible:** of games with a VCT, **68%** get their first
+  VCT on a *first-player*-to-move position vs 32% second-player (both at ~ply 21.5).
+  Consistent with 15×15 free-style being a first-player win (Allis).
+
+**This explains the "shocking" 48.9% win rate.** A VCT appears around move ~20 (≈10
+stones/side) and rapfi games run ~40–60 plies, so the **entire back half of nearly
+every game is VCT-saturated** — once the board fills past ~20 stones, a forced
+threat sequence almost always exists for *someone*. The win rate isn't a sampling
+artifact; it's the natural density of forced wins in mid/late tactical positions.
+
+### ⭐ Headline implication — play self-play games TO the first VCT, not to five
+A VCT is a *proven forced win* the GPU oracle can both **detect and terminally
+value** (exact win + the winning move via `return_move`). So self-play does not need
+to play the game out to an actual five-in-a-row: **terminate at the first VCT and
+take the oracle's verdict as the game result.** That cuts the searched/played
+trajectory from ~40–60 plies to a **median of 19** — *less than half* the plies to a
+**labeled** winner, with an **exact** terminal value instead of a bootstrap. Far
+fewer MCTS-expanded plies per game → cheaper, higher-quality self-play data. This is
+the actionable lever from this run; seeded as [idea-pile.md](idea-pile.md) #11.
+
+## Per-rung results at scale (the deepening curve)
+Each rung runs only on the prior rung's `cap` survivors. `cap` count = input to the
+next rung. Throughput = cascade-only perf rows (last night's sweep filtered out by ts).
+
+| rung | input boards | steady width | peak b/s | median b/s | GPU wall | win | no_win | cap (→next) | win% | cap% |
+|-----:|-------------:|-------------:|---------:|-----------:|---------:|----:|-------:|------------:|-----:|-----:|
+| cap50 | 56,121,658 | 524,288 | 43,089 | 42,496 | 22.5 min | 26,837,059 | 21,605,369 | 7,130,052 | 48.3 | 12.8 |
+| cap100 | 7,200,627 | 262,144 | 9,257 | 9,176 | 13.2 min | 108,070 | 450,445 | 6,642,112 | 1.5 | 92.2 |
+| cap250 | 6,642,112 | 262,144 | 3,867 | 3,792 | 29.4 min | 96,424 | 364,780 | 6,180,908 | 1.5 | 93.1 |
+| cap500 | 6,180,908 | 131,072 | 1,926 | 1,889 | 55.0 min | 49,770 | 205,883 | 5,925,255 | 0.8 | 95.9 |
+| cap1000 | 5,925,255 | 65,536 | 922 | 908 | 109.6 min | 38,273 | 192,888 | 5,694,094 | 0.6 | 96.1 |
+| cap2000 | 5,694,094 | 131,072 | 500 | 493 | 195.8 min | 30,744 | 148,994 | 5,514,356 | 0.5 | 96.8 |
+
+*(ladder stopped at cap2000 per Jason's decision 2026-06-30 — see Closing summary.
+ cap2000 wall includes a clean kill+resume at 92% when the ladder was truncated.)*
+
+> **cap50→cap100 survivor count grew 7,130,052 → 7,200,627**: cap50 was still
+> flushing its last shards when first sampled; 7.20M is the true cap50 survivor set.
+
+## Width-ramp curve at scale (cap50 — where throughput saturates)
+The cascade auto-doubles batch width from 2,048 until throughput stops climbing,
+then holds. cap50 saturated at **W=524,288** (going wider bought <5%):
+
+| width | boards/s |
+|------:|---------:|
+| 2,048 | 3,306 |
+| 4,096 | 7,142 |
+| 8,192 | 13,061 |
+| 16,384 | 21,370 |
+| 32,768 | 27,566 |
+| 65,536 | 35,411 |
+| 131,072 | 38,953 |
+| 262,144 | 41,403 |
+| **524,288** | **43,089** ← knee |
+
+**Matches the standalone sweep's cap50 knee (43,397 b/s).** The cascade reproduces
+the measured throughput law in production: width is king until GPU saturation, then
+flat. Note it settled at 524k, not the sweep's nominal 2M plateau — the extra width
+gains nothing at cap50, so the ramp correctly stopped early.
+
+## ⚠️ Deep-ladder time projection — the full run is ~DAYS, not overnight
+The tail barely shrinks (each rung resolves only ~4% of its survivors) while
+throughput ~halves per ladder step. So the deep rungs run on ~5M+ boards at
+collapsing speed. Measured + extrapolated wall (cap2000 measured at 496 b/s):
+
+| rung | survivors in | est. b/s | est. wall |
+|-----:|-------------:|---------:|----------:|
+| cap2000 | 5,694,094 | 496 (measured) | ~3.2 h |
+| cap4000 | ~5.47M | ~250 | ~6 h |
+| cap10000 | ~5.3M | ~110 | ~13 h |
+| cap20000 | ~5.1M | ~55 | ~26 h |
+| cap50000 | ~5.0M | ~22 | ~2.6 d |
+| cap100000 | ~4.9M | ~11 | ~5 d |
+
+**Full ladder to 100k ≈ ~10 days of continuous GPU.** The cheap rungs (≤1000)
+finished in ~3.5 h and resolved 99.6% of the corpus; the remaining ~0.4% (~5.7M
+positions, but really one stubborn hard-tail class) is what costs the days. This is
+the deliberate "grind out the deep gold + record depth limits" run — fully
+resumable, so it can run as long as desired — but the cost shape means **a decision
+point:** let it run for days, cap the ladder (e.g. stop at 10k, make 100k a
+separate targeted run), or sample the deep tail rather than solving all ~5M.
+(Flagged to Jason 2026-06-30 11:10; no change made without him.)
+
+## Notes / anomalies
+- cap50 resolved **87.2%** of the whole corpus definitively (48.3% win + 38.9%
+  no_win) at just 50 nodes — confirming most rapfi positions are tactically
+  shallow. The interesting tail is the **12.8% (7.20M)** that cap and fall through.
+- **THE KEY AT-SCALE FINDING — survivor-rung throughput collapses far below the
+  single-shot knee.** The standalone sweep measured the knee on the *natural*
+  rapfi mix; each cascade rung after cap50 runs only on the *hard survivors* (boards
+  that already capped at the prior budget), which run the **full** node budget with
+  no early-out. So measured b/s per rung << the sweep knee:
+
+  | rung | survivor-rung b/s (this run) | single-shot knee (natural mix) | ratio |
+  |-----:|-----------------------------:|-------------------------------:|------:|
+  | cap50 | 43,089 | 43,397 | 0.99× (cap50 IS the natural mix) |
+  | cap100 | 9,257 | 23,822 | **0.39×** |
+  | cap250 | 3,867 | 10,107 | **0.38×** |
+  | cap500 | 1,926 | 3,134 | **0.61×** |
+  | cap1000 | 922 | 1,290 | **0.71×** |
+  | cap2000 | 500 | — (no knee measured) | — |
+
+  Plan deep-rung wall-clock off the *survivor* rate, but the ratio is **not
+  constant — it climbs with budget** (0.38× → 0.61× → ~0.71×). Likely because the
+  single-shot knee at a high budget is *itself* increasingly dominated by hard
+  boards (easy ones resolve fast at any budget), so the survivor set looks more and
+  more like the natural mix the knee was measured on — the two rates converge as the
+  budget rises. Low-budget rungs are where survivor-vs-natural diverges most.
+- **The deeper you go, the less budget buys.** cap100 (2× the nodes) converted only
+  **7.8%** of cap50's survivors to a definitive verdict (1.5% win + 6.3% no_win);
+  the other 92.2% still cap. The tail is hard, not slow — the deep-win gold is rare
+  and lives only at the high-budget rungs, exactly as the cascade was built to find.
+
+**Cross-links:** [vct-cascade-labeler.md](vct-cascade-labeler.md) (architecture +
+knee sweep) · [mega-vct-solver.md](mega-vct-solver.md) ·
+[gpu-vct-feasibility.md](gpu-vct-feasibility.md).
