@@ -101,9 +101,15 @@ a real reboot does). Operational takeaways, now load-bearing for this lab:
    `this-machine-metal-compiler-wedge`.)
 
 ## Status / how to resume
-Extract+dedup DONE; throughput characterized; **labeling cascade not yet run** (a
-Metal compiler-service wedge blocked the GPU the night of 2026-06-29→30, see
-[[this-machine-metal-compiler-wedge]] in memory). To run it:
+Extract+dedup DONE; throughput characterized; **labeling cascade RAN 2026-06-30
+(06:58→14:12), stopped at cap2000 by decision** — 90.2% of the corpus resolved
+(48.9% win / 41.3% no_win), 9.8% (5.51M) deep tail preserved in
+`survivors/cap2000/` for a future targeted deep run. Full per-rung record +
+closing ledger: [vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md).
+(The night-of 2026-06-29→30 Metal wedge that first blocked the GPU was cleared by
+a reboot, see [[this-machine-metal-compiler-wedge]] in memory.) To run the
+deferred deep tail (caps 4000→100000 on `survivors/cap2000/`), or re-run from
+scratch:
 ```bash
 cd ~/code/gomoku-vct-cascade-labeler
 GOMOKU_BOARD_SIZE=15 bash scripts/vct_cascade/watchdog.sh ~/data/raphi_vct
