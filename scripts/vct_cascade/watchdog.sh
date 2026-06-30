@@ -12,8 +12,14 @@ set -uo pipefail
 
 OUT="${1:-$HOME/data/raphi_vct}"
 LADDER="${2:-50,100,250,500,1000,2000,4000,10000,20000,50000,100000}"
+# STALL_MIN is intentionally generous: the cascade compiles its kernel ONCE then
+# only RUNS dispatches (each <=180s, watchdog-bounded internally), and every search
+# is max_nodes-bounded so a true infinite hang is impossible. A 45-min gap therefore
+# means a real wedge (e.g. Metal compiler-service corruption), not a slow dispatch.
+# Killing mid-flight risks the very compiler-service wedge we saw from the sweep, so
+# we prefer clean restart-on-death and make stall-kills rare.
 POLL="${POLL:-300}"
-STALL_MIN="${STALL_MIN:-30}"
+STALL_MIN="${STALL_MIN:-45}"
 MAX_RESTARTS="${MAX_RESTARTS:-6}"
 export GOMOKU_BOARD_SIZE=15
 
