@@ -67,6 +67,42 @@ trajectory from ~40–60 plies to a **median of 19** — *less than half* the pl
 fewer MCTS-expanded plies per game → cheaper, higher-quality self-play data. This is
 the actionable lever from this run; seeded as [idea-pile.md](idea-pile.md) #11.
 
+## ⭐⭐ 50 nodes is a near-complete first-VCT detector — the wall sits BEHIND cap50
+Tagging each VCT position with the budget that resolved it (the rung it won in;
+a win leaves the survivor stream so its budget is unique) and joining to game order
+answers "how cheap is the first forced win, and what does deeper budget buy?"
+
+- **98.8% of all 27.4M VCT positions resolve at cap50** (27,105,046); only 1.2% need
+  more. The cascade's deeper rungs barely add wins — they mostly chase no-wins.
+- **A 50-node seeker finds a forced win in 96.1% of ALL games** (99.7% of the
+  1.15M games that have any VCT). Only **0.3%** of vct-games (3,987) have a VCT but
+  none catchable at 50 nodes.
+- **Deeper budget buys almost no earliness.** First VCT a seeker can reach, by ceiling:
+
+  | budget | % games w/ a ≤B VCT | median first-VCT ply | mean |
+  |---:|---:|---:|---:|
+  | **cap50** | **99.7%** | **20** | 22.2 |
+  | cap100 | 99.8% | 20 | 22.0 |
+  | cap250 | 99.9% | 19 | 21.8 |
+  | cap1000 | 100.0% | 19 | 21.6 |
+  | cap2000 | 100.0% | 19 | 21.6 |
+
+  50 → 2000 nodes (**40×** compute) moves the first forced win **~0.6 ply earlier
+  (mean), ~1 ply (median)**. Effectively nothing.
+- Even the game's **true-earliest** VCT is usually cheap: **86.7%** of games have
+  their absolute-first forced win visible at cap50 (cumulative 90.8% by cap100,
+  94.7% by cap250, 100% by cap2000).
+
+**Design implication (settles the direction):** build the AI around **cap50 VCT
+seeking**. It's a practically-complete mate detector (96% of games, ~as early as an
+infinitely-patient solver, within ~1 ply) at **40–850× less compute per position**
+than the deep rungs. The deep budgets matter only for the stubborn ~1.2% — and
+those are dominated by hard-to-confirm **no-wins**, not earlier wins (the deep tail
+is a wall whose far side is mostly empty of cheap gold). Shallow-fast beats
+deep-slow for a mate-seeking player: brutal iteration time, gives up only 0.3% of
+decidable games and ~1 ply of earliness. Feeds [idea-pile.md](idea-pile.md) #11 —
+the seek-VCT target is **cheap**, so VCT-terminated self-play is cheap to run.
+
 ## Per-rung results at scale (the deepening curve)
 Each rung runs only on the prior rung's `cap` survivors. `cap` count = input to the
 next rung. Throughput = cascade-only perf rows (last night's sweep filtered out by ts).
