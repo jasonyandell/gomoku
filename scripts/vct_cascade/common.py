@@ -46,8 +46,11 @@ def boards_from_lists(atk, dfd, B: int) -> np.ndarray:
     ``solve_vct_mega_bb`` eats (board[0]=attacker, no swap)."""
     flat = np.zeros((B, 2, NN), dtype=bool)
     for plane, col in ((0, atk), (1, dfd)):
-        lengths = np.asarray(col.value_lengths(), dtype=np.int64)
-        values = np.asarray(col.values.to_numpy(zero_copy_only=False), dtype=np.int64)
+        # offsets index into the (possibly un-trimmed) child; a SLICED ListArray
+        # keeps the full child buffer, so window the values by offsets[0:-1].
+        offsets = np.asarray(col.offsets, dtype=np.int64)
+        values = np.asarray(col.values, dtype=np.int64)[offsets[0]:offsets[-1]]
+        lengths = np.diff(offsets)
         board_ids = np.repeat(np.arange(B, dtype=np.int64), lengths)
         flat[board_ids, plane, values] = True
     return flat.reshape(B, 2, N, N)
