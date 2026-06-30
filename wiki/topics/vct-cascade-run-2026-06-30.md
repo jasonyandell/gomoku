@@ -21,6 +21,7 @@ next rung. Throughput = cascade-only perf rows (last night's sweep filtered out 
 |-----:|-------------:|-------------:|---------:|-----------:|---------:|----:|-------:|------------:|-----:|-----:|
 | cap50 | 56,121,658 | 524,288 | 43,089 | 42,496 | 22.5 min | 26,837,059 | 21,605,369 | 7,130,052 | 48.3 | 12.8 |
 | cap100 | 7,200,627 | 262,144 | 9,257 | 9,176 | 13.2 min | 108,070 | 450,445 | 6,642,112 | 1.5 | 92.2 |
+| cap250 | 6,642,112 | 262,144 | 3,867 | 3,792 | 29.4 min | 96,424 | 364,780 | 6,180,908 | 1.5 | 93.1 |
 
 *(rows appended as each rung completes)*
 
@@ -62,7 +63,7 @@ gains nothing at cap50, so the ramp correctly stopped early.
   |-----:|-----------------------------:|-------------------------------:|------:|
   | cap50 | 43,089 | 43,397 | 0.99× (cap50 IS the natural mix) |
   | cap100 | 9,257 | 23,822 | **0.39×** |
-  | cap250 | ~3,800 | 10,107 | **~0.38×** |
+  | cap250 | 3,867 | 10,107 | **0.38×** |
 
   Plan deep-rung wall-clock off the *survivor* rate (~0.4× the knee), not the knee.
 - **The deeper you go, the less budget buys.** cap100 (2× the nodes) converted only
