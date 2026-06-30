@@ -73,6 +73,33 @@ whole point of the cascade. (~48% of all plies having a side-to-move VCT is high
 but plausible for tactical rapfi self-play, which is dense with near-terminal
 positions; revisit against the cascade's exact curve.)
 
+## Post-mortem: the throughput sweep crashed WindowServer (2026-06-30 ~01:10)
+Running the deep-cap throughput sweep wrapped in `timeout` (which SIGKILLs the MLX
+process **mid-Metal-compile**) wedged the Metal compiler service system-wide
+(`MTLCompilerService ... Reentrancy avoided`) — and we believe it also **took down
+WindowServer** (the macOS graphics server), i.e. crashed the whole GUI session.
+
+Evidence (process start times, `ps -o lstart`):
+- launchd / kernel (pid 1): original boot **Jun 24 20:21** — NO kernel reboot
+  (uptime stayed 5 days).
+- **WindowServer + loginwindow: relaunched 01:10** — ≈ exactly when the sweep
+  wedged Metal (`sweep_all` finished 01:11:49).
+- Symptoms reported: all apps closed, browser gone, next login required a
+  **password not Touch ID** (the signature of a fresh loginwindow / GUI teardown).
+
+So a tail-bounded GPU job killed mid-compile didn't just fail itself — it appears
+to have crashed the desktop, and because the kernel never rebooted the wedge
+**persisted** (8h+ idle and the WindowServer restart both failed to clear it; only
+a real reboot does). Operational takeaways, now load-bearing for this lab:
+1. **Bound GPU runs by WORK (board count / `max_nodes`), never by an external
+   `timeout` SIGKILL.** The cascade already does this (compiles its kernel once,
+   then runs `max_nodes`-bounded dispatches), so it is the safe execution path.
+2. The `sweep.py` deep-cap probe must not be `timeout`-wrapped — give it a longer
+   in-process per-dispatch budget instead, or skip caps ≥2000 in the wide sweep.
+3. Distinguish a GUI crash from a reboot via `ps -o lstart= -p 1` (kernel) vs
+   WindowServer's start time. (Full machine-fact note lives in session memory:
+   `this-machine-metal-compiler-wedge`.)
+
 ## Status / how to resume
 Extract+dedup DONE; throughput characterized; **labeling cascade not yet run** (a
 Metal compiler-service wedge blocked the GPU the night of 2026-06-29→30, see
