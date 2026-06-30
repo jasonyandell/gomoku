@@ -23,6 +23,7 @@ next rung. Throughput = cascade-only perf rows (last night's sweep filtered out 
 | cap100 | 7,200,627 | 262,144 | 9,257 | 9,176 | 13.2 min | 108,070 | 450,445 | 6,642,112 | 1.5 | 92.2 |
 | cap250 | 6,642,112 | 262,144 | 3,867 | 3,792 | 29.4 min | 96,424 | 364,780 | 6,180,908 | 1.5 | 93.1 |
 | cap500 | 6,180,908 | 131,072 | 1,926 | 1,889 | 55.0 min | 49,770 | 205,883 | 5,925,255 | 0.8 | 95.9 |
+| cap1000 | 5,925,255 | 65,536 | 922 | 908 | 109.6 min | 38,273 | 192,888 | 5,694,094 | 0.6 | 96.1 |
 
 *(rows appended as each rung completes)*
 
@@ -50,6 +51,29 @@ the measured throughput law in production: width is king until GPU saturation, t
 flat. Note it settled at 524k, not the sweep's nominal 2M plateau — the extra width
 gains nothing at cap50, so the ramp correctly stopped early.
 
+## ⚠️ Deep-ladder time projection — the full run is ~DAYS, not overnight
+The tail barely shrinks (each rung resolves only ~4% of its survivors) while
+throughput ~halves per ladder step. So the deep rungs run on ~5M+ boards at
+collapsing speed. Measured + extrapolated wall (cap2000 measured at 496 b/s):
+
+| rung | survivors in | est. b/s | est. wall |
+|-----:|-------------:|---------:|----------:|
+| cap2000 | 5,694,094 | 496 (measured) | ~3.2 h |
+| cap4000 | ~5.47M | ~250 | ~6 h |
+| cap10000 | ~5.3M | ~110 | ~13 h |
+| cap20000 | ~5.1M | ~55 | ~26 h |
+| cap50000 | ~5.0M | ~22 | ~2.6 d |
+| cap100000 | ~4.9M | ~11 | ~5 d |
+
+**Full ladder to 100k ≈ ~10 days of continuous GPU.** The cheap rungs (≤1000)
+finished in ~3.5 h and resolved 99.6% of the corpus; the remaining ~0.4% (~5.7M
+positions, but really one stubborn hard-tail class) is what costs the days. This is
+the deliberate "grind out the deep gold + record depth limits" run — fully
+resumable, so it can run as long as desired — but the cost shape means **a decision
+point:** let it run for days, cap the ladder (e.g. stop at 10k, make 100k a
+separate targeted run), or sample the deep tail rather than solving all ~5M.
+(Flagged to Jason 2026-06-30 11:10; no change made without him.)
+
 ## Notes / anomalies
 - cap50 resolved **87.2%** of the whole corpus definitively (48.3% win + 38.9%
   no_win) at just 50 nodes — confirming most rapfi positions are tactically
@@ -66,7 +90,8 @@ gains nothing at cap50, so the ramp correctly stopped early.
   | cap100 | 9,257 | 23,822 | **0.39×** |
   | cap250 | 3,867 | 10,107 | **0.38×** |
   | cap500 | 1,926 | 3,134 | **0.61×** |
-  | cap1000 | ~915 (in progress) | 1,290 | **~0.71×** |
+  | cap1000 | 922 | 1,290 | **0.71×** |
+  | cap2000 | 496 (in progress) | — (no knee measured) | — |
 
   Plan deep-rung wall-clock off the *survivor* rate, but the ratio is **not
   constant — it climbs with budget** (0.38× → 0.61× → ~0.71×). Likely because the
