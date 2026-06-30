@@ -103,6 +103,71 @@ deep-slow for a mate-seeking player: brutal iteration time, gives up only 0.3% o
 decidable games and ~1 ply of earliness. Feeds [idea-pile.md](idea-pile.md) #11 —
 the seek-VCT target is **cheap**, so VCT-terminated self-play is cheap to run.
 
+## First VCT per game — resolution by budget (first VCTs are DEEP-ENRICHED)
+The "50 nodes sees everything" claim above is about the *total* VCT population. Look
+only at each game's **first** VCT (the earliest-ply forced win) and the picture
+sharpens — the first forced win is by definition the hardest to reach, so it is far
+more likely to be a deep one. Tagging each game's first VCT with the budget that
+resolved it (`scripts/vct_cascade/first_vct_resolution.py`), over the 1,151,498
+games with a confirmed VCT:
+
+| budget that resolved the FIRST VCT | games | % | cumulative |
+|---|---:|---:|---:|
+| **cap50** (shallowest) | 997,874 | **86.7%** | 86.7% |
+| cap100 | 47,374 | 4.1% | 90.8% |
+| cap250 | 45,587 | 4.0% | 94.7% |
+| cap500 | 24,310 | 2.1% | 96.8% |
+| cap1000 | 19,490 | 1.7% | 98.5% |
+| cap2000 | 16,863 | 1.5% | 100% |
+
+- **13.3% of games (153,624) had their first VCT go cap→win only by looking deeper
+  than 50 nodes** — vs only **1.2%** of the total VCT population. **First VCTs are
+  ~11× deep-enriched** relative to a random VCT. The population's 98.8%-cap50 number
+  is diluted by the abundant easy *late*-game VCTs; the first forced win lives in the
+  contested early zone where the hard positions cluster.
+- **The deeper-needed tail does NOT die out at cap2000.** Of the 13.3%: cap100 30.8%
+  → cap250 29.7% → cap500 15.8% → cap1000 12.7% → **cap2000 still 11.0%**. Heavy,
+  unterminated tail ⇒ pushing past 2000 nodes would keep converting more first VCTs.
+  For first VCTs specifically the wall is **softer** than the population implied.
+- **Censoring caveat (the honest asterisk):** **91.4% of vct-games have an
+  *unresolved* deep-tail position at a ply *earlier* than their first confirmed VCT.**
+  So every first-VCT ply here is an **upper bound** — the true first VCT could be
+  earlier *and* deeper, hiding in the cap2000 tail. (Most early caps are likely
+  no-wins — then the bound is tight — but we can't know without resolving them; this
+  is the game-side view of the "no earlier VCT" deep-tail subset.) Also 39,525 games
+  have *no* confirmed VCT but *do* have a deep-tail position — a first VCT for them,
+  if any, lives entirely past cap2000.
+- **What it means for the shallow seeker:** doesn't overturn "build shallow" — a
+  cap50 seeker still finds mate in 96% of games — but it sharpens the trade: a
+  *deeper*-searching opponent could beat the cap50 seeker **to the punch** (find the
+  mate several plies earlier) in ~13%+ of games. Fine for a concept-prover; a known
+  lever if/when we want to strengthen it.
+
+## Sustained throughput vs budget — the cap50 tradeoff point (confirmed)
+"Sustained" = median boards/s across steady-state dispatches (NOT the peak knee).
+As actually run by the cascade:
+
+| step | sustained b/s | ≈ /min | width | ran on |
+|---|---:|---:|---:|---|
+| **cap50** | **42,496** | ~2.55M | 524k | **natural full corpus** ✅ |
+| cap100 | 9,176 | ~0.55M | 262k | hard survivors ⚠️ |
+| cap250 | 3,792 | ~0.23M | 262k | hard survivors ⚠️ |
+
+- **Only cap50 is a clean natural-mix rate** (it ran on the whole corpus). cap100/250
+  ran only on the hard *survivors*, so those are worst-case rates, not what 100/250
+  would do on a normal position stream (the single-shot sweep on a natural mix hit
+  ~23.8k / ~10.1k at the knee — ~2.6× the survivor rates).
+- **Sanity check (Jason 2026-06-30):** the survivor rungs track ~`rate ∝ 1/budget`
+  (cap250→cap100: budget ×0.4, rate ×2.42). Extrapolating that to cap50 (×2) predicts
+  **~18–20k b/s** — the "if every board were tail-hard" floor. The *measured*
+  natural-mix cap50 is **42,496** — ~2× that floor, because real game positions are
+  mostly easy. (Strict-linear extrapolation gives ~11k but is the wrong model; the
+  inverse-budget fit is much better.)
+- **Verdict — cap50 is the tradeoff sweet spot:** ~18–20k b/s pessimistic floor,
+  ~42.5k realistic, while keeping 86.7% of first VCTs and a forced win in 96% of
+  games. The VCT terminal test is **not** the bottleneck (tens of thousands/s);
+  MCTS tree search is. Operating point confirmed with ~2× headroom over the floor.
+
 ## Per-rung results at scale (the deepening curve)
 Each rung runs only on the prior rung's `cap` survivors. `cap` count = input to the
 next rung. Throughput = cascade-only perf rows (last night's sweep filtered out by ts).
