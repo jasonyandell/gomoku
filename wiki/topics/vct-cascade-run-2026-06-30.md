@@ -11,7 +11,33 @@ the throughput-knee sweep ([[vct-cascade-labeler]]) could only sample.
 - **Launched:** 2026-06-30 06:58 (after the 06:53 reboot cleared the Metal wedge).
 - **Execution:** `watchdog.sh` → `cascade.py`, all proof-outputs ON
   (move+support+carriers+w), `complete=OFF`, work-bounded (no `timeout` kills).
-- **Ladder:** `50, 100, 250, 500, 1000, 2000, 4000, 10000, 20000, 50000, 100000`.
+- **Ladder:** planned `50…100000`; **STOPPED AT CAP2000** (Jason's call, 2026-06-30
+  14:12) once the deep-ladder projection showed cap4000→100k as a ~10-day grind.
+
+## ✅ Closing summary — run complete through cap2000 (2026-06-30)
+The ≤2000 ladder finished cleanly (`[cascade] complete`, no wedge) in **~7.2 h
+wall** (06:58→14:12). Final ledger over the whole 56,121,658-position corpus:
+
+| outcome | positions | % of corpus |
+|---|---:|---:|
+| **win** (side-to-move has a VCT) | 27,428,327 | **48.9%** |
+| **no_win** (proven none ≤ its budget) | 23,178,975 | **41.3%** |
+| **resolved subtotal** | **50,607,302** | **90.2%** |
+| **deep tail** (still cap at 2000 nodes) | 5,514,356 | **9.8%** |
+
+Ledger is exact and complete: 27,428,327 + 23,178,975 + 5,514,356 = 56,121,658 ✓
+(every position has a row; nothing is "absence = state").
+
+**The deep tail — `survivors/cap2000/` (5,514,356 positions)** — is the preserved,
+content-addressed seed for a future targeted deep run (caps 4000→100000, or a
+sampled probe of the depth limits). It was deferred, not abandoned: the cascade is
+resume-by-row-offset, so a later run just adds `4000,10000,…` to the ladder and
+picks up exactly here. Projection said the full deep ladder ≈ **~10 days** of GPU
+on these ~5.5M stubborn boards (each rung resolves only ~3–4%); that's a separate
+deliberate run, not part of this one.
+
+**Net:** 90.2% of the rapfi corpus now carries an exact VCT verdict + proof outputs
+(move/support/carriers/w), and the hard 9.8% is cleanly isolated for later.
 
 ## Per-rung results at scale (the deepening curve)
 Each rung runs only on the prior rung's `cap` survivors. `cap` count = input to the
@@ -24,8 +50,10 @@ next rung. Throughput = cascade-only perf rows (last night's sweep filtered out 
 | cap250 | 6,642,112 | 262,144 | 3,867 | 3,792 | 29.4 min | 96,424 | 364,780 | 6,180,908 | 1.5 | 93.1 |
 | cap500 | 6,180,908 | 131,072 | 1,926 | 1,889 | 55.0 min | 49,770 | 205,883 | 5,925,255 | 0.8 | 95.9 |
 | cap1000 | 5,925,255 | 65,536 | 922 | 908 | 109.6 min | 38,273 | 192,888 | 5,694,094 | 0.6 | 96.1 |
+| cap2000 | 5,694,094 | 131,072 | 500 | 493 | 195.8 min | 30,744 | 148,994 | 5,514,356 | 0.5 | 96.8 |
 
-*(rows appended as each rung completes)*
+*(ladder stopped at cap2000 per Jason's decision 2026-06-30 — see Closing summary.
+ cap2000 wall includes a clean kill+resume at 92% when the ladder was truncated.)*
 
 > **cap50→cap100 survivor count grew 7,130,052 → 7,200,627**: cap50 was still
 > flushing its last shards when first sampled; 7.20M is the true cap50 survivor set.
@@ -91,7 +119,7 @@ separate targeted run), or sample the deep tail rather than solving all ~5M.
   | cap250 | 3,867 | 10,107 | **0.38×** |
   | cap500 | 1,926 | 3,134 | **0.61×** |
   | cap1000 | 922 | 1,290 | **0.71×** |
-  | cap2000 | 496 (in progress) | — (no knee measured) | — |
+  | cap2000 | 500 | — (no knee measured) | — |
 
   Plan deep-rung wall-clock off the *survivor* rate, but the ratio is **not
   constant — it climbs with budget** (0.38× → 0.61× → ~0.71×). Likely because the
