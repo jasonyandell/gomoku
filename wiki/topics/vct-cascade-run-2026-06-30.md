@@ -39,6 +39,34 @@ deliberate run, not part of this one.
 **Net:** 90.2% of the rapfi corpus now carries an exact VCT verdict + proof outputs
 (move/support/carriers/w), and the hard 9.8% is cleanly isolated for later.
 
+## 🎯 The first VCT arrives at median ply 19 — games are decided FAR earlier than they end
+Joining every game's per-ply positions (`positions_raw`: shard/game_idx/ply → id)
+back to the win-ledger, for the **first ply at which the side-to-move has a VCT**:
+
+- **Mean 21.6 · median 19** plies to first VCT (min 6, max 119; p10–p90 = **12–31**).
+- **96.4%** of the 1,194,662 games contain a VCT at all (3.6% never do = draws /
+  cut-short). Distribution: 2.0% by ply 9, **49.6% in plies 10–19**, 36.5% in 20–29,
+  11.9% at 30+.
+- **First-move advantage is visible:** of games with a VCT, **68%** get their first
+  VCT on a *first-player*-to-move position vs 32% second-player (both at ~ply 21.5).
+  Consistent with 15×15 free-style being a first-player win (Allis).
+
+**This explains the "shocking" 48.9% win rate.** A VCT appears around move ~20 (≈10
+stones/side) and rapfi games run ~40–60 plies, so the **entire back half of nearly
+every game is VCT-saturated** — once the board fills past ~20 stones, a forced
+threat sequence almost always exists for *someone*. The win rate isn't a sampling
+artifact; it's the natural density of forced wins in mid/late tactical positions.
+
+### ⭐ Headline implication — play self-play games TO the first VCT, not to five
+A VCT is a *proven forced win* the GPU oracle can both **detect and terminally
+value** (exact win + the winning move via `return_move`). So self-play does not need
+to play the game out to an actual five-in-a-row: **terminate at the first VCT and
+take the oracle's verdict as the game result.** That cuts the searched/played
+trajectory from ~40–60 plies to a **median of 19** — *less than half* the plies to a
+**labeled** winner, with an **exact** terminal value instead of a bootstrap. Far
+fewer MCTS-expanded plies per game → cheaper, higher-quality self-play data. This is
+the actionable lever from this run; seeded as [idea-pile.md](idea-pile.md) #11.
+
 ## Per-rung results at scale (the deepening curve)
 Each rung runs only on the prior rung's `cap` survivors. `cap` count = input to the
 next rung. Throughput = cascade-only perf rows (last night's sweep filtered out by ts).

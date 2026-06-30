@@ -374,3 +374,39 @@ encoding may rediscover it as a *spatial frequency*.
   [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) — #3 spectral (detect the claw by its
   *frequency*, no task to accidentally make line-shaped) and #1 DCA (a non-line *bond map*). Those are the
   recommended next stabs; run order on that page.
+
+---
+
+## 2026-06-30 — measured from the full-corpus VCT cascade (#97)
+
+### 11. Play self-play games TO the first VCT, not to five-in-a-row  ⭐⭐ (self-play efficiency)
+**Measured fact** ([vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md)):
+labeling all 56.1M unique rapfi positions with the GPU VCT oracle and joining back
+to games shows the **first VCT arrives at median ply 19 / mean 21.6** (p10–p90 =
+12–31), in **96.4%** of games. Rapfi games run ~40–60 plies, so the first *proven
+forced win* exists less than halfway in.
+**The idea:** a VCT is a forced win the oracle both **detects and terminally values**
+(exact win + winning move via `solve_vct_mega_bb(return_move=True)`). So self-play
+need not play out to an actual five — **stop at the first VCT and take the oracle
+verdict as the result.** Roughly **halves the plies per game** (≈40–60 → ~19 to a
+*labeled* winner) and replaces a bootstrapped value with an **exact** one at the
+terminus.
+- **Why it matters:** self-play rollout is the training bottleneck (MCTS-expanded
+  plies). Cutting trajectory length >2× and handing the value head a verified target
+  near the decisive moment should mean cheaper *and* cleaner data. Composes with the
+  whole seek-VCT thesis ([shape-library-engine](shape-library-engine.md),
+  [phi-distance-field-learnability](phi-distance-field-learnability.md)) — the game's
+  real objective becomes "reach a VCT", which is exactly what those L2 targets regress.
+- **Watch / caveat:** terminating at VCT changes the value target distribution and
+  removes the defender's "play it out" learning past onset; the
+  [vct-reachability-mining](vct-reachability-mining.md) knife-edge result (≈80% of
+  alternative moves already lose by force near onset) suggests the pre-VCT band is
+  where the hard learning is — so VCT-termination should *sharpen* the signal, not
+  lose it, but measure. Defender still needs the "no VCT for me, avoid giving you one"
+  lessons, which this preserves (the terminal credits the side that achieved the VCT).
+- **Cost:** low-ish. The solver already runs in/near the MCTS loop (batch-VCF
+  guard-rail, idea #9); reuse it as a terminal test each ply (cap small, ~50 nodes
+  catches 87% of the corpus) and end the game on the first hit.
+- **Measure:** plies/game in self-play (expect ~2× drop), value-head calibration on
+  held-out oracle verdicts, and the #4 ms-ladder crossing vs a five-terminated
+  control at equal wall-clock.
