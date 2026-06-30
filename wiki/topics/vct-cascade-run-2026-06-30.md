@@ -22,6 +22,7 @@ next rung. Throughput = cascade-only perf rows (last night's sweep filtered out 
 | cap50 | 56,121,658 | 524,288 | 43,089 | 42,496 | 22.5 min | 26,837,059 | 21,605,369 | 7,130,052 | 48.3 | 12.8 |
 | cap100 | 7,200,627 | 262,144 | 9,257 | 9,176 | 13.2 min | 108,070 | 450,445 | 6,642,112 | 1.5 | 92.2 |
 | cap250 | 6,642,112 | 262,144 | 3,867 | 3,792 | 29.4 min | 96,424 | 364,780 | 6,180,908 | 1.5 | 93.1 |
+| cap500 | 6,180,908 | 131,072 | 1,926 | 1,889 | 55.0 min | 49,770 | 205,883 | 5,925,255 | 0.8 | 95.9 |
 
 *(rows appended as each rung completes)*
 
@@ -64,8 +65,15 @@ gains nothing at cap50, so the ramp correctly stopped early.
   | cap50 | 43,089 | 43,397 | 0.99× (cap50 IS the natural mix) |
   | cap100 | 9,257 | 23,822 | **0.39×** |
   | cap250 | 3,867 | 10,107 | **0.38×** |
+  | cap500 | 1,926 | 3,134 | **0.61×** |
+  | cap1000 | ~915 (in progress) | 1,290 | **~0.71×** |
 
-  Plan deep-rung wall-clock off the *survivor* rate (~0.4× the knee), not the knee.
+  Plan deep-rung wall-clock off the *survivor* rate, but the ratio is **not
+  constant — it climbs with budget** (0.38× → 0.61× → ~0.71×). Likely because the
+  single-shot knee at a high budget is *itself* increasingly dominated by hard
+  boards (easy ones resolve fast at any budget), so the survivor set looks more and
+  more like the natural mix the knee was measured on — the two rates converge as the
+  budget rises. Low-budget rungs are where survivor-vs-natural diverges most.
 - **The deeper you go, the less budget buys.** cap100 (2× the nodes) converted only
   **7.8%** of cap50's survivors to a definitive verdict (1.5% win + 6.3% no_win);
   the other 92.2% still cap. The tail is hard, not slow — the deep-win gold is rare
