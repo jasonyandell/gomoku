@@ -386,8 +386,12 @@ encoding may rediscover it as a *spatial frequency*.
 > VCT, recording the oracle's winning move (one-hot) + exact terminal value. **Prereq done:** the
 > `mega_vct_bb` oracle was 15×15-only (word-3 `TOPMASK`); ported N-general (byte-identical @15, validated
 > @9). E2E smoke (random net, 9×9): plies 36.0→**19.9** (0.55×), median terminus ply **20** (= the corpus
-> finding), 64/64 games VCT-ended. Next = the training-slice science vs a five-terminated control. See
-> `TRAINING_WIKI.md` 2026-06-30.
+> finding), 64/64 games VCT-ended. **Eval side BUILT too (#99):** `eval.vct_finish_picker` — a hybrid
+> player that plays by policy to the VCT then lets the GPU oracle hammer it out to a REAL five
+> (`match.py` `model:...,vct_finish=50`, `eval_worker --vct-finish-nodes`), so the net wins genuine games
+> vs any opponent through the standard harness (no special "VCT=win" harness) — also the deployable
+> web-UI player. Next = the training-slice science vs a five-terminated control. See `TRAINING_WIKI.md`
+> 2026-06-30.
 **Measured fact** ([vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md)):
 labeling all 56.1M unique rapfi positions with the GPU VCT oracle and joining back
 to games shows the **first VCT arrives at median ply 19 / mean 21.6** (p10–p90 =

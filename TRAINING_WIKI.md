@@ -5355,3 +5355,35 @@ OFF = byte-identical); the training-science comparison is the next phase.** Merg
   verdicts, and whether "reach a VCT" self-play trains a stronger net faster (idea #11's #4 ms-ladder
   crossing). **Caveat to watch (idea #11):** terminating at VCT removes defender "play-it-out" learning
   past onset — the knife-edge result predicts it should SHARPEN signal, but measure.
+
+## 2026-06-30 (issue #99) — VCT-finisher hybrid player: policy to the VCT, GPU oracle to the win (eval vs anything, no special harness)
+
+Follow-up to #98. A VCT-terminus net stops at the first VCT and takes the oracle verdict — great for
+training, but to EVALUATE it vs any opponent through the standard match harness it must win a REAL game
+(actual five-in-a-row), not lean on a "VCT = win" special harness. Jason: "extend the player so it plays
+by policy to VCT then just hammers the rest out rote... if we capture the logic in the player, we can eval
+vs anything, and not be trapped with a special harness." Merged `feat/vct-finisher-hybrid`.
+
+- **Built `vct_finish_picker(base, *, budget)`** in `gomoku/eval.py` — the GPU-oracle sibling of the
+  existing CPU `vcf_overlay_picker` (same compose-a-picker shape). Each turn: batched
+  `solve_vct_mega_bb(state.board[None], max_nodes=budget, return_move=True)`; if the side to move has a
+  forced VCT, play the oracle's winning move, else delegate to `base`. `state.board` is already the
+  (2,N,N) side-to-move-relative solver input (plane 0 attacker / plane 1 defender) — no conversion, no
+  HISTORY_PLY. `budget=0` = OFF (byte-identical, never imports MLX). Threaded via a `vct_finish_nodes`
+  param on `mcts_picker` (wrapped OUTERMOST — VCT ⊇ VCF). Wired: `match.py` `model:` spec
+  (`model:checkpoint=X,vct_finish=50` — ad-hoc eval vs any baseline / external Rapfi) + `eval_worker.py
+  --vct-finish-nodes` (SEQUENTIAL; the parallel path is guarded — MLX under multiprocessing fork is
+  unvalidated / Metal-wedge risk). Solver import behind `_load_vct_solver()` so tests monkeypatch without MLX.
+- **Why cap50 also CONVERTS, not just detects:** after each forced exchange the remaining position is a
+  SUB-proof of the original ≤50-node VCT proof, so re-solving each turn keeps handing back the next
+  forcing move until a real five. Whatever the opponent plays, the win stays forced.
+- **E2E smoke (random net, 9×9, standard `play_match_pickers`):**
+  - vs random: plain 40W-0L (0 finisher fires — correct); hybrid 39W-1L, **finisher fired 54× over 264
+    picks** → converts VCTs to genuine wins.
+  - vs heuristic: plain 0W-40L, hybrid 0W-40L, **0 fires over 180 picks** — a random net earns no VCT vs a
+    defender, so the finisher never fires and NEVER HURTS (≡ plain, only ever plays proven wins).
+  - **Crafted open-four, hybrid to move (terminal_before=False): 1W-0L, fired once → wins a REAL
+    five-in-a-row** through the standard harness. The money shot: policy→VCT→hammered to five, no special harness.
+- Tests: `tests/test_vct_finish.py` (5 unit tests, monkeypatched oracle) + eval-path gate
+  (vcf-overlay / proven-prop / tree-reuse / panel / color-split) green. This hybrid is also the deployable
+  web-UI player and realizes the wiki's long-anticipated "Phase C hybrid-play eval" (seeker-steering).
