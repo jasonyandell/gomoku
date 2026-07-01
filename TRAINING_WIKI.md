@@ -5387,3 +5387,40 @@ vs anything, and not be trapped with a special harness." Merged `feat/vct-finish
 - Tests: `tests/test_vct_finish.py` (5 unit tests, monkeypatched oracle) + eval-path gate
   (vcf-overlay / proven-prop / tree-reuse / panel / color-split) green. This hybrid is also the deployable
   web-UI player and realizes the wiki's long-anticipated "Phase C hybrid-play eval" (seeker-steering).
+
+## 2026-06-30 (issue #100) — VCT-terminus science run: the 9×9 A/B (throughput win, robustness LOSS)
+
+The science slice for #98/#99. **Full synthesis: [wiki/topics/vct-terminus-selfplay-result.md](wiki/topics/vct-terminus-selfplay-result.md).**
+Matched 9×9 pair (`scripts/run_sweep.py`: `vctsci-terminus` vs `vctsci-control`), byte-identical except the
+terminus; both cloned from `derby-v9-small` (fresh 64×4) minus `--gumbel-root` (terminus guard) and
+`--vcf-teacher` (VCF ⊆ VCT). Grown by `--resume` to **e500** (100 was smoke — strength only broke out in
+the extended epochs). wandb terminus `cc0fy0ao` / control `7cu4ho9w`. Jason: "start with 100 epochs… keep
+going to 500, it's screaming fast." Merged `feat/vct-terminus-science`.
+
+- **Training:** terminus self-play plies 36→**9.1** (control 34→11.8), wall **~2.1 s/epoch** (control
+  ~4.7 s) — the terminus reaches EQUAL fixed-baseline strength at **~45% of the control's wall-clock**
+  (idea #11's throughput claim: CONFIRMED). Internal EMA elo @e500 **1366 vs 1347** — a tie. Both
+  fast-attack-narrow but pass the balanced-baseline test (h/la2/la4 climb together).
+- **⚠ Eval gotcha (reusable):** `worker_weights.pt` = the **EMA** weights (what self-play + internal eval
+  use); `load_checkpoint(epochNNNN.pt)` returns the **raw** state_dict, *far weaker* under `ema_tau=0.99`
+  on short-game training (terminus **6%** raw vs **68%** EMA vs heuristic). Eval the EMA. First pass used
+  raw and looked like a 6% net — chased it down, re-ran on EMA.
+- **Fixed baselines (EMA, n=40):** terminus 66/81/49% (h/la2/la4), control 80/75/38%, champion 62\*/75\*/61\*
+  (\*draw-saturated). **Finisher lift concentrated at the top: terminus +12.5% vs la4**, ~0 else; control ~0
+  everywhere. Fixed baselines saturate for strong nets ⇒ coarse ruler, gate on H2H.
+- **Head-to-head (the headline — both predictions REFUTED):** terminus wins **0 of 120 games vs the
+  control** (25%: 0W-20L-20D in every config), and **never reaches a VCT** (finisher fires **0**/1060).
+  Loses **0-40** to the champion. Champion 40-0 on the control (calibration). Jason predicted a control
+  *crush* + a champion win; Claude hedged to a control-crush too. **Both lost to the same mechanism**: the
+  terminus's only opponent was a non-defending copy of itself, so it never learned to defend or play a long
+  game; a sound opponent denies every VCT and it collapses out-of-distribution. The control, playing to
+  five, learned both sides ⇒ wins the sibling H2H at equal fixed-baseline strength. **Non-transitivity in
+  the flesh.**
+- **Rapfi coda (giggles):** `champion+finisher vs Rapfi@50ms` (native mix9svq NNUE, 9×9) = **20 straight
+  draws** (0W-0L-20D) — even a shallow Rapfi denies every VCT; 9×9 is drawish at this level.
+- **Verdict:** idea #11's throughput claim holds; its "strong player" claim is refuted — VCT-terminus
+  self-play induces attack-only specialization (idea #11's own caveat as the dominant effect). The seek-VCT
+  *objective* survives; the missing piece is DEFENSE (record past-terminus for the losing side / mix full
+  games / curriculum). Next probe filed: **#101** (train the terminus long — p90 plies → 81, or wicked
+  strong at short games?). Eval harness: `scripts/vctsci_finisher_eval.py` (`--list`/`--run`/`--collate`,
+  one matchup/process).

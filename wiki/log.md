@@ -1679,3 +1679,16 @@ strategy); work_steal/refill is the right tool ONLY when forced narrow (streamin
 waves), and even then only if the next boards are already in hand — a *gated* frontier can't be refilled.
 This resolves the #93/#94 "no-op" — it was a no-op *at full width*; the value lives at forced-narrow width.
 Full tables in [topics/mega-vct-solver.md](topics/mega-vct-solver.md) § Where work_steal does win.
+
+## [2026-06-30] New page: VCT-terminus self-play A/B result (#100) — throughput win, robustness loss
+
+Created [topics/vct-terminus-selfplay-result.md](topics/vct-terminus-selfplay-result.md) — the science
+slice for #98/#99. Matched 9×9 A/B (`vctsci-terminus` vs `vctsci-control`, grown to e500): the terminus
+reaches **equal fixed-baseline strength at ~45% of the control's wall-clock** but **loses head-to-head
+75–25 (0 wins/120)** and 0-40 to the champion — ending every game at the first VCT means it never learns
+to defend, so a sound opponent denies every VCT (finisher fires = 0) and it collapses. Idea #11's caveat
+is the dominant effect. Added an index row (VCT cluster) + updated idea-pile #11 (BUILT → **TESTED**) +
+TRAINING_WIKI 2026-06-30. Two reusable lessons banked: **eval the EMA `worker_weights.pt`, not the epoch
+checkpoint's raw state_dict** (terminus 6% raw vs 68% EMA), and **fixed baselines saturate for strong nets
+⇒ gate on H2H** (champion reads 62% vs heuristic yet 40-0s the control). Filed #101 (train the terminus
+long — p90 plies → 81?).
