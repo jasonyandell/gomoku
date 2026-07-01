@@ -1834,7 +1834,7 @@ CELLS: dict[str, Cell] = {
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # ── VCT-TERMINUS SCIENCE A/B (issue #100, follow-on to #98/#99) ──────────────
-    # Matched 9x9 pair, epoch-matched (300 epochs each), run SERIALLY. Question:
+    # Matched 9x9 pair, epoch-matched (500 epochs each), run SERIALLY. Question:
     # does terminating self-play at the first cap50 VCT (exact oracle terminal value +
     # winning move, #98) train a stronger/cleaner-value net PER EPOCH than playing out
     # to an actual five-in-a-row? Both cells are a clone of derby-v9-small
@@ -1845,10 +1845,13 @@ CELLS: dict[str, Cell] = {
     #       trainer can't absorb (low reuse) AND pile 8 concurrent MLX solver contexts onto
     #       the terminus cell's GPU. 4 = better reuse + half the Metal co-tenancy, still
     #       ample generation for a 100-epoch slice. Matched both cells.
-    #   (1) epochs=300 (a slice long enough to be more than a smoke — the first
-    #       100-epoch pass showed both cells fast-attack-collapse to ~9-11 plies by
-    #       e100; 300 tests whether the terminus's per-color signal, esp. white
-    #       "trying to play" vs grinding a slow loss, separates the pair);
+    #   (1) epochs=500 (fresh-run intent; the actual A/B was grown by --resume:
+    #       fresh 0->100 [smoke], then +epochs resumes to e500, warm buffer + same
+    #       wandb timeline each time. The 100-epoch pass showed both cells
+    #       fast-attack-collapse to ~9-11 plies; the terminus's RAW net broke its
+    #       389 plateau to elo~697 / la2 0->40% only in the extended epochs, so the
+    #       slice must be long. Tests whether the terminus's per-color signal, esp.
+    #       white "trying to play" vs grinding a slow loss, separates the pair);
     #   (2) extra_worker_args drops "--gumbel-root --gumbel-m 16": the #98 terminus code
     #       raises NotImplementedError if gumbel-root + terminus are both on, so dropping
     #       it from BOTH keeps the pair honest (the A/B measures the terminus delta, both
@@ -1875,7 +1878,7 @@ CELLS: dict[str, Cell] = {
                 opponent_mix_recent=0.4, opponent_mix_history=0.1,
                 opponent_mix_recent_window=100,
                 weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
-                epochs=300, random_opening_moves=0,
+                epochs=500, random_opening_moves=0,
                 global_pool=True,
                 extra_worker_args=["--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
@@ -1891,7 +1894,7 @@ CELLS: dict[str, Cell] = {
                 opponent_mix_recent=0.4, opponent_mix_history=0.1,
                 opponent_mix_recent_window=100,
                 weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
-                epochs=300, random_opening_moves=0,
+                epochs=500, random_opening_moves=0,
                 global_pool=True,
                 extra_worker_args=["--value-discount", "0.98",
                                    "--vct-terminus", "--vct-terminus-budget", "50"],

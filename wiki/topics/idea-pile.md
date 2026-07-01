@@ -390,8 +390,15 @@ encoding may rediscover it as a *spatial frequency*.
 > player that plays by policy to the VCT then lets the GPU oracle hammer it out to a REAL five
 > (`match.py` `model:...,vct_finish=50`, `eval_worker --vct-finish-nodes`), so the net wins genuine games
 > vs any opponent through the standard harness (no special "VCT=win" harness) — also the deployable
-> web-UI player. Next = the training-slice science vs a five-terminated control. See `TRAINING_WIKI.md`
-> 2026-06-30.
+> web-UI player.
+> ⭐ **TESTED 2026-06-30 (#100) — THROUGHPUT WIN, ROBUSTNESS LOSS.** Matched 9×9 A/B (`vctsci-terminus` vs
+> `vctsci-control`), grown to e500. The terminus reaches **equal fixed-baseline strength at ~45% of the
+> control's wall-clock** (throughput claim CONFIRMED) — but **loses head-to-head to the control 75–25 (0
+> wins in 120 games, every config)** and **0–40** to the champion, because ending every game at the first
+> VCT (≈ply 9) means it **never learns to defend** and, vs any opponent that denies a VCT, it never reaches
+> one (finisher fires = 0) and collapses. **This caveat (below) is the DOMINANT effect** — attack-only
+> specialization, a cousin of fast-attack collapse. The seek-VCT *objective* survives; the missing half is
+> DEFENSE. Full result: [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md); next probe #101.
 **Measured fact** ([vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md)):
 labeling all 56.1M unique rapfi positions with the GPU VCT oracle and joining back
 to games shows the **first VCT arrives at median ply 19 / mean 21.6** (p10–p90 =
