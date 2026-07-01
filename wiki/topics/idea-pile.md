@@ -380,6 +380,14 @@ encoding may rediscover it as a *spatial frequency*.
 ## 2026-06-30 — measured from the full-corpus VCT cascade (#97)
 
 ### 11. Play self-play games TO the first VCT, not to five-in-a-row  ⭐⭐ (self-play efficiency)
+> ⚙️ **BUILT 2026-06-30 (#98), default-OFF.** `--vct-terminus` / `--vct-terminus-budget 50` in
+> `selfplay_worker.py` → `self_play.configure_vct_terminus()`: a batched cap50 `solve_vct_mega_bb`
+> across the whole wave each ply (native + Python paths) ends any game whose side-to-move has a forced
+> VCT, recording the oracle's winning move (one-hot) + exact terminal value. **Prereq done:** the
+> `mega_vct_bb` oracle was 15×15-only (word-3 `TOPMASK`); ported N-general (byte-identical @15, validated
+> @9). E2E smoke (random net, 9×9): plies 36.0→**19.9** (0.55×), median terminus ply **20** (= the corpus
+> finding), 64/64 games VCT-ended. Next = the training-slice science vs a five-terminated control. See
+> `TRAINING_WIKI.md` 2026-06-30.
 **Measured fact** ([vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md)):
 labeling all 56.1M unique rapfi positions with the GPU VCT oracle and joining back
 to games shows the **first VCT arrives at median ply 19 / mean 21.6** (p10–p90 =

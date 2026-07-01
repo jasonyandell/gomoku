@@ -96,6 +96,105 @@ def configure_vct_teacher(max_depth: int | None = None,
         _VCT_MAX_NODES = int(max_nodes)
 
 
+# ---------------------------------------------------------------------------
+# VCT-terminus self-play (issue #98): end a game at the FIRST cap50 VCT instead
+# of playing out to five-in-a-row. A VCT is a forced win the GPU oracle
+# (scripts.vct_metal.mega_vct_bb) both DETECTS and terminally VALUES (exact win +
+# winning move), so the rollout tail past the VCT (empirically ~half the game;
+# first VCT at median ply ~19) is pure label noise. Terminate there and take the
+# oracle verdict: cheaper AND cleaner data, and the objective becomes "reach a
+# VCT". Unlike the per-move --vct-teacher (which RELABELS a full playout via the
+# retired CPU solver), this ENDS the game early using the batched GPU oracle.
+#
+# THE CALL-COST LAW (wiki gpu-vct-feasibility.md): the solver's wall is set by the
+# single hardest board and is ~flat in batch size, so every caller MUST be
+# bulk-synchronous — gather the WHOLE wave of live games into ONE solve per ply,
+# never solve-in-a-loop. cap50 (max_nodes=50) is the near-complete first-VCT
+# detector sweet spot (98.8% of VCTs, 96%+ of games; 40-850x cheaper than deep
+# search). See wiki idea-pile.md #11 + vct-cascade-run-2026-06-30.md.
+_VCT_TERMINUS_ENABLED = False
+_VCT_TERMINUS_BUDGET = 50            # per-board node cap (cap50)
+_vct_terminus_solver = None         # lazily-imported MLX solve_vct_mega_bb
+
+
+def configure_vct_terminus(enabled: bool | None = None,
+                           budget: int | None = None) -> None:
+    """Enable / parameterize VCT-terminus self-play (process-wide). None leaves a
+    field unchanged. Call once before generation, before any game loop. Gating is
+    purely on this global, so the default-off path is byte-identical self-play and
+    never imports MLX."""
+    global _VCT_TERMINUS_ENABLED, _VCT_TERMINUS_BUDGET
+    if enabled is not None:
+        _VCT_TERMINUS_ENABLED = bool(enabled)
+    if budget is not None:
+        _VCT_TERMINUS_BUDGET = int(budget)
+
+
+def _vct_terminus_solve(planes_list):
+    """Batched cap50 VCT test across the whole wave of live games. `planes_list`
+    is one (N_INPUT_PLANES, N, N) input-plane stack per active game, in the SAME
+    side-to-move-relative convention as :func:`vcf.solve_vct_from_planes`
+    (attacker = plane 0, defender = plane HISTORY_PLY). Returns (win, move): win
+    (B,) bool = the side to move has a forced VCT; move (B,) int = the oracle's
+    winning first move (flat index, -1 where no win). ONE bulk-synchronous MLX
+    solve — never per-game (the call-cost law)."""
+    global _vct_terminus_solver
+    if _vct_terminus_solver is None:
+        # Lazy: only a VCT-terminus run pays the MLX import + one-time Metal
+        # compile (coexists with the PyTorch/MPS evaluator in-process, verified).
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+        _vct_terminus_solver = solve_vct_mega_bb
+    attacker = np.stack([np.asarray(p)[0] for p in planes_list]).astype(bool)
+    defender = np.stack([np.asarray(p)[HISTORY_PLY] for p in planes_list]).astype(bool)
+    boards = np.stack([attacker, defender], axis=1)          # (B, 2, N, N)
+    win, _hit, move = _vct_terminus_solver(
+        boards, max_nodes=_VCT_TERMINUS_BUDGET, return_move=True)
+    return np.asarray(win).astype(bool), np.asarray(move).astype(np.int64)
+
+
+def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plies,
+                            trajectories, completed, final_state, record_ownership,
+                            profile):
+    """Run the batched VCT test over the wave and TERMINATE every game whose side
+    to move has a forced VCT: record the decisive position (one-hot on the oracle
+    winning move) as that game's final training example, credit that side the win,
+    and drop it from the active set. Games with no VCT survive and continue to
+    normal MCTS + play this ply. Returns the surviving (active, active_games).
+
+    The terminal outcome flows through the SAME sign-flip + mate-distance discount
+    as a real five-in-a-row terminal (:func:`_apply_teachers_to_trajectory`): the
+    appended VCT position is the last trajectory element, so it gets plies-to-end
+    = 0 (crisp +-1) and earlier positions get discounted back from it."""
+    with _profile_timer(profile, "vct_terminus_s"):
+        win, move = _vct_terminus_solve(planes_list)
+    if not win.any():
+        return active, active_games
+    keep = []
+    for slot_idx, g_idx in enumerate(active):
+        if not win[slot_idx]:
+            keep.append(slot_idx)
+            continue
+        n_initial = initial_plies[g_idx]
+        side = (n_initial + ply) % 2          # the side to move HAS the forced win
+        mv = int(move[slot_idx])
+        pi_term = np.zeros(N_ACTIONS, dtype=np.float32)
+        if 0 <= mv < N_ACTIONS:
+            pi_term[mv] = 1.0                 # exact winning move = seek-VCT target
+        else:                                 # win with no move: never expected
+            pi_term[:] = 1.0 / N_ACTIONS
+            _profile_add(profile, "vct_terminus_moveless", 1.0)
+        trajectories[g_idx].append(
+            (np.asarray(planes_list[slot_idx]).copy(), pi_term, side))
+        outcome_for_black = 1.0 if side == 0 else -1.0
+        if record_ownership:
+            # A VCT terminus is NOT an actual five-in-a-row board, so there is no
+            # honest final-ownership target — MASK it (like a max-plies draw).
+            final_state[g_idx] = (None, 0)
+        completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+        _profile_add(profile, "vct_terminus_fired", 1.0)
+    return [active[s] for s in keep], [active_games[s] for s in keep]
+
+
 # Value-discount (Derby v6 'mate-discounted-value'): scale ordinary outcome value
 # targets by gamma^(plies_to_end) so positions near a decisive end get crisp ±1 and
 # far-from-end positions get hedged targets — generalizing the VCF mate-distance
@@ -2052,6 +2151,19 @@ def _generate_games_native(
         with _profile_timer(profile, "active_list_s"):
             active_games = [games[i] for i in active]
 
+        # VCT-terminus (issue #98): BEFORE searching, batch-test the whole wave
+        # for a forced VCT and END any game whose side to move has one (credit
+        # that side, record the oracle's winning move as a one-hot target).
+        # Survivors continue to the normal search below. Default OFF =
+        # byte-identical. One bulk-synchronous solve per ply (call-cost law).
+        if _VCT_TERMINUS_ENABLED:
+            planes_list = [g.root_planes() for g in active_games]
+            active, active_games = _vct_terminus_partition(
+                active, active_games, planes_list, ply, initial_plies,
+                trajectories, completed, final_state, record_ownership, profile)
+            if not active:
+                break
+
         # Playout-Cap Randomization: decide per-game-per-ply whether this is a
         # full-search (recorded) move or a fast (non-recorded) move. The native
         # search_batch requires a single sim count per call, so when PCR is
@@ -2316,6 +2428,10 @@ def generate_games(
             "random_opening_moves (the opening book owns the opening)"
         )
     if gumbel_root:
+        if _VCT_TERMINUS_ENABLED:
+            raise NotImplementedError(
+                "--vct-terminus is not wired into the Gumbel generation paths; "
+                "run the native / Python (non-Gumbel) path (drop gumbel_root).")
         # Gumbel root selection + Sequential Halving. When the native C engine
         # is available AND implements the Gumbel batch path, use it — it
         # inherits the wave-batching that keeps Gumbel wall-comparable to native
@@ -2439,6 +2555,15 @@ def generate_games(
     ply = 0
     while active and ply < max_plies:
         active_games = [games[i] for i in active]
+        # VCT-terminus (issue #98): same batched pre-search test as the native
+        # path; the Python game exposes planes via g.root.state.to_planes().
+        if _VCT_TERMINUS_ENABLED:
+            planes_list = [g.root.state.to_planes() for g in active_games]
+            active, active_games = _vct_terminus_partition(
+                active, active_games, planes_list, ply, initial_plies,
+                trajectories, completed, final_state, record_ownership, profile)
+            if not active:
+                break
         if wave_size > 1:
             run_batched_mcts_waves(
                 active_games,

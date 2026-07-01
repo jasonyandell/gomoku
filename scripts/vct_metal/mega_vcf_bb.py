@@ -71,7 +71,7 @@ _SRC = """
     thread ulong own[4]; thread ulong opp[4]; thread ulong empty[4];
     for (uint w=0; w<4u; w++){ own[w]=own_in[base+w]; opp[w]=opp_in[base+w]; }
     for (uint w=0; w<4u; w++){ empty[w] = ~(own[w]|opp[w]); }
-    empty[3] &= TOPMASK;
+    mask4(empty);
 
     ulong fmask[__MAXD__][4];     // remaining sound single-four moves per frame
     int mm[__MAXD__]; int mb[__MAXD__];
