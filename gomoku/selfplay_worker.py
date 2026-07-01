@@ -64,6 +64,7 @@ from gomoku.self_play import (
     configure_draw_value,
     configure_search_contempt,
     configure_vcf_teacher,
+    configure_oracle_veto,
     configure_vct_teacher,
     configure_vct_terminus,
     configure_value_discount,
@@ -211,6 +212,19 @@ def parse_args() -> argparse.Namespace:
                         "(cap50 = the near-complete first-VCT detector sweet spot: "
                         "98.8%% of VCTs, 96%%+ of games, 40-850x cheaper than deep "
                         "search). Only matters with --vct-terminus.")
+    p.add_argument("--oracle-veto", action="store_true", default=False,
+                   help="Sound-world oracle veto (issue #107): every self-play "
+                        "ply, bulk escape-solve the wave (GPU oracle, the "
+                        "--vct-terminus-budget cap) and MASK every move proven "
+                        "to lose to a forced opponent VCT out of the root visit "
+                        "distribution — both the move played AND the recorded "
+                        "policy target (on-policy: the target stays the net's "
+                        "own search, just constrained). A position where EVERY "
+                        "legal move is a proven blunder ends the game as a "
+                        "DEFENDER TERMINUS (side to move loses, z=-1). Composes "
+                        "with --vct-terminus (attacker end) for fully "
+                        "oracle-sound games. Native (non-Gumbel) path only. "
+                        "Default OFF = byte-identical self-play.")
     p.add_argument("--defense-teacher", action="store_true", default=False,
                    help="Enable the exact DEFENSIVE teacher (value-only): mirror "
                         "of --vcf-teacher. When the OPPONENT has a proven forced "
@@ -962,6 +976,9 @@ def main() -> None:
     # on the process global; the default-off path never imports MLX).
     configure_vct_terminus(enabled=args.vct_terminus, budget=args.vct_terminus_budget,
                            defense_max_cands=getattr(args, "vct_defense_max_cands", 0))
+    # Sound-world oracle veto (issue #107): no-op unless --oracle-veto is set
+    # (gated purely on the process global; default-off never imports MLX).
+    configure_oracle_veto(enabled=args.oracle_veto)
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
     # policy_mode (#43): switch to stamping the saving move on the policy head.

@@ -139,6 +139,32 @@ def configure_vct_terminus(enabled: bool | None = None,
         _VCT_DEFENSE_MAX_CANDS = int(defense_max_cands)
 
 
+# Sound-world oracle veto (issue #107). When enabled, every self-play ply runs
+# the bulk VCT-defense escape-solve (_vct_defense_solve, FULL breadth) over the
+# wave and the resulting per-cell blunder map is ACTED ON instead of merely
+# recorded:
+#   * moves proven to lose to a forced opponent VCT are masked OUT of the root
+#     visit distribution — both the move actually played AND the recorded
+#     policy target `pi` (on-policy by construction: the target stays the
+#     net's own search, just constrained; no post-hoc relabeling);
+#   * a position where EVERY legal move is a proven blunder is a defender
+#     terminus: the game ends there, side-to-move loses (the exact mirror of
+#     the attacker VCT-terminus), giving an opponent-independent value target.
+# Composes with (but does not require) _VCT_TERMINUS_ENABLED and record_vct —
+# the per-ply solve is shared by all three consumers. Native gen path only.
+# Default OFF = byte-identical self-play.
+_ORACLE_VETO_ENABLED = False
+
+
+def configure_oracle_veto(enabled: bool | None = None) -> None:
+    """Enable the gen-side oracle veto (process-wide). None leaves it unchanged.
+    Call once before generation. Gating is purely on this global, so the
+    default-off path is byte-identical self-play and never imports MLX."""
+    global _ORACLE_VETO_ENABLED
+    if enabled is not None:
+        _ORACLE_VETO_ENABLED = bool(enabled)
+
+
 def _vct_terminus_solve(planes_list):
     """Batched cap50 VCT test across the whole wave of live games. `planes_list`
     is one (N_INPUT_PLANES, N, N) input-plane stack per active game, in the SAME
@@ -278,6 +304,71 @@ def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plie
             final_state[g_idx] = (None, 0)
         completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
         _profile_add(profile, "vct_terminus_fired", 1.0)
+    return [active[s] for s in keep], [active_games[s] for s in keep]
+
+
+def _legal_mask_from_planes(planes) -> np.ndarray:
+    """(N_ACTIONS,) bool legal (empty) mask from a to_planes() stack."""
+    p = np.asarray(planes)
+    occupied = p[0].astype(bool) | p[HISTORY_PLY].astype(bool)
+    return ~occupied.reshape(-1)
+
+
+def _veto_policy(pi: np.ndarray, vmap: np.ndarray, legal: np.ndarray) -> np.ndarray:
+    """Mask proven-blunder cells out of a root visit distribution.
+
+    `vmap` is the (N_ACTIONS,) 0/1 blunder map from _vct_defense_solve, `legal`
+    the (N_ACTIONS,) bool legality mask. Returns a renormalized distribution
+    with zero mass on proven blunders. If the search put ALL its mass on
+    blunders (visited only losing moves), falls back to uniform over the legal
+    non-blunder cells — the caller guarantees at least one exists (the all-lose
+    case is partitioned out as a defender terminus before search)."""
+    keep = vmap < 0.5
+    masked = np.where(keep, pi, 0.0)
+    s = masked.sum()
+    if s > 0.0 and np.isfinite(s):
+        return (masked / s).astype(np.float32)
+    fallback = (legal & keep).astype(np.float32)
+    n = fallback.sum()
+    if n <= 0.0:                       # defensive: should be unreachable
+        return (legal.astype(np.float32) / max(legal.sum(), 1)).astype(np.float32)
+    return fallback / n
+
+
+def _oracle_veto_partition(active, active_games, planes_list, pending_vct, ply,
+                           initial_plies, trajectories, completed, final_state,
+                           record_ownership, record_vct, vct_maps, profile):
+    """Defender terminus: END every game whose side to move has NO non-losing
+    move (every legal cell is a proven blunder on its map). The exact mirror of
+    :func:`_vct_terminus_partition` — side-to-move LOSES, the doomed position is
+    recorded with a uniform-over-legal policy target (no move is better than
+    another; the value signal z=-1 is the teaching), and the game leaves the
+    active set before any search is spent on it. Only positions with a FULL
+    blunder map (veto forces max_cands=0) can terminate here; positions with no
+    map (None) always survive. Returns the surviving (active, active_games)."""
+    keep = []
+    for slot_idx, g_idx in enumerate(active):
+        vmap = pending_vct.get(g_idx)
+        if vmap is None:
+            keep.append(slot_idx)
+            continue
+        legal = _legal_mask_from_planes(planes_list[slot_idx])
+        if not legal.any() or not np.all(vmap[legal] >= 0.5):
+            keep.append(slot_idx)
+            continue
+        n_initial = initial_plies[g_idx]
+        side = (n_initial + ply) % 2       # the side to move is LOST
+        pi_term = (legal.astype(np.float32) / legal.sum())
+        trajectories[g_idx].append(
+            (np.asarray(planes_list[slot_idx]).copy(), pi_term, side))
+        if record_vct:
+            vct_maps[g_idx].append(vmap)   # keep lockstep with the recorded traj
+        outcome_for_black = -1.0 if side == 0 else 1.0
+        if record_ownership:
+            # Not a real five-in-a-row board -> ownership target MASKED.
+            final_state[g_idx] = (None, 0)
+        completed.append((g_idx, outcome_for_black, n_initial + ply))
+        _profile_add(profile, "oracle_veto_all_lose", 1.0)
     return [active[s] for s in keep], [active_games[s] for s in keep]
 
 
@@ -2276,16 +2367,32 @@ def _generate_games_native(
                 trajectories, completed, final_state, record_ownership, profile)
             if not active:
                 break
-            # Moonshot VCT-defense labeler: over the SURVIVING positions, one bulk
-            # escape-solve per ply produces each survivor's per-cell blunder map,
-            # attached to THIS ply's recorded position below (side-to-move = me).
-            if record_vct:
-                with _profile_timer(profile, "vct_defense_s"):
-                    surv_planes = [g.root_planes() for g in active_games]
-                    vmaps, vmasks = _vct_defense_solve(
-                        surv_planes, max_cands=_VCT_DEFENSE_MAX_CANDS)
-                for k, g_idx in enumerate(active):
-                    pending_vct[g_idx] = vmaps[k] if vmasks[k].any() else None
+        # Moonshot VCT-defense labeler / sound-world oracle veto (issue #107):
+        # over the surviving positions, ONE bulk escape-solve per ply produces
+        # each survivor's per-cell blunder map (call-cost law). Three consumers
+        # share the same solve: the recorded aux target (record_vct), the
+        # root-policy veto, and the defender terminus (both _ORACLE_VETO_ENABLED).
+        # The veto needs FULL breadth — an untested cell can't be vetoed, and
+        # "all moves lose" is only sound when every legal cell was tested — so
+        # it forces max_cands=0; the label-only path keeps the configured cap.
+        if record_vct or _ORACLE_VETO_ENABLED:
+            with _profile_timer(profile, "vct_defense_s"):
+                surv_planes = [g.root_planes() for g in active_games]
+                vmaps, vmasks = _vct_defense_solve(
+                    surv_planes,
+                    max_cands=0 if _ORACLE_VETO_ENABLED else _VCT_DEFENSE_MAX_CANDS)
+            for k, g_idx in enumerate(active):
+                pending_vct[g_idx] = vmaps[k] if vmasks[k].any() else None
+            # Defender terminus: games where EVERY legal move is a proven
+            # blunder end HERE (side-to-move loses) — no search is spent on a
+            # lost-by-oracle position, mirroring the attacker terminus above.
+            if _ORACLE_VETO_ENABLED:
+                active, active_games = _oracle_veto_partition(
+                    active, active_games, surv_planes, pending_vct, ply,
+                    initial_plies, trajectories, completed, final_state,
+                    record_ownership, record_vct, vct_maps, profile)
+                if not active:
+                    break
 
         # Playout-Cap Randomization: decide per-game-per-ply whether this is a
         # full-search (recorded) move or a fast (non-recorded) move. The native
@@ -2342,6 +2449,20 @@ def _generate_games_native(
                 tau = 1.0 if ply < temperature_moves else temperature_final
                 with _profile_timer(profile, "policy_export_s"):
                     pi = g.policy(temperature=tau)
+                # Sound-world oracle veto (issue #107): zero out proven-blunder
+                # cells and renormalize BEFORE pi is either recorded as the
+                # training target or sampled for play — one masking point, both
+                # consumers. The target stays the net's own visit distribution
+                # (on-policy), just constrained to non-losing moves. NOTE: not
+                # composed with search-contempt (the contempt pick reads raw
+                # visits and could select a vetoed move; don't run both).
+                if _ORACLE_VETO_ENABLED:
+                    vmap = pending_vct.get(g_idx)
+                    if vmap is not None and vmap.any():
+                        with _profile_timer(profile, "oracle_veto_mask_s"):
+                            legal = _legal_mask_from_planes(g.root_planes())
+                            pi = _veto_policy(pi, vmap, legal)
+                            _profile_add(profile, "oracle_veto_masked", 1.0)
                 n_initial = initial_plies[g_idx]
                 side = (n_initial + ply) % 2
                 # Sanitize pi before recording the training example: NaN entries

@@ -1935,6 +1935,43 @@ CELLS: dict[str, Cell] = {
                                    "--record-vct"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--aux-vct-weight", "0.1"]),
+    # SOUND-WORLD (issue #107). Clone of 'moonshot' (the from-scratch 9x9
+    # VCT-terminus recipe + surviving Bruce levers) with the aux-head levers
+    # REPLACED by the two sound-world levers, both byte-identical-off:
+    #   (1) --oracle-veto (worker): every ply, the same bulk escape-solve that
+    #       fed the #103 aux-head LABELS now ACTS — proven-blunder moves are
+    #       masked out of the played move AND the recorded policy target
+    #       (on-policy), and an all-moves-lose position ends the game as a
+    #       DEFENDER terminus (z=-1). With --vct-terminus both ends of every
+    #       game are oracle-sound: the twin can never hand over a VCT, so the
+    #       missing punisher exists from epoch 0 and z means "a real forced
+    #       win", not "my non-defending copy folded".
+    #   (2) --line-planes (trainer): 8 in-forward line-potential input channels
+    #       (per-cell x 4-dir x {me,opp}) so cross-line threats read locally.
+    #   NO --record-vct / --aux-vct-weight: #103's verdict — the head learns a
+    #   percept nothing reads; the veto IS the actuator, so drop the sensor.
+    # Falsifiable tell: selfplay/plies_mean must LEAVE the ~9-10 attractor
+    # (smoke with a RANDOM net: mean 48 plies, two 81-ply draws, 6 defender
+    # termini in 8 games). Gate on H2H + white column, never internal elo.
+    "sound-world": Cell("sound-world", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=4, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--value-discount", "0.98",
+                                   "--vct-terminus", "--vct-terminus-budget", "50",
+                                   "--oracle-veto"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--line-planes"]),
     # MOONSHOT-BRUCE-IDX2 (issue #102 pivot). The from-scratch 9x9 'moonshot'
     # learned the VCT-defense REPRESENTATION (vct_loss dropped) but never changed
     # self-play behavior — plies stayed pinned at the 9x9 self-play ceiling, so the
