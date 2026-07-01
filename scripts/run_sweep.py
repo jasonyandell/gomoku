@@ -1833,6 +1833,66 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--gumbel-root", "--gumbel-m", "16", "--vcf-teacher",
                                    "--value-discount", "0.98"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # ── VCT-TERMINUS SCIENCE A/B (issue #100, follow-on to #98/#99) ──────────────
+    # Matched 9x9 pair, epoch-matched (100 epochs each), run SERIALLY. Question:
+    # does terminating self-play at the first cap50 VCT (exact oracle terminal value +
+    # winning move, #98) train a stronger/cleaner-value net PER EPOCH than playing out
+    # to an actual five-in-a-row? Both cells are a clone of derby-v9-small
+    # (the fresh seed-0 champion-recipe twin) with FOUR deliberate, MATCHED changes:
+    #   (0) n_workers 8->4: this recipe uses --sgd-steps-per-epoch 64, so the trainer runs
+    #       NON-BLOCKING async (fixed 64 SGD steps/epoch, decoupled from generation). 8 async
+    #       workers don't speed a fixed-cadence trainer — they add diversity the 64-step
+    #       trainer can't absorb (low reuse) AND pile 8 concurrent MLX solver contexts onto
+    #       the terminus cell's GPU. 4 = better reuse + half the Metal co-tenancy, still
+    #       ample generation for a 100-epoch slice. Matched both cells.
+    #   (1) epochs=100 (a bounded first slice, not continuous);
+    #   (2) extra_worker_args drops "--gumbel-root --gumbel-m 16": the #98 terminus code
+    #       raises NotImplementedError if gumbel-root + terminus are both on, so dropping
+    #       it from BOTH keeps the pair honest (the A/B measures the terminus delta, both
+    #       without gumbel);
+    #   (3) extra_worker_args drops "--vcf-teacher": VCF ⊆ VCT, so with the terminus ON
+    #       the VCF-teacher is preempted by the earlier VCT terminus (near-inert) AND it
+    #       would double the per-ply Metal solve load; dropping it from BOTH makes the
+    #       control a clean "standard self-play to five" and the ONLY cell difference the
+    #       terminus. "--value-discount 0.98" stays on both (matched value shaping).
+    # The ONLY difference between the two cells: 'terminus' adds
+    # "--vct-terminus --vct-terminus-budget 50". Own output dirs (fresh both). Eval both
+    # nets post-hoc with the #99 finisher (model:...,vct_finish=50) vs fixed baselines —
+    # the terminus net learns to REACH VCTs but not CONVERT, so its raw-policy trainer-elo
+    # underrates it; the finisher closes that and never hurts the control.
+    "vctsci-control": Cell("vctsci-control", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=4, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=100, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--value-discount", "0.98"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    "vctsci-terminus": Cell("vctsci-terminus", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=4, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=100, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--value-discount", "0.98",
+                                   "--vct-terminus", "--vct-terminus-budget", "50"],
+                extra_train_args=["--sgd-steps-per-epoch", "64"]),
     # 'x-vct' = extend the exact OFFENSIVE teacher from VCF to VCT (bead derby-6us /
     # derby-rxf). VERBATIM clone of derby-v7-mate-discount (the reigning champion:
     # gumbel-root + value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1
