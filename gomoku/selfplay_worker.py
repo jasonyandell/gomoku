@@ -65,6 +65,7 @@ from gomoku.self_play import (
     configure_search_contempt,
     configure_vcf_teacher,
     configure_vct_teacher,
+    configure_vct_terminus,
     configure_value_discount,
     generate_games,
     generate_games_vs_baseline,
@@ -196,6 +197,20 @@ def parse_args() -> argparse.Namespace:
                         "which starved generation in Derby v8). On cap-hit the "
                         "solver returns no-forced-win quickly so self-play proceeds. "
                         "Raise alongside --vct-max-depth at your own gen-cost risk.")
+    p.add_argument("--vct-terminus", action="store_true", default=False,
+                   help="VCT-TERMINUS self-play (issue #98): end each game at the "
+                        "FIRST position where the side to move has a forced VCT "
+                        "(batched GPU oracle, cap50), taking the oracle's exact "
+                        "win + winning move instead of playing out to five. Cuts "
+                        "trajectory length ~2x (first VCT ~median ply 19) to a "
+                        "labeled winner with an EXACT terminal value. Native / "
+                        "Python (non-Gumbel) paths only. Default OFF = "
+                        "byte-identical five-in-a-row self-play.")
+    p.add_argument("--vct-terminus-budget", type=int, default=50,
+                   help="Per-board node cap for the --vct-terminus oracle test "
+                        "(cap50 = the near-complete first-VCT detector sweet spot: "
+                        "98.8%% of VCTs, 96%%+ of games, 40-850x cheaper than deep "
+                        "search). Only matters with --vct-terminus.")
     p.add_argument("--defense-teacher", action="store_true", default=False,
                    help="Enable the exact DEFENSIVE teacher (value-only): mirror "
                         "of --vcf-teacher. When the OPPONENT has a proven forced "
@@ -927,6 +942,9 @@ def main() -> None:
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
     configure_vct_teacher(args.vct_max_depth, args.vct_max_nodes)
+    # VCT-terminus (issue #98): no-op unless --vct-terminus is set (gated purely
+    # on the process global; the default-off path never imports MLX).
+    configure_vct_terminus(enabled=args.vct_terminus, budget=args.vct_terminus_budget)
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
     # policy_mode (#43): switch to stamping the saving move on the policy head.

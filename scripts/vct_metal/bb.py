@@ -20,7 +20,13 @@ N = bb_ref.N
 WIN = bb_ref.WIN
 NN = bb_ref.NN
 NWORDS = 4
-TOPMASK = (1 << (NN - 192)) - 1   # valid bits in word 3 (cells 192..224)
+# Full 4-word board mask (N-general). At N=15 this is [~0, ~0, ~0, (1<<33)-1], so
+# masking words 0..2 is a no-op and behaviour is byte-identical to the old
+# word-3-only TOPMASK. At N<14 the board no longer fills words 0..2, so ALL four
+# words must be masked to zero off-board bits — otherwise `empty = ~(own|opp)`
+# leaks spurious "empty" cells in the high words. See issue #98 (9x9 oracle).
+_BMASK_WORDS = [(bb_ref.BOARDMASK >> (64 * w)) & ((1 << 64) - 1) for w in range(NWORDS)]
+TOPMASK = _BMASK_WORDS[3]   # top-word mask; kept for back-compat (== old value at N=15)
 
 
 # --------------------------------------------------------------------------- #
@@ -62,9 +68,11 @@ def _dir_consts():
 
 
 _HEADER = """
-constant ulong TOPMASK = __TOPMASK__ul;   // valid bits in word 3
+constant ulong TOPMASK = __TOPMASK__ul;   // valid bits in top word (back-compat)
+constant ulong BMASK[4] = {__BMASK__};    // full N-general board mask (all 4 words)
 __DIRCONSTS__
 
+inline void mask4(thread ulong* a){ a[0]&=BMASK[0];a[1]&=BMASK[1];a[2]&=BMASK[2];a[3]&=BMASK[3]; }
 inline void cpy4(thread const ulong* a, thread ulong* o){ o[0]=a[0];o[1]=a[1];o[2]=a[2];o[3]=a[3]; }
 inline void and4(thread ulong* a, thread const ulong* b){ a[0]&=b[0];a[1]&=b[1];a[2]&=b[2];a[3]&=b[3]; }
 inline bool any4(thread const ulong* a){ return (a[0]|a[1]|a[2]|a[3]) != 0ul; }
@@ -88,7 +96,7 @@ inline void shl256(thread const ulong* x, uint t, thread ulong* o){
         ulong hi = (j-1 >= 0) ? x[j-1] : 0ul;
         o[i] = (b==0u) ? lo : ((lo << b) | (hi >> (64u-b)));
     }
-    o[3] &= TOPMASK;
+    mask4(o);
 }
 
 // any >= WIN in a row for bitset P?
@@ -128,7 +136,7 @@ inline void completion_mask(thread const ulong* P, thread const ulong* empty, th
         }
     }
     and4(comp, empty);
-    comp[3] &= TOPMASK;
+    mask4(comp);
 }
 """
 
@@ -136,6 +144,7 @@ inline void completion_mask(thread const ulong* P, thread const ulong* empty, th
 def _header():
     return (_HEADER
             .replace("__TOPMASK__", str(TOPMASK))
+            .replace("__BMASK__", ", ".join("%dul" % w for w in _BMASK_WORDS))
             .replace("__DIRCONSTS__", _dir_consts()))
 
 
@@ -145,7 +154,7 @@ _PROBE_SRC = """
     thread ulong own[4]; thread ulong opp[4]; thread ulong empty[4];
     for (uint w=0; w<4u; w++){ own[w]=own_in[base+w]; opp[w]=opp_in[base+w]; }
     for (uint w=0; w<4u; w++){ empty[w] = (~(own[w]|opp[w])); }
-    empty[3] &= TOPMASK;
+    mask4(empty);
     five_out[gid] = has_five(own) ? 1 : 0;
     thread ulong comp[4];
     completion_mask(own, empty, comp);

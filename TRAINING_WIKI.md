@@ -5310,3 +5310,48 @@ Net: the **harness is the deliverable** (resumable, append-only, 96% yield, read
 and it **proves the second-pass null durable at 10× scale** while sharpening the path forward (ablate
 openings ≫ fold D4). Files: `scripts/threat_shapes/md_minimize_stream.py`,
 `analyze_vocab_stream.py`; log `stream_enable_shuf.jsonl` (+ `stream_enable.jsonl`, 51 deep stencils).
+
+## 2026-06-30 (issue #98) — VCT-terminus self-play: end games at the first cap50 VCT, not at five (9×9 generator + the 15×15 oracle ported to 9×9)
+
+Jason: "9×9 AlphaZero, but this time instead of playing to win, play to VCT @ 50-node budget. VCT is the
+terminus — with that in hand we can win any game, so further searching is noise." This is idea-pile #11
+(⭐ "first VCT at median ply 19") built onto the generators, using the validated `mega_vct_bb` GPU oracle
+as a batched per-ply terminal test across the wave of live games. **Code-only capability landed (default
+OFF = byte-identical); the training-science comparison is the next phase.** Merged `feat/9-9-az`.
+
+- **Step 0 — the oracle was 15×15-ONLY; ported to be N-general (the prerequisite nobody had hit).**
+  `scripts/vct_metal/bb.py` computed `TOPMASK=(1<<(NN-192))-1` and masked only bitboard **word 3** — correct
+  only when the board fills words 0–2 (N∈{14,15}). At N=9 (NN=81) it crashes at import (negative shift) AND
+  would leak off-board "empty" cells in the high words (`empty=~(own|opp)` unmasked). `n_sweep`'s "N" is
+  *pool size*, not board size — **the solver had never run at board-9.** Fix: replace the word-3-only
+  `TOPMASK` with a full 4-word `BMASK[4]` (= `bb_ref.BOARDMASK` split) + a `mask4()` helper, applied at
+  every masking site (`bb.py` ×3, `mega_vcf_bb.py`, `mega_vct_bb.py`). **Provably byte-identical at N=15**
+  (words 0–2 masked with all-ones = no-op). Revalidated: `test_bb.py` (Metal port vs golden `bb_ref`)
+  ALL PASS at N=9 (1800 positions, 0 errors) AND N=15; `test_mega_vct_bb.py` 16/16 vs the committed N=15
+  golden (byte-identical confirmed); 4 hand-verified 9×9 VCTs correct with sound winning moves. The
+  15×15 threat-shapes tool `certificate_falsification.py` still compiles unchanged (TOPMASK kept).
+- **Step 1 — the generator hook.** New `--vct-terminus` / `--vct-terminus-budget 50` (`selfplay_worker.py`)
+  → `configure_vct_terminus()` (`self_play.py`; process-global gate, so default-off never imports MLX). In
+  the wave loop (native + Python paths), BEFORE search each ply: gather every active game's side-to-move-
+  relative root planes → **ONE** bulk-synchronous `solve_vct_mega_bb(boards, max_nodes=50, return_move=True)`
+  (the call-cost law — never solve-in-a-loop) → any game where the side to move has a forced VCT is
+  terminated now: record the decisive position with the oracle's winning move as a **one-hot policy target**
+  (= the seek-VCT objective), credit that side the win, drop it from the wave; survivors continue to normal
+  MCTS. The exact terminal value flows through the SAME sign-flip + mate-distance discount as a real five
+  terminal. Plane convention reuses `vcf.solve_vct_from_planes` (attacker=plane 0, defender=plane
+  HISTORY_PLY). Gumbel paths guarded (NotImplementedError); ownership masked at a VCT terminus (not a real
+  five board).
+- **Coexistence works (the frankenstein's viability question).** native-C MCTS + PyTorch-MPS evaluator +
+  MLX(Metal) oracle all run in ONE process — verified live during generation, not just at import.
+- **E2E smoke (random net, 9×9, 64 games each, augment off):** plies_mean **36.0 → 19.9 (0.55×)**, median
+  **35 → 20**; every terminus game decisive (a VCT is always a win), **64/64 ended at a VCT** with a one-hot
+  oracle-move terminal (vs 1/64 accidental for the five-terminated baseline). Median terminus ply **20**
+  matches the 15×15 rapfi-corpus finding (median first-VCT ply 19–20) — on a *different board size with a
+  random net*. The "~half the plies" prediction lands almost exactly.
+- **Tests:** `tests/test_vct_terminus.py` (5 deterministic unit tests, monkeypatched oracle) + a focused
+  gen-path gate (native / gumbel-guard / teachers / swap2 / ownership / board15) green.
+- **Next (the science, gate with Jason):** a real 9×9 training slice with `--vct-terminus` vs a
+  five-terminated control at equal wall-clock — MTTE/Δelo, value-head calibration on held-out oracle
+  verdicts, and whether "reach a VCT" self-play trains a stronger net faster (idea #11's #4 ms-ladder
+  crossing). **Caveat to watch (idea #11):** terminating at VCT removes defender "play-it-out" learning
+  past onset — the knife-edge result predicts it should SHARPEN signal, but measure.

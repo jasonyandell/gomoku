@@ -153,7 +153,7 @@ _SRC = """
     thread ulong own[4]; thread ulong opp[4]; thread ulong empty[4];
     for (uint w=0; w<4u; w++){ own[w]=own_in[base+w]; opp[w]=opp_in[base+w]; }
     for (uint w=0; w<4u; w++){ empty[w] = ~(own[w]|opp[w]); }
-    empty[3] &= TOPMASK;
+    mask4(empty);
 
     uchar typ[__MAXD__]; uchar phase[__MAXD__];
     // fmask doubles as the AND-node reply set: a frame is OR (uses fmask=fours +
