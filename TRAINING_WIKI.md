@@ -5464,3 +5464,56 @@ moonshot.
   defensive signal**: the supervised VCT aux-head (**#102**) / the from-scratch VCT-gate + aux-head gauntlet
   (**#103**, now in-progress), which regress the VCT structure directly rather than hoping a non-defending twin
   will teach defense. Cross-ref #100 (the head-to-head yardstick), idea-pile #11 (lineage).
+
+## 2026-07-01 (issue #103) — the VCT-defense aux head: it learns the percept, the policy never acts on it
+
+Executes the #102 aux-head design. **Full synthesis: [wiki/topics/vct-defense-aux-head-result.md](wiki/topics/vct-defense-aux-head-result.md).**
+Built a per-cell **"VCT-blunder map"** defense aux head (supervised by the GPU mega VCT solver: for each legal
+move, does it walk the side-to-move into a forced opponent VCT; defense label via **escape-search over every
+legal move** — a move is "lost" iff all children lose). `--aux-vct-weight 0.1`, default 0 byte-identical.
+Ran **two** experiments; **both failed to make the net *defend*, instructively.**
+
+**Experiment A — 9×9 from-scratch moonshot (wandb `8mtowemb`, retired e1152).** From-scratch 9×9, VCT-terminus
+gate (budget 50), the defense head (weight 0.1, full escape-search), + surviving Bruce levers (value-discount
+0.98, global-pool, WL2 stack, 64 SGD-steps/epoch, 64×4, 1.5M buf, sims=100). NO gumbel (terminus-incompatible),
+NO `--vcf-teacher` (CPU solver RETIRED → `CpuSolverRetired`; also inert under terminus since VCF⊆VCT). Run dir
+`~/data/moonshot-103/`.
+- **The head learns the representation:** `train/vct_loss` **0.60→0.03**, `mask_frac` ~0.9.
+- **Self-play does NOT change:** `selfplay/plies_mean` flat **~9-10 for all 1152 epochs** — the #101 attractor.
+- **Conclusion:** the supervised defense gradient forms the **percept** but self-play offers no opponent strong
+  enough to make the **policy** act on it. The #101 ceiling holds **even with the representation present** —
+  rules out "the net can't *see* the blunder." Motivated concentrating on a strong net at a hard fixed position.
+
+**Experiment B — Bruce/idx-2 pivot (wandb `zrjfwny2` from e613, retired e862 ≈ 257 pivot epochs).** When A didn't
+dig out, pivoted: warm-start from **Bruce** (`g15_128x10_bigbuf_e588_best.pt`, 128×10 15×15, ep 605) + **layer
+the VCT-defense head on** via a new `load_checkpoint(force_aux_vct=True)` splice (`gomoku/model.py:635/673`,
+`gomoku/train.py:1417-1422`; core loads strict, fresh `vct_*` params splice in like the swap2 choice head, off =
+byte-identical) + **restrict self-play to the idx-2 opening** (`GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8`, the
+white-to-move "Bruce-Lee board") + VCT-terminus. Idea: concentrate the defense gradient on Bruce's measured
+white-defense wound.
+- **The head learns again:** `train/vct_loss` **0.52→0.026** (loaded clean, no arch mismatch — the splice worked).
+- **The self-play POLICY drifts hard:** `loss/policy` **1.93→2.62** (rising) and `selfplay/plies_mean`
+  **collapses 11.6→9.6** — the terminus attractor, reached *even from a champion*. The terminus + narrow-opening
+  regime **specializes / erodes** the champion's general play.
+
+**THE EVAL-SATURATION CATCH (the thing most likely to be documented wrong).** Ran the idx-2 verdict eval
+(`gomoku.rapfimine.eval_idx2`, **n=48, sims=160, GOMOKU_BOARD_SIZE=15**) on **both** the pivot EMA checkpoint
+**and frozen Bruce**, identical settings:
+- Pivot EMA: **0/48** (black 0/24, white 0/24).
+- **Frozen Bruce (identical settings): ALSO 0/48** (black 0/24, white 0/24).
+So the eval at sims=160 is **SATURATED — Rapfi crushes both nets; it does NOT discriminate**, and therefore does
+**NOT** show the pivot degraded Bruce. Do **NOT** write "the pivot degraded the champion black 42%→0" — frozen
+Bruce also scores 0/48 here. The wiki's "Bruce black ~42% / white 0/12" is a **different eval config**
+(stronger-net / higher think-time, white-defense-plan §1B.2, n=24 vs Rapfi 5s/move), not comparable. **The real
+evidence of "it fell apart" is the self-play policy drift** (`loss/policy` up, `plies` collapsed), NOT the Rapfi
+eval. A clean strength-delta (pivot vs frozen Bruce) would need a **higher-sim or direct-H2H** eval — **not run**
+(experiment abandoned at the pivot).
+
+**Verdict.** Across both experiments the recurring lesson: **the VCT-defense aux head reliably learns the
+defensive REPRESENTATION, but nothing so far makes the POLICY act on it** — not from-scratch self-play (no
+opponent to punish weak defense) and not a frozen-champion warm-start (terminus/narrow regime just specializes
+the policy). **"Frankenstein + aux head" is not the recipe** (Jason). The head is a working **sensor** with **no
+actuator yet**. What-to-try-next (open directions): target the POLICY directly — the escape-search as a
+defensive *policy* target (mask/penalize blunder moves, cf. #43), the defense head at MCTS *inference* time to
+prune blunders, or a curriculum/opponent that actually forces defense. Cross-ref #100/#101 (the structural
+self-play defensive ceiling this head was meant to break), idea-pile #11.

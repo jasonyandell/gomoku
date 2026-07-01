@@ -3,6 +3,22 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-07-01] New page: the VCT-defense aux head — a working sensor with no actuator (#103)
+
+Created [topics/vct-defense-aux-head-result.md](topics/vct-defense-aux-head-result.md) — the outcome of #103,
+executing the #102 supervised VCT-defense aux-head design. Ran TWO experiments; **both learn the defensive
+REPRESENTATION but fail to make the POLICY defend.** **A** (from-scratch 9×9, wandb `8mtowemb`, e1152):
+`train/vct_loss` 0.60→0.03, mask_frac ~0.9, but `plies_mean` flat ~9-10 for 1152 epochs = the #101 attractor
+*unchanged even with the representation present*. **B** (Bruce/idx-2 pivot, wandb `zrjfwny2`, e862): warm-start
+the 128×10 champion + layer the head via the new `force_aux_vct` splice + restrict self-play to the idx-2 wound;
+the head learns (0.52→0.026) but the self-play policy drifts (`loss/policy` 1.93→2.62, plies 11.6→9.6). Kept the
+honesty bar high on the **eval-saturation nuance**: the idx-2 gate (n=48, sims=160) reads **0/48 on the pivot AND
+0/48 on frozen Bruce** — saturated, so it does NOT show the pivot degraded Bruce; the real "fell apart" evidence
+is the policy drift, and a clean strength-delta was never measured (abandoned). Verdict: **a working sensor with
+no actuator** ("Frankenstein + aux head is not the recipe" — Jason); next = target the policy directly. Added an
+index ⭐ row (after the #100/#101 terminus row), a TRAINING_WIKI 2026-07-01 (#103) entry, and an idea-pile #11
+aux-head-sequel marker. Documentation only; the head/splice code was already merged to main (6ba92b5).
+
 ## [2026-06-26] New page: mining VCT-reachability from the Rapfi corpus (off-path fan + knife-edge)
 
 Created [topics/vct-reachability-mining.md](topics/vct-reachability-mining.md) — cheap ways to mine

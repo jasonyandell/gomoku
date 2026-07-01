@@ -409,6 +409,20 @@ encoding may rediscover it as a *spatial frequency*.
 > settles it), and "stronger at short games" is inferred from falling pl/vl, not measured (no evals). The way
 > past the ceiling = **opponent-independent** defensive signal: the supervised VCT aux-head (#102/#103).
 > Full: [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) § Long-run coda (#101).
+> ⭐ **AUX-HEAD SEQUEL 2026-07-01 (#103) — a working sensor with no actuator.** The opponent-independent
+> supervised **VCT-defense aux head** (#102 design) was built + run TWO ways. **From-scratch 9×9 moonshot**
+> (wandb `8mtowemb`, e1152): the head learns (`train/vct_loss` 0.60→0.03, mask_frac ~0.9) but `plies_mean`
+> stays flat ~9-10 — the **#101 attractor, unchanged even WITH the defensive representation**. **Bruce/idx-2
+> pivot** (wandb `zrjfwny2`, warm-start the 128×10 champion + layer the head via `force_aux_vct` + restrict
+> self-play to the idx-2 wound): the head learns again (0.52→0.026) but the self-play *policy drifts*
+> (`loss/policy` 1.93→2.62, plies 11.6→9.6 — the terminus/narrow regime specializes the champion). **Eval
+> nuance (don't misread):** the idx-2 gate (`eval_idx2`, n=48, sims=160) reads **0/48 on the pivot AND 0/48 on
+> frozen Bruce** — SATURATED, non-discriminating, so it does NOT show the pivot degraded Bruce; the real "fell
+> apart" evidence is the policy drift, and a clean strength-delta was never measured (abandoned). **Recurring
+> lesson: the aux head learns the defensive REPRESENTATION, but nothing so far makes the POLICY act on it**
+> ("Frankenstein + aux head is not the recipe" — Jason). Next = target the POLICY directly (escape-search as a
+> policy target / defense head at MCTS inference / an opponent that forces defense).
+> Full: [vct-defense-aux-head-result.md](vct-defense-aux-head-result.md).
 **Measured fact** ([vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md)):
 labeling all 56.1M unique rapfi positions with the GPU VCT oracle and joining back
 to games shows the **first VCT arrives at median ply 19 / mean 21.6** (p10–p90 =
