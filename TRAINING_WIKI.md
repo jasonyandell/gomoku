@@ -5424,3 +5424,43 @@ going to 500, it's screaming fast." Merged `feat/vct-terminus-science`.
   games / curriculum). Next probe filed: **#101** (train the terminus long — p90 plies → 81, or wicked
   strong at short games?). Eval harness: `scripts/vctsci_finisher_eval.py` (`--list`/`--run`/`--collate`,
   one matchup/process).
+
+## 2026-07-01 (issue #101) — train the VCT-terminus player LONG: does p90 plies reach 81? (no — a stable attractor at ≈14.5)
+
+The natural next probe of #100. **Full synthesis: [wiki/topics/vct-terminus-selfplay-result.md](wiki/topics/vct-terminus-selfplay-result.md) § Long-run coda (#101).**
+Question: train the VCT-terminus player (games END at the first cap50 VCT) continuously with `--internal-eval`
+**off** — just train, no train-time evals — and watch `selfplay/plies_p90`. The retired 9×9→11×11 graduation
+gate was **p90 = 81** (a full board). Two hypotheses: **(A)** p90 climbs → the net learns to *avoid* VCTs
+(emergent VCT-avoidance at equilibrium); **(B, Jason's bet)** it never gets there and just gets "wicked strong
+exploring short games."
+
+**Result — Hypothesis B held.** A **fresh from-scratch** run (the #100 terminus buffer died with its worktree;
+fresh also gives a clean single p90 timeline through the collapse), `vctsci-terminus` recipe verbatim (64×4,
+`n_sim=100`, 4 workers, `--vct-terminus --vct-terminus-budget 50`, `ema_tau=0.99`, 64 SGD-steps/epoch). wandb
+**`kgajrge4`** (`jasonyandell-forge42/gomoku`; run dir `~/data/vctsci-101-long/`, outside the repo). Reached
+**~2,700 epochs (≈14× the #100 e500 slice) and was still riding its 12h / 1M-epoch wall at writeup**; the
+verdict was locked by ~e1,200 and only hardened over the next ~1,500 flat epochs. Hand-off was to the #103
+moonshot.
+
+- **The p90 trajectory (verified from the run, 200-epoch block means):** cold **~28** → collapsed to a trough
+  **11.9** by ~e85 → a **decelerating creep** back up: 11.9 → 12.7 → 13.2 → 13.4 → 13.6 → 14.0 → 14.4 → **14.7**,
+  increments off the trough **+0.8, +0.5, +0.2, +0.2, +0.4, +0.2 …** flattening to **~14.5–14.6** and holding
+  for the final ~1,000 epochs. **Never a hint of a march toward 81** (≈6× short). mean plies pinned **~9.6**.
+  `loss/policy` fell monotonically **4.38 → ~2.17** then flat; `loss/value` **0.39 → ~0.022**, flat. Every dial
+  converged — a **stable attractor**, just a *rising* one in the low teens.
+- **Mechanism (co-evolution, capped by the self-play ceiling):** the 11.9→14.5 creep is the defender (its own
+  EMA twin) learning to **postpone** the VCT a few plies, *never to prevent* it — self-play offers no opponent
+  strong enough to *punish* weak defense. The net got sharper at the **same ~9-ply game** (pl/vl down), not at
+  longer games. Same self-play ceiling #100 exposed head-to-head; Hypothesis A (VCT-avoidance) refuted.
+- **Confound (cap50 recall):** the terminus ends at the first *cap50*-detected VCT; as play sharpens some real
+  VCTs need **>50 nodes** and cap50 misses them, so **part** of the p90 creep is the detector losing recall on
+  the shifting distribution, not genuine defense. `plies` is therefore an **unreliable defense proxy** — only
+  `fires>0` vs a real opponent (the #100 finisher yardstick) settles "did it learn defense," and #100 already
+  answered **no** (fires = 0 vs the control/champion).
+- **Honesty caveat:** #101 ran with **no evals**, so "gets stronger at short games" is **inferred from falling
+  pl/vl, not a measured strength number** — a plausibility argument, not a proof.
+- **Verdict + the way out:** the self-play defensive ceiling is **structural**, not undertraining — 2,700 epochs
+  of pure self-play buys a few plies of postponement and nothing more. The path past it is **opponent-independent
+  defensive signal**: the supervised VCT aux-head (**#102**) / the from-scratch VCT-gate + aux-head gauntlet
+  (**#103**, now in-progress), which regress the VCT structure directly rather than hoping a non-defending twin
+  will teach defense. Cross-ref #100 (the head-to-head yardstick), idea-pile #11 (lineage).

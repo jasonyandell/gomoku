@@ -1692,3 +1692,21 @@ TRAINING_WIKI 2026-06-30. Two reusable lessons banked: **eval the EMA `worker_we
 checkpoint's raw state_dict** (terminus 6% raw vs 68% EMA), and **fixed baselines saturate for strong nets
 ⇒ gate on H2H** (champion reads 62% vs heuristic yet 40-0s the control). Filed #101 (train the terminus
 long — p90 plies → 81?).
+
+## [2026-07-01] Long-run coda (#101): VCT-terminus p90 is a stable attractor at ≈14.5, not the 81 gate
+
+Extended [topics/vct-terminus-selfplay-result.md](topics/vct-terminus-selfplay-result.md) with a
+"## Long-run coda (#101)" section — the natural next probe of #100. Trained the VCT-terminus player from
+scratch for **~2,700 epochs with no evals** (wandb `kgajrge4`, `jasonyandell-forge42/gomoku`, run dir
+`~/data/vctsci-101-long/`) and watched `selfplay/plies_p90`: it does **not** climb toward 81 (the retired
+9×9→11×11 gate = a full board), so **Hypothesis B held** (Jason's bet) — a **rising-then-flattening fixed
+point at p90 ≈14.5 / mean ≈9.6**, the net sharpening inside the fast forced-win regime (pl 4.38→2.17, vl
+0.39→0.022, all flat). Verified block-mean trajectory off the run: cold ~28 → trough 11.9 (~e85) → decelerating
+creep 11.9→12.7→13.2→13.4→13.6→14.0→14.4→14.7, flat for the final ~1,000 epochs. Mechanism: the defender (its
+own EMA twin) learns to **postpone** the VCT, never to **prevent** it — the self-play defensive ceiling is
+**structural**, not undertraining. Banked two honesty caveats: `plies` is an unreliable defense proxy (cap50
+loses recall as play sharpens ⇒ part of the creep is the detector, not defense — only `fires>0` vs a real
+opponent settles it, and #100 said no), and "stronger at short games" is inferred from falling pl/vl, not a
+measured strength number (evals were off). The way past the ceiling = opponent-independent defensive signal =
+the supervised VCT aux-head (#102/#103). Updated idea-pile #11 lineage (added the #101 coda), the index row,
+and TRAINING_WIKI 2026-07-01. Closes #101.

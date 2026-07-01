@@ -129,6 +129,80 @@ whole "reach-a-VCT" edge evaporates the instant the opponent can defend.
   **#101** — train the terminus player long: does p90 plies ever hit 81 (learns to *avoid* VCTs) or does it
   get "wicked strong at short games"?
 
+## Long-run coda (#101): a stable attractor at p90 ≈ 14, never the 81 gate
+
+> **RESULT (2026-07-01): HYPOTHESIS B HELD.** Trained LONG with **no evals**, the VCT-terminus player
+> does **not** learn to avoid VCTs (p90 → 81, a full board = the old 9×9→11×11 graduation gate). Instead
+> `selfplay/plies_p90` settles into a **rising-then-flattening fixed point at ≈14.5** (mean ≈9.6) — it gets
+> *sharper at the same short game*, never longer ones. Every dial converges: a **stable attractor in the
+> low teens**, ~6× short of 81.
+
+**The run.** #101 asked the natural next question of #100: if you train the terminus player continuously
+with `--internal-eval` **off** (just train, no train-time strength ladder), does `selfplay/plies_p90` ever
+climb to **81** (the retired 9×9→11×11 gate = a full board)? Two hypotheses: **(A)** p90 climbs → the net
+learns to *avoid* VCTs (emergent VCT-avoidance at equilibrium, both sides steering away from giving/taking
+forced wins); **(B, Jason's bet)** it never gets there and just gets "wicked strong exploring short games."
+
+A **fresh from-scratch** run (`vctsci-terminus` recipe verbatim — 64×4, `n_sim=100`, 4 workers,
+`--vct-terminus --vct-terminus-budget 50`, `ema_tau=0.99`, 64 SGD-steps/epoch; the #100 terminus buffer
+had died with its worktree, and fresh gives a clean single p90 timeline through the collapse phase). wandb
+**`kgajrge4`** (`jasonyandell-forge42/gomoku`; run dir `~/data/vctsci-101-long/`, outside the repo, leaving
+#100's preserved checkpoints untouched). At this writeup it had reached **~2,700 epochs (≈14× the #100 e500
+slice) and was still riding its 12h / 1M-epoch wall** — but the trajectory had been flat at the fixed point
+for ~1,000 epochs, so the scientific call (locked by ~e1,200) only hardened. Hand-off was to the #103
+moonshot.
+
+**The p90 trajectory (verified from `kgajrge4`, 200-epoch block means):**
+
+| epoch block | p90 (block mean) | mean plies | loss/policy | loss/value |
+|---|---|---|---|---|
+| cold (e6–e21) | ~28 | ~19–21 | 4.38 | 0.39 |
+| **200–399 (trough)** | **11.9** | 8.5 | 2.57 | 0.111 |
+| 400–599 | 12.7 | 8.6 | 2.39 | 0.061 |
+| 600–799 | 13.2 | 8.9 | 2.32 | 0.042 |
+| 800–999 | 13.4 | 9.1 | 2.28 | 0.035 |
+| 1000–1199 | 13.6 | 9.3 | 2.25 | 0.029 |
+| 1200–1399 | 14.0 | 9.4 | 2.23 | 0.022 |
+| 1600–1799 | 14.4 | 9.5 | 2.20 | 0.023 |
+| 2000–2199 | 14.7 | 9.6 | 2.18 | 0.022 |
+| 2400–2599 | 14.6 | 9.6 | 2.17 | 0.026 |
+| 2600–2799\* | 14.6 | 9.6 | 2.17 | 0.030 |
+
+\*partial (n=112). p90 **collapsed** from cold ~28 to the 11.9 trough by ~e85, then a **decelerating creep**
+back up — increments off the trough of **+0.8, +0.5, +0.2, +0.2, +0.4, +0.2 …** flattening to **~14.5–14.6**
+and holding there for the final ~1,000 epochs. **Never a hint of a climb toward 81.** mean plies pinned
+~9 the whole way. Policy loss fell monotonically 4.38 → ~2.17 then flattened; value loss 0.39 → ~0.022,
+flat. **Every dial converged to a fixed point** — the definition of a stable attractor, just a *rising* one
+in the low teens.
+
+**Mechanism — co-evolution, capped by the self-play ceiling.** The 11.9→14.5 creep is real but it is the
+defender (its own EMA twin) learning to **postpone** the VCT by a few plies, *never to prevent* it — because
+self-play offers no opponent strong enough to *punish* weak defense. The net got sharper at the **same ~9-ply
+game** (pl/vl down), not at longer games. This is the #100 finding restated as a dynamical fact: the missing
+half is DEFENSE, and self-play alone cannot supply it (the same self-play ceiling that #100 exposed
+head-to-head). Hypothesis A (emergent VCT-avoidance) is **refuted**: avoidance would show as p90 marching
+toward a full board; instead it asymptotes 6× short.
+
+**Two confounds/caveats, stated honestly:**
+- **`plies` is an unreliable defense proxy (the cap50-recall confound).** The terminus ends at the first
+  *cap50*-detected VCT. As play sharpens, some genuine VCTs need **>50 nodes** and cap50 misses them, so
+  **part** of the p90 creep is the detector **losing recall on the shifting distribution**, not the net
+  genuinely defending longer. So the 11.9→14.5 rise over-states real defensive improvement — only
+  **`fires>0` vs a real opponent** (the #100 finisher yardstick) can settle "did it learn defense," and #100
+  already answered that **no** (fires = 0 vs the control/champion).
+- **"Gets stronger at short games" is INFERRED, not measured.** #101 ran with `--internal-eval` **off**, so
+  there is **no** strength number for this run — the "sharper" claim rests entirely on falling `loss/policy`
+  and `loss/value`, not on any fixed-baseline or H2H measurement. Read it as a plausibility argument, not a
+  proof.
+
+**Verdict.** Jason's bet (B) held: no VCT-avoidance, no march to 81 — a **stable attractor at p90 ≈ 14.5 /
+mean ≈ 9.6**, the net sharpening inside the fast forced-win regime. This confirms the #100 diagnosis from a
+second angle: the self-play defensive ceiling is *structural*, not a matter of undertraining — 2,700 epochs
+of pure self-play buys a few plies of postponement and nothing more. **The way past the ceiling is
+opponent-independent defensive signal** — a supervised VCT aux-head (#102) / the from-scratch VCT-gate +
+aux-head gauntlet (#103), which regress the VCT structure directly rather than hoping a non-defending twin
+will teach defense.
+
 ## Reproduce
 
 - Cells: `scripts/run_sweep.py` → `vctsci-control` / `vctsci-terminus` (fresh 9×9; grow with
@@ -147,4 +221,6 @@ whole "reach-a-VCT" edge evaporates the instant the opponent can defend.
 - [vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md) — the median-first-VCT-ply-19 finding that motivated it.
 - [mega-vct-solver.md](mega-vct-solver.md) — the cap50 oracle (`solve_vct_mega_bb`) used as terminus + finisher.
 - [launch-sequence-runbook.md](launch-sequence-runbook.md) — balanced-baseline / fast-attack-collapse indicators.
-- `TRAINING_WIKI.md` 2026-06-30 (#100) — the chronological run record.
+- `TRAINING_WIKI.md` 2026-06-30 (#100) + 2026-07-01 (#101) — the chronological run records.
+- **#102 / #103** — the supervised VCT aux-head (and the from-scratch VCT-gate + aux-head gauntlet): the
+  opponent-independent defensive gradient that the long-run coda argues is the way past this self-play ceiling.
