@@ -398,7 +398,17 @@ encoding may rediscover it as a *spatial frequency*.
 > VCT (≈ply 9) means it **never learns to defend** and, vs any opponent that denies a VCT, it never reaches
 > one (finisher fires = 0) and collapses. **This caveat (below) is the DOMINANT effect** — attack-only
 > specialization, a cousin of fast-attack collapse. The seek-VCT *objective* survives; the missing half is
-> DEFENSE. Full result: [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md); next probe #101.
+> DEFENSE. Full result: [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md).
+> ⭐ **LONG-RUN CODA 2026-07-01 (#101) — HYPOTHESIS B held: a stable attractor, NOT VCT-avoidance.** Trained
+> the terminus player from scratch for **~2,700 epochs with no evals** (wandb `kgajrge4`), `selfplay/plies_p90`
+> does **not** climb toward the retired 81-ply 9×9→11×11 gate; it settles at a **rising-then-flattening fixed
+> point ≈14.5** (mean ≈9.6), sharpening at the *same ~9-ply game* (pl 4.38→2.17, vl 0.39→0.022, all flat).
+> Mechanism: the defender (its own twin) learns to **postpone** the VCT a few plies, never to **prevent** it —
+> the self-play ceiling is **structural**. Two caveats: `plies` is an unreliable defense proxy (cap50 loses
+> recall as play sharpens ⇒ part of the creep is the detector, not defense — only `fires>0` vs a real opponent
+> settles it), and "stronger at short games" is inferred from falling pl/vl, not measured (no evals). The way
+> past the ceiling = **opponent-independent** defensive signal: the supervised VCT aux-head (#102/#103).
+> Full: [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) § Long-run coda (#101).
 **Measured fact** ([vct-cascade-run-2026-06-30.md](vct-cascade-run-2026-06-30.md)):
 labeling all 56.1M unique rapfi positions with the GPU VCT oracle and joining back
 to games shows the **first VCT arrives at median ply 19 / mean 21.6** (p10–p90 =
