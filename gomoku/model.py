@@ -68,6 +68,18 @@ class ModelConfig:
     # dropped at inference, untouched by fuse_model_for_inference. Structural twin
     # of the ownership head; gated on by the trainer flag --aux-vct-weight > 0.
     aux_vct: bool = False
+    # Sound-world line-potential input planes (issue #107). When False
+    # (default), the stem takes exactly n_input_planes channels and the model
+    # is byte-identical to one predating this field. When True, forward()
+    # derives 8 extra channels (gomoku.features.line_potential_planes: per-cell
+    # x 4-direction x {me, opp} max live-5-window stone count / 4) from the two
+    # CURRENT stone planes and feeds n_input_planes + 8 channels to the stem.
+    # Computed INSIDE the model so the external 17-plane contract (records,
+    # replay buffer, D4 augmentation, native paths, evaluators) is untouched,
+    # and augmentation consistency is automatic. This is an INPUT-representation
+    # lever, not a head: it changes the stem conv's in_channels, so it cannot be
+    # toggled on an existing checkpoint without a splice (cf. force_aux_vct).
+    line_planes: bool = False
     # KataGo-style global pooling (Derby v4 "Whole-board" lever). When False
     # (default), the residual tower is the exact current arch and the
     # state_dict is byte-identical. When True, the LATTER HALF of residual
@@ -266,8 +278,13 @@ class GomokuNet(nn.Module):
         kernel = 3
         spatial = cfg.board_size + 2 * cfg.stem_padding - kernel + 1
 
+        # Sound-world lever (issue #107): with cfg.line_planes the stem widens
+        # by the 8 in-forward-derived line-potential channels; off (default) is
+        # byte-identical to a model predating the field.
+        from gomoku.features import N_LINE_PLANES
+        stem_in = cfg.n_input_planes + (N_LINE_PLANES if cfg.line_planes else 0)
         self.stem = nn.Sequential(
-            nn.Conv2d(cfg.n_input_planes, c, kernel, padding=cfg.stem_padding, bias=False),
+            nn.Conv2d(stem_in, c, kernel, padding=cfg.stem_padding, bias=False),
             nn.BatchNorm2d(c),
             make_activation(cfg.activation),
         )
@@ -367,6 +384,19 @@ class GomokuNet(nn.Module):
         if cfg.choice_head:
             self.choice_fc = nn.Linear(cfg.value_hidden, N_CHOICES)
 
+    def _expand_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Append the derived line-potential planes when cfg.line_planes is on.
+
+        Every trunk entry point (forward, forward_with_choice) goes through
+        here so the stem always sees the channel count it was built with. Off
+        (default) returns x untouched — the byte-identical hot path.
+        """
+        if not self.cfg.line_planes:
+            return x
+        from gomoku.features import expand_input_planes
+        history_ply = (self.cfg.n_input_planes - 1) // 2
+        return expand_input_planes(x, history_ply)
+
     def forward(
         self,
         x: torch.Tensor,
@@ -404,7 +434,7 @@ class GomokuNet(nn.Module):
         and never run either aux head or request WDL logits (zero extra FLOPs in
         the generation-bound path). Requesting a head/logits that were not
         constructed raises."""
-        h = self.tower(self.stem(x))
+        h = self.tower(self.stem(self._expand_input(x)))
 
         p = F.relu(self.policy_bn(self.policy_conv(h)))
         p = self.policy_fc(p.flatten(1))
@@ -485,7 +515,7 @@ class GomokuNet(nn.Module):
                 "forward_with_choice requires cfg.choice_head=True "
                 "(the choice head was not constructed)"
             )
-        h = self.tower(self.stem(x))
+        h = self.tower(self.stem(self._expand_input(x)))
 
         p = F.relu(self.policy_bn(self.policy_conv(h)))
         p = self.policy_fc(p.flatten(1))
@@ -513,6 +543,7 @@ def build_model(
     aux_opponent_reply: bool = False,
     aux_ownership: bool = False,
     aux_vct: bool = False,
+    line_planes: bool = False,
     global_pool: bool | int | None = None,
     value_head: str | None = None,
     value_hlgauss_bins: int | None = None,
@@ -533,6 +564,8 @@ def build_model(
         overrides["aux_ownership"] = True
     if aux_vct:
         overrides["aux_vct"] = True
+    if line_planes:
+        overrides["line_planes"] = True
     if global_pool is not None:
         overrides["global_pool"] = global_pool
     # Only override value_head when an explicit non-default is requested, so the
@@ -662,6 +695,9 @@ def load_checkpoint(
     saved_cfg.setdefault("value_hlgauss_sigma", ModelConfig.value_hlgauss_sigma)
     # Pre-15x15-era checkpoints predate board_size; they were all 9x9.
     saved_cfg.setdefault("board_size", 9)
+    # Pre-sound-world checkpoints predate line_planes (issue #107); they were
+    # all built with the bare 17-plane stem.
+    saved_cfg.setdefault("line_planes", False)
     # Pre-swap2 checkpoints predate choice_head. The champion's state_dict has no
     # choice-head weights, but the swap2 net WANTS the head, so we build it (the
     # config default is True) and warm-start the core strict + fall back the

@@ -995,6 +995,17 @@ def parse_args() -> argparse.Namespace:
                         "logged. The head is DROPPED at inference (self-play/eval "
                         "pay nothing). Must be paired with the worker's "
                         "--record-vct. Suggested starting value 0.1.")
+    p.add_argument("--line-planes", action="store_true", default=False,
+                   help="Sound-world line-potential input planes (issue #107): "
+                        "the model derives 8 extra input channels in forward() "
+                        "(per-cell x 4-direction x {me,opp} max live-5-window "
+                        "stone count / 4) from the two current stone planes, so "
+                        "double threats read as two channels hot at one cell. "
+                        "FRESH models only — the stem conv's in_channels widens, "
+                        "so a resume takes line_planes from the checkpoint config "
+                        "and this flag must agree. External 17-plane contract "
+                        "(records/buffer/workers) is untouched. Default OFF = "
+                        "byte-identical.")
     p.add_argument("--soft-policy-weight", type=float, default=0.0,
                    help="KataGo-style soft-policy auxiliary target (bead "
                         "derby-79l). 0.0 (default) = OFF = byte-identical to "
@@ -1449,6 +1460,17 @@ def main() -> None:
                 f"from the checkpoint. Re-launch with --activation {loaded_act} (or "
                 f"start a FRESH cell for the new activation — see bead derby-sib)."
             )
+        # Line-planes lever (issue #107): the stem width comes from the
+        # checkpoint config; assert --line-planes agrees so a mis-launched
+        # resume hard-errors rather than silently building the wrong stem.
+        loaded_lp = bool(getattr(getattr(model, "cfg", None), "line_planes", False))
+        if bool(args.line_planes) != loaded_lp:
+            raise SystemExit(
+                f"--line-planes={bool(args.line_planes)} disagrees with the "
+                f"resumed checkpoint's line_planes={loaded_lp}; the stem width "
+                f"comes from the checkpoint. Re-launch to match (or start a "
+                f"FRESH cell for the new input representation — issue #107)."
+            )
         # Value-head lever (beads derby-cgf, derby-tn4): the value head module
         # (scalar tanh / WDL 3-bin / HL-Gauss N-bin) comes from the checkpoint
         # config; assert --value-head agrees so a mis-launched resume hard-errors
@@ -1489,6 +1511,7 @@ def main() -> None:
             aux_opponent_reply=aux_on,
             aux_ownership=ownership_on,
             aux_vct=vct_on,
+            line_planes=args.line_planes,
             global_pool=gp_arg,
             value_head=args.value_head,
             value_hlgauss_bins=args.hlgauss_bins,
