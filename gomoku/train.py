@@ -216,6 +216,9 @@ def train_step(
     ownership: torch.Tensor | None = None,
     ownership_mask: torch.Tensor | None = None,
     ownership_weight: float = 0.0,
+    vct: torch.Tensor | None = None,
+    vct_mask: torch.Tensor | None = None,
+    vct_weight: float = 0.0,
     soft_policy_weight: float = 0.0,
     teacher_planes: torch.Tensor | None = None,
     teacher_pi: torch.Tensor | None = None,
@@ -255,6 +258,7 @@ def train_step(
     use_ownership = (
         ownership_weight > 0.0 and ownership is not None and ownership_mask is not None
     )
+    use_vct = vct_weight > 0.0 and vct is not None and vct_mask is not None
     # WDL value-representation lever (bead derby-cgf): when the model carries a
     # WDL value head, request the (B, 3) {win,draw,loss} logits and train them
     # with cross-entropy against the WDL target derived from the scalar z. The
@@ -271,16 +275,18 @@ def train_step(
     use_value_logits = use_wdl or use_hlgauss
     aux_logits = None
     own_logits = None
+    vct_logits = None
     value_logits = None
-    if use_aux or use_ownership or use_value_logits:
+    if use_aux or use_ownership or use_vct or use_value_logits:
         outputs = model(
             planes,
             return_aux=use_aux,
             return_ownership=use_ownership,
+            return_vct=use_vct,
             return_value_logits=use_value_logits,
         )
-        # forward() returns (p, v, [aux], [ownership], [value_logits]) in that
-        # fixed order; unpack positionally per the flags requested above.
+        # forward() returns (p, v, [aux], [ownership], [vct], [value_logits]) in
+        # that fixed order; unpack positionally per the flags requested above.
         logits, v = outputs[0], outputs[1]
         idx_extra = 2
         if use_aux:
@@ -288,6 +294,9 @@ def train_step(
             idx_extra += 1
         if use_ownership:
             own_logits = outputs[idx_extra]
+            idx_extra += 1
+        if use_vct:
+            vct_logits = outputs[idx_extra]
             idx_extra += 1
         if use_value_logits:
             value_logits = outputs[idx_extra]
@@ -365,6 +374,21 @@ def train_step(
             own_l = per_own_se.sum() * 0.0  # keep head connected, zero grad
         loss = loss + ownership_weight * own_l
         own_l_val = float(own_l.detach())
+    vct_l_val = float("nan")
+    if use_vct:
+        # Masked BCE-with-logits: the vct head emits raw per-cell logits, the
+        # target is a per-cell 0/1 "blunder map". Per-cell BCE, mean over cells
+        # then mean over the valid (labeled) rows. Illegal/occupied cells carry a
+        # 0 target (never a blunder) so training them toward 0 is harmless.
+        per_vct = F.binary_cross_entropy_with_logits(
+            vct_logits, vct, reduction="none").mean(dim=-1)  # (B,)
+        vmask = vct_mask.bool()
+        if bool(vmask.any()):
+            vct_l = per_vct[vmask].mean()
+        else:
+            vct_l = per_vct.sum() * 0.0  # keep head connected, zero grad
+        loss = loss + vct_weight * vct_l
+        vct_l_val = float(vct_l.detach())
     # Teacher distillation (eval/teacher build): a SEPARATE forward over a batch
     # of expert-labelled positions adds a policy cross-entropy / KL toward the
     # teacher's policy target — a one-hot best move (v1 HARD) OR a soft per-move
@@ -439,6 +463,9 @@ def train_step(
     if use_ownership:
         out["loss/aux_ownership"] = own_l_val
         out["train/ownership_mask_frac"] = float(ownership_mask.bool().float().mean())
+    if use_vct:
+        out["train/vct_loss"] = vct_l_val
+        out["train/vct_mask_frac"] = float(vct_mask.bool().float().mean())
     if use_teacher:
         out["loss/teacher"] = teacher_l_val
     if side is not None and ply is not None:
@@ -955,6 +982,19 @@ def parse_args() -> argparse.Namespace:
                         "Independent of --aux-opponent-reply-weight: either, "
                         "both, or neither head may be enabled. Suggested starting "
                         "value 0.15.")
+    p.add_argument("--aux-vct-weight", type=float, default=0.0,
+                   help="Moonshot auxiliary VCT-defense head (per-cell "
+                        "'VCT-blunder map'). 0.0 (default) = OFF = byte-identical "
+                        "to today (head not constructed, no vct forward, buffer "
+                        "vct tensors not allocated, SGD graph unchanged). When "
+                        "> 0, a dense 81-way head predicts, per cell, whether the "
+                        "side to move playing there walks into a forced VCT for "
+                        "the opponent; its masked BCE-with-logits against the 0/1 "
+                        "target (from the worker's --record-vct labeler) is added "
+                        "to the loss scaled by this weight, and train/vct_loss is "
+                        "logged. The head is DROPPED at inference (self-play/eval "
+                        "pay nothing). Must be paired with the worker's "
+                        "--record-vct. Suggested starting value 0.1.")
     p.add_argument("--soft-policy-weight", type=float, default=0.0,
                    help="KataGo-style soft-policy auxiliary target (bead "
                         "derby-79l). 0.0 (default) = OFF = byte-identical to "
@@ -1297,6 +1337,16 @@ def main() -> None:
     if ownership_on:
         print(f"aux ownership head ENABLED (weight={ownership_weight})")
 
+    # Moonshot aux VCT-defense lever. The single weight flag gates the vct head
+    # (constructed iff weight > 0), the buffer vct tensors, and the masked-BCE vct
+    # loss term. The per-position target is produced by the worker's --record-vct
+    # labeler. 0.0 (default) => everything off and byte-identical to the pre-vct
+    # path. Independent of aux_on / ownership_on.
+    vct_weight = float(args.aux_vct_weight)
+    vct_on = vct_weight > 0.0
+    if vct_on:
+        print(f"aux VCT-defense head ENABLED (weight={vct_weight})")
+
     # swap2 v2a choice-head lever. The single weight flag gates the ChoiceBuffer,
     # the per-game choice-example ingest, and the choice loss term. 0.0 (default)
     # => everything off and byte-identical to the pre-v2a path. The choice head
@@ -1423,6 +1473,7 @@ def main() -> None:
             stem_padding=args.stem_padding,
             aux_opponent_reply=aux_on,
             aux_ownership=ownership_on,
+            aux_vct=vct_on,
             global_pool=gp_arg,
             value_head=args.value_head,
             value_hlgauss_bins=args.hlgauss_bins,
@@ -1501,6 +1552,7 @@ def main() -> None:
     buffer = ReplayBuffer(args.replay_buffer_size, device=device,
                           aux_opponent_reply=aux_on,
                           aux_ownership=ownership_on,
+                          aux_vct=vct_on,
                           cross_game_value=cross_game_on,
                           pack_planes=bool(getattr(args, "pack_buffer", False)))
     if buffer.pack_planes:
@@ -2474,11 +2526,13 @@ def main() -> None:
             for i in range(steps_this_cycle):
                 microbatch_steps_this_cycle += 1
                 aux_pi = aux_mask = ownership = ownership_mask = None
-                if aux_on or ownership_on or cross_game_on:
+                vct = vct_mask = None
+                if aux_on or ownership_on or vct_on or cross_game_on:
                     sampled = buffer.sample(
                         args.batch_size,
                         return_aux=aux_on,
                         return_ownership=ownership_on,
+                        return_vct=vct_on,
                         return_keys=cross_game_on,
                     )
                     planes, pi, z, side, ply = sampled[:5]
@@ -2487,6 +2541,8 @@ def main() -> None:
                         aux_pi, aux_mask = extra.pop(0), extra.pop(0)
                     if ownership_on:
                         ownership, ownership_mask = extra.pop(0), extra.pop(0)
+                    if vct_on:
+                        vct, vct_mask = extra.pop(0), extra.pop(0)
                     if cross_game_on and position_stats is not None:
                         pos_keys = extra.pop(0)
                         if pos_keys is not None:
@@ -2524,6 +2580,9 @@ def main() -> None:
                     ownership=ownership,
                     ownership_mask=ownership_mask,
                     ownership_weight=ownership_weight,
+                    vct=vct,
+                    vct_mask=vct_mask,
+                    vct_weight=vct_weight,
                     soft_policy_weight=args.soft_policy_weight,
                     teacher_planes=teacher_planes,
                     teacher_pi=teacher_pi,

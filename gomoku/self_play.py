@@ -115,19 +115,28 @@ def configure_vct_teacher(max_depth: int | None = None,
 _VCT_TERMINUS_ENABLED = False
 _VCT_TERMINUS_BUDGET = 50            # per-board node cap (cap50)
 _vct_terminus_solver = None         # lazily-imported MLX solve_vct_mega_bb
+# Moonshot VCT-defense labeler breadth cap. 0 (default) = enumerate ALL legal
+# empty cells as blunder candidates per recorded position; K > 0 caps to the K
+# empty cells nearest an existing stone (a per-ply gen-cost lever). Only read by
+# _vct_defense_solve, which is only called when record_vct is on.
+_VCT_DEFENSE_MAX_CANDS = 0
 
 
 def configure_vct_terminus(enabled: bool | None = None,
-                           budget: int | None = None) -> None:
+                           budget: int | None = None,
+                           defense_max_cands: int | None = None) -> None:
     """Enable / parameterize VCT-terminus self-play (process-wide). None leaves a
     field unchanged. Call once before generation, before any game loop. Gating is
     purely on this global, so the default-off path is byte-identical self-play and
-    never imports MLX."""
-    global _VCT_TERMINUS_ENABLED, _VCT_TERMINUS_BUDGET
+    never imports MLX. `defense_max_cands` caps the VCT-defense labeler breadth
+    (0 = all legal empty cells; K > 0 = K cells nearest existing stones)."""
+    global _VCT_TERMINUS_ENABLED, _VCT_TERMINUS_BUDGET, _VCT_DEFENSE_MAX_CANDS
     if enabled is not None:
         _VCT_TERMINUS_ENABLED = bool(enabled)
     if budget is not None:
         _VCT_TERMINUS_BUDGET = int(budget)
+    if defense_max_cands is not None:
+        _VCT_DEFENSE_MAX_CANDS = int(defense_max_cands)
 
 
 def _vct_terminus_solve(planes_list):
@@ -150,6 +159,83 @@ def _vct_terminus_solve(planes_list):
     win, _hit, move = _vct_terminus_solver(
         boards, max_nodes=_VCT_TERMINUS_BUDGET, return_move=True)
     return np.asarray(win).astype(bool), np.asarray(move).astype(np.int64)
+
+
+def _defense_candidate_cells(empty_flat, occupied, max_cands):
+    """Pick which empty cells to test as blunder candidates. max_cands <= 0 (or a
+    board with fewer empties than the cap) => ALL legal empty cells; otherwise the
+    `max_cands` empty cells with the smallest Chebyshev distance to any existing
+    stone (breadth cap near the action). Returns a 1-D int array of flat indices."""
+    empty_flat = np.asarray(empty_flat, dtype=np.int64)
+    if max_cands is None or max_cands <= 0 or empty_flat.size <= max_cands:
+        return empty_flat
+    n = occupied.shape[0]
+    stones = np.argwhere(occupied)                 # (S, 2) rows, cols
+    if stones.size == 0:
+        return empty_flat[:max_cands]
+    rows = empty_flat // n
+    cols = empty_flat % n
+    rc = np.stack([rows, cols], axis=1)            # (E, 2)
+    # Chebyshev distance from each empty cell to the NEAREST existing stone.
+    dist = np.abs(rc[:, None, :] - stones[None, :, :]).max(axis=2).min(axis=1)
+    order = np.argsort(dist, kind="stable")
+    return empty_flat[order[:max_cands]]
+
+
+def _vct_defense_solve(planes_list, max_cands=0):
+    """Moonshot VCT-defense labeler. For each input position (side-to-move = me),
+    produce a per-cell (N_ACTIONS,) 0/1 "blunder map": map[m] = 1.0 iff, after I
+    play empty cell m, the OPPONENT has a forced VCT (i.e. m walks me into a lost
+    position). `planes_list` is one (N_INPUT_PLANES, N, N) stack per position, in
+    the same side-to-move-relative convention as :func:`_vct_terminus_solve`
+    (attacker = plane 0 = my stones, defender = plane HISTORY_PLY = opp stones).
+
+    For each candidate m the CHILD board is framed from the OPPONENT's
+    perspective (they are now to move):
+        attacker = opp stones (my defender-plane, HISTORY_PLY)
+        defender = my stones (plane 0) with cell m set to 1
+    ALL children of ALL positions are concatenated into ONE (Sum_L, 2, N, N) batch
+    and solved with a SINGLE solve_vct_mega_bb call (the call-cost law) — never
+    per-position. `max_cands` <= 0 tests every legal empty cell; K > 0 caps to the
+    K empties nearest existing stones.
+
+    Returns (maps, masks): maps is a list of (N_ACTIONS,) float32 arrays (1.0 on
+    proven-blunder cells, 0.0 elsewhere), masks is a list of (N_ACTIONS,) bool
+    arrays marking which cells were evaluated (candidate cells)."""
+    global _vct_terminus_solver
+    if _vct_terminus_solver is None:
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+        _vct_terminus_solver = solve_vct_mega_bb
+    n = BOARD_SIZE
+    maps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in planes_list]
+    masks = [np.zeros(N_ACTIONS, dtype=bool) for _ in planes_list]
+    child_boards: list[np.ndarray] = []      # each (2, N, N) bool
+    owners: list[tuple[int, int]] = []       # (position index, flat cell m)
+    for pos_idx, p in enumerate(planes_list):
+        p = np.asarray(p)
+        me = p[0].astype(bool)               # my stones (plane 0)
+        opp = p[HISTORY_PLY].astype(bool)    # opponent stones (plane HISTORY_PLY)
+        occupied = me | opp
+        empty_flat = np.flatnonzero(~occupied.reshape(-1))
+        cands = _defense_candidate_cells(empty_flat, occupied, max_cands)
+        for m in cands:
+            m = int(m)
+            r, c = divmod(m, n)
+            child_def = me.copy()
+            child_def[r, c] = True           # my stones + m = defender in the child
+            child_boards.append(np.stack([opp, child_def], axis=0))  # attacker=opp
+            owners.append((pos_idx, m))
+            masks[pos_idx][m] = True
+    if not child_boards:
+        return maps, masks
+    batch = np.stack(child_boards, axis=0).astype(bool)   # (Sum_L, 2, N, N)
+    win, _hit = _vct_terminus_solver(
+        batch, max_nodes=_VCT_TERMINUS_BUDGET, return_move=False)
+    win = np.asarray(win).astype(bool)
+    for k, (pos_idx, m) in enumerate(owners):
+        if win[k]:
+            maps[pos_idx][m] = 1.0
+    return maps, masks
 
 
 def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plies,
@@ -1111,6 +1197,15 @@ class SelfPlayExample:
     # the SAME D4 symmetry as planes/pi/aux_pi under augmentation. None when the
     # ownership lever is off — masked out of the ownership loss.
     ownership: np.ndarray | None = None  # (N_ACTIONS,) float32 or None
+    # Moonshot VCT-defense target: per-cell (81,) 0/1 "blunder map" for THIS
+    # position (side-to-move = me). vct[m] = 1.0 iff playing at empty cell m walks
+    # the side to move into a forced VCT for the opponent, 0.0 otherwise. Unlike
+    # `ownership` (one per-GAME final board), this is a PER-PLY target computed by
+    # the escape-search labeler at the position that is being recorded. Under D4
+    # augmentation it is permuted by the SAME symmetry as planes/pi/ownership (it
+    # is a per-cell board map). None when the vct lever is off or the position was
+    # not labeled — masked out of the vct loss.
+    vct: np.ndarray | None = None  # (N_ACTIONS,) float32 or None
 
 
 @dataclass
@@ -1250,22 +1345,24 @@ def _build_examples(
     augment_symmetries: bool,
     profile: ProfileStats | None = None,
     ownership: np.ndarray | None = None,
+    vct: np.ndarray | None = None,
 ) -> list[SelfPlayExample]:
     """Expand one recorded position into training example(s).
 
     With D4 augmentation, emits 8 symmetry variants; the per-cell aux targets
-    (opponent-reply `aux_pi` and/or `ownership`, when present) are transformed
-    by the SAME symmetry as planes+pi via augment_with_cell_targets, so each
-    label stays board-aligned with its position. Without augmentation, emits the
-    single position. A None target propagates to the example unchanged → masked
-    out of that target's loss.
+    (opponent-reply `aux_pi`, `ownership`, and/or the vct-defense blunder map,
+    when present) are transformed by the SAME symmetry as planes+pi via
+    augment_with_cell_targets, so each label stays board-aligned with its
+    position. Without augmentation, emits the single position. A None target
+    propagates to the example unchanged → masked out of that target's loss.
 
-    Byte-identical guarantee: when BOTH aux_pi and ownership are None, this uses
-    the plain `augment` (the pre-aux path), so the off-case output is unchanged.
+    Byte-identical guarantee: when aux_pi, ownership, AND vct are all None, this
+    uses the plain `augment` (the pre-aux path), so the off-case output is
+    unchanged.
     """
     out: list[SelfPlayExample] = []
     if augment_symmetries:
-        if aux_pi is None and ownership is None:
+        if aux_pi is None and ownership is None and vct is None:
             with _profile_timer(profile, "d4_augment_s"):
                 augmented = list(augment(planes, pi))
             for aug_planes, aug_pi in augmented:
@@ -1273,21 +1370,24 @@ def _build_examples(
                     out.append(SelfPlayExample(
                         aug_planes, aug_pi.astype(np.float32), z,
                         side=int(side), ply=int(ply_at_capture),
-                        aux_pi=None, ownership=None,
+                        aux_pi=None, ownership=None, vct=None,
                     ))
         else:
-            # One or both per-cell targets present: carry them through the
+            # One or more per-cell targets present: carry them through the
             # identical D4 symmetry as planes+pi. Slot order is fixed
-            # [aux_pi, ownership]; a missing target keeps its slot as None so
+            # [aux_pi, ownership, vct]; a missing target keeps its slot as None so
             # the example field stays None (masked out of that loss).
             cell_targets = []
-            aux_slot = ownership_slot = None
+            aux_slot = ownership_slot = vct_slot = None
             if aux_pi is not None:
                 aux_slot = len(cell_targets)
                 cell_targets.append(aux_pi)
             if ownership is not None:
                 ownership_slot = len(cell_targets)
                 cell_targets.append(ownership)
+            if vct is not None:
+                vct_slot = len(cell_targets)
+                cell_targets.append(vct)
             with _profile_timer(profile, "d4_augment_s"):
                 augmented = list(augment_with_cell_targets(planes, pi, cell_targets))
             for aug_planes, aug_pi, aug_targets in augmented:
@@ -1299,6 +1399,8 @@ def _build_examples(
                                 if aux_slot is not None else None),
                         ownership=(aug_targets[ownership_slot].astype(np.float32)
                                    if ownership_slot is not None else None),
+                        vct=(aug_targets[vct_slot].astype(np.float32)
+                             if vct_slot is not None else None),
                     ))
     else:
         with _profile_timer(profile, "example_create_s"):
@@ -1307,6 +1409,7 @@ def _build_examples(
                 side=int(side), ply=int(ply_at_capture),
                 aux_pi=(aux_pi.astype(np.float32) if aux_pi is not None else None),
                 ownership=(ownership.astype(np.float32) if ownership is not None else None),
+                vct=(vct.astype(np.float32) if vct is not None else None),
             ))
     return out
 
@@ -2066,6 +2169,7 @@ def _generate_games_native(
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
+    record_vct: bool = False,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -2142,6 +2246,14 @@ def _generate_games_native(
             swap2_results.append(swap2_res)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    # Moonshot VCT-defense per-ply targets, kept in LOCKSTEP with `trajectories`:
+    # vct_maps[g_idx][k] is the (N_ACTIONS,) blunder map (or None) for the k-th
+    # RECORDED position of game g_idx. Terminal VCT-terminus one-hot positions are
+    # appended to `trajectories` by the partition (which knows nothing of vct) and
+    # get NO vct_maps entry — they sit at the end, so the finalize loop reads a
+    # None (masked out) for any ply_idx past the vct_maps length. Off (record_vct
+    # False) => never populated, byte-identical to the pre-vct path.
+    vct_maps: list[list] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []
     final_state: dict[int, tuple[np.ndarray, int]] = {}
@@ -2156,6 +2268,7 @@ def _generate_games_native(
         # that side, record the oracle's winning move as a one-hot target).
         # Survivors continue to the normal search below. Default OFF =
         # byte-identical. One bulk-synchronous solve per ply (call-cost law).
+        pending_vct: dict[int, np.ndarray | None] = {}
         if _VCT_TERMINUS_ENABLED:
             planes_list = [g.root_planes() for g in active_games]
             active, active_games = _vct_terminus_partition(
@@ -2163,6 +2276,16 @@ def _generate_games_native(
                 trajectories, completed, final_state, record_ownership, profile)
             if not active:
                 break
+            # Moonshot VCT-defense labeler: over the SURVIVING positions, one bulk
+            # escape-solve per ply produces each survivor's per-cell blunder map,
+            # attached to THIS ply's recorded position below (side-to-move = me).
+            if record_vct:
+                with _profile_timer(profile, "vct_defense_s"):
+                    surv_planes = [g.root_planes() for g in active_games]
+                    vmaps, vmasks = _vct_defense_solve(
+                        surv_planes, max_cands=_VCT_DEFENSE_MAX_CANDS)
+                for k, g_idx in enumerate(active):
+                    pending_vct[g_idx] = vmaps[k] if vmasks[k].any() else None
 
         # Playout-Cap Randomization: decide per-game-per-ply whether this is a
         # full-search (recorded) move or a fast (non-recorded) move. The native
@@ -2242,6 +2365,9 @@ def _generate_games_native(
                         planes = g.root_planes()
                     with _profile_timer(profile, "trajectory_append_s"):
                         trajectories[g_idx].append((planes, pi.copy(), side))
+                        if record_vct:
+                            # Keep vct_maps in lockstep with the recorded traj.
+                            vct_maps[g_idx].append(pending_vct.get(g_idx))
 
                 with _profile_timer(profile, "sample_action_s"):
                     # Search-contempt (Derby 'x-search-contempt', bead derby-qoq):
@@ -2302,13 +2428,18 @@ def _generate_games_native(
                 traj, outcome_for_black, vcf_teacher=vcf_teacher,
                 vct_teacher=vct_teacher, defense_teacher=defense_teacher,
                 profile=profile)
+            vmaps = vct_maps[g_idx] if record_vct else None
             for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
                 pi, z = finalized[ply_idx]
                 ply_at_capture = n_initial + ply_idx
                 aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+                # Per-ply vct map (None for terminal VCT-terminus positions that
+                # sit past the recorded-position count → masked out of the loss).
+                vct = (vmaps[ply_idx]
+                       if vmaps is not None and ply_idx < len(vmaps) else None)
                 examples.extend(_build_examples(
                     planes, pi, z, side, ply_at_capture, aux_pi,
-                    augment_symmetries, profile, ownership=ownership,
+                    augment_symmetries, profile, ownership=ownership, vct=vct,
                 ))
             records.append(GameRecord(
                 examples=examples,
@@ -2355,6 +2486,7 @@ def generate_games(
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
+    record_vct: bool = False,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
@@ -2521,6 +2653,7 @@ def generate_games(
             defense_teacher=defense_teacher,
             record_aux=record_aux,
             record_ownership=record_ownership,
+            record_vct=record_vct,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
@@ -2548,6 +2681,9 @@ def generate_games(
     # Per-game trajectory of (planes, pi, side_to_move_at_that_ply)
     # side_to_move is encoded as 0 for the player who moved first ("black"), 1 for the other.
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    # Moonshot VCT-defense per-ply targets, in LOCKSTEP with `trajectories` (see
+    # the native path for the alignment contract). Off => never populated.
+    vct_maps: list[list] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []  # (game_idx, outcome_for_black, plies)
     final_state: dict[int, tuple[np.ndarray, int]] = {}
@@ -2557,6 +2693,7 @@ def generate_games(
         active_games = [games[i] for i in active]
         # VCT-terminus (issue #98): same batched pre-search test as the native
         # path; the Python game exposes planes via g.root.state.to_planes().
+        pending_vct: dict[int, np.ndarray | None] = {}
         if _VCT_TERMINUS_ENABLED:
             planes_list = [g.root.state.to_planes() for g in active_games]
             active, active_games = _vct_terminus_partition(
@@ -2564,6 +2701,15 @@ def generate_games(
                 trajectories, completed, final_state, record_ownership, profile)
             if not active:
                 break
+            # Moonshot VCT-defense labeler over the surviving positions (one bulk
+            # escape-solve per ply); attached to this ply's recorded position.
+            if record_vct:
+                surv_planes = [g.root.state.to_planes() for g in active_games]
+                vmaps_ply, vmasks_ply = _vct_defense_solve(
+                    surv_planes, max_cands=_VCT_DEFENSE_MAX_CANDS)
+                for k, g_idx in enumerate(active):
+                    pending_vct[g_idx] = (
+                        vmaps_ply[k] if vmasks_ply[k].any() else None)
         if wave_size > 1:
             run_batched_mcts_waves(
                 active_games,
@@ -2595,6 +2741,8 @@ def generate_games(
             n_initial = initial_plies[g_idx]
             side = (n_initial + ply) % 2
             trajectories[g_idx].append((g.root.state.to_planes(), pi.copy(), side))
+            if record_vct:
+                vct_maps[g_idx].append(pending_vct.get(g_idx))
 
             action = _sample_action(pi, rng)
             g.advance_root(action)
@@ -2641,13 +2789,18 @@ def generate_games(
             traj, outcome_for_black, vcf_teacher=vcf_teacher,
             vct_teacher=vct_teacher, defense_teacher=defense_teacher,
             profile=profile)
+        vmaps = vct_maps[g_idx] if record_vct else None
         for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
             pi, z = finalized[ply_idx]
             ply_at_capture = n_initial + ply_idx
             aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            # Per-ply vct map (None for terminal VCT-terminus positions past the
+            # recorded-position count → masked out of the loss).
+            vct = (vmaps[ply_idx]
+                   if vmaps is not None and ply_idx < len(vmaps) else None)
             examples.extend(_build_examples(
                 planes, pi, z, side, ply_at_capture, aux_pi,
-                augment_symmetries, None, ownership=ownership,
+                augment_symmetries, None, ownership=ownership, vct=vct,
             ))
         records.append(GameRecord(
             examples=examples, plies=plies, outcome=outcome_for_black,

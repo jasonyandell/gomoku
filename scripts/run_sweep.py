@@ -1899,6 +1899,42 @@ CELLS: dict[str, Cell] = {
                 extra_worker_args=["--value-discount", "0.98",
                                    "--vct-terminus", "--vct-terminus-budget", "50"],
                 extra_train_args=["--sgd-steps-per-epoch", "64"]),
+    # MOONSHOT (issue: VCT-defense aux head). VERBATIM clone of 'vctsci-terminus'
+    # (the from-scratch VCT-terminus recipe: small/stem1/global-pool + value-
+    # discount 0.98 + the WL2 stack [ema 0.99 / grad-accum 4 / league mix 0.4/0.1 /
+    # poll jitter] + sgd-steps-per-epoch 64 + --vct-terminus budget 50) PLUS the
+    # champion levers, MINUS the two that can't run here: gumbel-root is OMITTED
+    # (incompatible with --vct-terminus, which raises in the Gumbel gen paths) and
+    # --vcf-teacher is OMITTED (its CPU vcf solver is RETIRED -> CpuSolverRetired
+    # at runtime; and it is inert under the terminus anyway since VCF ⊆ VCT — the
+    # terminus already stamps the offensive forced win via the GPU oracle). So the
+    # surviving Bruce levers are value-discount 0.98 + global-pool + the WL2 stack
+    # + sgd-steps-64 (all already in vctsci-terminus). The moonshot lever
+    # itself: --record-vct on the worker (per-ply escape-search labeler emits the
+    # per-cell VCT-blunder map) + --aux-vct-weight 0.1 on the trainer (the dense
+    # 81-way defense head trained with masked BCE against that 0/1 map). n_workers
+    # 4, epochs 1_000_000 (run to a wall cap, not an epoch count). Lane-isolated
+    # outputs. With --aux-vct-weight 0 this cell would be byte-identical to
+    # vctsci-terminus; the head/labeler are the only additions.
+    "moonshot": Cell("moonshot", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=4, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True,
+                extra_worker_args=["--value-discount", "0.98",
+                                   "--vct-terminus", "--vct-terminus-budget", "50",
+                                   "--record-vct"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--aux-vct-weight", "0.1"]),
     # 'x-vct' = extend the exact OFFENSIVE teacher from VCF to VCT (bead derby-6us /
     # derby-rxf). VERBATIM clone of derby-v7-mate-discount (the reigning champion:
     # gumbel-root + value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1
