@@ -34,7 +34,12 @@ def main() -> int:
     ap.add_argument("--sims", type=int, default=100)
     ap.add_argument("--c-puct", type=float, default=1.5)
     ap.add_argument("--opening-plies", type=int, default=4)
-    ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--workers", type=int, default=8,
+                    help="legacy pool size; ignored under the arena (default)")
+    ap.add_argument("--no-arena", action="store_true",
+                    help="use the legacy process-pool match instead of the "
+                         "batched arena (#106; same openings per seed, not "
+                         "byte-identical outcomes)")
     ap.add_argument("--device", type=str, default="cpu")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=str, default="sweep_runs/derby_v4/round_robin.json")
@@ -51,7 +56,7 @@ def main() -> int:
         print("need >= 2 --model entries"); return 2
 
     print(f"Round-robin: {names}  ({args.games} games/pair, sims={args.sims}, "
-          f"workers={args.workers})\n")
+          f"{'arena' if not args.no_arena else f'workers={args.workers}'})\n")
 
     # pairwise: delta[a][b] = a's Δelo vs b (and delta[b][a] = -that)
     delta = {a: {} for a in names}
@@ -62,7 +67,7 @@ def main() -> int:
             recipe_label=f"{a}-vs-{b}", window_epochs=0, wall_secs=None,
             n_games=args.games, sims=args.sims, c_puct=args.c_puct,
             seed=args.seed, device=args.device, n_workers=args.workers,
-            opening_plies=args.opening_plies,
+            opening_plies=args.opening_plies, use_arena=not args.no_arena,
         )
         delta[a][b] = res.delta_elo
         delta[b][a] = -res.delta_elo

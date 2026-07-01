@@ -33,6 +33,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from gomoku.arena import NetAgent, PickerAgent, play_matches_batched
 from gomoku.eval import mcts_picker, play_match_parallel, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
@@ -83,6 +84,14 @@ def parse_args() -> argparse.Namespace:
                         "spawn-start pool overhead ~0.5-1s per cycle, worth it for "
                         "n_games >= ~8 or when adding higher lookahead depths.")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--no-arena", action="store_true",
+                   help="Disable the batched arena (#106) and use the legacy "
+                        "sequential / process-pool paths. The arena (default) "
+                        "plays all games of a matchup concurrently with leaf "
+                        "evals batched across games — statistically equivalent, "
+                        "not byte-identical. The arena is auto-disabled when any "
+                        "eval lever below is set (they are not ported to the "
+                        "wave-batched search yet).")
     p.add_argument("--eval-vcf-nodes", type=int, default=0,
                    help="Eval-time root VCF overlay node budget. Default 0 = OFF "
                         "(byte-identical to the pre-lever path: no solver call, "
@@ -180,6 +189,23 @@ def main() -> None:
     if not specs:
         raise SystemExit("no baselines configured")
     baseline_pickers = [(raw, s, build_player(s)) for raw, s in zip(raw_specs, specs)]
+    # Batched arena (#106): default ON when every eval lever is at its OFF
+    # default (the levers live in mcts_picker's per-game search, which the
+    # wave-batched arena search doesn't implement yet).
+    levers_off = (
+        args.eval_vcf_nodes == 0
+        and args.fpu_reduction_c == 0.0
+        and not args.reuse_tree
+        and not args.proven_prop
+        and args.proven_vcf_leaf_nodes == 0
+        and args.vct_finish_nodes == 0
+    )
+    use_arena = not args.no_arena and levers_off
+    if not args.no_arena and not levers_off:
+        print("[eval] arena disabled: an eval lever (--eval-vcf-nodes / "
+              "--fpu-reduction-c / --reuse-tree / --proven-prop / "
+              "--proven-vcf-leaf-nodes / --vct-finish-nodes) is set; "
+              "falling back to the legacy path", flush=True)
     out_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint_path).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = out_dir / "eval_results.jsonl"
@@ -212,10 +238,21 @@ def main() -> None:
         # the baselines we have anchor Elos for. Fed to implied_elo at the end
         # of the cycle.
         elo_matches: list[tuple[float, float, int]] = []
+        arena_net = (
+            NetAgent(evaluator, sims=args.sims, c_puct=args.c_puct, label="model")
+            if use_arena else None
+        )
         for spec_idx, (raw_spec, spec, baseline_picker) in enumerate(baseline_pickers):
             t0 = time.perf_counter()
             match_seed = args.seed + epoch_tag * 1000 + spec_idx
-            if args.n_workers > 1:
+            if use_arena:
+                res = play_matches_batched(
+                    arena_net,
+                    PickerAgent(baseline_picker, label=spec.label()),
+                    n_games=args.n_games,
+                    seed=match_seed,
+                )
+            elif args.n_workers > 1:
                 if args.vct_finish_nodes > 0:
                     raise SystemExit(
                         "--vct-finish-nodes is sequential-only for now: the MLX "

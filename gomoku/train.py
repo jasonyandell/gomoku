@@ -1098,6 +1098,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--eval-sims", type=int, default=50,
                    help="MCTS sims used by the model during eval matches")
+    p.add_argument("--no-eval-arena", action="store_true",
+                   help="Disable the batched eval arena (#106) for the in-trainer "
+                        "eval and use the legacy one-game-at-a-time path. The "
+                        "arena (default) plays each matchup's games concurrently "
+                        "with leaf evals batched across games — statistically "
+                        "equivalent winrates, not byte-identical. Auto-disabled "
+                        "when any eval lever (--eval-vcf-nodes, --fpu-reduction-c, "
+                        "--reuse-tree, --proven-prop, --proven-vcf-leaf-nodes) "
+                        "is set, since those live in the per-game search the "
+                        "wave-batched arena doesn't implement.")
     p.add_argument("--eval-baselines", type=str,
                    default="random,heuristic",
                    help="comma-separated player specs played every eval cycle. "
@@ -2749,15 +2759,36 @@ def main() -> None:
             eval_counter += 1
             eval_start = time.time()
             eval_evaluator = make_torch_evaluator(model, device)
-            model_picker = mcts_picker(eval_evaluator,
-                                       n_simulations=args.eval_sims,
-                                       c_puct=args.c_puct,
-                                       eval_vcf_nodes=args.eval_vcf_nodes,
-                                       eval_vcf_depth=args.eval_vcf_depth,
-                                       fpu_reduction_c=args.fpu_reduction_c,
-                                       reuse_tree=args.reuse_tree,
-                                       proven_prop=args.proven_prop,
-                                       proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes)
+            # Batched arena (#106): all of a matchup's games live at once,
+            # leaf evals batched across games (the self-play regime) instead
+            # of one game at a time at batch 1. Only when every eval lever is
+            # at its OFF default — the levers live in mcts_picker's per-game
+            # search, which the wave-batched arena search doesn't implement.
+            eval_levers_off = (
+                args.eval_vcf_nodes == 0
+                and args.fpu_reduction_c == 0.0
+                and not args.reuse_tree
+                and not args.proven_prop
+                and args.proven_vcf_leaf_nodes == 0
+            )
+            use_eval_arena = not args.no_eval_arena and eval_levers_off
+            if use_eval_arena:
+                from gomoku.arena import NetAgent, PickerAgent, play_matches_batched
+                arena_net = NetAgent(eval_evaluator,
+                                     sims=args.eval_sims,
+                                     c_puct=args.c_puct,
+                                     label="model")
+                model_picker = None
+            else:
+                model_picker = mcts_picker(eval_evaluator,
+                                           n_simulations=args.eval_sims,
+                                           c_puct=args.c_puct,
+                                           eval_vcf_nodes=args.eval_vcf_nodes,
+                                           eval_vcf_depth=args.eval_vcf_depth,
+                                           fpu_reduction_c=args.fpu_reduction_c,
+                                           reuse_tree=args.reuse_tree,
+                                           proven_prop=args.proven_prop,
+                                           proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes)
 
             run_slow = bool(slow_pickers) and (eval_counter % args.eval_slow_every == 0)
             batches = [("fast", fast_pickers, args.eval_baseline_games)]
@@ -2767,11 +2798,19 @@ def main() -> None:
             for batch_label, pickers, n_games in batches:
                 for spec_idx, (spec, baseline_picker) in enumerate(pickers):
                     m_start = time.time()
-                    res = play_match_pickers(
-                        model_picker, baseline_picker,
-                        n_games=n_games,
-                        seed=args.seed + epoch * 1000 + spec_idx,
-                    )
+                    if use_eval_arena:
+                        res = play_matches_batched(
+                            arena_net,
+                            PickerAgent(baseline_picker, label=spec.label()),
+                            n_games=n_games,
+                            seed=args.seed + epoch * 1000 + spec_idx,
+                        )
+                    else:
+                        res = play_match_pickers(
+                            model_picker, baseline_picker,
+                            n_games=n_games,
+                            seed=args.seed + epoch * 1000 + spec_idx,
+                        )
                     key = _baseline_log_key(spec)
                     log[f"eval/{key}_winrate"] = res.win_rate
                     log[f"eval/{key}_wins"] = res.wins
