@@ -1935,6 +1935,59 @@ CELLS: dict[str, Cell] = {
                                    "--record-vct"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--aux-vct-weight", "0.1"]),
+    # MOONSHOT-BRUCE-IDX2 (issue #102 pivot). The from-scratch 9x9 'moonshot'
+    # learned the VCT-defense REPRESENTATION (vct_loss dropped) but never changed
+    # self-play behavior — plies stayed pinned at the 9x9 self-play ceiling, so the
+    # dense defense gradient had no wound to bite. Pivot: WARM-START the 15x15
+    # champion "Bruce" (128x10, sweep_runs/g15_128x10_bigbuf_e588_best.pt — same
+    # zrjfwny2 run as eval502, epoch-605 best-eval WEIGHTS; a fresh buffer is
+    # correct for the restricted distribution) + LAYER the VCT-defense head on
+    # (load_checkpoint(..., force_aux_vct=True), driven by --aux-vct-weight > 0 on
+    # the resume path) + RESTRICT self-play to the SINGLE idx-2 opener (the "Bruce-
+    # Lee board", white to move) — the one position where Bruce's measured white-
+    # defense hole lives (black ~42% / white 0/12 vs Rapfi). Concentrating every
+    # self-play game on that opener puts the whole defense gradient on the wound.
+    #
+    # RECIPE = Bruce's reigning G15-128x10-bigbuf champion recipe (128x10 large +
+    # 1.5M packed buffer + global-pool + value-discount 0.98 + the WL2 stack: ema
+    # 0.99 / grad-accum 4 / league mix 0.4/0.1/100 / poll jitter 2-8s + sgd-steps-
+    # per-epoch 64) with FOUR deltas, all of which are byte-identical-off:
+    #   (1) fixed_openings=True — self-play starts from the fixed BALANCED book;
+    #       restrict to idx-2 ONLY by exporting GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8
+    #       in the LAUNCH ENV (drops all but book index 2). Board size MUST be 15.
+    #   (2) VCT-defense labeler+head: --vct-terminus --vct-terminus-budget 50 +
+    #       --record-vct on the worker, --aux-vct-weight 0.1 on the trainer.
+    #   (3) gumbel-root REMOVED — --vct-terminus raises in the Gumbel gen paths
+    #       (same constraint the from-scratch moonshot cell documents). No vcf-
+    #       teacher (its CPU solver is retired; inert under the terminus anyway).
+    #   (4) --vct-defense-max-cands: the 15x15 escape-search breadth cap (up to 225
+    #       children/ply, ~3x the 9x9 cost). 0 = test every empty cell. Set from the
+    #       throughput smoke — bump to a K (e.g. 32) ONLY if gen starves (reuse
+    #       blowup). Left at 0 here; add "--vct-defense-max-cands","32" to
+    #       extra_worker_args if the smoke says the full search starves gen.
+    # LAUNCH (same-size resume; force_aux_vct layers the head onto Bruce):
+    #   GOMOKU_BOARD_SIZE=15 GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8 \
+    #     uv run python scripts/run_sweep.py --cell moonshot-bruce-idx2 \
+    #       --resume sweep_runs/g15_128x10_bigbuf_e588_best.pt
+    "moonshot-bruce-idx2": Cell("moonshot-bruce-idx2-board15", sgd_per_game=1.0,
+                buffer_size=1_500_000, games_per_epoch=64,
+                size="large", stem_padding=1, n_simulations=100,
+                n_workers=4, wave_size=64, games_per_batch=8, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100, save_every=5,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=False, fixed_openings=True,
+                extra_worker_args=["--value-discount", "0.98",
+                                   "--vct-terminus", "--vct-terminus-budget", "50",
+                                   "--record-vct"],
+                extra_train_args=["--sgd-steps-per-epoch", "64", "--pack-buffer",
+                                  "--aux-vct-weight", "0.1"]),
     # 'x-vct' = extend the exact OFFENSIVE teacher from VCF to VCT (bead derby-6us /
     # derby-rxf). VERBATIM clone of derby-v7-mate-discount (the reigning champion:
     # gumbel-root + value-discount 0.98 + global-pool + gumbel-m 16 + the 0.4/0.1

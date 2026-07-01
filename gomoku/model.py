@@ -632,6 +632,7 @@ def load_checkpoint(
     device: torch.device | str = "cpu",
     *,
     expect_board_size: int | None = BOARD_SIZE,
+    force_aux_vct: bool = False,
 ) -> tuple[GomokuNet, dict]:
     """Load a checkpoint into a freshly built model.
 
@@ -642,6 +643,14 @@ def load_checkpoint(
     a mismatch raises ValueError instead of producing a model whose heads
     disagree with every other shape in the process. Pass
     ``expect_board_size=None`` to skip the check (offline inspection only).
+
+    Warm-start head layering: ``force_aux_vct=True`` builds the model WITH the
+    aux VCT-defense head even when the checkpoint predates it (aux_vct absent /
+    False in the saved config), so the moonshot head can be layered onto an
+    older champion (e.g. Bruce, 15x15) on a same-size ``--resume``. The core
+    loads strict; the freshly-initialized ``vct_*`` params splice in via the
+    same path as the swap2 choice head. A checkpoint that already carries the
+    head loads it exactly (no fallback). Off (default) => byte-identical.
     """
     payload = torch.load(path, map_location=device, weights_only=False)
     saved_cfg = dict(payload["model_config"])
@@ -658,6 +667,11 @@ def load_checkpoint(
     # config default is True) and warm-start the core strict + fall back the
     # choice head to its fresh init below — rather than disabling the head.
     saved_cfg.setdefault("choice_head", ModelConfig.choice_head)
+    # Warm-start head layering: force the aux VCT-defense head on for a resume
+    # onto a champion that predates it (its saved config has aux_vct absent /
+    # False). The `vct_*` splice below then fires and fills the fresh head.
+    if force_aux_vct:
+        saved_cfg["aux_vct"] = True
     if expect_board_size is not None and saved_cfg["board_size"] != expect_board_size:
         raise ValueError(
             f"checkpoint {path!r} was trained at board size "

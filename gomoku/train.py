@@ -1414,7 +1414,12 @@ def main() -> None:
     total_games = 0
     wandb_run_id = None
     if args.resume:
-        model, payload = load_checkpoint(args.resume, device=device)
+        # force_aux_vct=vct_on layers the moonshot VCT-defense head onto a
+        # champion that predates it (e.g. Bruce, 15x15) on a same-size resume:
+        # the core loads strict, the fresh vct_* head splices in. Without this
+        # the resumed model would lack the head that --aux-vct-weight > 0 trains.
+        model, payload = load_checkpoint(
+            args.resume, device=device, force_aux_vct=vct_on)
         start_epoch = int(payload.get("epoch", 0))
         total_games = int(payload.get("total_games", 0))
         wandb_run_id = payload.get("wandb_run_id")
