@@ -137,6 +137,17 @@ def parse_args() -> argparse.Namespace:
                         "True the leaf's proven_value is set to +1 and "
                         "propagates upward via --proven-prop. Requires "
                         "--proven-prop to have any effect.")
+    p.add_argument("--vct-finish-nodes", type=int, default=0,
+                   help="Eval-time GPU-VCT FINISHER node budget (issue #99). "
+                        "Default 0 = OFF (byte-identical; no MLX import). When >0, "
+                        "before MCTS picks the eval picker runs a batched "
+                        "solve_vct_mega_bb from the root; if the side to move has a "
+                        "forced VCT it plays the oracle's winning move, driving a "
+                        "detected VCT to a REAL five-in-a-row rote — so a VCT-terminus "
+                        "net wins genuine games vs any baseline. cap50 (=50) matches "
+                        "the trained detection threshold. EVAL-ONLY; SEQUENTIAL-ONLY "
+                        "for now (requires --n-workers 1: the MLX oracle under "
+                        "multiprocessing fork is unvalidated).")
     return p.parse_args()
 
 
@@ -192,6 +203,7 @@ def main() -> None:
             reuse_tree=args.reuse_tree,
             proven_prop=args.proven_prop,
             proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes,
+            vct_finish_nodes=args.vct_finish_nodes,
         )
 
         log: dict = {"eval_worker/epoch_evaluated": epoch_tag}
@@ -204,6 +216,11 @@ def main() -> None:
             t0 = time.perf_counter()
             match_seed = args.seed + epoch_tag * 1000 + spec_idx
             if args.n_workers > 1:
+                if args.vct_finish_nodes > 0:
+                    raise SystemExit(
+                        "--vct-finish-nodes is sequential-only for now: the MLX "
+                        "oracle under multiprocessing fork is unvalidated (Metal "
+                        "compiler wedge risk). Re-run with --n-workers 1.")
                 # Parallel: spawn pool, each worker reloads model from disk
                 # and reconstructs the opponent picker from `raw_spec`.
                 res = play_match_parallel(

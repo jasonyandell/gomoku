@@ -93,7 +93,11 @@ def build_player(spec: PlayerSpec) -> Player:
             raise SystemExit(f"model spec needs checkpoint=PATH: {spec.raw!r}")
         sims = int(spec.kwargs.get("sims", "100"))
         c_puct = float(spec.kwargs.get("c_puct", "1.5"))
-        key = (os.path.abspath(checkpoint), sims, c_puct)
+        # VCT-finisher (issue #99): policy to the VCT, then the GPU oracle hammers
+        # it out rote to a real five. vct_finish=50 (cap50) = the trained threshold;
+        # 0 (default) = OFF. Lets a VCT-terminus net win real games vs any opponent.
+        vct_finish = int(spec.kwargs.get("vct_finish", "0"))
+        key = (os.path.abspath(checkpoint), sims, c_puct, vct_finish)
         if key not in _model_cache:
             # Lazy torch import — keeps `python -m gomoku.match random vs heuristic`
             # zero-torch.
@@ -105,7 +109,10 @@ def build_player(spec: PlayerSpec) -> Player:
             model, _ = load_checkpoint(checkpoint, device=device)
             model = fuse_model_for_inference(model)
             evaluator = make_torch_evaluator(model, device)
-            _model_cache[key] = mcts_picker(evaluator, n_simulations=sims, c_puct=c_puct)
+            _model_cache[key] = mcts_picker(
+                evaluator, n_simulations=sims, c_puct=c_puct,
+                vct_finish_nodes=vct_finish,
+            )
         return _model_cache[key]
     if spec.kind == "external":
         # Lazy import — keeps zero-torch / zero-subprocess paths clean.
