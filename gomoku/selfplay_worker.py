@@ -353,6 +353,21 @@ def parse_args() -> argparse.Namespace:
                         "ownership field recorded. Must match the trainer's "
                         "--aux-ownership-weight > 0 so the buffer/head pick the "
                         "target up.")
+    p.add_argument("--record-vct", action="store_true", default=False,
+                   help="Moonshot aux VCT-defense head: for each recorded "
+                        "position run the per-ply escape-search labeler (one bulk "
+                        "solve/ply over the surviving positions) and record a "
+                        "per-cell 0/1 'blunder map' (1 where playing there walks "
+                        "the side to move into a forced VCT for the opponent). "
+                        "Requires --vct-terminus (the labeler runs at the terminus "
+                        "partition). Default off = no vct field recorded. Must "
+                        "match the trainer's --aux-vct-weight > 0.")
+    p.add_argument("--vct-defense-max-cands", type=int, default=0,
+                   help="Breadth cap for the --record-vct labeler: 0 (default) "
+                        "tests EVERY legal empty cell as a blunder candidate; "
+                        "K > 0 caps to the K empty cells nearest existing stones "
+                        "(a per-ply gen-cost lever). Only matters with "
+                        "--record-vct.")
     p.add_argument("--profile-output", type=str, default=None,
                    help="Write a JSON timing profile for bounded worker runs. "
                         "The profile separates native_search_batch, evaluator, "
@@ -813,6 +828,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             defense_teacher=args.defense_teacher,
             record_aux=getattr(args, "record_aux", False),
             record_ownership=getattr(args, "record_ownership", False),
+            record_vct=getattr(args, "record_vct", False),
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
@@ -944,7 +960,8 @@ def main() -> None:
     configure_vct_teacher(args.vct_max_depth, args.vct_max_nodes)
     # VCT-terminus (issue #98): no-op unless --vct-terminus is set (gated purely
     # on the process global; the default-off path never imports MLX).
-    configure_vct_terminus(enabled=args.vct_terminus, budget=args.vct_terminus_budget)
+    configure_vct_terminus(enabled=args.vct_terminus, budget=args.vct_terminus_budget,
+                           defense_max_cands=getattr(args, "vct_defense_max_cands", 0))
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
     # policy_mode (#43): switch to stamping the saving move on the policy head.

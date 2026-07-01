@@ -60,6 +60,14 @@ class ModelConfig:
     # dropped at inference, untouched by fuse_model_for_inference. Gated on by the
     # trainer flag --aux-ownership-weight > 0.
     aux_ownership: bool = False
+    # Moonshot auxiliary VCT-defense head ("VCT-blunder map"). When False
+    # (default), NOT constructed -> byte-identical state_dict / param count /
+    # inference graph. When True, a dense head off the SAME shared tower predicts,
+    # per board cell, whether the side to move playing there walks into a forced
+    # VCT for the opponent (81-way, one 0/1-ish logit per cell). TRAINING-ONLY,
+    # dropped at inference, untouched by fuse_model_for_inference. Structural twin
+    # of the ownership head; gated on by the trainer flag --aux-vct-weight > 0.
+    aux_vct: bool = False
     # KataGo-style global pooling (Derby v4 "Whole-board" lever). When False
     # (default), the residual tower is the exact current arch and the
     # state_dict is byte-identical. When True, the LATTER HALF of residual
@@ -332,6 +340,21 @@ class GomokuNet(nn.Module):
             self.ownership_bn = nn.BatchNorm2d(cfg.value_filters)
             self.ownership_fc = nn.Linear(cfg.value_filters * spatial * spatial, n_actions)
 
+        # Moonshot auxiliary VCT-defense head — a dense head off the SAME shared
+        # tower output `h`. Predicts per-cell (81-way) whether the side to move
+        # playing there walks into a forced VCT for the opponent (a 0/1 "blunder
+        # map"; raw per-cell logits, the loss is a masked BCE-with-logits against
+        # the 0/1 target). Structural twin of the ownership head (1x1 conv -> bn ->
+        # relu -> flatten -> linear to N_ACTIONS). Constructed ONLY when
+        # cfg.aux_vct is set, so the off-case state_dict / param count / inference
+        # graph are byte-identical to a model without it. TRAINING-ONLY: never run
+        # by forward() unless return_vct=True, never touched by
+        # fuse_model_for_inference. Independent of the other aux heads.
+        if cfg.aux_vct:
+            self.vct_conv = nn.Conv2d(c, cfg.value_filters, 1, bias=False)
+            self.vct_bn = nn.BatchNorm2d(cfg.value_filters)
+            self.vct_fc = nn.Linear(cfg.value_filters * spatial * spatial, n_actions)
+
         # Swap2 choice head — a single Linear off the value head's penultimate
         # hidden activation (value_fc1's `value_hidden`-wide output), emitting
         # N_CHOICES (=3) logits over the choice slots. It taps the SAME shared
@@ -350,6 +373,7 @@ class GomokuNet(nn.Module):
         *,
         return_aux: bool = False,
         return_ownership: bool = False,
+        return_vct: bool = False,
         return_value_logits: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         """Forward pass. Returns (policy, value) by default.
@@ -367,11 +391,13 @@ class GomokuNet(nn.Module):
             opponent-reply logits;
           * return_ownership=True (requires cfg.aux_ownership) appends the
             per-cell ownership logits;
+          * return_vct=True (requires cfg.aux_vct) appends the per-cell
+            VCT-defense (blunder-map) logits;
           * return_value_logits=True (requires cfg.value_head in {"wdl","hlgauss"})
             appends the raw (B, 3) {win,draw,loss} OR (B, N) HL-Gauss bin logits
             for the value cross-entropy loss.
         The output tuple is ordered (policy, value, [aux_policy], [ownership],
-        [value_logits]) with each optional tensor present iff its flag is set:
+        [vct], [value_logits]) with each optional tensor present iff its flag is set:
           none -> (p, v)                          [byte-identical default]
           aux only -> (p, v, aux_policy)          [unchanged 3-tuple contract]
         Only the trainer passes these flags; self-play and eval call forward(x)
@@ -419,6 +445,15 @@ class GomokuNet(nn.Module):
             o = F.relu(self.ownership_bn(self.ownership_conv(h)))
             o = self.ownership_fc(o.flatten(1))
             out = out + (o,)
+        if return_vct:
+            if not self.cfg.aux_vct:
+                raise RuntimeError(
+                    "forward(return_vct=True) requires cfg.aux_vct=True "
+                    "(VCT-defense head was not constructed)"
+                )
+            vlog = F.relu(self.vct_bn(self.vct_conv(h)))
+            vlog = self.vct_fc(vlog.flatten(1))
+            out = out + (vlog,)
         if return_value_logits:
             if self.cfg.value_head not in ("wdl", "hlgauss"):
                 raise RuntimeError(
@@ -477,6 +512,7 @@ def build_model(
     stem_padding: int | None = None,
     aux_opponent_reply: bool = False,
     aux_ownership: bool = False,
+    aux_vct: bool = False,
     global_pool: bool | int | None = None,
     value_head: str | None = None,
     value_hlgauss_bins: int | None = None,
@@ -495,6 +531,8 @@ def build_model(
         overrides["aux_opponent_reply"] = True
     if aux_ownership:
         overrides["aux_ownership"] = True
+    if aux_vct:
+        overrides["aux_vct"] = True
     if global_pool is not None:
         overrides["global_pool"] = global_pool
     # Only override value_head when an explicit non-default is requested, so the
@@ -639,10 +677,15 @@ def load_checkpoint(
     # strict. A checkpoint that already carries the choice head loads it exactly
     # (no fallback triggered) and round-trips bit-for-bit.
     state = dict(payload["model_state_dict"])
-    if cfg.choice_head:
+    # Splice freshly-initialized CHOICE-head and VCT-defense-head params into the
+    # saved dict for any such key the checkpoint is missing, then load strict. The
+    # choice head predates most champions; the moonshot vct head can be layered on
+    # an OLDER checkpoint (warm-start the core strict, fall the fresh vct head back
+    # to its init). A checkpoint that already carries either head loads it exactly.
+    if cfg.choice_head or cfg.aux_vct:
         model_sd = model.state_dict()
         for key, tensor in model_sd.items():
-            if key.startswith("choice_") and key not in state:
+            if (key.startswith("choice_") or key.startswith("vct_")) and key not in state:
                 state[key] = tensor
     model.load_state_dict(state)
     return model, payload

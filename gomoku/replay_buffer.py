@@ -17,6 +17,7 @@ class ReplayBuffer:
         *,
         aux_opponent_reply: bool = False,
         aux_ownership: bool = False,
+        aux_vct: bool = False,
         cross_game_value: bool = False,
         pack_planes: bool = False,
     ):
@@ -93,6 +94,22 @@ class ReplayBuffer:
         else:
             self.ownership = None
             self.ownership_mask = None
+        # Moonshot VCT-defense target + validity mask. LAZY-ALLOCATED exactly like
+        # the ownership tensors: off (default) => never allocated, so the off-case
+        # buffer RAM/schema is byte-identical. `vct` holds the per-cell 0/1
+        # "blunder map" (1.0 where the side to move playing there walks into a
+        # forced VCT for the opponent; zeros where undefined); `vct_mask` is True
+        # for rows carrying a valid target (vct-off / unlabeled positions are False
+        # => excluded from the masked-BCE vct loss).
+        self.vct_enabled = bool(aux_vct)
+        if self.vct_enabled:
+            self.vct = torch.zeros(
+                (capacity, N_ACTIONS), dtype=torch.float32, device=self.device
+            )
+            self.vct_mask = torch.zeros((capacity,), dtype=torch.bool, device=self.device)
+        else:
+            self.vct = None
+            self.vct_mask = None
         # Cross-game value sidecar (Derby 'position-stats'). LAZY-ALLOCATED like
         # the aux tensors: off (default) => NEVER allocated, so the off-case
         # buffer RAM/schema is byte-identical. When on, each row carries its
@@ -229,6 +246,19 @@ class ReplayBuffer:
                     own_mask_np[j] = True
             own_t = torch.from_numpy(own_np)
             own_mask_t = torch.from_numpy(own_mask_np)
+        if self.vct_enabled:
+            # Build a dense vct-defense-target tensor + validity mask for this add.
+            # examples whose vct is None (vct-undefined / unlabeled) get a zero
+            # target and mask=False, so they never contribute vct gradient.
+            vct_np = np.zeros((n, N_ACTIONS), dtype=np.float32)
+            vct_mask_np = np.zeros((n,), dtype=bool)
+            for j, e in enumerate(examples):
+                vc = getattr(e, "vct", None)
+                if vc is not None:
+                    vct_np[j] = vc
+                    vct_mask_np[j] = True
+            vct_t = torch.from_numpy(vct_np)
+            vct_mask_t = torch.from_numpy(vct_mask_np)
         if self.cross_game_enabled:
             # Compute each example's canonical D4-invariant key ONCE, here at
             # ingest, from the row's current-frame occupancy.
@@ -261,6 +291,9 @@ class ReplayBuffer:
             if self.ownership_enabled:
                 self.ownership[self.head:end].copy_(own_t[i:i + chunk].to(self.device))
                 self.ownership_mask[self.head:end].copy_(own_mask_t[i:i + chunk].to(self.device))
+            if self.vct_enabled:
+                self.vct[self.head:end].copy_(vct_t[i:i + chunk].to(self.device))
+                self.vct_mask[self.head:end].copy_(vct_mask_t[i:i + chunk].to(self.device))
             i += chunk
             self.head = end % self.capacity
             self.size = min(self.size + chunk, self.capacity)
@@ -271,6 +304,7 @@ class ReplayBuffer:
         *,
         return_aux: bool = False,
         return_ownership: bool = False,
+        return_vct: bool = False,
         return_keys: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         if self.size == 0:
@@ -279,7 +313,7 @@ class ReplayBuffer:
         # `_planes_at` is `self.planes[idx]` when packing is OFF (byte-identical)
         # and the unpack-on-sample path when ON; both land float32 on `device`.
         base = (self._planes_at(idx), self.pi[idx], self.z[idx], self.side[idx], self.ply[idx])
-        if not return_aux and not return_ownership and not return_keys:
+        if not return_aux and not return_ownership and not return_vct and not return_keys:
             # Default 5-tuple — byte-identical to the pre-aux signature so every
             # existing caller is untouched.
             return base
@@ -311,6 +345,20 @@ class ReplayBuffer:
                     (batch_size,), dtype=torch.bool, device=self.device
                 )
                 out = out + (zero_own, false_mask)
+        # VCT-defense path: append (vct, vct_mask) under the same off-buffer
+        # fallback contract. Order is always [aux..., ownership..., vct...] and
+        # BEFORE the cross-game keys slot below.
+        if return_vct:
+            if self.vct_enabled:
+                out = out + (self.vct[idx], self.vct_mask[idx])
+            else:
+                zero_vct = torch.zeros(
+                    (batch_size, N_ACTIONS), dtype=torch.float32, device=self.device
+                )
+                false_mask = torch.zeros(
+                    (batch_size,), dtype=torch.bool, device=self.device
+                )
+                out = out + (zero_vct, false_mask)
         # Cross-game keys path: append the sampled rows' canonical (B, 3) uint64
         # key array (numpy, CPU — the relabel read path is a CPU dict lookup).
         # When the lever is off, append None so the caller can no-op cleanly.
@@ -457,6 +505,9 @@ class ReplayBuffer:
         if self.ownership_enabled:
             sd["ownership"] = self.ownership[:self.size].cpu()
             sd["ownership_mask"] = self.ownership_mask[:self.size].cpu()
+        if self.vct_enabled:
+            sd["vct"] = self.vct[:self.size].cpu()
+            sd["vct_mask"] = self.vct_mask[:self.size].cpu()
         return sd
 
     def load_state_dict(self, sd: dict) -> None:
@@ -503,6 +554,17 @@ class ReplayBuffer:
                     self.ownership[:n].zero_()
                     self.ownership_mask[:n].zero_()
                     print(f"replay buffer: ownership target missing from checkpoint, "
+                          f"zero-filled + masked-off {n} slots")
+            # VCT-defense tolerate-missing: same contract as ownership above — old/
+            # off checkpoints contribute no vct gradient until they evict.
+            if self.vct_enabled:
+                if "vct" in sd and "vct_mask" in sd:
+                    self.vct[:n].copy_(sd["vct"][:n].to(self.device))
+                    self.vct_mask[:n].copy_(sd["vct_mask"][:n].to(self.device))
+                else:
+                    self.vct[:n].zero_()
+                    self.vct_mask[:n].zero_()
+                    print(f"replay buffer: vct target missing from checkpoint, "
                           f"zero-filled + masked-off {n} slots")
         if "current_weight_version" in sd:
             self.current_weight_version = int(sd["current_weight_version"])
