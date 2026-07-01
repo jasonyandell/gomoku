@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 import os
+import threading
 import time
 from typing import MutableMapping
 
@@ -140,7 +141,8 @@ def configure_vct_terminus(enabled: bool | None = None,
 
 
 # Sound-world oracle veto (issue #107). When enabled, every self-play ply runs
-# the bulk VCT-defense escape-solve (_vct_defense_solve, FULL breadth) over the
+# the bulk VCT-defense escape-solve (_vct_defense_solve, FULL breadth unless
+# _VETO_MAX_CANDS staged escalation is configured) over the
 # wave and the resulting per-cell blunder map is ACTED ON instead of merely
 # recorded:
 #   * moves proven to lose to a forced opponent VCT are masked OUT of the root
@@ -155,14 +157,85 @@ def configure_vct_terminus(enabled: bool | None = None,
 # Default OFF = byte-identical self-play.
 _ORACLE_VETO_ENABLED = False
 
+# Staged-escalation breadth cap for the VETO's escape-solve (big-board lever).
+# 0 (default) = FULL breadth every ply (the original #107 semantics,
+# byte-identical). K > 0 = stage 1 tests only the K empty cells nearest existing
+# stones (the same _defense_candidate_cells rule as the labeler cap) and vetoes
+# the proven blunders among THEM (conservative-safe: an untested cell is simply
+# never vetoed); the one soundness-critical event — "ALL legal moves lose", the
+# defender terminus — can only be declared at full breadth, so any position
+# whose tested cells are ALL blunders is ESCALATED: its remaining untested legal
+# cells are solved in a second bulk call before the partition runs. The
+# partition condition np.all(vmap[legal] >= 0.5) is automatically sound under
+# partial maps (untested legal cells read 0.0 -> the game survives).
+_VETO_MAX_CANDS = 0
 
-def configure_oracle_veto(enabled: bool | None = None) -> None:
-    """Enable the gen-side oracle veto (process-wide). None leaves it unchanged.
-    Call once before generation. Gating is purely on this global, so the
-    default-off path is byte-identical self-play and never imports MLX."""
-    global _ORACLE_VETO_ENABLED
+# Oracle/search overlap (perf, flag-gated): run the per-ply bulk mega-solve in a
+# background thread WHILE the native MCTS wave searches on MPS, joining before
+# the verdicts are consumed. MLX releases the GIL inside the Metal dispatch and
+# the two libraries drive separate Metal queues, so the smaller of (solve,
+# search) hides almost entirely (measured). NOT byte-identical to the serial
+# order: games the oracle would have terminated pre-search are searched (and
+# discarded) this ply, which changes evaluator batch shapes on firing plies —
+# the same numeric class as a wave-size change; targets/records are unchanged
+# in kind and the flag-on path is deterministic per seed. Default OFF.
+_ORACLE_OVERLAP_ENABLED = False
+
+
+def configure_oracle_veto(enabled: bool | None = None,
+                          max_cands: int | None = None) -> None:
+    """Enable / parameterize the gen-side oracle veto (process-wide). None
+    leaves a field unchanged. Call once before generation. Gating is purely on
+    these globals, so the default-off path is byte-identical self-play and never
+    imports MLX. `max_cands` (0 = full breadth) is the staged-escalation stage-1
+    breadth cap; see _VETO_MAX_CANDS."""
+    global _ORACLE_VETO_ENABLED, _VETO_MAX_CANDS
     if enabled is not None:
         _ORACLE_VETO_ENABLED = bool(enabled)
+    if max_cands is not None:
+        _VETO_MAX_CANDS = int(max_cands)
+
+
+def configure_oracle_overlap(enabled: bool | None = None) -> None:
+    """Enable the oracle/search overlap (process-wide). None leaves it
+    unchanged. Call once before generation. Native gen path only; see
+    _ORACLE_OVERLAP_ENABLED for the semantics note. Default OFF."""
+    global _ORACLE_OVERLAP_ENABLED
+    if enabled is not None:
+        _ORACLE_OVERLAP_ENABLED = bool(enabled)
+
+
+def _load_mega_solver():
+    """Lazy-import the MLX mega VCT solver (one-time Metal compile on first
+    call; coexists with the PyTorch/MPS evaluator in-process, verified)."""
+    global _vct_terminus_solver
+    if _vct_terminus_solver is None:
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+        _vct_terminus_solver = solve_vct_mega_bb
+    return _vct_terminus_solver
+
+
+_MEGA_WARMED = False
+
+
+def _warm_mega_solver() -> None:
+    """One tiny synchronous solve so the MLX import + Metal kernel compile
+    happen on the MAIN thread before any background-thread solve (overlap
+    mode). Idempotent, ~0.2s once per process."""
+    global _MEGA_WARMED
+    if not _MEGA_WARMED:
+        solver = _load_mega_solver()
+        solver(np.zeros((1, 2, BOARD_SIZE, BOARD_SIZE), dtype=bool),
+               max_nodes=1, return_move=True)
+        _MEGA_WARMED = True
+
+
+def _terminus_boards(arrs):
+    """(B, 2, N, N) bool solver batch (attacker = plane 0 = side to move,
+    defender = plane HISTORY_PLY) from a list of to_planes() stacks."""
+    attacker = np.stack([a[0] for a in arrs]).astype(bool)
+    defender = np.stack([a[HISTORY_PLY] for a in arrs]).astype(bool)
+    return np.stack([attacker, defender], axis=1)
 
 
 def _vct_terminus_solve(planes_list):
@@ -173,16 +246,9 @@ def _vct_terminus_solve(planes_list):
     (B,) bool = the side to move has a forced VCT; move (B,) int = the oracle's
     winning first move (flat index, -1 where no win). ONE bulk-synchronous MLX
     solve — never per-game (the call-cost law)."""
-    global _vct_terminus_solver
-    if _vct_terminus_solver is None:
-        # Lazy: only a VCT-terminus run pays the MLX import + one-time Metal
-        # compile (coexists with the PyTorch/MPS evaluator in-process, verified).
-        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
-        _vct_terminus_solver = solve_vct_mega_bb
-    attacker = np.stack([np.asarray(p)[0] for p in planes_list]).astype(bool)
-    defender = np.stack([np.asarray(p)[HISTORY_PLY] for p in planes_list]).astype(bool)
-    boards = np.stack([attacker, defender], axis=1)          # (B, 2, N, N)
-    win, _hit, move = _vct_terminus_solver(
+    solver = _load_mega_solver()
+    boards = _terminus_boards([np.asarray(p) for p in planes_list])
+    win, _hit, move = solver(
         boards, max_nodes=_VCT_TERMINUS_BUDGET, return_move=True)
     return np.asarray(win).astype(bool), np.asarray(move).astype(np.int64)
 
@@ -228,57 +294,189 @@ def _vct_defense_solve(planes_list, max_cands=0):
     Returns (maps, masks): maps is a list of (N_ACTIONS,) float32 arrays (1.0 on
     proven-blunder cells, 0.0 elsewhere), masks is a list of (N_ACTIONS,) bool
     arrays marking which cells were evaluated (candidate cells)."""
-    global _vct_terminus_solver
-    if _vct_terminus_solver is None:
-        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
-        _vct_terminus_solver = solve_vct_mega_bb
-    n = BOARD_SIZE
-    maps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in planes_list]
-    masks = [np.zeros(N_ACTIONS, dtype=bool) for _ in planes_list]
-    child_boards: list[np.ndarray] = []      # each (2, N, N) bool
-    owners: list[tuple[int, int]] = []       # (position index, flat cell m)
-    for pos_idx, p in enumerate(planes_list):
-        p = np.asarray(p)
+    solver = _load_mega_solver()
+    arrs = [np.asarray(p) for p in planes_list]
+    maps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in arrs]
+    child_boards, owner_pos, owner_cell, masks = _defense_children(arrs, max_cands)
+    if child_boards is None:
+        return maps, masks
+    win, _hit = solver(
+        child_boards, max_nodes=_VCT_TERMINUS_BUDGET, return_move=False)
+    win = np.asarray(win).astype(bool)
+    for k in np.flatnonzero(win):
+        maps[owner_pos[k]][owner_cell[k]] = 1.0
+    return maps, masks
+
+
+def _stack_children(me: np.ndarray, opp: np.ndarray, cands: np.ndarray):
+    """Vectorized child-board build for ONE position: for each candidate cell m,
+    the child is (attacker=opp, defender=me+m) — the OPPONENT-to-move frame the
+    escape-solve tests. Returns (E, 2, N, N) bool in `cands` order."""
+    E = int(cands.size)
+    n = me.shape[0]
+    child_def = np.repeat(me[None], E, axis=0)
+    child_def.reshape(E, -1)[np.arange(E), cands] = True
+    child_att = np.repeat(opp[None], E, axis=0)
+    return np.stack([child_att, child_def], axis=1).reshape(E, 2, n, n)
+
+
+def _defense_children(arrs, max_cands):
+    """Build the escape-solve child batch for a list of to_planes() stacks.
+
+    Returns (child_boards, owner_pos, owner_cell, masks): child_boards is the
+    concatenated (Sum_L, 2, N, N) bool solver batch (None when no position has
+    any candidate), owner_pos/owner_cell are (Sum_L,) int arrays mapping each
+    child back to (position index, flat cell), and masks is the per-position
+    (N_ACTIONS,) bool "which cells were evaluated" list. Same candidate rule and
+    ordering as the historical per-cell loop, vectorized per position."""
+    masks = [np.zeros(N_ACTIONS, dtype=bool) for _ in arrs]
+    seg_boards: list[np.ndarray] = []
+    seg_pos: list[np.ndarray] = []
+    seg_cell: list[np.ndarray] = []
+    for pos_idx, p in enumerate(arrs):
         me = p[0].astype(bool)               # my stones (plane 0)
         opp = p[HISTORY_PLY].astype(bool)    # opponent stones (plane HISTORY_PLY)
         occupied = me | opp
         empty_flat = np.flatnonzero(~occupied.reshape(-1))
-        cands = _defense_candidate_cells(empty_flat, occupied, max_cands)
-        for m in cands:
-            m = int(m)
-            r, c = divmod(m, n)
-            child_def = me.copy()
-            child_def[r, c] = True           # my stones + m = defender in the child
-            child_boards.append(np.stack([opp, child_def], axis=0))  # attacker=opp
-            owners.append((pos_idx, m))
-            masks[pos_idx][m] = True
-    if not child_boards:
-        return maps, masks
-    batch = np.stack(child_boards, axis=0).astype(bool)   # (Sum_L, 2, N, N)
-    win, _hit = _vct_terminus_solver(
-        batch, max_nodes=_VCT_TERMINUS_BUDGET, return_move=False)
+        cands = np.asarray(
+            _defense_candidate_cells(empty_flat, occupied, max_cands),
+            dtype=np.int64)
+        if cands.size == 0:
+            continue
+        seg_boards.append(_stack_children(me, opp, cands))
+        seg_pos.append(np.full(cands.size, pos_idx, dtype=np.int64))
+        seg_cell.append(cands)
+        masks[pos_idx][cands] = True
+    if not seg_boards:
+        return None, None, None, masks
+    return (np.concatenate(seg_boards, axis=0), np.concatenate(seg_pos),
+            np.concatenate(seg_cell), masks)
+
+
+def _oracle_ply_solve(planes_list, *, want_terminus, want_defense,
+                      defense_max_cands=0, profile=None):
+    """ONE bulk mega-solve per ply for every oracle consumer (the call-cost law:
+    one call costs one tail; two calls cost two tails). Concatenates the
+    attacker-terminus boards (B) and the defense escape-solve children (Sum_L)
+    over the SAME positions into a single solve_vct_mega_bb dispatch and slices
+    the verdicts back out.
+
+    Bit-identical to running _vct_terminus_solve + _vct_defense_solve
+    separately: the megakernel runs one GPU thread per board with a PER-BOARD
+    node budget (`int nodes=0` thread-local), so a board's verdict is
+    independent of batch composition; and `return_move` selects the SAME kernel
+    (the move output is always computed, the flag only gates the Python return).
+    Verified by tests/test_oracle_merged_solve.py and a live-solver probe.
+
+    Returns (win_t, move_t, vmaps, vmasks): the terminus pair is None unless
+    `want_terminus`; the defense pair is None unless `want_defense`. Slot order
+    follows `planes_list`."""
+    solver = _load_mega_solver()
+    B = len(planes_list)
+    with _profile_timer(profile, "oracle_build_s"):
+        arrs = [np.asarray(p) for p in planes_list]
+        segs: list[np.ndarray] = []
+        if want_terminus:
+            segs.append(_terminus_boards(arrs))
+        child_boards = owner_pos = owner_cell = masks = None
+        if want_defense:
+            child_boards, owner_pos, owner_cell, masks = _defense_children(
+                arrs, defense_max_cands)
+            if child_boards is not None:
+                segs.append(child_boards)
+    win_t = move_t = None
+    vmaps = vmasks = None
+    if want_defense:
+        vmaps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in arrs]
+        vmasks = masks
+    if not segs:
+        return win_t, move_t, vmaps, vmasks
+    batch = segs[0] if len(segs) == 1 else np.concatenate(segs, axis=0)
+    with _profile_timer(profile, "oracle_solve_s"):
+        win, _hit, move = solver(
+            batch, max_nodes=_VCT_TERMINUS_BUDGET, return_move=True)
+    _profile_add(profile, "oracle_solve_calls", 1.0)
+    _profile_add(profile, "oracle_boards", float(batch.shape[0]))
     win = np.asarray(win).astype(bool)
-    for k, (pos_idx, m) in enumerate(owners):
-        if win[k]:
-            maps[pos_idx][m] = 1.0
-    return maps, masks
+    off = 0
+    if want_terminus:
+        win_t = win[:B]
+        move_t = np.asarray(move)[:B].astype(np.int64)
+        off = B
+    if want_defense and child_boards is not None:
+        child_win = win[off:]
+        for k in np.flatnonzero(child_win):
+            vmaps[owner_pos[k]][owner_cell[k]] = 1.0
+    return win_t, move_t, vmaps, vmasks
+
+
+def _escalate_all_blunder_positions(planes_list, surv_slots, vmaps, vmasks,
+                                    profile=None):
+    """Staged-escalation stage 2 (see _VETO_MAX_CANDS): among the surviving
+    positions, find those whose TESTED cells are ALL proven blunders while
+    untested legal cells remain — the only positions where the (soundness-
+    critical, full-breadth-only) defender terminus could fire — and solve their
+    remaining untested legal cells in ONE bulk call, updating vmaps/vmasks in
+    place to full breadth. Positions with any tested-safe cell can never fire
+    the terminus and keep their partial (conservative) map."""
+    todo: list[tuple[int, np.ndarray]] = []
+    for s in surv_slots:
+        mask = vmasks[s]
+        if not mask.any():
+            continue
+        if not np.all(vmaps[s][mask] >= 0.5):
+            continue                       # a tested safe cell exists
+        legal = _legal_mask_from_planes(planes_list[s])
+        untested = legal & ~mask
+        if not untested.any():
+            continue                       # already full breadth
+        todo.append((s, np.flatnonzero(untested).astype(np.int64)))
+    if not todo:
+        return
+    solver = _load_mega_solver()
+    with _profile_timer(profile, "oracle_escalation_s"):
+        segs, seg_slot, seg_cell = [], [], []
+        for s, cells in todo:
+            p = np.asarray(planes_list[s])
+            me = p[0].astype(bool)
+            opp = p[HISTORY_PLY].astype(bool)
+            segs.append(_stack_children(me, opp, cells))
+            seg_slot.append(np.full(cells.size, s, dtype=np.int64))
+            seg_cell.append(cells)
+        batch = np.concatenate(segs, axis=0)
+        win, _hit = solver(
+            batch, max_nodes=_VCT_TERMINUS_BUDGET, return_move=False)
+    win = np.asarray(win).astype(bool)
+    slot_arr = np.concatenate(seg_slot)
+    cell_arr = np.concatenate(seg_cell)
+    for s, cells in todo:
+        vmasks[s][cells] = True
+    for k in np.flatnonzero(win):
+        vmaps[slot_arr[k]][cell_arr[k]] = 1.0
+    _profile_add(profile, "oracle_escalated_positions", float(len(todo)))
+    _profile_add(profile, "oracle_escalation_boards", float(batch.shape[0]))
 
 
 def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plies,
                             trajectories, completed, final_state, record_ownership,
-                            profile):
+                            profile, win=None, move=None):
     """Run the batched VCT test over the wave and TERMINATE every game whose side
     to move has a forced VCT: record the decisive position (one-hot on the oracle
     winning move) as that game's final training example, credit that side the win,
     and drop it from the active set. Games with no VCT survive and continue to
     normal MCTS + play this ply. Returns the surviving (active, active_games).
 
+    `win`/`move` may be precomputed by the merged per-ply oracle solve
+    (:func:`_oracle_ply_solve`, slot-aligned with `active`); when None this runs
+    its own bulk solve (the historical form; the Python gen path uses this).
+
     The terminal outcome flows through the SAME sign-flip + mate-distance discount
     as a real five-in-a-row terminal (:func:`_apply_teachers_to_trajectory`): the
     appended VCT position is the last trajectory element, so it gets plies-to-end
     = 0 (crisp +-1) and earlier positions get discounted back from it."""
-    with _profile_timer(profile, "vct_terminus_s"):
-        win, move = _vct_terminus_solve(planes_list)
+    if win is None:
+        with _profile_timer(profile, "vct_terminus_s"):
+            win, move = _vct_terminus_solve(planes_list)
     if not win.any():
         return active, active_games
     keep = []
@@ -370,6 +568,39 @@ def _oracle_veto_partition(active, active_games, planes_list, pending_vct, ply,
         completed.append((g_idx, outcome_for_black, n_initial + ply))
         _profile_add(profile, "oracle_veto_all_lose", 1.0)
     return [active[s] for s in keep], [active_games[s] for s in keep]
+
+
+def _apply_oracle_partitions(oracle_res, active, active_games, planes_list,
+                             slot_of, ply, initial_plies, trajectories,
+                             completed, final_state, record_ownership,
+                             record_vct, vct_maps, profile):
+    """Consume one ply's merged oracle verdicts (:func:`_oracle_ply_solve`):
+    run the attacker-terminus partition, build `pending_vct` for the survivors,
+    run staged escalation when the veto breadth is capped, then the
+    defender-terminus/all-lose partition. `planes_list`/`slot_of` are aligned
+    with the ACTIVE SET AT SOLVE TIME (pre-partition slots). Returns the
+    surviving (active, active_games, pending_vct)."""
+    win_t, move_t, vmaps, vmasks = oracle_res
+    pending_vct: dict[int, np.ndarray | None] = {}
+    if win_t is not None and active:
+        active, active_games = _vct_terminus_partition(
+            active, active_games, planes_list, ply, initial_plies,
+            trajectories, completed, final_state, record_ownership, profile,
+            win=win_t, move=move_t)
+    if vmaps is not None and active:
+        surv_slots = [slot_of[g_idx] for g_idx in active]
+        if _ORACLE_VETO_ENABLED and _VETO_MAX_CANDS > 0:
+            _escalate_all_blunder_positions(
+                planes_list, surv_slots, vmaps, vmasks, profile)
+        for g_idx, s in zip(active, surv_slots):
+            pending_vct[g_idx] = vmaps[s] if vmasks[s].any() else None
+        if _ORACLE_VETO_ENABLED:
+            surv_planes = [planes_list[s] for s in surv_slots]
+            active, active_games = _oracle_veto_partition(
+                active, active_games, surv_planes, pending_vct, ply,
+                initial_plies, trajectories, completed, final_state,
+                record_ownership, record_vct, vct_maps, profile)
+    return active, active_games, pending_vct
 
 
 # Value-discount (Derby v6 'mate-discounted-value'): scale ordinary outcome value
@@ -2354,43 +2585,57 @@ def _generate_games_native(
         with _profile_timer(profile, "active_list_s"):
             active_games = [games[i] for i in active]
 
-        # VCT-terminus (issue #98): BEFORE searching, batch-test the whole wave
-        # for a forced VCT and END any game whose side to move has one (credit
-        # that side, record the oracle's winning move as a one-hot target).
-        # Survivors continue to the normal search below. Default OFF =
-        # byte-identical. One bulk-synchronous solve per ply (call-cost law).
+        # Oracle phase (issues #98/#107): the attacker VCT-terminus test, the
+        # VCT-defense blunder maps (recorded aux target and/or root-policy
+        # veto), and the defender terminus all consume ONE merged bulk
+        # mega-solve per ply (_oracle_ply_solve — one solver call costs one
+        # TAIL; the historical two-call form cost two; per-board verdicts are
+        # independent of batch composition, so the merge is bit-identical).
+        # The veto's escape-solve runs FULL breadth by default — an untested
+        # cell can't be vetoed, and "all moves lose" is only sound when every
+        # legal cell was tested; --oracle-veto-max-cands K > 0 switches to the
+        # staged-escalation form (K nearest cells, full breadth only for
+        # positions whose tested cells ALL lose). With _ORACLE_OVERLAP_ENABLED
+        # the solve runs in a background thread WHILE the MPS search below
+        # runs, and the partitions apply post-search (flag-gated; see the
+        # semantics note at the flag). Default features OFF = byte-identical.
         pending_vct: dict[int, np.ndarray | None] = {}
-        if _VCT_TERMINUS_ENABLED:
-            planes_list = [g.root_planes() for g in active_games]
-            active, active_games = _vct_terminus_partition(
-                active, active_games, planes_list, ply, initial_plies,
-                trajectories, completed, final_state, record_ownership, profile)
-            if not active:
-                break
-        # Moonshot VCT-defense labeler / sound-world oracle veto (issue #107):
-        # over the surviving positions, ONE bulk escape-solve per ply produces
-        # each survivor's per-cell blunder map (call-cost law). Three consumers
-        # share the same solve: the recorded aux target (record_vct), the
-        # root-policy veto, and the defender terminus (both _ORACLE_VETO_ENABLED).
-        # The veto needs FULL breadth — an untested cell can't be vetoed, and
-        # "all moves lose" is only sound when every legal cell was tested — so
-        # it forces max_cands=0; the label-only path keeps the configured cap.
-        if record_vct or _ORACLE_VETO_ENABLED:
-            with _profile_timer(profile, "vct_defense_s"):
-                surv_planes = [g.root_planes() for g in active_games]
-                vmaps, vmasks = _vct_defense_solve(
-                    surv_planes,
-                    max_cands=0 if _ORACLE_VETO_ENABLED else _VCT_DEFENSE_MAX_CANDS)
-            for k, g_idx in enumerate(active):
-                pending_vct[g_idx] = vmaps[k] if vmasks[k].any() else None
-            # Defender terminus: games where EVERY legal move is a proven
-            # blunder end HERE (side-to-move loses) — no search is spent on a
-            # lost-by-oracle position, mirroring the attacker terminus above.
-            if _ORACLE_VETO_ENABLED:
-                active, active_games = _oracle_veto_partition(
-                    active, active_games, surv_planes, pending_vct, ply,
-                    initial_plies, trajectories, completed, final_state,
-                    record_ownership, record_vct, vct_maps, profile)
+        oracle_wanted = _VCT_TERMINUS_ENABLED or record_vct or _ORACLE_VETO_ENABLED
+        oracle_box: dict = {}
+        oracle_thread = None
+        planes_list: list | None = None
+        slot_of: dict[int, int] = {}
+        if oracle_wanted:
+            with _profile_timer(profile, "oracle_planes_s"):
+                planes_list = [g.root_planes() for g in active_games]
+            slot_of = {g_idx: s for s, g_idx in enumerate(active)}
+            defense_cands = (
+                _VETO_MAX_CANDS if _ORACLE_VETO_ENABLED else _VCT_DEFENSE_MAX_CANDS)
+            want_defense = record_vct or _ORACLE_VETO_ENABLED
+            if _ORACLE_OVERLAP_ENABLED:
+                _warm_mega_solver()   # compile on the main thread, once
+
+                def _oracle_bg(pl=planes_list, dc=defense_cands,
+                               wt=_VCT_TERMINUS_ENABLED, wd=want_defense):
+                    try:
+                        oracle_box["res"] = _oracle_ply_solve(
+                            pl, want_terminus=wt, want_defense=wd,
+                            defense_max_cands=dc, profile=profile)
+                    except BaseException as exc:  # pragma: no cover - re-raised
+                        oracle_box["err"] = exc
+
+                oracle_thread = threading.Thread(target=_oracle_bg, daemon=True)
+                oracle_thread.start()
+            else:
+                oracle_box["res"] = _oracle_ply_solve(
+                    planes_list, want_terminus=_VCT_TERMINUS_ENABLED,
+                    want_defense=want_defense, defense_max_cands=defense_cands,
+                    profile=profile)
+                active, active_games, pending_vct = _apply_oracle_partitions(
+                    oracle_box["res"], active, active_games, planes_list,
+                    slot_of, ply, initial_plies, trajectories, completed,
+                    final_state, record_ownership, record_vct, vct_maps,
+                    profile)
                 if not active:
                     break
 
@@ -2403,6 +2648,12 @@ def _generate_games_native(
         # below; game advancement happens identically for both kinds of move.
         if pcr_active:
             is_full = rng.random(len(active_games)) < playout_cap_frac
+            # Recorded-move gating is keyed by g_idx (not slot) so it stays
+            # correct when the overlap path partitions `active` post-search;
+            # in the default serial path `active` is unchanged between here
+            # and the post-search loop, so this is byte-identical to the old
+            # slot indexing.
+            full_set = {active[s] for s in range(len(active_games)) if is_full[s]}
             full_slots = [s for s in range(len(active_games)) if is_full[s]]
             fast_slots = [s for s in range(len(active_games)) if not is_full[s]]
             with _profile_timer(profile, "native_search_batch_s"):
@@ -2431,6 +2682,7 @@ def _generate_games_native(
                     _profile_add(profile, "search_calls", 1.0)
         else:
             is_full = None  # every move is full + recorded (production path)
+            full_set = None
             with _profile_timer(profile, "native_search_batch_s"):
                 native_mcts.search_batch(
                     active_games,
@@ -2441,11 +2693,27 @@ def _generate_games_native(
                 )
             _profile_add(profile, "search_calls", 1.0)
 
+        # Oracle/search overlap: join the background solve and apply the
+        # partitions AFTER the search (games the oracle terminates this ply
+        # were searched anyway and are simply dropped — their extra search is
+        # the price of hiding the solve under the MPS wave).
+        if oracle_thread is not None:
+            with _profile_timer(profile, "oracle_join_stall_s"):
+                oracle_thread.join()
+            if "err" in oracle_box:
+                raise oracle_box["err"]
+            active, active_games, pending_vct = _apply_oracle_partitions(
+                oracle_box["res"], active, active_games, planes_list, slot_of,
+                ply, initial_plies, trajectories, completed, final_state,
+                record_ownership, record_vct, vct_maps, profile)
+            if not active:
+                break
+
         next_active: list[int] = []
         with _profile_timer(profile, "post_search_loop_s"):
             for slot_idx, g_idx in enumerate(active):
                 g = active_games[slot_idx]
-                record_target = is_full is None or bool(is_full[slot_idx])
+                record_target = is_full is None or g_idx in full_set
                 tau = 1.0 if ply < temperature_moves else temperature_final
                 with _profile_timer(profile, "policy_export_s"):
                     pi = g.policy(temperature=tau)
@@ -2460,7 +2728,11 @@ def _generate_games_native(
                     vmap = pending_vct.get(g_idx)
                     if vmap is not None and vmap.any():
                         with _profile_timer(profile, "oracle_veto_mask_s"):
-                            legal = _legal_mask_from_planes(g.root_planes())
+                            # The root hasn't advanced since the oracle solve,
+                            # so this ply's planes are reusable (same values as
+                            # a fresh g.root_planes() export).
+                            legal = _legal_mask_from_planes(
+                                planes_list[slot_of[g_idx]])
                             pi = _veto_policy(pi, vmap, legal)
                             _profile_add(profile, "oracle_veto_masked", 1.0)
                 n_initial = initial_plies[g_idx]
@@ -2483,7 +2755,14 @@ def _generate_games_native(
                             else:
                                 pi = pi / s
                     with _profile_timer(profile, "root_planes_s"):
-                        planes = g.root_planes()
+                        # Reuse this ply's oracle plane export when available
+                        # (the root hasn't advanced; same values, one fewer
+                        # native materialization). Nothing mutates these
+                        # arrays, so storing the shared reference is safe.
+                        if planes_list is not None:
+                            planes = planes_list[slot_of[g_idx]]
+                        else:
+                            planes = g.root_planes()
                     with _profile_timer(profile, "trajectory_append_s"):
                         trajectories[g_idx].append((planes, pi.copy(), side))
                         if record_vct:
