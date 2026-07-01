@@ -182,3 +182,58 @@ def test_rapfi_sugar_parses(monkeypatch):
     assert captured["size"] == 4
     assert agent.label == "rapfi@50ms"
     agent.close()
+
+
+# ---------------- explicit opening_states (the H2H gate seam, #106) ----------------
+
+
+def test_slots_explicit_opening_states():
+    s1 = GameState.initial().apply(10).apply(20)
+    s2 = GameState.initial().apply(30).apply(40)
+    slots = _build_slots(4, seed=0, opening_states=[s1, s2])
+    assert np.array_equal(slots[0].state.board, s1.board)
+    assert np.array_equal(slots[1].state.board, s1.board)
+    assert np.array_equal(slots[2].state.board, s2.board)
+    assert np.array_equal(slots[3].state.board, s2.board)
+    # Even-ply openings: black to move, so A moves first iff A is black.
+    assert [s.a_to_move for s in slots] == [True, False, True, False]
+
+
+def test_slots_opening_states_too_short_raises():
+    with pytest.raises(ValueError):
+        _build_slots(6, seed=0, opening_states=[GameState.initial()])
+
+
+def test_h2h_gate_arena_path(monkeypatch):
+    # head_to_head_eval(use_arena=True) end-to-end with stub agents — no torch
+    # model, no checkpoint files. Verifies the gate's arena wiring: opening
+    # regeneration, slot layout, tally mapping into HeadToHeadResult.
+    import gomoku.arena as arena_mod
+    from scripts.delta_e_harness import head_to_head_eval
+
+    def _fake_net_agent(ckpt, *, sims, c_puct, device=None, label=None):
+        picker = heuristic_player if ckpt == "fork.pt" else random_player
+        return PickerAgent(picker, label=label or ckpt)
+
+    monkeypatch.setattr(arena_mod, "net_agent_from_checkpoint", _fake_net_agent)
+    res = head_to_head_eval(
+        "fork.pt", "c.pt", recipe_label="stub", window_epochs=0, wall_secs=None,
+        n_games=8, sims=10, c_puct=1.5, seed=0, use_arena=True)
+    assert res.n_games == 8
+    assert res.wins + res.draws + res.losses == 8
+    # heuristic fork should dominate the random parent.
+    assert res.win_rate > 0.7
+    assert res.delta_elo > 0
+
+
+def test_h2h_opening_states_match_legacy_derivation():
+    # The arena path must play the SAME openings a legacy run at this seed
+    # would: pair k's opening = _random_opening_state(default_rng(seed + k)).
+    from gomoku.self_play import _random_opening_state
+    from scripts.delta_e_harness import _h2h_opening_states
+
+    seed, plies = 123, 4
+    got = _h2h_opening_states(3, plies, seed)
+    for k in range(3):
+        want, _ = _random_opening_state(np.random.default_rng(seed + k), plies)
+        assert np.array_equal(got[k].board, want.board)

@@ -684,6 +684,26 @@ def _tally(outcomes) -> tuple[int, int, int]:
     return wins, draws, losses
 
 
+def _h2h_opening_states(n_pairs: int, opening_plies: int, seed: int) -> list:
+    """Regenerate the legacy per-pair openings: pair k's opening comes from
+    ``default_rng(seed + k)``, exactly as `_play_one_h2h_game` derives it — so
+    the arena path plays the SAME openings a legacy run at this seed would."""
+    import numpy as np
+
+    from gomoku.game import GameState
+    from gomoku.self_play import _random_opening_state
+
+    out = []
+    for pair_idx in range(n_pairs):
+        if opening_plies > 0:
+            state, _ = _random_opening_state(
+                np.random.default_rng(seed + pair_idx), opening_plies)
+        else:
+            state = GameState.initial()
+        out.append(state)
+    return out
+
+
 def head_to_head_eval(
     fork_ckpt: str,
     c_ckpt: str,
@@ -698,6 +718,7 @@ def head_to_head_eval(
     device: str = "cpu",
     n_workers: int = 6,
     opening_plies: int = 4,
+    use_arena: bool = True,
 ) -> HeadToHeadResult:
     """Play one fork-vs-C direct match (model-vs-model, paired random openings)
     and return a HeadToHeadResult. Wins are the fork's.
@@ -705,17 +726,40 @@ def head_to_head_eval(
     Anchor-ceiling fix: two similar models score near 50% against EACH OTHER —
     the maximally sensitive region of the logistic — so the relative Δelo has a
     tight CI with no anchor ceiling. Paired random openings give INDEPENDENT
-    games despite the deterministic pickers. Runs the match in parallel across
-    `n_workers` processes (CPU is idle while GPU forks serially) with live
-    progress; falls back to a single-process loop when n_workers < 2.
+    games despite the deterministic pickers.
+
+    ``use_arena`` (default True) runs the match through the batched arena
+    (issue #105/#106): both models resident in ONE process, every game live at
+    once, leaf evals batched across the whole field via wave-MCTS. Openings
+    are the same per-(seed, pair_idx) derivation as the legacy path; outcomes
+    are statistically equivalent but not byte-identical (wave batching) — so
+    flip harnesses BETWEEN derby rounds, never mid-field. ``n_workers`` is
+    ignored under the arena. ``use_arena=False`` keeps the legacy
+    process-pool / sequential paths unchanged.
     """
     tasks = _h2h_tasks(n_games, opening_plies, seed)
     n_played = len(tasks)
     t0 = time.perf_counter()
     print(f"[delta-e] H2H {recipe_label}: matching fork vs C — {n_played} games "
-          f"(openings={opening_plies}p, sims={sims}, workers={n_workers})...", flush=True)
+          f"(openings={opening_plies}p, sims={sims}, "
+          f"{'arena' if use_arena else f'workers={n_workers}'})...", flush=True)
 
-    if n_workers >= 2:
+    if use_arena:
+        from gomoku.arena import net_agent_from_checkpoint, play_matches_batched
+
+        fork_agent = net_agent_from_checkpoint(
+            fork_ckpt, sims=sims, c_puct=c_puct, device=device, label="fork")
+        c_agent = net_agent_from_checkpoint(
+            c_ckpt, sims=sims, c_puct=c_puct, device=device, label="C")
+        openings = _h2h_opening_states(
+            max(1, n_games // 2), opening_plies, seed)
+        # Arena slot layout matches _h2h_tasks: game 2k = fork-as-black on
+        # opening k, game 2k+1 = fork-as-white on the same opening.
+        res = play_matches_batched(
+            fork_agent, c_agent, n_games=n_played, seed=seed,
+            opening_states=openings)
+        wins, draws, losses = res.wins, res.draws, res.losses
+    elif n_workers >= 2:
         import multiprocessing as mp
         ctx = mp.get_context("spawn")
         init_args = (fork_ckpt, c_ckpt, sims, c_puct, device, opening_plies, seed)
@@ -962,6 +1006,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         ">0 is REQUIRED for an honest CI — temperature=0 pickers "
                         "replay one line per color from the empty board (2 distinct "
                         "games). Each opening is played twice (colors swapped).")
+    p.add_argument("--no-arena", action="store_true",
+                   help="Head-to-head only: use the legacy process-pool match "
+                        "instead of the batched arena (#106). The arena is the "
+                        "default — same openings per seed, statistically "
+                        "equivalent but not byte-identical outcomes; flip "
+                        "harnesses BETWEEN derby rounds, not mid-field.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the exact per-recipe train commands and exit (no GPU).")
     p.add_argument("--self-test", action="store_true",
@@ -995,7 +1045,8 @@ def _run_head_to_head(
             window_epochs=args.window_epochs, wall_secs=wall,
             n_games=args.eval_games, sims=args.eval_sims, c_puct=args.eval_c_puct,
             seed=args.seed, device=args.eval_device, n_workers=args.eval_workers,
-            opening_plies=args.h2h_opening_plies))
+            opening_plies=args.h2h_opening_plies,
+            use_arena=not args.no_arena))
 
     print("\n" + format_h2h_table(results))
 

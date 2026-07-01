@@ -64,9 +64,33 @@ Short weak-net games; the gap **widens** with longer games and bigger fields
 - Naming: `gomoku.lab.arena` (`gomoku-lab-arena`) is the autolab *promotion
   daemon* — unrelated to this match engine (`gomoku-arena`).
 
-## Not yet rewired (follow-ups)
+## Wired-through callers (#106, 2026-07-01)
 
-In-trainer eval (`train.py` eval block), `eval_worker.py`,
-`scripts/delta_e_harness.py::head_to_head_eval` / `round_robin.py` (the derby
-gate — biggest Δelo/Δt win: 120 games/pair × sims=200 currently on 6 CPU
-process workers) still use the sequential/spawn paths. See #105 follow-ups.
+All three standing callers now default to the arena, each with an escape
+hatch back to the byte-identical legacy path:
+
+- **Derby gate** — `scripts/delta_e_harness.py::head_to_head_eval` takes
+  `use_arena=True` (default). Openings are regenerated with the SAME
+  per-`(seed, pair_idx)` derivation as the legacy path
+  (`_h2h_opening_states`), slot layout matches `_h2h_tasks` (game 2k =
+  fork-as-black on opening k), and `n_workers` is ignored under the arena.
+  `scripts/round_robin.py` inherits it; both CLIs take `--no-arena`.
+- **`eval_worker.py`** — arena by default; `--no-arena` restores legacy.
+- **`train.py` in-trainer eval** — arena by default; `--no-eval-arena`
+  restores legacy.
+- **Lever auto-fallback**: any eval lever (`--eval-vcf-nodes`,
+  `--fpu-reduction-c`, `--reuse-tree`, `--proven-prop`,
+  `--proven-vcf-leaf-nodes`, `--vct-finish-nodes`) silently isn't portable to
+  the wave-batched search yet, so setting one auto-disables the arena (with a
+  printed note) — the levers keep their byte-identical legacy semantics.
+
+**Derby-gate measurement** (M5 Max, az_mini 9x9 pair, 120 games, sims=200,
+paired 4-ply openings): legacy pool (8 CPU workers, device=cpu) = **59s wall
+/ 630s CPU**; arena (device=mps) = **9.6s wall / 6.4s CPU** — ~6× wall, ~100×
+less CPU, GPU barely warm. Short weak-net games; real champions play longer
+games where the gap widens. Same story at 40 games: 13s/118s-CPU → 6s/3s-CPU.
+
+Reminder: the switch changes eval *numbers* slightly (statistically
+equivalent, not byte-identical) — verdicts recorded pre/post switch are not
+directly comparable; the derby runner should note the changeover on the
+research board.

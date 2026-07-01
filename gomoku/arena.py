@@ -153,6 +153,38 @@ class EnginePoolAgent(BatchedAgent):
 _RAPFI_SUGAR = re.compile(r"^rapfi@(\d+)ms$")
 
 
+def net_agent_from_checkpoint(
+    checkpoint: str,
+    *,
+    sims: int = 100,
+    c_puct: float = 1.5,
+    wave_size: int = 16,
+    device: str | None = None,
+    label: str | None = None,
+) -> NetAgent:
+    """Load a checkpoint into a warm `NetAgent` (load -> fuse -> warmup)."""
+    import os
+
+    from gomoku.mcts import make_torch_evaluator
+    from gomoku.model import fuse_model_for_inference, load_checkpoint
+    from gomoku.util import pick_device
+
+    dev = pick_device(device or os.environ.get("GOMOKU_DEVICE"))
+    model, _ = load_checkpoint(checkpoint, device=dev)
+    model = fuse_model_for_inference(model)
+    evaluator = make_torch_evaluator(model, dev)
+    # Warmup forward — eat the MPS graph-compile latency here, not on the
+    # first move of the first game.
+    evaluator([GameState.initial()])
+    return NetAgent(
+        evaluator,
+        sims=sims,
+        c_puct=c_puct,
+        wave_size=wave_size,
+        label=label or f"model:{checkpoint}",
+    )
+
+
 def build_agent(
     spec_str: str,
     *,
@@ -208,22 +240,13 @@ def build_agent(
         sims = int(spec.kwargs.get("sims", str(default_sims)))
         c_puct = float(spec.kwargs.get("c_puct", "1.5"))
         wave = int(spec.kwargs.get("wave", str(wave_size)))
-
-        from gomoku.mcts import make_torch_evaluator
-        from gomoku.model import fuse_model_for_inference, load_checkpoint
-        from gomoku.util import pick_device
-
-        import os
-
-        dev = device or pick_device(os.environ.get("GOMOKU_DEVICE"))
-        model, _ = load_checkpoint(checkpoint, device=dev)
-        model = fuse_model_for_inference(model)
-        evaluator = make_torch_evaluator(model, dev)
-        # Warmup forward — eat the MPS graph-compile latency here, not on the
-        # first move of the first game.
-        evaluator([GameState.initial()])
-        return NetAgent(
-            evaluator, sims=sims, c_puct=c_puct, wave_size=wave, label=spec.label()
+        return net_agent_from_checkpoint(
+            checkpoint,
+            sims=sims,
+            c_puct=c_puct,
+            wave_size=wave,
+            device=device,
+            label=spec.label(),
         )
 
     if spec.kind == "external":
@@ -267,28 +290,43 @@ def _build_slots(
     seed: int,
     random_opening_moves: int = 0,
     start_state: GameState | None = None,
+    opening_states: list[GameState] | None = None,
 ) -> list[_Slot]:
     """Set up per-game slots with `play_match_pickers`-compatible semantics:
     A alternates colors by game index; a fixed `start_state` wins over random
     openings; each color-swap pair (2k, 2k+1) shares one random opening; an
-    odd-ply opening means white is to move, flipping the base assignment."""
-    opening_states: list[GameState] = []
-    if start_state is None and random_opening_moves > 0:
+    odd-ply opening means white is to move, flipping the base assignment.
+
+    ``opening_states`` supplies the per-pair openings EXPLICITLY (pair k =
+    games 2k and 2k+1) — the seam callers with their own opening derivation
+    use (e.g. the delta-e H2H gate regenerates each pair's opening from
+    ``seed + pair_idx``). Precedence: start_state > opening_states >
+    random_opening_moves."""
+    if opening_states is not None and start_state is None:
+        need = (n_games + 1) // 2
+        if len(opening_states) < need:
+            raise ValueError(
+                f"opening_states has {len(opening_states)} entries; "
+                f"{n_games} games need {need} pairs"
+            )
+    elif start_state is None and random_opening_moves > 0:
         from gomoku.self_play import _random_opening_state
 
         opening_rng = np.random.default_rng(seed)
+        generated: list[GameState] = []
         for _ in range((n_games + 1) // 2):
             opening_state, _moves = _random_opening_state(
                 opening_rng, random_opening_moves
             )
-            opening_states.append(opening_state)
+            generated.append(opening_state)
+        opening_states = generated
 
     slots: list[_Slot] = []
     for g_idx in range(n_games):
         a_is_black = g_idx % 2 == 0
         if start_state is not None:
             state = start_state
-        elif random_opening_moves > 0:
+        elif opening_states is not None:
             state = opening_states[g_idx // 2]
         else:
             state = GameState.initial()
@@ -315,6 +353,7 @@ def play_matches_batched(
     seed: int = 0,
     random_opening_moves: int = 0,
     start_state: GameState | None = None,
+    opening_states: list[GameState] | None = None,
 ) -> MatchResult:
     """Play A vs B with every game live at once. Result from A's perspective.
 
@@ -332,6 +371,7 @@ def play_matches_batched(
         seed=seed,
         random_opening_moves=random_opening_moves,
         start_state=start_state,
+        opening_states=opening_states,
     )
 
     # Safety valve — terminal draw detection ends games at a full board, so
