@@ -101,6 +101,13 @@ inline void candidate_own(thread const ulong* own, thread const ulong* empty, th
     ulong d2[4]; king(d1, d2);
     for(int w=0;w<4;w++) cand[w]=d2[w]&empty[w];
 }
+// 64-bit simd_shuffle_xor (Metal simd shuffles take <=32-bit types): split into
+// two uint halves. Used by the lanes>1 variant's intra-cluster reductions.
+inline ulong sxor64(ulong v, ushort delta){
+    uint lo = simd_shuffle_xor((uint)(v & 0xffffffffull), delta);
+    uint hi = simd_shuffle_xor((uint)(v >> 32), delta);
+    return ((ulong)hi << 32) | (ulong)lo;
+}
 inline bool def_tempo(thread const ulong* opp, thread const ulong* empty){
     ulong c[4]; completion_mask(opp, empty, c); if (any4(c)) return true;  // defender five
     ulong f[4]; gen_forcing(opp, empty, f);     if (any4(f)) return true;  // defender four
@@ -329,8 +336,125 @@ def _src():
 # ----------------------------------------------------------------------------
 def _build_src(support: bool, complete: bool, carriers: bool = False,
                w: bool = False, depth_cap: bool = False,
-               work_steal: bool = False) -> str:
+               work_steal: bool = False, lanes: int = 1) -> str:
     src = _src()
+    # -- LANES (issue #114): K simd lanes cooperate on ONE board. All K lanes
+    # hold replicated board state and run the AND/OR DFS in LOCKSTEP — they
+    # compute identical values at every step, so control flow never diverges
+    # between them and no state needs sharing. Only the two per-node candidate
+    # scans (the fours loop and the forcing-threes loop — the per-node hot
+    # cost every capped lane pays) are partitioned: lane j takes set-bit ranks
+    # j, j+K, j+2K, ... and the partial results merge with intra-cluster simd
+    # reductions — OR for the fmask/tmask accumulators, MIN for the winning
+    # cell. The sequential scan commits to the LOWEST winning bit (lowbit4
+    # order), and min == lowest, so the merged result is BIT-IDENTICAL to the
+    # base kernel: same dwin move, same masks, same node count, same hitcap.
+    # (On a dwin the base kernel leaves fmask/tmask partially filled and
+    # returns ret=1 without reading them, so evaluating the full scan here
+    # changes no verdict.) K must divide 32 so a board's K-lane cluster sits
+    # aligned inside one simdgroup (grid = B*K consecutive threads). v1 is
+    # base-verdict-only, like work_steal v1.
+    if lanes > 1:
+        assert not (support or complete or carriers or w or depth_cap
+                    or work_steal), \
+            "lanes>1 v1 supports the base (win, hit, move) verdict only"
+        assert lanes in (2, 4, 8, 16, 32), "lanes must divide 32"
+        def _rep(s, old, new):
+            assert old in s, "lanes variant anchor drifted:\n" + old
+            return s.replace(old, new, 1)
+        src = _rep(src,
+            "    uint gid = thread_position_in_grid.x;\n",
+            "    uint _tid = thread_position_in_grid.x;\n"
+            "    uint gid = _tid / __LANES__u;\n"
+            "    uint _lane = _tid % __LANES__u;\n")
+        src = _rep(src, """          // -- fours: one set-algebra pass over the whole board --
+          ulong fourc[4]; gen_forcing(own, empty, fourc);
+          ulong ff[4]; cpy4(fourc, ff);
+          while (true){
+            int m = lowbit4(ff); if (m<0) break; clrbit4(ff, m);
+            ulong own2[4]; cpy4(own, own2); setbit4(own2, m);
+            ulong empty2[4]; cpy4(empty, empty2); clrbit4(empty2, m);
+            if (gfive){ ulong oc[4]; completion_mask(opp, empty2, oc); if (any4(oc)) continue; } // unsound
+            ulong cm[4]; completion_mask(own2, empty2, cm);
+            int nc = popcount4(cm);
+            if (nc>=2){ if(sp==0) winmove=m; dwin=true; break; }    // sound double four
+            setbit4(&fmask[sp][0], m);
+          }
+""", """          // -- fours: lane-partitioned scan + cluster reduce (K lanes/board) --
+          ulong fourc[4]; gen_forcing(own, empty, fourc);
+          {
+            ulong fpart[4]={0ul,0ul,0ul,0ul}; int dwm=(1<<30);
+            ulong ff[4]; cpy4(fourc, ff); uint ii=0u;
+            while (true){
+              int m = lowbit4(ff); if (m<0) break; clrbit4(ff, m);
+              if ((ii++ % __LANES__u) != _lane) continue;
+              ulong own2[4]; cpy4(own, own2); setbit4(own2, m);
+              ulong empty2[4]; cpy4(empty, empty2); clrbit4(empty2, m);
+              if (gfive){ ulong oc[4]; completion_mask(opp, empty2, oc); if (any4(oc)) continue; } // unsound
+              ulong cm[4]; completion_mask(own2, empty2, cm);
+              int nc = popcount4(cm);
+              if (nc>=2){ dwm = min(dwm, m); continue; }    // sound double four
+              setbit4(fpart, m);
+            }
+            for (ushort d=__HALFL__; d>0; d>>=1){
+              dwm = min(dwm, simd_shuffle_xor(dwm, d));
+              for(int w2=0;w2<4;w2++) fpart[w2] |= sxor64(fpart[w2], d);
+            }
+            if (dwm < (1<<30)){ if(sp==0) winmove=dwm; dwin=true; }
+            else { cpy4(fpart, &fmask[sp][0]); }
+          }
+""")
+        src = _rep(src, """          if (!dwin){
+            ulong cand[4]; candidate_own(own, empty, cand);
+            ulong tt[4]; for(int w=0;w<4;w++) tt[w]=cand[w]&(~fourc[w]);
+            while (true){
+              int m = lowbit4(tt); if (m<0) break; clrbit4(tt, m);
+              ulong own2[4]; cpy4(own, own2); setbit4(own2, m);
+              ulong empty2[4]; cpy4(empty, empty2); clrbit4(empty2, m);
+              ulong rm[4]; bool fk;
+              int nt = gen_threes(own2, empty2, m, rm, &fk);
+              if (nt>=1){
+                if (gtempo && def_tempo(opp, empty2)) continue;    // defender tempo
+                if (fk){ if(sp==0) winmove=m; dwin=true; break; }  // fork three
+                setbit4(&tmask[sp][0], m);
+              }
+            }
+          }
+""", """          if (!dwin){
+            ulong cand[4]; candidate_own(own, empty, cand);
+            ulong tt[4]; for(int w=0;w<4;w++) tt[w]=cand[w]&(~fourc[w]);
+            ulong tpart[4]={0ul,0ul,0ul,0ul}; int fkm=(1<<30);
+            uint ii=0u;
+            while (true){
+              int m = lowbit4(tt); if (m<0) break; clrbit4(tt, m);
+              if ((ii++ % __LANES__u) != _lane) continue;
+              ulong own2[4]; cpy4(own, own2); setbit4(own2, m);
+              ulong empty2[4]; cpy4(empty, empty2); clrbit4(empty2, m);
+              ulong rm[4]; bool fk;
+              int nt = gen_threes(own2, empty2, m, rm, &fk);
+              if (nt>=1){
+                if (gtempo && def_tempo(opp, empty2)) continue;    // defender tempo
+                if (fk){ fkm = min(fkm, m); continue; }  // fork three
+                setbit4(tpart, m);
+              }
+            }
+            for (ushort d=__HALFL__; d>0; d>>=1){
+              fkm = min(fkm, simd_shuffle_xor(fkm, d));
+              for(int w2=0;w2<4;w2++) tpart[w2] |= sxor64(tpart[w2], d);
+            }
+            if (fkm < (1<<30)){ if(sp==0) winmove=fkm; dwin=true; }
+            else { cpy4(tpart, &tmask[sp][0]); }
+          }
+""")
+        src = _rep(src,
+            "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);\n"
+            "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);",
+            "    if (_lane == 0u){\n"
+            "    win[gid]=(uchar)ret; hit[gid]=(uchar)(hitcap?1:0);\n"
+            "    move[gid]=(int)((ret==1) ? (winmove>=0 ? winmove : mm[0]) : -1);\n"
+            "    }")
+        return (src.replace("__LANES__", str(lanes))
+                   .replace("__HALFL__", str(lanes // 2)))
     # -- WORK-STEAL (issue #93): a persistent kernel. Instead of one thread per
     # board (grid=B), launch `resident` threads that each pull the NEXT unsolved
     # board index from a shared atomic `cursor` and loop until the pool drains.
@@ -534,9 +658,10 @@ _KERNEL_CACHE: dict = {}
 
 
 def _get_kernel(support: bool, complete: bool, carriers: bool = False,
-                w: bool = False, depth_cap: bool = False, work_steal: bool = False):
+                w: bool = False, depth_cap: bool = False, work_steal: bool = False,
+                lanes: int = 1):
     key = (bool(support), bool(complete), bool(carriers), bool(w), bool(depth_cap),
-           bool(work_steal))
+           bool(work_steal), int(lanes))
     k = _KERNEL_CACHE.get(key)
     if k is None:
         if work_steal:
@@ -563,12 +688,13 @@ def _get_kernel(support: bool, complete: bool, carriers: bool = False,
             if depth_cap:
                 inames.append("max_depth")
         k = mx.fast.metal_kernel(
-            name="mega_vct_bb_%d%d%d%d%d%d" % (
+            name="mega_vct_bb_%d%d%d%d%d%d_l%d" % (
                 int(support), int(complete), int(carriers), int(w), int(depth_cap),
-                int(work_steal)),
+                int(work_steal), int(lanes)),
             input_names=inames,
             output_names=names,
-            source=_build_src(support, complete, carriers, w, depth_cap, work_steal),
+            source=_build_src(support, complete, carriers, w, depth_cap, work_steal,
+                              lanes),
             header=_HEADER, atomic_outputs=work_steal)
         _KERNEL_CACHE[key] = k
     return k
@@ -598,7 +724,8 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
                       return_move: bool = False, return_support: bool = False,
                       complete: bool = False, return_carriers: bool = False,
                       return_w: bool = False, max_depth=None,
-                      work_steal: bool = False, resident: int = 8192):
+                      work_steal: bool = False, resident: int = 8192,
+                      lanes: int = 1):
     """boards: (B,2,N,N) bool. Solves VCT for the side to move (board[0]=attacker).
 
     Returns (win, hit_cap): (B,) bool by default. Optional outputs are appended in
@@ -669,9 +796,51 @@ def solve_vct_mega_bb(boards: np.ndarray, *, max_nodes: int = 20000, tg: int = 3
       backfills threadgroups, so the gain is modest. See ``solve_vct_streaming``
       (the iterative-deepening driver built on top) and
       ``wiki/topics/mega-vct-solver.md`` § Streaming / work-stealing.
+
+    * ``lanes=K`` (K ∈ {2,4,8,16,32}, issue #114) makes K simd lanes cooperate
+      on ONE board: all K lanes replicate the board state and run the AND/OR
+      DFS in lockstep, and the two per-node candidate scans (fours,
+      forcing-threes — the per-node hot cost) are partitioned across the K-lane
+      cluster and merged with simd reductions (OR for the masks, MIN for the
+      winning cell — min == lowbit order, so the verdict is BIT-IDENTICAL to
+      base: same move, same node count, same hit_cap). This attacks the
+      per-node latency floor AND intra-simdgroup divergence (32/K boards per
+      simdgroup instead of 32). Costs K× threads, so past GPU saturation
+      (B×K ≳ ~25k) prefer a smaller K. v1 is base-verdict-only, like
+      ``work_steal``; combining raises. ``tg`` must be a multiple of 32.
     """
     B = boards.shape[0]
     own, opp = bb.pack_words(boards)
+    if lanes > 1:
+        # LANES (issue #114): K simd lanes cooperate per board — the per-node
+        # candidate scans are partitioned across an aligned K-lane cluster and
+        # merged with simd reductions; the verdict is BIT-IDENTICAL to base
+        # (min == lowbit order; same node count / hitcap). v1 = base verdict.
+        if (return_support or complete or return_carriers or return_w
+                or max_depth is not None or work_steal):
+            raise ValueError(
+                "lanes>1 supports only the base (win, hit, move) verdict in v1 "
+                "— drop return_support/complete/return_carriers/return_w/"
+                "max_depth/work_steal")
+        if lanes not in (2, 4, 8, 16, 32):
+            raise ValueError("lanes must be one of 2/4/8/16/32 (divide 32)")
+        if tg % lanes != 0 or tg % 32 != 0:
+            raise ValueError("tg must be a multiple of 32 (and of lanes) so a "
+                             "board's lane cluster sits inside one simdgroup")
+        kernel = _get_kernel(False, False, lanes=lanes)
+        o = mx.array(own.reshape(-1))
+        p = mx.array(opp.reshape(-1))
+        mn = mx.array(np.array([max_nodes], dtype=np.int32))
+        outs = kernel(
+            inputs=[o, p, mn], grid=(B * lanes, 1, 1),
+            threadgroup=(min(B * lanes, tg), 1, 1),
+            output_shapes=[(B,), (B,), (B,)],
+            output_dtypes=[mx.uint8, mx.uint8, mx.int32])
+        mx.eval(*outs)
+        res = [np.array(outs[0]).astype(bool), np.array(outs[1]).astype(bool)]
+        if return_move:
+            res.append(np.array(outs[2]).astype(np.int32))
+        return tuple(res)
     if work_steal:
         # Option A (issue #93): persistent work-stealing dispatch. `resident`
         # lanes drain the B-board pool through an atomic cursor; the tail-bound

@@ -403,6 +403,48 @@ def test_streaming_consistent_with_base():
         assert int((~sh).sum()) >= int((~hb).sum()), f"streaming resolved fewer (ws={ws})"
 
 
+def test_lanes_source_untouched_default():
+    """lanes=1 (the default) source is unchanged; lanes>1 injects exactly the
+    lane-partitioned scans + cluster reductions (issue #114)."""
+    assert _build_src(False, False) == _src(), "default source drifted"
+    ls = _build_src(False, False, lanes=8)
+    assert "uint gid = _tid / 8u;" in ls
+    assert "simd_shuffle_xor" in ls
+    assert "if ((ii++ % 8u) != _lane) continue;" in ls
+    assert "if (_lane == 0u){" in ls
+
+
+def test_lanes_rejects_optional_outputs():
+    st = load_position_stack(4, seed=0, min_ply=6, max_ply=40)
+    for kw in (dict(return_support=True), dict(complete=True),
+               dict(return_carriers=True), dict(return_w=True),
+               dict(max_depth=8), dict(work_steal=True)):
+        with pytest.raises(ValueError):
+            solve_vct_mega_bb(st, max_nodes=200, lanes=8, **kw)
+    with pytest.raises(ValueError):
+        solve_vct_mega_bb(st, max_nodes=200, lanes=3)
+
+
+def run_lanes_identical(B=1200, seed=0, budget=500):
+    """lanes=K verdict is bit-identical to the base kernel for every K: the
+    lane-partitioned scans commit to min(winning cell) == the sequential scan's
+    lowbit4 order, and the node count / hitcap latch are untouched."""
+    st = load_position_stack(B, seed=seed, min_ply=6, max_ply=40)
+    wb, hb, mb = solve_vct_mega_bb(st, max_nodes=budget, return_move=True)
+    for K in (2, 4, 8, 16, 32):
+        w, h, m = solve_vct_mega_bb(st, max_nodes=budget, return_move=True,
+                                    lanes=K)
+        assert np.array_equal(w, wb), f"lanes={K} win != base"
+        assert np.array_equal(h, hb), f"lanes={K} hit != base"
+        assert np.array_equal(m, mb), f"lanes={K} move != base"
+
+
+def test_lanes_byte_identical():
+    run_lanes_identical(B=1200, seed=0, budget=500)
+    run_lanes_identical(B=33, seed=1, budget=50)    # sub-threadgroup B
+    run_lanes_identical(B=1, seed=2, budget=4000)   # single board
+
+
 if __name__ == "__main__":
     import sys
     if not FIXTURE.exists():
@@ -427,6 +469,10 @@ if __name__ == "__main__":
     test_work_steal_rejects_optional_outputs()
     test_work_steal_byte_identical()
     test_streaming_consistent_with_base()
+    test_lanes_source_untouched_default()
+    run_lanes_identical(B=1200, seed=0, budget=500)
+    run_lanes_identical(B=33, seed=1, budget=50)
+    run_lanes_identical(B=1, seed=2, budget=4000)
     if MD_FIXTURE.exists():
         test_md_matches_golden(np.load(MD_FIXTURE))
     print("FAST tier PASS")

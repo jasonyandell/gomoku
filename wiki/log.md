@@ -1747,3 +1747,19 @@ batch grinds; ladder 0.83×, oracle-sort 0.98×, tg-variants 1.00×, **precheck 
 (0.59×, new mechanism: null boards are themselves cap-bound)**. Next: multi-thread-per-board
 kernel pass + cap25 recall study (worktree `gomoku-mega-vct-bb` kept, receipts in #114). Full
 receipts: [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) 2026-07-01 refill entry.
+
+## [2026-07-02] Perf blitz day 2 (#114): lanes=K multi-thread-per-board kernel lands — 1.34× solve / 1.29× gen at 13×13, bit-identical
+
+Day-1's census left one lever; built it. K simd lanes cooperate per board in
+`mega_vct_bb` (lockstep replicated-state DFS; the two per-node candidate scans
+lane-partitioned + simd-reduced; MIN commit == lowbit order ⇒ verdict
+**bit-identical**, invariant #11). Receipts on 132 REAL 13×13 merged-veto
+batches (360,925 boards, cap50, `bench_lanes13.py` — committed, unlike day-1's
+scratchpad): K=2/4/8/16 = 1.09/1.23/1.34/1.36×, verdicts identical every
+batch. End-to-end gen 48@32: wall 67.7→52.6 s (1.29×), aug-pos/s 297.5→383.2,
+game stream identical. Honest scoresheet: predicted 2–4×, got 1.34× (K×
+thread inflation at real widths; narrow-batch ceiling 1.72× @B=150 15×15).
+`GOMOKU_VCT_LANES=8` env knob (default off) wires it into gen. FAST tier +
+full pytest green. Left in #114: cap25 recall study, veto-breadth staging.
+Details: [topics/mega-vct-solver.md](topics/mega-vct-solver.md)
+§ Multi-thread-per-board; [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) 2026-07-02.
