@@ -36,7 +36,7 @@ corpus labeling, scale `max_nodes` with B. A CAP verdict is fail-safe wherever
 solve_vct_mega_bb(boards, *, max_nodes=20000, tg=32,
                   return_move=False, return_support=False, complete=False,
                   return_carriers=False, return_w=False, max_depth=None,
-                  work_steal=False, resident=8192)
+                  work_steal=False, resident=8192, lanes=1)
 solve_md_min(boards, *, max_nodes=20000, lo=1, hi=None, tg=32)  # -> (md, capped)
 solve_vct_streaming(boards, *, budgets=(250,1000,4000,20000),    # -> (win, hit[, move])
                     work_steal=False, resident=8192, tg=32, return_move=False, log=None)
@@ -473,6 +473,48 @@ raw logs + `REPORT.md` under `~/data/idx2_solve/sweep/` (out-of-git).
 
 ---
 
+## Multi-thread-per-board — `lanes=K` (#114)
+
+The base kernel's per-node hot cost is the OR-node candidate scans: the fours
+loop (trial-play every four-move: soundness + double-four check) and the
+forcing-threes loop (trial-play every `candidate_own` cell: a whole-board
+`gen_forcing` + follow-up `completion_mask` loop each). One thread per board
+pays that serially — and at 13×13 the resolve census is **48% @budget 10 /
+9.5% @11–50 / 42.5% capped@50**, so every simdgroup is saturated with hard
+lanes and all the dispatch-level levers (ladder 0.83×, oracle-sort 0.98×, tg
+1.00×, precheck 0.59×) have nothing to grab.
+
+**`lanes=K` (K ∈ {2,4,8,16,32}) makes K simd lanes cooperate on one board.**
+All K lanes replicate the board state and run the AND/OR DFS in lockstep (they
+compute identical values, so they never diverge from each other and nothing
+needs sharing); only the two candidate scans partition work — lane j takes
+set-bit ranks j, j+K, … and the partials merge with intra-cluster simd
+reductions (OR for `fmask`/`tmask`, MIN for the winning cell). Min == lowbit
+order, so the verdict is **BIT-IDENTICAL** to base: same move, same node
+count, same `hit_cap` (invariant #11). This attacks both the per-node latency
+floor (scan work ÷ K) and intra-simdgroup divergence (32/K boards per
+simdgroup). Cost: K× threads, so past GPU saturation (B×K ≳ ~25 k) prefer a
+smaller K; `ulong` shuffles split into 2×`uint` (`sxor64`). v1 is
+base-verdict-only (combining with optional outputs raises), `tg` must be a
+multiple of 32.
+
+**Measured (2026-07-02, `bench_lanes13.py` — capture real gen batches, replay
+per variant, verdict-equality asserted per batch).** 132 real 13×13
+merged-veto batches (360,925 boards, cap50, fresh small net, live sound-world
+semantics): K=2/4/8/16 → **1.09/1.23/1.34/1.36×** solve wall. 15×15 random
+stacks @cap50: K=8 → **1.72×** @B=150, 1.46× @B=1500; at B=6000 K=4 wins
+(1.33×) — the optimal K shrinks as B×K approaches saturation. End-to-end gen
+(`bench_gen_refill`, 48 games @32 concurrent, 13×13): wall **67.7→52.6 s
+(1.29×)**, aug-pos/s **297.5→383.2**, join stall 25.8→12.5 s, game stream
+identical (same 132 calls / 360,925 boards / plies). `GOMOKU_VCT_LANES` (env,
+default 0=off; read by `gomoku/self_play.py`) turns it on for the gen oracle
+path — off = the byte-identical base kernel. The prediction was 2–4×;
+measured 1.34× on real 13×13 batches — the K× thread inflation eats into the
+divergence win at real batch widths (the 1.72× narrow-batch number shows the
+mechanism at its best).
+
+---
+
 ## Invariants (the regression contract)
 
 1. `return_support` leaves `(win, hit, move)` **byte-identical** to default.
@@ -508,6 +550,14 @@ raw logs + `REPORT.md` under `~/data/idx2_solve/sweep/` (out-of-git).
     `resident ∈ {<B, ≈B, ≫B}`, down to sub-threadgroup `B`. Combining it with any
     optional output raises. `solve_vct_streaming` latches budget-independent clean
     verdicts ⇒ agrees with a deepest-budget base call on all mutually-clean boards.
+11. **`lanes=K` (#114) is verdict-invariant.** `_build_src(False, False)` is
+    unchanged (`== _src()`); `lanes>1` only lane-partitions the two OR-node
+    candidate scans and merges with simd reductions whose MIN commit == the
+    sequential scan's lowbit4 order — so `(win, hit, move)` is **bit-identical**
+    to base for every K ∈ {2,4,8,16,32}, every budget, down to sub-threadgroup
+    and B=1. Combining with any optional output / work_steal raises; non-power
+    K raises. Covered by `test_lanes_source_untouched_default`,
+    `test_lanes_rejects_optional_outputs`, `test_lanes_byte_identical`.
 
 Covered by `scripts/vct_metal/test_mega_vct_bb.py` — `test_support_and_complete_invariants`,
 `test_carriers_golden_shapes`, `test_carriers_invariants`, `test_w_golden_shapes`,

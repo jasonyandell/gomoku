@@ -379,3 +379,27 @@ Receipts + attack list in issue #114: (1) multi-thread-per-board kernel
 rewrite (the per-node cost every capped lane pays), (2) cap50→cap25 recall
 study (the 9.5% census bucket bounds the 13×13 miss rate), (3) veto-breadth
 staging with a leak-rate measurement (last resort, semantics-gated).
+
+## 2026-07-02 — Lever (2) LANDED: lanes=K multi-thread-per-board kernel (#114) = 1.34× solve / 1.29× gen at 13×13, bit-identical
+
+The day-1 census said the only remaining lever was the kernel itself; day 2
+built it. `solve_vct_mega_bb(..., lanes=K)`: K simd lanes cooperate on one
+board — replicated-state lockstep DFS, the two per-node candidate scans
+(fours / forcing-threes, the per-node hot cost) lane-partitioned and merged
+with simd cluster reductions (OR masks, MIN winning cell == lowbit order), so
+the verdict is **bit-identical** to base (invariant #11; regression-tested to
+sub-threadgroup and B=1; default `lanes=1` source byte-identical).
+
+**Measured** (`scripts/vct_metal/bench_lanes13.py` — the committed version of
+day-1's evaporated scratchpad: capture real gen batches, replay per variant,
+verdict-equality asserted every batch). 132 real 13×13 merged-veto batches
+(360,925 boards, cap50, fresh small net): K=2/4/8/16 →
+**1.09/1.23/1.34/1.36×**. End-to-end gen (48@32): wall 67.7→52.6 s
+(**1.29×**), aug-pos/s 297.5→383.2, join stall 25.8→12.5 s, game stream
+identical. 15×15 narrow batches show the mechanism's ceiling (K=8 = 1.72×
+@B=150); at real widths the K× thread inflation eats half the win — the
+honest scoresheet vs the 2–4× prediction. Optimal K shrinks past B×K ≈ 25 k.
+`GOMOKU_VCT_LANES=8` (env, default off) enables it for the gen oracle path.
+Full contract + numbers: [mega-vct-solver.md](mega-vct-solver.md)
+§ Multi-thread-per-board. Remaining #114 items: cap50→cap25 recall study;
+veto-breadth staging (last resort).
