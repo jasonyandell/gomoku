@@ -320,7 +320,7 @@ def _stack_children(me: np.ndarray, opp: np.ndarray, cands: np.ndarray):
     return np.stack([child_att, child_def], axis=1).reshape(E, 2, n, n)
 
 
-def _defense_children(arrs, max_cands):
+def _defense_children(arrs, max_cands, build_for=None):
     """Build the escape-solve child batch for a list of to_planes() stacks.
 
     Returns (child_boards, owner_pos, owner_cell, masks): child_boards is the
@@ -328,7 +328,13 @@ def _defense_children(arrs, max_cands):
     any candidate), owner_pos/owner_cell are (Sum_L,) int arrays mapping each
     child back to (position index, flat cell), and masks is the per-position
     (N_ACTIONS,) bool "which cells were evaluated" list. Same candidate rule and
-    ordering as the historical per-cell loop, vectorized per position."""
+    ordering as the historical per-cell loop, vectorized per position.
+
+    `build_for` (optional (B,) bool) skips the child-board BUILD for positions
+    marked False while still marking their candidate masks — the null-board
+    precheck's contract: a position with a clean opp-no-VCT-on-pass has every
+    child PROVEN no-win (freestyle monotonicity + solver 0-FP), so its cells
+    count as evaluated (zero blunder map) without ever hitting the solver."""
     masks = [np.zeros(N_ACTIONS, dtype=bool) for _ in arrs]
     seg_boards: list[np.ndarray] = []
     seg_pos: list[np.ndarray] = []
@@ -343,57 +349,94 @@ def _defense_children(arrs, max_cands):
             dtype=np.int64)
         if cands.size == 0:
             continue
+        masks[pos_idx][cands] = True
+        if build_for is not None and not build_for[pos_idx]:
+            continue
         seg_boards.append(_stack_children(me, opp, cands))
         seg_pos.append(np.full(cands.size, pos_idx, dtype=np.int64))
         seg_cell.append(cands)
-        masks[pos_idx][cands] = True
     if not seg_boards:
         return None, None, None, masks
     return (np.concatenate(seg_boards, axis=0), np.concatenate(seg_pos),
             np.concatenate(seg_cell), masks)
 
 
+# Null-board precheck (perf, byte-identical, default ON): before building the
+# ~(legal cells) escape-solve children of a position, solve its NULL board
+# (attacker = opponent, i.e. "the side to move passes"). A CLEAN no-win (win
+# False AND hit_cap False) is an exhaustive proof that the opponent has no VCT
+# even with a free tempo; every child adds one DEFENDER stone to that exact
+# frame, and by freestyle monotonicity (a defender stone never makes an
+# attacker VCT appear — documented mega-solver invariant, see return_w) no
+# child can hold an attacker VCT either; the solver never returns win=True on
+# a no-VCT board (0 FP), so every child would come back win=False. The whole
+# children build+solve is therefore skippable with a provably identical zero
+# blunder map. A capped null (hit_cap=True) is NOT skippable: a child's extra
+# defender stone can prune the attacker's move list enough that the child
+# search completes (and proves a win) within the same node budget. Measured on
+# live sound-world gen positions: ~68% of plies are clean -> ~64% of children
+# solver-work skipped (the veto-stretched endgame plies 40+ are ~all clean).
+_ORACLE_PRECHECK_ENABLED = True
+
+
+def configure_oracle_precheck(enabled: bool | None = None) -> None:
+    """Enable/disable the null-board precheck (process-wide; A/B escape hatch —
+    the results are byte-identical either way, only the cost changes)."""
+    global _ORACLE_PRECHECK_ENABLED
+    if enabled is not None:
+        _ORACLE_PRECHECK_ENABLED = bool(enabled)
+
+
 def _oracle_ply_solve(planes_list, *, want_terminus, want_defense,
                       defense_max_cands=0, profile=None):
-    """ONE bulk mega-solve per ply for every oracle consumer (the call-cost law:
-    one call costs one tail; two calls cost two tails). Concatenates the
-    attacker-terminus boards (B) and the defense escape-solve children (Sum_L)
-    over the SAME positions into a single solve_vct_mega_bb dispatch and slices
-    the verdicts back out.
+    """Bulk mega-solve per ply for every oracle consumer (the call-cost law:
+    gather everything, never solve-in-a-loop). Phase 1 concatenates the
+    attacker-terminus boards (B) and — with the precheck on — the null boards
+    (B) into ONE solve_vct_mega_bb dispatch; phase 2 solves the defense
+    escape-children ONLY for positions whose null board came back win-or-cap
+    (with the precheck off, the children ride along in phase 1 and there is no
+    phase 2).
 
     Bit-identical to running _vct_terminus_solve + _vct_defense_solve
     separately: the megakernel runs one GPU thread per board with a PER-BOARD
     node budget (`int nodes=0` thread-local), so a board's verdict is
-    independent of batch composition; and `return_move` selects the SAME kernel
-    (the move output is always computed, the flag only gates the Python return).
-    Verified by tests/test_oracle_merged_solve.py and a live-solver probe.
+    independent of batch composition; `return_move` selects the SAME kernel
+    (the move output is always computed, the flag only gates the Python
+    return); and the precheck skip is a proof, not an approximation (see
+    _ORACLE_PRECHECK_ENABLED). Verified by tests/test_oracle_merged_solve.py,
+    a live-solver probe, and same-seed whole-gen hash receipts.
 
     Returns (win_t, move_t, vmaps, vmasks): the terminus pair is None unless
     `want_terminus`; the defense pair is None unless `want_defense`. Slot order
     follows `planes_list`."""
     solver = _load_mega_solver()
     B = len(planes_list)
+    precheck = want_defense and _ORACLE_PRECHECK_ENABLED
     with _profile_timer(profile, "oracle_build_s"):
         arrs = [np.asarray(p) for p in planes_list]
         segs: list[np.ndarray] = []
         if want_terminus:
             segs.append(_terminus_boards(arrs))
+        if precheck:
+            null_att = np.stack([a[HISTORY_PLY] for a in arrs]).astype(bool)
+            null_def = np.stack([a[0] for a in arrs]).astype(bool)
+            segs.append(np.stack([null_att, null_def], axis=1))
         child_boards = owner_pos = owner_cell = masks = None
-        if want_defense:
+        if want_defense and not precheck:
             child_boards, owner_pos, owner_cell, masks = _defense_children(
                 arrs, defense_max_cands)
             if child_boards is not None:
                 segs.append(child_boards)
     win_t = move_t = None
     vmaps = vmasks = None
-    if want_defense:
+    if want_defense and not precheck:
         vmaps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in arrs]
         vmasks = masks
     if not segs:
         return win_t, move_t, vmaps, vmasks
     batch = segs[0] if len(segs) == 1 else np.concatenate(segs, axis=0)
     with _profile_timer(profile, "oracle_solve_s"):
-        win, _hit, move = solver(
+        win, hit, move = solver(
             batch, max_nodes=_VCT_TERMINUS_BUDGET, return_move=True)
     _profile_add(profile, "oracle_solve_calls", 1.0)
     _profile_add(profile, "oracle_boards", float(batch.shape[0]))
@@ -403,7 +446,26 @@ def _oracle_ply_solve(planes_list, *, want_terminus, want_defense,
         win_t = win[:B]
         move_t = np.asarray(move)[:B].astype(np.int64)
         off = B
-    if want_defense and child_boards is not None:
+    if precheck:
+        null_win = win[off:off + B]
+        null_hit = np.asarray(hit).astype(bool)[off:off + B]
+        need = null_win | null_hit          # only these can hold a blunder
+        vmaps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in arrs]
+        with _profile_timer(profile, "oracle_build_s"):
+            child_boards, owner_pos, owner_cell, vmasks = _defense_children(
+                arrs, defense_max_cands, build_for=need)
+        _profile_add(profile, "oracle_precheck_skips", float(B - int(need.sum())))
+        if child_boards is not None:
+            with _profile_timer(profile, "oracle_solve_s"):
+                child_win, _chit = solver(
+                    child_boards, max_nodes=_VCT_TERMINUS_BUDGET,
+                    return_move=False)
+            _profile_add(profile, "oracle_solve_calls", 1.0)
+            _profile_add(profile, "oracle_boards", float(child_boards.shape[0]))
+            child_win = np.asarray(child_win).astype(bool)
+            for k in np.flatnonzero(child_win):
+                vmaps[owner_pos[k]][owner_cell[k]] = 1.0
+    elif want_defense and child_boards is not None:
         child_win = win[off:]
         for k in np.flatnonzero(child_win):
             vmaps[owner_pos[k]][owner_cell[k]] = 1.0

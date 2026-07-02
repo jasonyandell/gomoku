@@ -65,6 +65,7 @@ from gomoku.self_play import (
     configure_search_contempt,
     configure_vcf_teacher,
     configure_oracle_overlap,
+    configure_oracle_precheck,
     configure_oracle_veto,
     configure_vct_teacher,
     configure_vct_terminus,
@@ -236,6 +237,16 @@ def parse_args() -> argparse.Namespace:
                         "safe); a position whose tested cells ALL lose is "
                         "escalated to full breadth before the defender-"
                         "terminus check, which stays exactly sound.")
+    p.add_argument("--oracle-precheck", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Null-board precheck for the escape-solve (byte-"
+                        "identical results, default ON): a position whose "
+                        "null board ('I pass') is a CLEAN no-win at the cap "
+                        "provably has no blunder cells (freestyle "
+                        "monotonicity + solver 0-FP), so its children are "
+                        "never built or solved (~64%% of children solver-work "
+                        "on live gen). --no-oracle-precheck restores the "
+                        "single-phase merged solve (A/B escape hatch).")
     p.add_argument("--oracle-overlap", action="store_true", default=False,
                    help="Perf: run the per-ply bulk oracle solve (MLX/Metal) in "
                         "a background thread WHILE the native MCTS wave "
@@ -1008,6 +1019,9 @@ def main() -> None:
     # Oracle/search overlap (perf): run the per-ply mega-solve concurrently
     # with the MPS search wave. Default OFF = byte-identical serial order.
     configure_oracle_overlap(enabled=args.oracle_overlap)
+    # Null-board precheck (perf): byte-identical results, default ON;
+    # --no-oracle-precheck is the A/B escape hatch.
+    configure_oracle_precheck(enabled=args.oracle_precheck)
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
     # policy_mode (#43): switch to stamping the saving move on the policy head.

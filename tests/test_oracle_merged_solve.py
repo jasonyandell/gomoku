@@ -23,10 +23,12 @@ def _reset_globals():
     solver = sp._vct_terminus_solver
     veto, cands = sp._ORACLE_VETO_ENABLED, sp._VETO_MAX_CANDS
     overlap = sp._ORACLE_OVERLAP_ENABLED
+    precheck = sp._ORACLE_PRECHECK_ENABLED
     yield
     sp._vct_terminus_solver = solver
     sp.configure_oracle_veto(enabled=veto, max_cands=cands)
     sp.configure_oracle_overlap(enabled=overlap)
+    sp.configure_oracle_precheck(enabled=precheck)
 
 
 def fake_solver(boards, *, max_nodes=50, return_move=False, **_kw):
@@ -203,6 +205,40 @@ def test_apply_oracle_partitions_terminus_then_veto(monkeypatch):
     assert len(trajectories[5]) == 1              # one-hot terminus example
     assert pending[6] is not None                 # full-breadth map recorded
     assert pending[6].sum() == 0.0                # ...with no blunders
+
+
+def test_precheck_identical_results_and_skips(monkeypatch):
+    """The null-board precheck must be a pure cost optimization: identical
+    maps/masks with it on or off (the fake solver is monotone — a child win
+    implies a null win — mirroring freestyle monotonicity)."""
+    monkeypatch.setattr(sp, "_vct_terminus_solver", fake_solver)
+    rng = np.random.default_rng(21)
+    # mix: quiet positions (opp weak -> clean null no-win -> skipped) and hot
+    # positions (opp strong -> null win -> children solved)
+    planes_list = [_random_planes(rng, 3, 1), _random_planes(rng, 1, 6),
+                   _random_planes(rng, 2, 2), _random_planes(rng, 0, 5)]
+
+    sp.configure_oracle_precheck(enabled=False)
+    ref = sp._oracle_ply_solve(planes_list, want_terminus=True,
+                               want_defense=True, defense_max_cands=0)
+    prof: dict = {}
+    sp.configure_oracle_precheck(enabled=True)
+    out = sp._oracle_ply_solve(planes_list, want_terminus=True,
+                               want_defense=True, defense_max_cands=0,
+                               profile=prof)
+    np.testing.assert_array_equal(out[0], ref[0])       # terminus win
+    np.testing.assert_array_equal(out[1], ref[1])       # terminus move
+    for a, b in zip(out[2], ref[2]):
+        np.testing.assert_array_equal(a, b)             # blunder maps
+    for a, b in zip(out[3], ref[3]):
+        np.testing.assert_array_equal(a, b)             # evaluated masks
+    # positions 0 (opp 1 stone) and 2 (opp 2 vs me+1=3) have clean null
+    # no-wins under the fake rule -> skipped; 1 and 3 are hot.
+    assert prof.get("oracle_precheck_skips") == 2.0
+    # the skipped positions still read as fully evaluated (zero map, mask on)
+    legal0 = sp._legal_mask_from_planes(planes_list[0])
+    np.testing.assert_array_equal(out[3][0], legal0)
+    assert out[2][0].sum() == 0.0
 
 
 def test_staged_veto_terminus_matches_full_breadth(monkeypatch):
