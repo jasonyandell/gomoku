@@ -205,6 +205,36 @@ def test_apply_oracle_partitions_terminus_then_veto(monkeypatch):
     assert pending[6].sum() == 0.0                # ...with no blunders
 
 
+def test_staged_veto_terminus_matches_full_breadth(monkeypatch):
+    """The soundness-critical event: with the staged K-cap, an all-moves-lose
+    position must still fire the defender terminus (via escalation) exactly as
+    the full-breadth solve would."""
+    monkeypatch.setattr(sp, "_vct_terminus_solver", fake_solver)
+    # me 1 stone vs opp 5 -> every child loses (fake rule) => defender terminus.
+    doomed = _planes(me_flat=(40,), opp_flat=(0, 1, 2, 3, 4))
+
+    def run(max_cands):
+        sp.configure_oracle_veto(enabled=True, max_cands=max_cands)
+        res = sp._oracle_ply_solve([doomed], want_terminus=False,
+                                   want_defense=True,
+                                   defense_max_cands=max_cands)
+        active, active_games = [0], ["g"]
+        trajectories: dict = {0: []}
+        completed: list = []
+        active, active_games, pending = sp._apply_oracle_partitions(
+            res, active, active_games, [doomed], {0: 0}, ply=3,
+            initial_plies={0: 0}, trajectories=trajectories,
+            completed=completed, final_state={}, record_ownership=False,
+            record_vct=False, vct_maps={0: []}, profile=None)
+        return active, completed, trajectories[0], pending
+
+    a_full, c_full, t_full, _ = run(0)      # full breadth reference
+    a_k, c_k, t_k, _ = run(4)               # staged K=4 + escalation
+    assert a_full == [] and a_k == []        # terminus fires in BOTH modes
+    assert c_full == c_k                     # same (g_idx, outcome, plies)
+    np.testing.assert_array_equal(t_full[0][1], t_k[0][1])  # same pi target
+
+
 def test_configure_oracle_overlap_default_off():
     assert sp._ORACLE_OVERLAP_ENABLED is False    # default OFF = byte-identical
     sp.configure_oracle_overlap(enabled=True)
