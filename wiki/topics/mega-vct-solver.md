@@ -5,32 +5,94 @@ production VCT (Victory-by-Continuous-Threats) solver: one GPU thread per board
 runs the *whole* AND/OR proof search on-device as a bitboard (`own`/`opp`/`empty`
 = `ulong[4]`), make/unmake on a thread-local board, **all detection by bitboard
 set-algebra**. It is the single solver every threat-shape/mining/labeling
-consumer calls. **~1600× CPU throughput**, **0 FP / 0 FN** vs `gomoku.vcf.solve_vct`
-over 320 VCT + 360 VCF real positions.
+consumer calls, and the self-play oracle veto. **~1600× CPU throughput**,
+**0 FP / 0 FN** vs `gomoku.vcf.solve_vct` over 320 VCT + 360 VCF real positions.
 
-This page is the **API + invariants reference**. For *why* it is built this way
-(the CPU-bound v0 spike, the bitboard levers, the throughput characterization)
-read [gpu-vct-feasibility.md](gpu-vct-feasibility.md) — that page is the
-narrative/feasibility record; **this page is the contract.**
-
----
-
-## ⚡ THE CALL-COST LAW (the binding constraint — internalize before calling)
-
-**One call costs one _tail_: the wall is set by the single hardest board in the
-batch and is nearly flat in batch size.** B=16 → 24.6 s, B=16384 → 71.7 s — 1000×
-the boards for ~3× the wall; per-board cost swings ~350×. Compile is ~0.1 s (a
-fresh `uv run` per query is fine). Therefore **every caller MUST be
-bulk-synchronous**: gather every board you need (up to ~16 k) into *one* call;
-never solve-in-a-loop on a small batch. `max_nodes` is the tail knob (it bounds
-the single deepest board's search) and is a **GLOBAL pool across the batch** — for
-corpus labeling, scale `max_nodes` with B. A CAP verdict is fail-safe wherever
-"couldn't prove it" can be treated conservatively. Full numbers + derivation:
-[gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8 banner.
+This page is the **API + invariants contract + performance reference**. For the
+build *narrative* (the CPU-bound v0 spike, the bitboard levers, the throughput
+derivation) read [gpu-vct-feasibility.md](gpu-vct-feasibility.md) — that page is
+the feasibility record; **this page is the contract.**
 
 ---
 
-## API
+## 1. How it works — the on-device AND/OR bitboard search
+
+**One GPU thread solves one whole board.** The base kernel is `grid=(B,1,1)`:
+each thread runs an iterative AND/OR depth-first proof search over its own board,
+in a thread-local frame stack, with make/unmake — **no host orchestration per
+node**. This is what makes it fast; it is also what shapes its cost (§2).
+
+**Bitboard set-algebra, not cell scans.** Each colour is a 256-bit board packed
+as `ulong[4]` (N²≤256; N=15 here). All threat detection is shift-AND on those
+words — `has_five`, `completion_mask` (five-completion cells), forcing-move
+generation — done whole-board at once rather than by O(N²) per-cell scan. This
+bitboard rewrite was the ~10–14× step over the naive cell-scan megakernel (it
+mirrors the VCF result; details in [gpu-vct-feasibility.md](gpu-vct-feasibility.md)
+§8).
+
+**The proof tree.** A VCT is a forced win by *continuous threats* — every
+attacker move is a four or a forcing three, so the defender is always answering
+a threat and never gets a free tempo:
+
+- **OR node (attacker to move):** try each candidate move; the node wins if
+  **any** move leads to a forced win. Candidates are the fours (generated once by
+  set-algebra) plus the forcing threes (restricted to Chebyshev-2 of own stones —
+  a three is own's threat, so its move sits within radius-2 of the stones forming
+  it). An **inline win** — immediate five, sound double-four, fork-three — sets
+  `ret=1` at the detecting OR frame *without descending*.
+- **AND node (defender to move):** the defender must answer the threat; the node
+  wins for the attacker only if **every** defender reply still leads to a forced
+  win. The bounded reply set is the union of the threats' `{f}∪comps`
+  defeating-cell bitmasks (this is the v0 "host tempo-guard + open-four assembly"
+  reduced to in-kernel parallel set-algebra).
+
+A **four** advances OR→OR (+1 frame); a **forcing three** advances OR→AND→OR
+(+2 frames); an inline win collapses (+0). The search is bounded by `max_nodes`
+(a node budget — see §2) and a frame ceiling `MAXD=32` (never binding on real
+VCTs — §4).
+
+**Soundness.** The kernel never reports a false win: verdicts match the CPU
+oracle `gomoku.vcf.solve_vct` with **0 false-positive / 0 false-negative** clean
+disagreements over 320 real VCT positions (258 clean agreements, 8 seeds) and
+360 VCF positions. A `hit_cap` verdict means "couldn't prove within budget," NOT
+"no win" — always treat it conservatively.
+
+---
+
+## 2. The call-cost law — why every caller must be bulk-synchronous
+
+> ⚡ **One call costs one _tail_: the wall is set by the single hardest board in
+> the batch, and it is nearly flat in batch size.** An easy board is
+> milliseconds; a hard board (a deep *negative* proof — proving "no VCT" exhausts
+> the search) is the floor, and that floor scales with `max_nodes`. Passing
+> thousands more boards alongside it is nearly free.
+
+Measured (mn=2000, random midgame boards): **B=16 → 24.6 s, B=256 → 28.5 s,
+B=4096 → 40.5 s, B=16384 → 71.7 s** — 1000× the boards for ~3× the wall.
+Per-board cost collapses ~350× (1.5 s/board at B=16 → 0.0044 s/board at
+B=16384). Compile/import is ~0.1 s, so a fresh `uv run` per query is fine.
+
+**The mechanism:** the GPU scheduler already backfills at threadgroup-dispatch
+granularity, so retired lanes' slots get pending boards — *throughput is free,
+latency is fixed by the deepest board's serial single-thread grind.*
+
+**Binding rules for every caller:**
+1. **Be bulk-synchronous. Never solve-in-a-loop on a small batch** — a 25-board
+   call wastes ~99% of its wall. Gather every board you need (up to ~16 k) into
+   *one* call; sequential consumers (e.g. stencil ablation) march all items in
+   lockstep, one candidate per item per call.
+2. **`max_nodes` is the tail knob** — lower it to shrink the floor. It is a
+   **GLOBAL pool across the batch**, so for corpus labeling scale `max_nodes`
+   with B. A CAP verdict is fail-safe wherever "couldn't prove it" can be treated
+   conservatively.
+3. The floor itself only moves with a kernel that lets threads cooperate on the
+   *single deepest* board — that is the `lanes=K` lever (§ Performance).
+
+Full derivation + numbers: [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8.
+
+---
+
+## 3. API (the contract)
 
 ```python
 solve_vct_mega_bb(boards, *, max_nodes=20000, tg=32,
@@ -88,7 +150,7 @@ provably unchanged. Variants cost compute, not the fast path.
 
 ---
 
-## The three outputs, precisely
+## 4. The optional outputs, precisely
 
 ### `move` (passive winning move) — `return_move=True`
 A *passive* read of the move the search already commits to: the root's chosen
@@ -188,8 +250,8 @@ solver was right.
 ### `max_depth` (per-board frame cap) + `solve_md_min` (mate distance) — issue #91
 The **input** `max_depth` caps the search at a per-board **frame depth**: a branch
 that reaches frame `sp == max_depth` returns a **clean `ret=0`** (a definitive "no
-forced win within `sp < max_depth` frames") **without** descending and **without
-setting `hit_cap`**. The cut is placed *after* the node/structural cap, so an
+forced win within `sp < max_depth` frames") **without** descending and **without**
+setting `hit_cap`. The cut is placed *after* the node/structural cap, so an
 out-of-`max_nodes` board still latches `hit_cap` (inconclusive) and wins the race —
 the depth cut and the node cap are kept semantically distinct (one is "no win within
 this depth", the other is "couldn't afford to decide"). It makes **no move before
@@ -237,285 +299,148 @@ follow-up, not yet run. Drives the L1 **md-invariant stencil minimizer**
 
 ---
 
-## Streaming / work-stealing — `work_steal` + `solve_vct_streaming` (issue #93)
+## 5. Performance
 
-**The problem.** The base kernel is `grid=(B,1,1)` — one GPU thread per board, each
-running the whole AND/OR DFS in a thread-local stack until it wins, loses, or hits
-`max_nodes`. So in the long tail, the wall is the *single hardest board* grinding to
-`max_nodes` while the lanes that drew easy boards have retired. That's the call-cost
-law restated: 1000× boards for ~3× wall ⇒ there's spare lane capacity during the tail.
+The runtime map of the mega-VCT solver, in five facts. Tools:
+`scripts/vct_metal/{bench_throughput,sweep_throughput,analyze_sweep,n_sweep,maxd_study,bench_lanes13,bench_gen_refill}.py`;
+raw logs + `REPORT.md` under `~/data/idx2_solve/sweep/` (out-of-git).
 
-**`work_steal=True` (Option A) — a persistent dispatch.** Launch `resident` lanes
-(not `B`) and have each pull the next board index from a **shared atomic cursor**,
-looping until the pool drains. A lane that finishes an easy board immediately grabs
-another instead of idling. The per-board search is **byte-identical** to the base
-kernel — only the gid source (cursor vs thread id) and the output store change. The
-verdict is therefore bit-identical (regression-tested); `work_steal` is a *dispatch*
-optimization, not a search change.
+### 5.1 Peak throughput and the width knob
+Fully on-device, RSS ~0.3 GB, ~1600× aggregate CPU (`vcf.solve_vct` = 0.64
+solves/s). Solves/s saturate with batch size as the wall stays ~flat (call-cost
+law): mn=1500 real positions → B=8192 → 526, 16384 → **891**, 32768 → 1020
+(≈ GPU concurrency ceiling). At tight screening budgets the *screening* rate is
+enormous — quiet base@10 = **7.9M evals/min** (see §5.4 on why that resolves ~71%
+and no more).
 
-Mechanics that made it clean (all confirmed on MLX 0.31.2):
-- `mx.fast.metal_kernel(..., atomic_outputs=True)` emits every output as
-  `device atomic<T>*`; the cursor uses `atomic_fetch_add_explicit(&cursor[0], 1u,
-  memory_order_relaxed)`. Metal has **no `atomic<uchar>`**, so `win`/`hit` are widened
-  to `uint32` and `move` stays `int32`; the Python wrapper narrows them back, so the
-  returned tuple is dtype-identical to the base call.
-- The cursor is zeroed across all threadgroups by passing **`init_value=0`** on the
-  call (MLX zeroes the output buffer before the kernel runs) — no `threadgroup_barrier`
-  dance, so `resident` can span many threadgroups and saturate the GPU.
-- Fail-loud invariant: after the run, `cursor == B + resident` (B successful fetches
-  + one terminal overshoot per lane). A mismatch means the cursor wasn't zeroed (would
-  silently skip or over-run boards) and asserts rather than returns wrong data.
-- v1 is **base verdict only** — combining `work_steal` with
-  `return_support`/`complete`/`return_carriers`/`return_w`/`max_depth` raises
-  (the optional-output accumulators aren't wired through the loop yet).
-
-**Where it pays off — and where it doesn't.** The GPU hardware *already* backfills at
-*threadgroup-dispatch* granularity (a retired threadgroup's slot gets a pending one),
-which is *why* the call-cost law is flat. So for a single in-memory pool the marginal win
-over the base kernel is **none — measured 0.93–0.97× at best** (see the runtime table
-below); the cursor is pure overhead when all boards already fit one dispatch.
-`work_steal`'s *only* structural justification is a board pool **larger than one dispatch
-can hold or arriving incrementally** (so you cannot gather it up front): one persistent
-dispatch streams **millions** of boards at full occupancy with a single tail at the very
-end, instead of N sequential launches each paying a terminal tail + launch overhead. The
-intra-simdgroup divergence tax remains (a hard lane stalls its ~31 lock-step mates —
-measured at ~6% of lanes for a few hard boards in the spike); the cursor fixes
-inter-threadgroup idleness, not divergence.
-
-**`solve_vct_streaming` (Option B) — iterative deepening over the pool.** Round 0 solves
-**every** board at `budgets[0]`; the subset still `hit_cap` is re-solved at `budgets[1]`,
-and so on. A board's verdict **latches** the first round it returns clean — sound because
-a non-capped verdict is **budget-independent** (a deeper search never flips a clean
-win/no-win; same property `solve_md_min` relies on). Only boards still capped at
-`budgets[-1]` stay `hit=True`. This attacks the hard tail directly — most "hard" boards
-resolve at a slightly higher budget, so the expensive deep budgets run on only the
-shrinking survivor set, not the whole pool.
-
-### Measured runtime properties (#94) — the benchmark that mapped the niche
-
-84k real idx-2 frontier boards (replayed from `run-a` move-sequences, **no Rapfi**;
-24% capped@250), solver-only, `scripts/vct_metal/bench_throughput.py`:
-
-| regime | result | takeaway |
-|---|---|---|
-| **work_steal vs base, single pool** (budget 250/500/1000) | best **0.93 / 0.95 / 0.97×** (resident=16384); 0.34× @ resident=4096 | work_steal **never beats** base on a single in-memory pool — the hardware already backfills one dispatch, the cursor is overhead. Too-small `resident` underutilizes badly. |
-| **base chunked@16384** (the frontier's old wave pattern) | **0.66–0.69×** | a dispatch tail **per chunk**; the real lever is *one big dispatch*, not many small ones. |
-| **deepening on BASE** `(250,1000,4000)` vs single `@4000` | **1.60×**, identical verdicts (64539/64539) | ✅ **the niche.** The deep budget only touches the survivor tail. |
-| deepening ladder `(250,500,1000,2000,4000)` | 1.10× | coarse ladder wins — each round **re-solves survivors from scratch**, so extra rungs pay that redundancy. |
-| deepening on **work_steal** `(250,1000,4000)` | **0.87× (a LOSS)** | work_steal's big-round-0 handicap eats the deepening win ⇒ **`solve_vct_streaming` deepens on the base kernel by default**; `work_steal=True` is an opt-in for pools too large to gather into one dispatch. |
-
-> **[2026-06-29 correction — #95]** The **1.60×** above is **conditional on N**, not general:
-> it was measured at N=83814. The N-sweep finds deepen-vs-base@4000 = **0.69× / 0.79× / 1.19×
-> / 1.63×** at N = 10k / 20k / 40k / 84k (crossover ≈30–35k boards). Deepening wins only when
-> the hard-survivor batch is dense enough to saturate the GPU. For pools below ~30k boards,
-> a single base@ceiling dispatch is faster. See § Throughput characterization sweep.
-
-Net map of the mega-VCT solver's runtime: **for an in-memory pool, one big base
-dispatch is optimal; deepening with a coarse ladder buys ~1.6× at high effective budget;
-work_steal is a no-op-to-slight-loss whose only justification is genuinely-streamed pools
-you cannot gather up front.** The earlier `~1,750 nodes/s` frontier figure was
-*whole-pipeline* (Rapfi + solve + bookkeeping); the solver **alone** does ~6,900 boards/s
-@ budget 250 — ~3.9× the frontier rate, i.e. the frontier was **Rapfi-bound, not
-solver-bound** (so work_steal could never have sped it up — a prediction confirmed).
-
-**Validated:** `work_steal` verdict is byte-identical to base across seeds × budgets ×
-`resident ∈ {256,1024,8192}` (i.e. resident `<`, `≈`, `≫` B) and `B ∈ {1,31,33}` (sub-
-threadgroup); `solve_vct_streaming` agrees with a single deepest-budget base call on
-every mutually-clean board and resolves ≥ as many. See
-`scripts/vct_metal/test_mega_vct_bb.py` (`test_work_steal_*`, `test_streaming_*`).
-
-### Where work_steal *does* win: the forced-wave tail + the width knob (#96)
-
-The #93/#94 "work_steal is a no-op" was measured in the one setup where it can't help — a
-single in-memory pool where **base and work_steal drain together and run dry at the same
-instant**. #96 ran the matchup that test never did: *forced waves*, where the board supply
-runs dry because you chopped the work into separate dispatches. Three contestants on one
-mixed pool (#94's `bench_pool_100k`, N=16384, cap=2000; parity 12324 resolved / 6555 wins):
-
-- **wait** — process the pool in W separate dispatches, drain each fully before the next
-  (pays W tails). **refill** — one work_steal cursor over the whole pool, `resident` lanes
-  refill across wave boundaries (pays 1 tail). **oneshot** — single dispatch (= wait W=1).
-
-**At matched width, refill beats relaunch-per-wave** — confirming the tail is real and the
-cursor erases it (the inter-wave ramp-down/up + tail, recovered by keeping the pipe full):
-
-| width (in flight) | wait (relaunch/wave) | refill (cursor) | refill speedup |
-|---|---|---|---|
-| 4096 (W=4) | 73.9s | 61.4s | **1.20×** |
-| 1024 (W=16) | 269.8s | 209.7s | **1.29×** |
-
-The finer you're forced to slice, the more tails refill erases ⇒ the bigger its win.
-
-**But the tail is the *small* cost — width dominates.** `resident` is a **width throttle**;
-refill throughput climbs ~linearly with it up to saturation, reaching oneshot at R≈N:
+**Width is king.** Refill/streaming throughput climbs ~linearly with the number
+of lanes in flight (`resident`) up to saturation:
 
 | resident R | 1024 | 2048 | 4096 | 8192 | 16384(=N) | oneshot |
 |---|---|---|---|---|---|---|
 | vs oneshot | 0.12× | 0.22× | 0.40× | 0.66× | **0.96×** | 1.00× |
 
-(The 0.96× at full width = the atomic-cursor overhead, matching #94's 0.97×.) Going narrow
-costs ~0.34–0.40× *however* you handle the tail — far more than the 1.2–1.3× refill recovers.
+**If you can gather a big batch, run it wide in one dispatch** — that beats any
+narrow strategy by 3–8×. Going narrow costs ~0.34–0.40× *however* you handle the
+tail. Never chunk (`chunked@16384` = 0.63–0.69× — a dispatch tail *per chunk*).
 
-**Synthesis (resolves the whole work_steal arc):** *width is king* — if you can gather a big
-batch, run it wide (oneshot); that beats any narrow strategy by 3–8×, and is the quantified
-"make the pool huge" answer. **work_steal/refill is the right tool ONLY when you are forced
-narrow** — streaming, memory-bound, or waves you genuinely cannot merge — where it buys
-~1.2–1.3× over relaunch-per-wave. **Hard caveat:** refill only helps to the extent the next
-wave's boards are *already in hand*; a **gated** frontier (wave K+1 depends on K's verdicts)
-cannot be refilled — there the run-dry tail is unavoidable, and the only remaining lever is
-parallelizing a single proof across lanes (a major rewrite, worth only the final sliver).
-Bench: `scripts/vct_metal/bench_refill_vs_wait.py`; raw `~/data/idx2_solve/sweep/refill_vs_wait.{jsonl,log}`.
+### 5.2 Streaming / work-stealing — `work_steal` + `solve_vct_streaming` (#93/#94/#96)
+Two levers for pools you **cannot** gather up front (streamed, memory-bound, or
+forced-narrow waves). Both are verdict-invariant (invariant #10).
 
-### Throughput characterization sweep (#95) — the runtime map
+- **`work_steal=True`** launches `resident` persistent lanes that pull the next
+  board from a shared atomic cursor, so a lane that finishes an easy board grabs
+  another instead of idling. On a **single in-memory pool it is a no-op-to-loss**
+  (measured 0.93–0.97× at full width; 0.72–0.79× across pool shapes) — the
+  hardware already backfills one dispatch, so the cursor is pure overhead. Its
+  **only** justification: a pool larger than one dispatch can hold, or arriving
+  incrementally. There it beats **relaunch-per-wave** by **1.20–1.29×** (finer
+  forced slicing → bigger win) because the cursor erases the per-wave tail. But
+  the tail is the *small* cost — width dominates (§5.1), so narrowing to gain
+  refill is a net loss unless you were forced narrow already.
+- **`solve_vct_streaming` (iterative deepening)** solves the whole pool at
+  `budgets[0]`, re-solves only the still-capped survivors at `budgets[1]`, etc. A
+  clean (non-capped) verdict **latches** — it is budget-independent — so only the
+  shrinking hard tail pays the deep budgets. **Deepens on the base kernel by
+  default**; `work_steal` deepening loses (its big round-0 handicap eats the win).
+- **Hard caveat:** refill only helps if the next wave's boards are *already in
+  hand*. A **gated** frontier (wave K+1 depends on K's verdicts) cannot be
+  refilled — there the run-dry tail is unavoidable, and the only lever left is
+  parallelizing one proof across lanes (§5.3).
 
-Goal: map board-evals/min across the **whole mixed population**, which decomposes into
-differently-shaped subproblems (easies / long-tails / deeps) we can't know a-priori in
-general — but *can* know for already-computed boards via the append-only logs.
-`scripts/vct_metal/sweep_throughput.py` (append-only, resumable) sweeps **4 pools**
-(quiet-heavy frontier, capped-only, random, deep) × **strategies** (base @ 11 budgets,
-chunked, work_steal × 3 residents, deepening over 4 ladders) and builds a **per-pool
-resolution profile** (each board's min-resolving budget → hardness histogram → an oracle
-bound). `analyze_sweep.py` turns the logs into the map.
+### 5.3 The `lanes=K` multi-thread-per-board kernel (#114)
+The call-cost floor is one weak thread grinding the single deepest board; at
+13×13 half the batch is capped (§5.4), so *every* simdgroup is saturated with
+hard lanes and all the dispatch-level levers (ladder, oracle-sort, tg) have
+nothing to grab. `lanes=K` (K ∈ {2,4,8,16,32}) attacks the floor directly:
 
-**Two metrics, and the distinction matters:** *evals/min* = boards **screened**/min (high
-even at budget 10), vs *resolved/min* = boards given a **verdict**/min. Screening fast
-while leaving caps is not progress — the decision metric is resolved/min and the
-wall-to-resolve-to-ceiling.
+**K simd lanes cooperate on one board.** All K replicate the board and run the
+AND/OR DFS in lockstep (identical values, never diverge, nothing shared); only
+the two OR-node candidate scans (fours / forcing-threes — the per-node hot cost)
+partition work: lane j takes set-bit ranks j, j+K, …, and partials merge with
+intra-cluster simd reductions (OR for masks, MIN for the winning cell). Min ==
+lowbit order, so the verdict is **BIT-IDENTICAL** to base — same move, node count,
+`hit_cap` (invariant #11). This cuts both per-node latency (scan work ÷ K) and
+intra-simdgroup divergence (32/K boards per simdgroup). Cost: K× threads, so past
+saturation (B×K ≳ ~25 k) a smaller K wins.
 
-**Hardness profiles (done, N=30000/pool) — resolution is BIMODAL, and the hard tail is
-near-bottomless.** Cumulative % resolved by budget:
+**Measured (2026-07-02, `bench_lanes13.py` — real gen batches replayed per
+variant, verdict-equality asserted).** 132 real 13×13 merged-veto batches
+(360,925 boards, cap50): K=2/4/8/16 → **1.09 / 1.23 / 1.34 / 1.36×** solve wall.
+15×15 narrow batches show the mechanism's ceiling (K=8 = **1.72×** @B=150, 1.46×
+@B=1500; at B=6000 K=4 wins at 1.33×). End-to-end gen (48 games @32 concurrent,
+13×13): wall **67.7→52.6 s (1.29×)**, aug-pos/s 297.5→383.2, join stall
+25.8→12.5 s, game stream identical. The prediction was 2–4×; measured 1.34× on
+real 13×13 batches — the K× thread inflation eats half the divergence win at real
+widths (the 1.72× narrow number is the mechanism at its best).
+
+`GOMOKU_VCT_LANES` (env, default 0=off; read by `gomoku/self_play.py`) turns it
+on for the gen oracle path — off = the byte-identical base kernel. `tg` must be a
+multiple of 32; v1 is base-verdict-only (optional outputs / work_steal raise).
+
+### 5.4 Hardness is bimodal; MAXD=32 is sufficient (#95)
+Resolution across the mixed population is **bimodal**: 70–85% of boards resolve at
+budget *10*, then a steep plateau, then a **near-bottomless hard tail** that 80×
+the budget barely touches. Cumulative % resolved:
 
 | pool | @10 | @250 | @1000 | @20000 | still capped@20k |
 |---|---|---|---|---|---|
 | quiet (frontier) | 71% | 76% | 77% | 78% | **22%** |
-| capped-only | 0% | 0% | 3% | **6%** | **93.7%** |
+| capped-only | 0% | 0% | 3% | 6% | **93.7%** |
 | random | 72% | 82% | 84% | 85% | 15% |
 | deep (high ply) | 83% | 92% | 94% | 95% | 5% |
 
-Two facts jump out:
-1. **Budget beyond ~250 buys almost nothing.** 71–83% resolve by budget *10*; then a steep
-   plateau (quiet 76%→78% from 250→20000). The population is bimodal — "easy" (≤250 nodes)
-   vs a hard tail that 80× the budget barely touches. There is very little *in between*.
-2. **The capped regime is near-bottomless: 93.7% of capped boards stay capped even at 20,000
-   nodes** (80× the frontier's 250). So escalating `max_nodes` to "fill in the caps" is
-   largely futile — these need ≫20k nodes **or are unprovable within `MAXD=32` frames**.
-   That distinction is exactly what the **MAXD 32→64 study** resolves: if more caps fall at
-   64 frames, the cap was *frame-depth-bound*, not node-bound. (Consistent with the earlier
-   cap-probe: <1% flipped to a *win* at 16× budget; here 6% reach *any* verdict at 80×.)
+Consequences: **(a)** budget beyond ~250 buys almost nothing on the easy mass, so
+for max *resolved/min* **screen cheap (~10–100) then batch the hard survivors as
+ONE dense high-budget dispatch** (a dense all-hard batch saturates the GPU at
+~0.9M nodes/s vs ~0.35–0.49M mixed). **(b)** The capped tail is genuinely hard,
+not a budget away — `max_nodes` can't fill it (6.5% resolved at 80× budget) and
+neither can the frame ceiling: the **MAXD 32→64 study finds *exactly zero* new
+wins** (`gained_by_64 = 0`), so real VCTs essentially never exceed 32 forcing
+frames. **Keep MAXD=32** (MAXD=64 costs ~5% throughput for nothing); the
+`GOMOKU_VCT_MAXD` knob stays for probes.
 
-Peak solver node-throughput shows on the all-hard pool (capped ~0.9M nodes/s — every lane
-stays deep; mixed pools lower). A full fine ascending ladder pays ~1.8× the node-work of
-oracle routing (re-solve tax) — which is *why* coarse ladders beat fine.
+**Deepening's win is conditional on scale.** deepen `(250,1000,4000)` vs
+base@4000 = 0.69× / 0.79× / 1.19× / 1.63× at N = 10k / 20k / 40k / 84k — crossover
+≈ **30–35k** boards. Below that a single base@ceiling dispatch wins; above it the
+deep rounds stay dense with hard boards and saturate the GPU. So the recipe is:
+**screen-cheap → batch-hard → deepen only if the survivor set is ≳30k.**
 
-**Throughput map (partial: quiet/capped/random done, N=20000/config):**
-- **Screening rate is enormous at low budget** — quiet base@10 = **7.9M ev/min** resolving
-  71%, vs base@250 = 358k ev/min resolving 76%. Because hardness is bimodal, pushing the
-  budget up resolves *few* more boards at cratering throughput. For max *resolved/min*, screen
-  low and accept the hard tail as deferred.
-- **work_steal loses on EVERY pool** (capped 0.72×, quiet 0.79× vs base@250) — the no-op
-  generalizes across board shapes, as predicted.
-- **chunked@16384 loses on every pool** (0.63–0.66×) — the per-chunk-tail penalty is robust.
+### 5.5 The oracle dominates self-play gen — optimize the SOLVER, not the gen loop (2026-07-02)
+The sound-world gen recipe (`--vct-terminus --oracle-veto`, cap50) makes the VCT
+solver the gen bottleneck, and at 13×13 it is overwhelming. Perf isolation
+(`bench_gen_refill`, same small 64×4 net, sims=100, net size held constant):
 
-**Deepening's win is CONDITIONAL ON SCALE (resolves the #94 contradiction).** At N=20000
-deepening *loses* to base@ceiling on every pool (quiet coarse 0.80×, full_low 0.52×; capped
-coarse 0.78×), yet #94 measured **1.60×** at N=83814. The N-sweep (deepen `(250,1000,4000)`
-vs base@4000 on #94's *exact* pool, `n_sweep.py`) shows the speedup is **monotonic in N**:
+| config | games/min | aug_pos/s | oracle_s / wall_s |
+|---|---|---|---|
+| oracle ON, lockstep | 215.6 | 449 | 16.2 / 17.8 (**91%**) |
+| oracle ON, streaming (concurrent 64→256) | 216.4 | 451 | 16.2 / 17.7 |
+| oracle OFF, lockstep | 638 | 2497 | 0 |
+| oracle OFF, streaming | 644 | 2520 | 0 |
 
-| N | 10000 | 20000 | 40000 | 83814 |
-|---|---|---|---|---|
-| deepen vs base@4000 | 0.69× | 0.79× | **1.19×** | **1.63×** |
+Two load-bearing findings:
 
-Crossover ≈ **30–35k boards**; at 83814 it reproduces #94's 1.60× exactly. Mechanism:
-deepening's value is keeping the *deep* rounds **dense with hard boards** — the all-hard
-capped pool saturates the GPU at **~0.9M nodes/s** vs ~0.35–0.49M mixed, so a deep round on a
-dense survivor set is ~2× faster per node, beating the re-solve tax *only* when there are
-enough hard survivors to saturate. Below ~30k the survivor batch is too sparse and the tax
-dominates. **So #94's 1.60× is real but conditional on large N / high hard-density — not a
-general win** (dated-corrected in the #94 table below).
+1. **The VCT oracle veto is 91% of the gen wall at 13×13** — turning it on cuts
+   throughput ~3× (638→216 games/min). This is the `lanes=K` kernel's domain
+   (§5.3), NOT the gen loop's.
+2. **Streaming ≈ lockstep in a single process** (216 vs 216 games/min, oracle on
+   or off) — the refill loop adds ~0 single-process throughput. **#112's
+   3.4–4.6× was an 8-proc FLEET → 1 wide-proc comparison** (a fleet-consolidation
+   win, see [mcts-perf-ceiling.md](mcts-perf-ceiling.md)), NOT a gen-path
+   overhaul. Do not cite it as a single-process refill speedup.
 
-**MAXD 32→64 (`maxd_study.py`, env `GOMOKU_VCT_MAXD`) — the caps are NODE-bound, not
-frame-bound; MAXD=32 is sufficient.** Solving the capped sample (15k) at both ceilings:
-
-| budget | resolved @MAXD32 (wins) | resolved @MAXD64 (wins) |
-|---|---|---|
-| 1000 | 479 (90) | 480 (90) |
-| 4000 | 757 (151) | 758 (151) |
-| 20000 | 972 (200) | 976 (197) |
-
-Identical within noise, and the monotone cross-check on the random pool is decisive:
-**`gained_by_64 = 0`** — raising the frame ceiling finds *exactly zero* new wins. So the
-near-bottomless caps are not waiting on >32 forcing frames; they are node-bound (astronomically
-wide ≤32-frame trees) or genuinely VCT-less but expensive to disprove. Real VCTs essentially
-never exceed 32 frames. MAXD=64 buys nothing and costs ~5% throughput ⇒ **keep MAXD=32**; the
-`GOMOKU_VCT_MAXD` knob stays (default 32 = byte-identical validated path) for future probes.
-
-### The synthesis — optimal throughput across a mixed population
-
-The population is **bimodal** (easy ≤250 nodes vs a near-bottomless hard tail), so the
-throughput-optimal recipe is **screen-cheap-then-batch-hard**, never one fixed budget:
-1. **Screen at a low budget (~10–100)** — flushes the 70–85% easy majority at *millions* of
-   boards/min and gives the highest *resolved/min* (a clean verdict resolves and stops well
-   before the cap; raising the budget on the easy mass is pure waste).
-2. **Collect the hard survivors and solve them as ONE dense high-budget dispatch.** A dense
-   all-hard batch saturates the GPU (~0.9M nodes/s); never chunk it (per-chunk tail, 0.66×)
-   and never work_steal it (in-memory no-op). If the survivor set is large (≳30k), deepening
-   *(coarse ladder)* over it adds ~1.6×; below that, a single base@ceiling dispatch wins.
-3. **Use the append-only logs.** Boards already characterized (run-a tags capped@250) can be
-   routed *directly* into the dense hard-batch, skipping re-screening — the oracle path. A full
-   fine ascending ladder pays ~1.8× the node-work of this oracle routing (the re-solve tax),
-   which is why coarse ladders and log-driven routing beat blind fine deepening.
-
-And the honest ceiling on ambition: **`max_nodes` cannot fill the caps** (6.5% resolved at 80×
-budget; 1.3% wins) and **`MAXD` cannot either** (frame ceiling is not the binding constraint).
-The capped tail is a genuinely-hard regime, not a budget away. Tools:
-`scripts/vct_metal/{sweep_throughput,analyze_sweep,n_sweep,maxd_study,bench_throughput}.py`;
-raw logs + `REPORT.md` under `~/data/idx2_solve/sweep/` (out-of-git).
+**PERF LEVER PRIORITY:** because the oracle dominates, the lever for faster
+sound-world gen is the **VCT solver/kernel** (`lanes=K`, cap50→cap25 recall study,
+tighter per-node work), **not** the gen loop. Prior 9×9-era levers on
+`gomoku/self_play.py` (merged per-ply solve = 1.06–1.07× byte-identical default-on;
+null-board precheck **refuted** at both 9×9 and 13×13; oracle/search overlap =
+1.18× via GIL-released MLX under MPS contention) are second-order next to the
+kernel floor. Full gen-loop lever history + the bimodal 13×13 census:
+[mcts-perf-ceiling.md](mcts-perf-ceiling.md) (2026-07-01 / 2026-07-02 sections).
 
 ---
 
-## Multi-thread-per-board — `lanes=K` (#114)
-
-The base kernel's per-node hot cost is the OR-node candidate scans: the fours
-loop (trial-play every four-move: soundness + double-four check) and the
-forcing-threes loop (trial-play every `candidate_own` cell: a whole-board
-`gen_forcing` + follow-up `completion_mask` loop each). One thread per board
-pays that serially — and at 13×13 the resolve census is **48% @budget 10 /
-9.5% @11–50 / 42.5% capped@50**, so every simdgroup is saturated with hard
-lanes and all the dispatch-level levers (ladder 0.83×, oracle-sort 0.98×, tg
-1.00×, precheck 0.59×) have nothing to grab.
-
-**`lanes=K` (K ∈ {2,4,8,16,32}) makes K simd lanes cooperate on one board.**
-All K lanes replicate the board state and run the AND/OR DFS in lockstep (they
-compute identical values, so they never diverge from each other and nothing
-needs sharing); only the two candidate scans partition work — lane j takes
-set-bit ranks j, j+K, … and the partials merge with intra-cluster simd
-reductions (OR for `fmask`/`tmask`, MIN for the winning cell). Min == lowbit
-order, so the verdict is **BIT-IDENTICAL** to base: same move, same node
-count, same `hit_cap` (invariant #11). This attacks both the per-node latency
-floor (scan work ÷ K) and intra-simdgroup divergence (32/K boards per
-simdgroup). Cost: K× threads, so past GPU saturation (B×K ≳ ~25 k) prefer a
-smaller K; `ulong` shuffles split into 2×`uint` (`sxor64`). v1 is
-base-verdict-only (combining with optional outputs raises), `tg` must be a
-multiple of 32.
-
-**Measured (2026-07-02, `bench_lanes13.py` — capture real gen batches, replay
-per variant, verdict-equality asserted per batch).** 132 real 13×13
-merged-veto batches (360,925 boards, cap50, fresh small net, live sound-world
-semantics): K=2/4/8/16 → **1.09/1.23/1.34/1.36×** solve wall. 15×15 random
-stacks @cap50: K=8 → **1.72×** @B=150, 1.46× @B=1500; at B=6000 K=4 wins
-(1.33×) — the optimal K shrinks as B×K approaches saturation. End-to-end gen
-(`bench_gen_refill`, 48 games @32 concurrent, 13×13): wall **67.7→52.6 s
-(1.29×)**, aug-pos/s **297.5→383.2**, join stall 25.8→12.5 s, game stream
-identical (same 132 calls / 360,925 boards / plies). `GOMOKU_VCT_LANES` (env,
-default 0=off; read by `gomoku/self_play.py`) turns it on for the gen oracle
-path — off = the byte-identical base kernel. The prediction was 2–4×;
-measured 1.34× on real 13×13 batches — the K× thread inflation eats into the
-divergence win at real batch widths (the 1.72× narrow-batch number shows the
-mechanism at its best).
-
----
-
-## Invariants (the regression contract)
+## 6. Invariants (the regression contract)
 
 1. `return_support` leaves `(win, hit, move)` **byte-identical** to default.
 2. On boards neither solve capped, **complete `win` == default `win`**.
@@ -573,14 +498,15 @@ disagreements) is the same module's `test_mega_vct_bb_matches_mega_vct`.
 
 ---
 
-## Gotchas
+## 7. Gotchas
 
 - **Plane convention is side-to-move-relative, `board[0]`=attacker, no swap** — the
   #1 silent-wrong-answer trap.
 - **Free-style** (overlines win); VCT-win monotonicity holds under free-style.
 - **256-bit board** (`ulong[4]`, N²≤256). `uint[8]` was tried and reverted (~20%
-  slower in situ — the kernel is bookkeeping-heavy; see §8 "word width").
-- **Tail-bound, bulk-synchronous only** — see the call-cost law. Keep callers
+  slower in situ — the kernel is bookkeeping-heavy; see
+  [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8 "word width").
+- **Tail-bound, bulk-synchronous only** — see the call-cost law (§2). Keep callers
   bulk-synchronous; never solve-in-a-loop.
 - **`hit_cap` is not a no-win** — it's "couldn't prove within budget". Treat
   conservatively.
@@ -589,7 +515,7 @@ disagreements) is the same module's `test_mega_vct_bb_matches_mega_vct`.
 
 ---
 
-## CPU solver retired (2026-06-27) — gate, env override, fast/deep test tiers
+## 8. CPU solver retired (2026-06-27) — gate, env override, fast/deep test tiers
 
 The CPU oracle `gomoku/vcf.py` (`solve_vcf` / `solve_vct` + the `*_from_planes`
 wrappers) is **retired as a runtime dependency**. It is kept **intact** as a
@@ -640,19 +566,22 @@ the loop, not the kernel, which is 4 s flat at B=16384):
 - `tests/test_cpu_solver_gate.py` covers the gate itself (entry points raise when
   the env is cleared; the override unblocks them).
 
-## Consumers (who calls this)
+## 9. Consumers (who calls this)
 
 `scripts/threat_shapes/`: `mine_vct_gpu_flat.py`, `mine_first_vct.py`,
 `solve_puzzles.py`, `mine_puzzles.py`, `harvest_molecules.py`, `vct_fan.py`,
 `probe_timing.py`, `certificate_falsification.py` (the `carriers` certificate),
 `w_channel_probe.py` (the `w` identity-not-existence probe, #90),
 `md_minimize.py` (the `max_depth`/`solve_md_min` md-invariant stencil minimizer, #91).
-Feeds [shape-library-engine.md](shape-library-engine.md) (L1
+`gomoku/self_play.py` is the self-play **oracle veto** consumer (`GOMOKU_VCT_LANES`
+gates `lanes=K`). Feeds [shape-library-engine.md](shape-library-engine.md) (L1
 stencils), [vct-backward-mining.md](vct-backward-mining.md),
 [vct-reachability-mining.md](vct-reachability-mining.md), and
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md).
 
 **Cross-links:** [gpu-vct-feasibility.md](gpu-vct-feasibility.md) (build narrative
-+ throughput) · [vct-backward-mining.md](vct-backward-mining.md) §5 (the move
-output) · [allis-threat-theory.md](allis-threat-theory.md) (VCF/VCT formalism) ·
-`gomoku/vcf.py` (the CPU oracle `solve_vct`).
++ throughput derivation) · [mcts-perf-ceiling.md](mcts-perf-ceiling.md) (the gen
+loop; oracle-dominates finding) · [vct-mining-research.md](vct-mining-research.md)
+(the mining programs this feeds) · [vct-backward-mining.md](vct-backward-mining.md)
+§5 (the move output) · [allis-threat-theory.md](allis-threat-theory.md) (VCF/VCT
+formalism) · `gomoku/vcf.py` (the CPU oracle `solve_vct`).
