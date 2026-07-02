@@ -11,6 +11,7 @@ Don't lose it again.
 **Related:** [[training-run-lineage]] (which run warm-started from which),
 [[15x15-training-campaign]] (the destination board's campaign),
 [[sound-world-recipe]] (the 9×9 recipe carried up to 13×13 in #113),
+[[bruce-lee-model]] (the large "Bruce" net — the 15×15 warm-start target),
 [[rapfi-idx2-distillation-mine]] (the "Bruce Lee one-position" idx-2 champion — a same-size
 warm-start / aux-head splice target, distinct from cross-board).
 

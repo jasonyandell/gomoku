@@ -82,7 +82,7 @@ learnability threads confirm the net can perceive them; the oracle guarantees so
 | The **idx-2 opening** danger map / forward frontier | [idx2-vct-frontier-map.md](idx2-vct-frontier-map.md) |
 | **Non-line** structure — methods, and the canonical example | [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) · [the-claw.md](the-claw.md) |
 | Can a net **see / steer / regress** a VCT? (the learnability evidence) | [vct-recognition-learnability.md](vct-recognition-learnability.md) · [seeker-steering-learnability.md](seeker-steering-learnability.md) · [phi-distance-field-learnability.md](phi-distance-field-learnability.md) |
-| Why the whole net/oracle split is right (Rapfi already does it) | [rapfi-mix9svq-architecture.md](rapfi-mix9svq-architecture.md) §6 |
+| Why the whole net/oracle split is right (Rapfi already does it) | [rapfi-mix9svq-architecture.md](rapfi-mix9svq-architecture.md) §6 · [net-architecture-and-representation.md](net-architecture-and-representation.md) (our net + line-planes representation) |
 
 ## The threads, in a few sentences each
 

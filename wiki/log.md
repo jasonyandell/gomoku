@@ -1763,3 +1763,28 @@ thread inflation at real widths; narrow-batch ceiling 1.72× @B=150 15×15).
 full pytest green. Left in #114: cap25 recall study, veto-breadth staging.
 Details: [topics/mega-vct-solver.md](topics/mega-vct-solver.md)
 § Multi-thread-per-board; [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) 2026-07-02.
+
+## 2026-07-02 — Fan-out wiki refresh + fact-organization pass (pre-curation)
+
+A two-stage subagent fan-out to get the accumulated notes into real, discoverable
+pages *before* a later high-level curation pass. Stage 1 (9 pages): created
+[topics/training-run-reference.md](topics/training-run-reference.md) (every knob/switch
++ quick-start), [topics/eval-suite.md](topics/eval-suite.md) (command-first how-to-eval),
+[topics/rapfi-pool.md](topics/rapfi-pool.md), [topics/vct-mining-research.md](topics/vct-mining-research.md)
+(seek-VCT synthesis hub), [topics/bruce-lee-model.md](topics/bruce-lee-model.md), and
+[topics/net-architecture-and-representation.md](topics/net-architecture-and-representation.md)
+(recovers the 2026-07-01 Fable representation rationale from session logs — line planes /
+global pool / the hybrid-Rapfi north star — with an honest recovered-vs-lost box, since
+Fable's reasoning channel is redacted); curated/extended
+[topics/board-size-transfer-and-warm-start.md](topics/board-size-transfer-and-warm-start.md)
+(+ the auto-graduating 9→11→13→15 ladder), [topics/mega-vct-solver.md](topics/mega-vct-solver.md)
+(+ performance: lanes=K #114, the oracle-veto = 91%-of-gen-wall finding), and
+[topics/sound-world-recipe.md](topics/sound-world-recipe.md) (+ the 13×13 graduation NEGATIVE
+result #113 + the new role-invariant "rails" ideas). Stage 2 (curation): integrated all 9
+into the index task-view table (temp block removed), re-pointed the parallel-write link
+stand-ins to their real siblings, disambiguated the "Bruce" checkpoint provenance (two runs:
+live `gogpmbhw` e2659 w/ choice-head vs the `zrjfwny2` 128×10-bigbuf eval ladder where
+eval502=e500 and e588_best=e605), and reconciled the small-net param count (**345,885 @ 9×9
+vs 395,605 @ 13×13** — the +49,720 is the board-area flatten in `policy_fc`+`value_fc1`; the
+raw 396,774 state_dict also counts BatchNorm buffers). A **high-level curation pass is still
+pending** (this stage was facts-in-place-and-organized, not synthesis).
