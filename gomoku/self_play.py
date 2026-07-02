@@ -116,6 +116,12 @@ def configure_vct_teacher(max_depth: int | None = None,
 _VCT_TERMINUS_ENABLED = False
 _VCT_TERMINUS_BUDGET = 50            # per-board node cap (cap50)
 _vct_terminus_solver = None         # lazily-imported MLX solve_vct_mega_bb
+# Multi-thread-per-board kernel (issue #114): K simd lanes cooperate on each
+# board inside the solver. The verdict is BIT-IDENTICAL to base (regression-
+# tested invariant); this is purely a perf knob. Measured on 132 real 13x13
+# merged-veto batches (360,925 boards, cap50): K=8 -> 1.34x, K=16 -> 1.36x
+# solve-wall vs base. 0/1 (default) = off = the byte-identical base kernel.
+_VCT_SOLVER_LANES = int(os.environ.get("GOMOKU_VCT_LANES", "0"))
 # Moonshot VCT-defense labeler breadth cap. 0 (default) = enumerate ALL legal
 # empty cells as blunder candidates per recorded position; K > 0 caps to the K
 # empty cells nearest an existing stone (a per-ply gen-cost lever). Only read by
@@ -211,7 +217,12 @@ def _load_mega_solver():
     global _vct_terminus_solver
     if _vct_terminus_solver is None:
         from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
-        _vct_terminus_solver = solve_vct_mega_bb
+        if _VCT_SOLVER_LANES > 1:
+            import functools
+            _vct_terminus_solver = functools.partial(
+                solve_vct_mega_bb, lanes=_VCT_SOLVER_LANES)
+        else:
+            _vct_terminus_solver = solve_vct_mega_bb
     return _vct_terminus_solver
 
 
