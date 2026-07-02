@@ -300,9 +300,9 @@ in-trainer eval entirely; pair with a separate `eval_worker`).
 `--eval-vcf-depth` (root VCF overlay), `--fpu-reduction-c` (KataGo FPU;
 c≈0.45/0.20), `--reuse-tree` (tree reuse across plies), `--proven-prop` +
 `--proven-vcf-leaf-nodes` (proven-win propagation). All byte-identical-off.
-See [[launch-sequence-runbook]] §leading-indicators for what to watch. (Note:
-there is no dedicated `eval-suite.md` page in the wiki yet — the eval harness
-lives in `gomoku/eval.py`, `eval_worker.py`, `eval_swap2.py`, `match.py`.)
+See [[launch-sequence-runbook]] §leading-indicators for what to watch. The eval
+harness is documented in [[eval-suite]]; the code lives in `gomoku/eval.py`,
+`eval_worker.py`, `eval_swap2.py`, `match.py`.
 
 ### Perf / backend (worker-side, eval-only)
 

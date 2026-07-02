@@ -40,12 +40,50 @@ one position, not coverage. See
   loss dies), 9 fair openings collapsed to the single fair opener, **3 self-play
   workers** (buffer-balance knob — target reuse ~1–4; reuse <1 is gen-flood
   self-sabotage), gumbel-root m16, value-discount 0.95, 64 SGD-steps/epoch.
-- **Run:** wandb **`gogpmbhw`** (`G15-fixed-openings-board15`), the 8-worker
-  overnight e224→~616 and onward. Latest snapshot
-  `~/data/swap2/babysit/snapshots/g15_e2659_0623_2025.pt` (**e2659**). The
-  128×10 checkpoint used for the #103 warm-start pivot is
-  `g15_128x10_bigbuf_e588_best.pt` (~ep 605); the white-wound measurement below
-  used `g15_128x10_bigbuf_eval502.pt` (**eval502**).
+- **Run(s) — two distinct wandb runs sit behind the "Bruce" checkpoints**
+  (provenance verified 2026-07-02 by loading each `.pt`'s `epoch` /
+  `wandb_run_id` / `model_config`):
+  - **`gogpmbhw`** (`G15-fixed-openings-board15`) — the canonical **live-Bruce**
+    training run: 128×10 15×15 **with `choice_head`** (the swap2 schema), the
+    8-worker overnight e224→~616 and onward. Its latest babysit snapshot
+    `~/data/swap2/babysit/snapshots/g15_e2659_0623_2025.pt` loads as **epoch
+    2659, `wandb_run_id: gogpmbhw`, `choice_head: True`** (verified).
+  - **`zrjfwny2`** (cell `G15-128x10-bigbuf`, the "**128×10 bigbuf**" eval
+    ladder) — a **separate** wandb run, 128×10 15×15 **without `choice_head`**.
+    It produced the frozen internal-strength-ladder nets `…_eval146` (epoch 100),
+    `…_eval248` (e200), `…_eval348` (e300), **`…_eval502` (epoch 500)**, and
+    **`…_e588_best` (epoch 605, the "best" checkpoint)** — every one loads with
+    **`wandb_run_id: zrjfwny2`** and no `choice_head` (verified).
+- **The three files this page cites, disambiguated (all verified by torch-load):**
+  - `g15_e2659_0623_2025.pt` = **epoch 2659, run `gogpmbhw`** — the live-Bruce
+    babysit snapshot (swap2 schema, `choice_head:True`).
+  - `g15_128x10_bigbuf_e588_best.pt` = **epoch 605 (best), run `zrjfwny2`** — the
+    #103 warm-start base.
+  - `g15_128x10_bigbuf_eval502.pt` = **epoch 500, run `zrjfwny2`** — the
+    white-wound measurement net (§4a).
+  - So **`eval502` and `e588_best` are the SAME run (`zrjfwny2`) at different
+    epochs** (e500 vs the e605 "best") — one eval ladder, not two runs. Neither is
+    the same run as the `e2659` snapshot (`gogpmbhw`); the two lineages also
+    differ in architecture (`zrjfwny2` carries **no** `choice_head`). The file's
+    eval-index (146/248/348/502) does **not** equal its stored `epoch`
+    (100/200/300/500) — the index is offset from the internal epoch counter
+    (offset *reason* unverified; the `epoch` values themselves are verified).
+  - Reconciling "#103 pivot warm-started *from* `e588_best`" (§4d) with
+    `e588_best` already carrying `wandb_run_id: zrjfwny2`: the pivot **resumed the
+    same `zrjfwny2` run** from its own ~e605/e613 checkpoint (consistent with
+    [white-side-defense-plan.md](white-side-defense-plan.md) "resumed e585 →
+    e1286" and `TRAINING_WIKI.md` `G15-128x10-bigbuf` 501→513), rather than
+    starting a fresh run — so `zrjfwny2` names the *whole* bigbuf lineage, of
+    which the aux-head pivot (§4d, Experiment B) is a later resume segment. *(The
+    resume interpretation is inferred from the shared run-id plus the wiki's
+    resume notes; the run-id sharing is verified, the resume mechanism is not
+    independently re-verified here.)*
+  - **Unverified / open:** whether the `zrjfwny2` bigbuf net is itself a
+    warm-start descendant of the `gogpmbhw` Bruce (or an independent 128×10 run)
+    is **not** established by the checkpoint metadata — the differing arch
+    (`choice_head` present vs absent) and non-aligned epoch counters are
+    consistent with either; treat the two as *related-but-distinct* runs unless a
+    lineage link is confirmed elsewhere.
 - **Strength / plateau:** plateaued at **~50 Δelo**, confirmed
   **buffer-knob-proof** — reuse/window/freshness levers all exhausted, strength
   flat, **0/16 vs Rapfi**. Trading real blows (stronger than past-self, even-ish

@@ -156,8 +156,10 @@ strong, defends-and-closes net at 13×13 and beyond.
 
 ## See also
 - [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) — the #98 attacker terminus this recipe composes with.
-- [vct-backward-mining.md](vct-backward-mining.md) — VCT mining research lineage (the requested `vct-mining-research.md` topic lives here).
+- [vct-mining-research.md](vct-mining-research.md) — the VCT-mining reference (whole-net vs oracle split, the mining hub).
+- [vct-backward-mining.md](vct-backward-mining.md) — VCT mining research lineage.
 - [white-side-defense-plan.md](white-side-defense-plan.md) — the white-defense problem this line keeps colliding with.
 - [swap2-opening-protocol.md](swap2-opening-protocol.md) — the fair-openings piece of idea #4 (and the idx-2 connection).
 - [mega-vct-solver.md](mega-vct-solver.md) — the GPU oracle that can probe the 13×13 forced-win question.
+- [net-architecture-and-representation.md](net-architecture-and-representation.md) — the net + line-planes representation this recipe trains (param counts, presets).
 - [the-claw.md](the-claw.md) — the double-threat / line-planes representation motivation (net-architecture context).

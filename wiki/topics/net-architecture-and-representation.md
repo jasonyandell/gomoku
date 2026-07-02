@@ -14,6 +14,8 @@ Source files: `gomoku/model.py` (the net), `gomoku/features.py` (the line
 planes). See also [sound-world-recipe.md](sound-world-recipe.md),
 [vct-recognition-learnability.md](vct-recognition-learnability.md),
 [the-claw.md](the-claw.md),
+[bruce-lee-model.md](bruce-lee-model.md) (the large "Bruce" net),
+[vct-mining-research.md](vct-mining-research.md) (the mining hub / whole-net-vs-oracle split),
 [vct-defense-aux-head-result.md](vct-defense-aux-head-result.md),
 [idx2-vct-frontier-map.md](idx2-vct-frontier-map.md) (the "Bruce-Lee board").
 
@@ -50,7 +52,7 @@ Two presets are in play (`SIZE_PRESETS`):
 
 | preset | width×depth | params (measured) | role |
 |---|---|---|---|
-| **small** | 64 filters × 4 blocks | **345,885** (25-ch stem = 17+8 line planes; matches the 9×9 sound-world run) | the from-scratch 9×9 / 13×13 sound-world net |
+| **small** | 64 filters × 4 blocks | **345,885** @ 9×9 / **395,605** @ 13×13 (25-ch stem = 17+8 line planes; same net, the count scales with board area — see note) | the from-scratch 9×9 / 13×13 sound-world net |
 | **large ("Bruce")** | 128 × 10 | **~3.05M** (~3.2M with line-planes+global-pool) | the 15×15 champion |
 
 Params (and compute) scale as **≈ width² × depth**: the 64×4 → 128×10 jump is a
@@ -211,8 +213,18 @@ death-tell for that same attractor.
 > a deliberate size choice" is **BORNE OUT**; his guess that "Fable's big idea is
 > hybrid + search in Rapfi's direction" is **CONFIRMED** by the §3–§4 quotes.
 >
-> **Numbers, verified today:** the small net is **345,885 params** (measured;
-> logged in TRAINING_WIKI 2026-07-02 line 5534 as the from-scratch 9×9 run with a
-> "25-ch stem"), *not* the ~396K a rougher recollection suggested. The large
-> "Bruce" net is **~3.05M** (128×10). The ~14× epoch gap is net-size/train-bound
-> (line 5797).
+> **Numbers, verified today (re-measured 2026-07-02, WT):** the small
+> sound-world net is **345,885 params at 9×9** and **395,605 params at 13×13** —
+> *both figures are correct; they are the SAME architecture at different board
+> sizes*. The 345,885 is the from-scratch 9×9 run (wandb `zeed2xw5`, TRAINING_WIKI
+> line 5534, "25-ch stem"); the 395,605 is the actual trained
+> `sound-world-13-scratch` checkpoint (epoch2252.pt; `model_config` confirms
+> `line_planes=True, global_pool=True, stem_padding=1, scalar` value head). The
+> +49,720 gap is board-size-dependent flatten in the FC heads —
+> `policy_fc` (+44,088) and `value_fc1` (+5,632) flatten the H×W map, so fan-in
+> scales with board area (9²=81 → 13²=169); the tower/stem/choice head are
+> size-independent. (n_params counts learnable params; the checkpoint state_dict
+> reads 396,774 because it also stores BatchNorm running buffers, which n_params
+> excludes.) So the earlier "~396K vs 345K" confusion was 13×13-vs-9×9, not two
+> different nets. The large "Bruce" net is **~3.05M** (128×10). The ~14× epoch gap
+> is net-size/train-bound (line 5797).
