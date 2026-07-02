@@ -2831,20 +2831,22 @@ def worker_cmd(cell: Cell, dirs: dict, worker_id: str, seed: int) -> list[str]:
     return cmd
 
 
-def eval_cmd(cell: Cell, dirs: dict) -> list[str]:
+def eval_cmd(cell: Cell, dirs: dict, device: str = "cpu") -> list[str]:
     # Lookahead:depth=4 is included as a 4th anchor: with depth=4 anchored at
     # 1500 Elo the implied_elo MLE doesn't saturate against lookahead2 (1200),
     # so the model_elo trajectory shows real strength changes instead of
     # ceiling-clamping when the model crushes the lower-rated baselines.
-    # n_workers=4 keeps the multi-baseline eval cycle under ~3min via parallel
-    # game-playing (see gomoku/eval.py:play_match_parallel).
+    # device: "cpu" for the LIVE sidecar (never fight the training GPU
+    # tenant); the post-run final eval passes "mps" — the run is torn down,
+    # the GPU is free, and the batched arena turns minutes into seconds.
+    # n_workers=4 only matters on the legacy (non-arena) path.
     return [
         PYTHON, "-u", "-m", "gomoku.eval_worker",
         "--checkpoint-path", str(dirs["worker_weights"]),
         "--baselines", "random,heuristic,lookahead:depth=2,lookahead:depth=4",
         "--n-games", "20",
         "--sims", "100",
-        "--device", "cpu",
+        "--device", device,
         "--n-workers", "4",
         "--poll-sec", "2.0",
     ]
@@ -2889,13 +2891,17 @@ def _terminate_all(procs: list[tuple[str, subprocess.Popen]]) -> None:
 def _run_final_eval(cell: Cell, dirs: dict) -> None:
     """One-shot eval of the final published weights → a fresh eval/model_elo line
     in eval_results.jsonl. This is the training machine evaluating itself at the
-    end of a capped slice (eval stays inside the bundle, not the lab's job)."""
-    cmd = eval_cmd(cell, dirs) + ["--max-cycles", "1"]
+    end of a capped slice (eval stays inside the bundle, not the lab's job).
+
+    Runs on MPS: _terminate_all has already torn the run down, so the GPU is
+    free — the batched arena on MPS turns the 4-baseline battery from minutes
+    (the old forced-CPU path) into seconds."""
+    cmd = eval_cmd(cell, dirs, device="mps") + ["--max-cycles", "1"]
     log_path = dirs["log_dir"] / "final_eval.log"
     print(f"=== final eval (one-shot --max-cycles 1) for cell {cell.name} ===")
     env = os.environ.copy()
     env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-    env["GOMOKU_DEVICE"] = "cpu"
+    env["GOMOKU_DEVICE"] = "mps"
     with open(log_path, "a") as log_f:
         p = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT,
                              env=env, cwd=str(REPO_ROOT))

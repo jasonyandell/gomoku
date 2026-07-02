@@ -102,7 +102,19 @@ def vcf_overlay_picker(
 def _load_vct_solver():
     """Import the GPU VCT oracle (lazy; behind an indirection so tests can
     monkeypatch it without paying the MLX/Metal import + compile)."""
-    from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+    try:
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+    except ModuleNotFoundError:
+        # Console entry points (gomoku-arena etc.) don't put the repo root on
+        # sys.path the way `python -m gomoku.X` from the checkout does; the
+        # editable install means gomoku/'s parent IS the repo root.
+        import sys
+        from pathlib import Path
+
+        repo_root = str(Path(__file__).resolve().parents[1])
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
     return solve_vct_mega_bb
 
 

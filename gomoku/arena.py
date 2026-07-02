@@ -77,6 +77,14 @@ class NetAgent(BatchedAgent):
     Fresh tree per move, no root noise, greedy pick — identical decision rule
     to the legacy `mcts_picker` default, but the search itself batches leaves
     across every game in the subset (x wave_size with soft virtual loss).
+
+    `vct_finish` > 0 arms the batched GPU-VCT finisher (issue #109 — the
+    arena form of :func:`gomoku.eval.vct_finish_picker`): each round, ONE
+    bulk `solve_vct_mega_bb` call over every to-move board (the call-cost
+    law: one call = one solver tail, width rides free); games where the side
+    to move has a forced VCT within the node cap play the oracle's winning
+    move, the rest fall through to the batched MCTS wave. 0 (default) = OFF,
+    never imports MLX — byte-identical to the bare agent.
     """
 
     def __init__(
@@ -86,31 +94,59 @@ class NetAgent(BatchedAgent):
         sims: int = 100,
         c_puct: float = 1.5,
         wave_size: int = 16,
+        vct_finish: int = 0,
         label: str = "model",
     ) -> None:
         self.evaluator = evaluator
         self.sims = sims
         self.c_puct = c_puct
         self.wave_size = wave_size
+        self.vct_finish = int(vct_finish)
+        self.vct_finish_fired = 0     # diagnostic: oracle moves played
+        self._solver = None
+        if self.vct_finish > 0:
+            from gomoku.eval import _load_vct_solver
+
+            self._solver = _load_vct_solver()
         self.label = label
 
     def pick_batch(self, states: list[GameState], rngs: list[Rng]) -> list[int]:
         from gomoku.mcts import MCTSGame, policy_from_visits, run_batched_mcts_waves
 
-        games = [
-            MCTSGame(s, c_puct=self.c_puct, rng=r) for s, r in zip(states, rngs)
-        ]
-        run_batched_mcts_waves(
-            games,
-            self.evaluator,
-            n_simulations=self.sims,
-            wave_size=self.wave_size,
-            add_root_noise=False,
-        )
-        return [
-            int(np.argmax(policy_from_visits(g.root, temperature=0.0)))
-            for g in games
-        ]
+        picks: list[int | None] = [None] * len(states)
+        search_idx = list(range(len(states)))
+        if self._solver is not None and states:
+            boards = np.stack(
+                [np.asarray(s.board, dtype=bool) for s in states])   # (B,2,N,N)
+            win, _hit, move = self._solver(
+                boards, max_nodes=self.vct_finish, return_move=True)
+            win = np.asarray(win)
+            move = np.asarray(move)
+            search_idx = []
+            for i, s in enumerate(states):
+                m = int(move[i])
+                if (bool(win[i]) and 0 <= m
+                        and bool(np.asarray(s.legal_mask()).reshape(-1)[m])):
+                    picks[i] = m
+                    self.vct_finish_fired += 1
+                else:
+                    search_idx.append(i)
+
+        if search_idx:
+            games = [
+                MCTSGame(states[i], c_puct=self.c_puct, rng=rngs[i])
+                for i in search_idx
+            ]
+            run_batched_mcts_waves(
+                games,
+                self.evaluator,
+                n_simulations=self.sims,
+                wave_size=self.wave_size,
+                add_root_noise=False,
+            )
+            for i, g in zip(search_idx, games):
+                picks[i] = int(np.argmax(policy_from_visits(g.root, temperature=0.0)))
+        return [int(p) for p in picks]
 
 
 class PickerAgent(BatchedAgent):
@@ -284,6 +320,7 @@ def net_agent_from_checkpoint(
     sims: int = 100,
     c_puct: float = 1.5,
     wave_size: int = 16,
+    vct_finish: int = 0,
     device: str | None = None,
     label: str | None = None,
 ) -> NetAgent:
@@ -306,6 +343,7 @@ def net_agent_from_checkpoint(
         sims=sims,
         c_puct=c_puct,
         wave_size=wave_size,
+        vct_finish=vct_finish,
         label=label or f"model:{checkpoint}",
     )
 
@@ -363,14 +401,25 @@ def build_agent(
         checkpoint = spec.kwargs.get("checkpoint")
         if not checkpoint:
             raise SystemExit(f"model spec needs checkpoint=PATH: {spec_str!r}")
+        # Fail LOUD on kwargs the arena doesn't implement (issue #109: a
+        # `vct_finish=50` spec used to silently play the BARE net).
+        known = {"checkpoint", "sims", "c_puct", "wave", "vct_finish"}
+        unknown = set(spec.kwargs) - known
+        if unknown:
+            raise SystemExit(
+                f"model spec kwargs not supported by the batched arena: "
+                f"{sorted(unknown)} in {spec_str!r} (known: {sorted(known)}). "
+                f"Use the legacy sequential path (gomoku.eval) for other levers.")
         sims = int(spec.kwargs.get("sims", str(default_sims)))
         c_puct = float(spec.kwargs.get("c_puct", "1.5"))
         wave = int(spec.kwargs.get("wave", str(wave_size)))
+        vct_finish = int(spec.kwargs.get("vct_finish", "0"))
         return net_agent_from_checkpoint(
             checkpoint,
             sims=sims,
             c_puct=c_puct,
             wave_size=wave,
+            vct_finish=vct_finish,
             device=device,
             label=spec.label(),
         )
