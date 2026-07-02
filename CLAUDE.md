@@ -55,9 +55,11 @@ Prefer MPS over CPU. W&B project: `gomoku` (pull exact run histories, don't gues
   entangles diffs and blocks clean merges. **Never rebase, fast-forward, squash.**
   Start with `python scripts/worktree_session.py add <slug>` — records the owning
   session for `claude --resume <id>` (`worktree_session.py log` survives teardown).
-- **Janitor at session start:** `python scripts/reclaim_worktrees.py --apply`
-  reclaims what crashed sessions leak; `--gauge` prints the repo-hygiene metric.
-  Janitor + gauge, not a remembered procedure (`wiki/topics/worktree-hygiene.md`).
+- **Worktree cleanup is MANUAL and careful.** The auto-janitor
+  (`reclaim_worktrees.py`) is retired (2026-07-01): it removed a worktree a
+  LIVE training run was executing from — "clean + merged" says nothing about
+  live processes. Before removing any worktree, `ps aux | grep <path>` first
+  (`wiki/topics/worktree-hygiene.md`).
 - **Fan out to preserve context.** Context is the scarcest resource; delegate
   context-heavy/parallel work to subagents (`run_in_background: true` when async)
   — broad searches, log trawls, many-file reads, independent tasks — and keep the

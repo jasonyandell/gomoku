@@ -59,10 +59,11 @@ with `python scripts/worktree_session.py add <slug>` — it creates
 logs are findable later via `claude --resume <id>` (`worktree_session.py log`
 survives teardown).
 
-**Session-start janitor:** `python scripts/reclaim_worktrees.py --apply`
-reclaims worktrees/branches leaked by crashed sessions; `--gauge` prints a
-one-line repo-hygiene metric. Cleanup is a janitor + gauge, not a remembered
-procedure (`wiki/topics/worktree-hygiene.md`).
+**Worktree cleanup is MANUAL and careful.** The auto-janitor
+(`reclaim_worktrees.py`) is retired (2026-07-01): it removed a worktree a LIVE
+training run was executing from — "clean + merged" says nothing about live
+processes. Before removing any worktree, `ps aux | grep <path>` first
+(`wiki/topics/worktree-hygiene.md`).
 
 **Fan out to preserve context:** the orchestrator's context window is the
 scarcest resource. Delegate context-heavy or parallelizable work — broad
