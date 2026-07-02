@@ -608,12 +608,21 @@ def _oracle_veto_partition(active, active_games, planes_list, pending_vct, ply,
                            record_ownership, record_vct, vct_maps, profile):
     """Defender terminus: END every game whose side to move has NO non-losing
     move (every legal cell is a proven blunder on its map). The exact mirror of
-    :func:`_vct_terminus_partition` — side-to-move LOSES, the doomed position is
-    recorded with a uniform-over-legal policy target (no move is better than
-    another; the value signal z=-1 is the teaching), and the game leaves the
-    active set before any search is spent on it. Only positions with a FULL
+    :func:`_vct_terminus_partition` — side-to-move LOSES and the game leaves
+    the active set before any search is spent on it. Only positions with a FULL
     blunder map (veto forces max_cands=0) can terminate here; positions with no
-    map (None) always survive. Returns the surviving (active, active_games)."""
+    map (None) always survive. Returns the surviving (active, active_games).
+
+    The doomed position itself records NO training example (2026-07-01 wound
+    fix, #107): the original design appended it with a uniform-over-legal
+    policy target ("no move is better; z does the teaching"), but at scale
+    that IS the teaching — as black's attack sharpens, most games end here, so
+    white's most common late-training examples became uniform noise over ~70
+    cells and white's policy collapsed (e1982: 0W-20L-0D as white vs the old
+    champion, vs all-draws at e1239; self-metrics saw nothing). Dropping the
+    example loses nothing real: the trap-completing move (real MCTS pi, crisp
+    discounted z) becomes the trajectory's final example and the loss still
+    propagates through the mate-distance discount."""
     keep = []
     for slot_idx, g_idx in enumerate(active):
         vmap = pending_vct.get(g_idx)
@@ -626,11 +635,6 @@ def _oracle_veto_partition(active, active_games, planes_list, pending_vct, ply,
             continue
         n_initial = initial_plies[g_idx]
         side = (n_initial + ply) % 2       # the side to move is LOST
-        pi_term = (legal.astype(np.float32) / legal.sum())
-        trajectories[g_idx].append(
-            (np.asarray(planes_list[slot_idx]).copy(), pi_term, side))
-        if record_vct:
-            vct_maps[g_idx].append(vmap)   # keep lockstep with the recorded traj
         outcome_for_black = -1.0 if side == 0 else 1.0
         if record_ownership:
             # Not a real five-in-a-row board -> ownership target MASKED.

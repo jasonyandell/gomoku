@@ -268,7 +268,9 @@ def test_staged_veto_terminus_matches_full_breadth(monkeypatch):
     a_k, c_k, t_k, _ = run(4)               # staged K=4 + escalation
     assert a_full == [] and a_k == []        # terminus fires in BOTH modes
     assert c_full == c_k                     # same (g_idx, outcome, plies)
-    np.testing.assert_array_equal(t_full[0][1], t_k[0][1])  # same pi target
+    # 2026-07-01 wound fix (#107): the doomed position records NO example in
+    # EITHER mode (the old uniform-over-legal pi taught white noise at scale).
+    assert t_full == [] and t_k == []
 
 
 def test_configure_oracle_overlap_default_off():

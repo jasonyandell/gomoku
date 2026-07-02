@@ -80,7 +80,12 @@ def test_veto_policy_nan_pi_falls_back():
 
 def test_partition_all_lose_is_a_defender_terminus():
     # Board with two stones; EVERY legal cell is a proven blunder -> the side
-    # to move LOSES here, no search is spent, pi target = uniform over legal.
+    # to move LOSES here, no search is spent, and — the 2026-07-01 wound fix —
+    # NO training example is recorded for the doomed position. The original
+    # uniform-over-legal pi target taught white's policy noise at scale: as
+    # black sharpened, most games ended here, so white's most common examples
+    # were uniform noise and white collapsed (e1982: 0W-20L-0D as white vs the
+    # old champion, vs all-draws at e1239; self-metrics saw nothing). See #107.
     planes = _planes_with_stones(me_flat=(0,), opp_flat=(1,))
     legal = sp._legal_mask_from_planes(planes)
     vmap = np.zeros(N_ACTIONS, dtype=np.float32)
@@ -99,14 +104,9 @@ def test_partition_all_lose_is_a_defender_terminus():
     assert new_active == [] and new_games == []
     # side = (0+5)%2 = 1 (white) is to move and is LOST -> black wins
     assert completed == [(4, 1.0, 5)]
-    assert len(trajectories[4]) == 1
-    _planes, pi, side = trajectories[4][0]
-    assert side == 1
-    np.testing.assert_allclose(pi.sum(), 1.0, rtol=1e-6)
-    assert pi[0] == 0.0 and pi[1] == 0.0              # occupied cells get no mass
-    np.testing.assert_allclose(pi[legal], 1.0 / legal.sum(), rtol=1e-6)
+    assert trajectories[4] == []                      # doomed position NOT recorded
+    assert vct_maps[4] == []                          # lockstep stays empty
     assert final_state[4] == (None, 0)                # ownership masked
-    assert len(vct_maps[4]) == 1                      # lockstep with trajectory
 
 
 def test_partition_survives_with_a_safe_move_or_no_map():
