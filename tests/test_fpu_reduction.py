@@ -338,5 +338,8 @@ def test_eval_argparsers_expose_fpu_reduction_c():
     assert "--fpu-reduction-c" in ew_src, "eval_worker.py must expose --fpu-reduction-c"
     assert "--fpu-reduction-c" in tr_src, "train.py must expose --fpu-reduction-c"
     # Default-OFF discipline: 0.0 default in both argparsers.
-    assert 'default=0.0' in ew_src.split("--fpu-reduction-c")[1].split("help=")[0]
-    assert 'default=0.0' in tr_src.split("--fpu-reduction-c")[1].split("help=")[0]
+    # Anchor on the add_argument call — other flags' help text may mention
+    # --fpu-reduction-c before the argparser does.
+    anchor = 'add_argument("--fpu-reduction-c"'
+    assert 'default=0.0' in ew_src.split(anchor)[1].split("help=")[0]
+    assert 'default=0.0' in tr_src.split(anchor)[1].split("help=")[0]
