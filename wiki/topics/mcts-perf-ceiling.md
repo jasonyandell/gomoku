@@ -300,3 +300,35 @@ needs the TQ canary per the L06/L11b' entries above. The MCTS engine itself
 (hypothesis "the impl has headroom") is 0.6% of gen wall at sims=100 — no
 meaningful headroom left there; after the oracle levers the next wall is the
 evaluator's ~2 ms/call MPS dispatch floor (see the sections above).
+
+### 2026-07-01 CORRECTION (same session, round-2 A/B): the cost model is
+### CALL-COUNT x TAIL-GRIND; the null-board precheck is REFUTED at 9x9
+
+Round-2 measurement (same protocol, GPU-quiet) overturns the "width/work-
+bound" reading above and refutes lever #2 as a 9×9 speedup:
+
+- **Per-call solver cost is ~CONSTANT at this operating point:** merged
+  single-call = 81 calls / 12,218 boards / 3.545 s = **43.8 ms/call**;
+  precheck two-phase = 98 calls / 4,727 boards / 4.345 s = **44.3 ms/call**.
+  Cutting boards 2.6× changed nothing per call — the call pays the hardest
+  board's full cap50 grind (~0.9 ms/node on ONE GPU thread), width rides
+  free. The round-1 "width scaling" probe read was a difficulty-sampling
+  artifact of random boards (more random boards ⇒ harder max).
+- **Precheck verdict: byte-identical but SLOWER** (oracle 3.55 → 4.35 s,
+  wall 4.80 → 5.57 s/batch): the 61% board reduction saved nothing and the
+  phase-2 split added ~17 calls/batch. Default flipped to OFF; the flag
+  remains a big-board experiment (children build cost and widths differ
+  there). The monotonicity-skip PROOF and its receipts remain valid.
+- **What actually shipped as the win:** merged solve (1.06–1.07×, byte-
+  identical, default-on) + `--oracle-overlap` (**1.18× end-to-end** at live
+  config, identical games at the test seeds, deterministic; MLX/MPS GPU
+  contention — evaluator 1.16→2.3 s while a solve runs — caps the overlap
+  gain well below min(solve, search)).
+- **The measured next levers, in leverage order:** (1) **cross-worker solver
+  batching** — width is free, so ONE shared solve for all 4 workers costs the
+  same ~44 ms as each worker's own call ⇒ aggregate oracle GPU time ÷4
+  (architectural: a solver service or worker consolidation); (2) **kernel
+  tail** — ~0.9 ms/node/thread is the grind; a multi-thread-per-board or
+  memory-layout pass on `mega_vct_bb` attacks the floor directly; (3) lower
+  cap (cap50→cap25) = semantics change, needs a recall measurement first
+  (cascade data says cap50 ≈ 98.8% of VCTs; cap25 recall unknown).

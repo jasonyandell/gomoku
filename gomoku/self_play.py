@@ -361,7 +361,7 @@ def _defense_children(arrs, max_cands, build_for=None):
             np.concatenate(seg_cell), masks)
 
 
-# Null-board precheck (perf, byte-identical, default ON): before building the
+# Null-board precheck (perf, byte-identical): before building the
 # ~(legal cells) escape-solve children of a position, solve its NULL board
 # (attacker = opponent, i.e. "the side to move passes"). A CLEAN no-win (win
 # False AND hit_cap False) is an exhaustive proof that the opponent has no VCT
@@ -376,7 +376,15 @@ def _defense_children(arrs, max_cands, build_for=None):
 # search completes (and proves a win) within the same node budget. Measured on
 # live sound-world gen positions: ~68% of plies are clean -> ~64% of children
 # solver-work skipped (the veto-stretched endgame plies 40+ are ~all clean).
-_ORACLE_PRECHECK_ENABLED = True
+#
+# DEFAULT OFF (2026-07-01 A/B verdict): at the 9x9 live config the per-call
+# solver cost is ~CONSTANT (~44 ms at 48 or 151 boards/call — the call is
+# call-count x tail-grind bound, width is FREE), so skipping 61% of the boards
+# saved nothing while the phase-2 split added ~0.2 calls/ply => net SLOWER
+# (oracle 3.55 -> 4.35 s/batch). Results are byte-identical either way; the
+# flag stays as a BIG-BOARD experiment (N^2-children build cost and batch
+# widths change the trade there — re-measure before enabling).
+_ORACLE_PRECHECK_ENABLED = False
 
 
 def configure_oracle_precheck(enabled: bool | None = None) -> None:
