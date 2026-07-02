@@ -1726,3 +1726,24 @@ opponent settles it, and #100 said no), and "stronger at short games" is inferre
 measured strength number (evals were off). The way past the ceiling = opponent-independent defensive signal =
 the supervised VCT aux-head (#102/#103). Updated idea-pile #11 lineage (added the #101 coda), the index row,
 and TRAINING_WIKI 2026-07-01. Closes #101.
+
+## [2026-07-01] Perf blitz day 1 (#112 landed, #109 landed, #114 filed): one streaming worker replaces the gen fleet; standard eval minutes → seconds
+
+Jason's 5-day directive: max out the box — training, gen, VCT, standard eval; knobs may be
+consolidated. **Gen (#112, merged):** converted `_generate_games_native` to per-game plies and added
+**continuous refill** (`--concurrent-games`) + **streaming production mode** (`--stream`: chunk
+flushes + between-round weight hot-reload) — ONE process at width 256–512 = **4,080–5,579 aug-pos/s
+vs the 4-worker fleet's ~1,000–1,300 (~3.4–4.6×)**, oracle fully hidden under search, poison check
+0-violation both paths, `sound-world` cell rewired to the single streaming worker. Law amendment:
+width-is-free has an intra-simdgroup **divergence bump** (44→108 ms/call at 150→862 boards) that
+saturates — past ~1k boards width is ~free again. **Eval (#109, merged):** the batched arena now
+implements the **VCT finisher** (one bulk mega-solve per round; hybrid vs heuristic 15W-0L-5D in
+4.4 s — matches the legacy receipt that took minutes), model specs FAIL LOUD on unimplemented
+kwargs, and the post-run final eval runs on **MPS** (run is torn down, GPU free): standard
+4-baseline battery 37 s CPU → **14.3 s** wall, identical results. **13×13 (#113 prerequisite,
+#114 filed):** the solve is 100% of the wall (fp16-eval frees the evaluator and buys nothing);
+resolve census on real veto batches = 48% @10 / 9.5% @50 / **42.5% capped** — no tail, half the
+batch grinds; ladder 0.83×, oracle-sort 0.98×, tg-variants 1.00×, **precheck refuted again
+(0.59×, new mechanism: null boards are themselves cap-bound)**. Next: multi-thread-per-board
+kernel pass + cap25 recall study (worktree `gomoku-mega-vct-bb` kept, receipts in #114). Full
+receipts: [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) 2026-07-01 refill entry.
