@@ -196,13 +196,14 @@ def main() -> None:
     # Batched arena (#106): default ON when every eval lever is at its OFF
     # default (the levers live in mcts_picker's per-game search, which the
     # wave-batched arena search doesn't implement yet).
+    # vct_finish_nodes is NOT in this gate: the arena implements the batched
+    # finisher natively (issue #109 — one bulk mega-solve per round).
     levers_off = (
         args.eval_vcf_nodes == 0
         and args.fpu_reduction_c == 0.0
         and not args.reuse_tree
         and not args.proven_prop
         and args.proven_vcf_leaf_nodes == 0
-        and args.vct_finish_nodes == 0
     )
     use_arena = not args.no_arena and levers_off
     # Arena-side baseline agents are built ONCE and reused across epochs —
@@ -215,7 +216,7 @@ def main() -> None:
     if not args.no_arena and not levers_off:
         print("[eval] arena disabled: an eval lever (--eval-vcf-nodes / "
               "--fpu-reduction-c / --reuse-tree / --proven-prop / "
-              "--proven-vcf-leaf-nodes / --vct-finish-nodes) is set; "
+              "--proven-vcf-leaf-nodes) is set; "
               "falling back to the legacy path", flush=True)
     out_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint_path).parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +251,8 @@ def main() -> None:
         # of the cycle.
         elo_matches: list[tuple[float, float, int]] = []
         arena_net = (
-            NetAgent(evaluator, sims=args.sims, c_puct=args.c_puct, label="model")
+            NetAgent(evaluator, sims=args.sims, c_puct=args.c_puct,
+                     vct_finish=args.vct_finish_nodes, label="model")
             if use_arena else None
         )
         # Multi-opponent field (#110): ALL baselines' games live in one arena
