@@ -98,6 +98,14 @@ def parse_args() -> argparse.Namespace:
                         "MPS search wave always run at full width. Use with a "
                         "games-per-batch a few times larger. 0 = legacy "
                         "lockstep batches (byte-identical). Native path only.")
+    p.add_argument("--stream", action="store_true",
+                   help="Streaming production mode (issue #112): one unbounded "
+                        "continuous-refill generation (requires "
+                        "--concurrent-games > 0) that flushes completed games "
+                        "to the output dir in chunks of --games-per-batch and "
+                        "hot-reloads worker_weights.pt between rounds (games "
+                        "in flight finish under the new net). No lockstep "
+                        "batch ramp/drain, no weight staleness.")
     p.add_argument("--n-simulations", type=int, default=800)
     p.add_argument("--wave-size", type=int, default=32)
     p.add_argument("--c-puct", type=float, default=1.25,
@@ -852,7 +860,8 @@ def _draw_poll_interval(
 
 
 def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_games: int,
-                      archive: dict | None = None, profile: dict[str, float] | None = None):
+                      archive: dict | None = None, profile: dict[str, float] | None = None,
+                      flush_records=None, refresh_evaluator=None):
     if opp_picker is None:
         return generate_games(
             n_games, evaluator,
@@ -886,6 +895,9 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             record_ownership=getattr(args, "record_ownership", False),
             record_vct=getattr(args, "record_vct", False),
             concurrent_games=getattr(args, "concurrent_games", 0),
+            flush_records=flush_records,
+            flush_games=args.games_per_batch,
+            refresh_evaluator=refresh_evaluator,
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
@@ -1294,6 +1306,98 @@ def main() -> None:
             if args.max_batches > 0 and batch_n >= args.max_batches:
                 print(f"[{args.worker_id}] hit max-batches={args.max_batches}, exiting", flush=True)
                 return
+
+    if getattr(args, "stream", False):
+        # Streaming production mode (issue #112): one unbounded continuous-
+        # refill generation; chunks flush as games complete; weights hot-reload
+        # between rounds. Replaces the batch loop below entirely.
+        if opp_picker is not None:
+            raise SystemExit("--stream does not support --opponent")
+        if args.concurrent_games <= 0:
+            raise SystemExit("--stream requires --concurrent-games > 0")
+        state = {
+            "weights_mtime": weights_mtime,
+            "model_version": model_version,
+            "last_check": time.monotonic(),
+            "batch_n": 0,
+            "flush_t0": time.perf_counter(),
+        }
+
+        class _StreamDone(Exception):
+            pass
+
+        def _refresh():
+            now = time.monotonic()
+            if now - state["last_check"] < poll_sec:
+                return None
+            state["last_check"] = now
+            try:
+                cur = os.path.getmtime(args.weights_path)
+            except OSError:
+                return None
+            if cur <= state["weights_mtime"]:
+                return None
+            try:
+                m, payload = load_checkpoint(args.weights_path, device=device)
+                m = fuse_model_for_inference(m)
+                m = _maybe_half(m, args.fp16_eval, args.worker_id)
+                m = _maybe_compile(m, args.compile, args.worker_id)
+                ev = _build_evaluator(args, m, device)
+            except Exception as e:
+                # Trainer might be mid-write; try again next round.
+                print(f"[{args.worker_id}] stream reload failed ({e}); retrying",
+                      flush=True)
+                return None
+            state["weights_mtime"] = cur
+            state["model_version"] = int(
+                payload.get("epoch", state["model_version"] + 1))
+            print(
+                f"[{args.worker_id}] stream: reloaded weights "
+                f"version={state['model_version']} mtime={cur:.0f}",
+                flush=True,
+            )
+            return ev
+
+        def _flush(records):
+            n_games = len(records)
+            n_examples = sum(len(r.examples) for r in records)
+            dt = time.perf_counter() - state["flush_t0"]
+            state["flush_t0"] = time.perf_counter()
+            payload = {
+                "records": records,
+                "worker_id": args.worker_id,
+                "weights_mtime": state["weights_mtime"],
+                "model_version": state["model_version"],
+                "version": state["model_version"],
+                "n_games": n_games,
+                "n_examples": n_examples,
+                "gen_s": dt,
+            }
+            path = _atomic_save(out_dir, args.worker_id, payload)
+            state["batch_n"] += 1
+            print(
+                f"[{args.worker_id}] stream chunk {state['batch_n']}: "
+                f"{n_games}g {n_examples}ex {dt:.1f}s "
+                f"({dt / max(n_games, 1) * 1000:.0f} ms/game) -> {path.name}",
+                flush=True,
+            )
+            if args.max_batches > 0 and state["batch_n"] >= args.max_batches:
+                raise _StreamDone
+
+        print(
+            f"[{args.worker_id}] stream mode: concurrent={args.concurrent_games} "
+            f"flush_games={args.games_per_batch} poll={poll_sec:.1f}s",
+            flush=True,
+        )
+        try:
+            _generate_records(
+                args, evaluator, None, rng, 1 << 31, archive=archive,
+                flush_records=_flush, refresh_evaluator=_refresh,
+            )
+        except _StreamDone:
+            print(f"[{args.worker_id}] hit max-batches={args.max_batches}, exiting",
+                  flush=True)
+        return
 
     while True:
         profile = {} if args.profile_output else None

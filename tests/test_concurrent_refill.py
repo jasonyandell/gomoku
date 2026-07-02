@@ -123,6 +123,68 @@ def test_lockstep_zero_matches_full_width():
                 assert ea.z == eb.z
 
 
+def test_streaming_flush_delivers_every_game_once():
+    """flush_records mode: all games arrive through the callback in chunks of
+    flush_games (final chunk may be short), the call returns [], and every
+    delivered record is complete."""
+    chunks: list[list] = []
+    ret = generate_games(
+        10,
+        _Evaluator(),
+        n_simulations=8,
+        wave_size=4,
+        max_plies=25,
+        rng=np.random.default_rng(21),
+        augment_symmetries=False,
+        concurrent_games=3,
+        flush_records=chunks.append,
+        flush_games=4,
+    )
+    assert ret == []
+    delivered = [rec for chunk in chunks for rec in chunk]
+    assert len(delivered) == 10
+    for chunk in chunks[:-1]:
+        assert len(chunk) >= 4
+    for rec in delivered:
+        assert rec.plies > 0
+        assert len(rec.examples) > 0
+        sides = [ex.side for ex in rec.examples]
+        assert sides == [k % 2 for k in range(len(sides))]
+
+
+def test_streaming_refresh_evaluator_hot_swaps():
+    """refresh_evaluator is polled every round; returning a new evaluator makes
+    subsequent leaf evals use it (games in flight keep their trees)."""
+    calls = {"refresh": 0, "second_ev": 0}
+
+    class _CountingEvaluator:
+        @staticmethod
+        def evaluate_planes(planes):
+            calls["second_ev"] += 1
+            return _uniform_planes_evaluator(planes)
+
+    def refresh():
+        calls["refresh"] += 1
+        if calls["refresh"] == 3:
+            return _CountingEvaluator()
+        return None
+
+    records = generate_games(
+        6,
+        _Evaluator(),
+        n_simulations=8,
+        wave_size=4,
+        max_plies=20,
+        rng=np.random.default_rng(2),
+        augment_symmetries=False,
+        concurrent_games=2,
+        refresh_evaluator=refresh,
+    )
+    assert len(records) == 6
+    assert calls["refresh"] >= 3
+    assert calls["second_ev"] > 0     # the swapped-in evaluator served evals
+
+
 def test_refill_with_terminus_partition(monkeypatch):
     """Oracle partitions fire mid-stream with per-game plies: force the
     terminus to end every game at its 3rd ply and check sides/plies are

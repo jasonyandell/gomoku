@@ -1953,10 +1953,20 @@ CELLS: dict[str, Cell] = {
     # Falsifiable tell: selfplay/plies_mean must LEAVE the ~9-10 attractor
     # (smoke with a RANDOM net: mean 48 plies, two 81-ply draws, 6 defender
     # termini in 8 games). Gate on H2H + white column, never internal elo.
+    # PERF REWIRE (issue #112, 2026-07-01): ONE streaming continuous-refill
+    # worker replaces the 4x8 lockstep fleet. Per-game plies + refill keep the
+    # merged per-ply oracle solve AND the MPS search wave at full width (256
+    # concurrent games) so the ~44-150ms solve tail amortizes over 256 games
+    # instead of 8; chunks of 64 finished games flush to the trainer
+    # continuously (no batch ramp/drain; weights hot-reload between rounds).
+    # Measured: 1 proc @256-wide = 4,080 aug-pos/s vs the old fleet's
+    # ~1,000-1,300 (~3.4x); gen_poison_check 0-violation (legacy + refill).
+    # Trainer side unchanged: fixed --sgd-steps-per-epoch 64 is runaway-proof
+    # under the higher inflow (the LF1 lesson).
     "sound-world": Cell("sound-world", sgd_per_game=1.0,
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=100,
-                n_workers=4, games_per_batch=8, wave_mode=False,
+                n_workers=1, games_per_batch=64, wave_mode=False,
                 c_puct=1.25, c_puct_base=19652.0,
                 dirichlet_alpha=0.13, dirichlet_eps=0.25,
                 temperature_moves=30, temperature_final=0.1,
@@ -1969,7 +1979,8 @@ CELLS: dict[str, Cell] = {
                 global_pool=True,
                 extra_worker_args=["--value-discount", "0.98",
                                    "--vct-terminus", "--vct-terminus-budget", "50",
-                                   "--oracle-veto", "--oracle-overlap"],
+                                   "--oracle-veto", "--oracle-overlap",
+                                   "--stream", "--concurrent-games", "256"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--line-planes"]),
     # MOONSHOT-BRUCE-IDX2 (issue #102 pivot). The from-scratch 9x9 'moonshot'

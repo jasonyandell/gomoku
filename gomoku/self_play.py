@@ -2578,6 +2578,9 @@ def _generate_games_native(
     record_ownership: bool = False,
     record_vct: bool = False,
     concurrent_games: int = 0,
+    flush_records=None,
+    flush_games: int = 32,
+    refresh_evaluator=None,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -2595,7 +2598,13 @@ def _generate_games_native(
     pcr_active = playout_cap_frac < 1.0
     fast_sims = playout_cap_fast_sims if playout_cap_fast_sims > 0 else n_simulations
 
-    planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
+    # Evaluator indirection: streaming mode (refresh_evaluator) hot-swaps the
+    # net between rounds — games in flight keep their trees, subsequent leaf
+    # evals use the new weights (the standard continuous-self-play shape).
+    eval_box = {"ev": evaluator}
+
+    def planes_evaluator(planes_batch):
+        return eval_box["ev"].evaluate_planes(planes_batch)  # type: ignore[attr-defined]
 
     def _timed_planes_evaluator(planes_batch):
         t0 = time.perf_counter()
@@ -2647,7 +2656,8 @@ def _generate_games_native(
             start_state = _gamestate_from_archive(archive, idx)
             opening_plies = start_state.move_count
         elif swap2:
-            start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+            start_state, opening_plies, swap2_res = _swap2_opening_state(
+                eval_box["ev"], rng)
         elif fixed_openings:
             start_state, opening_plies = _fixed_opening_state(rng)
         elif random_opening_moves > 0:
@@ -2687,8 +2697,51 @@ def _generate_games_native(
     active: list[int] = list(range(width))
     completed: list[tuple[int, float, int]] = []
     final_state: dict[int, tuple[np.ndarray, int]] = {}
+    flush_queue: list[tuple[int, float, int]] = []
+
+    def _build_record(g_idx: int, outcome_for_black: float, plies: int) -> GameRecord:
+        examples: list[SelfPlayExample] = []
+        n_initial = initial_plies[g_idx]
+        traj = trajectories[g_idx]
+        ownership = None
+        if record_ownership:
+            fp, term_side = final_state.get(g_idx, (None, 0))
+            ownership = _ownership_target(fp, term_side, outcome_for_black)
+        finalized = _apply_teachers_to_trajectory(
+            traj, outcome_for_black, vcf_teacher=vcf_teacher,
+            vct_teacher=vct_teacher, defense_teacher=defense_teacher,
+            profile=profile)
+        vmaps = vct_maps[g_idx] if record_vct else None
+        for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
+            pi, z = finalized[ply_idx]
+            ply_at_capture = n_initial + ply_idx
+            aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            # Per-ply vct map (None for terminal VCT-terminus positions that
+            # sit past the recorded-position count → masked out of the loss).
+            vct = (vmaps[ply_idx]
+                   if vmaps is not None and ply_idx < len(vmaps) else None)
+            examples.extend(_build_examples(
+                planes, pi, z, side, ply_at_capture, aux_pi,
+                augment_symmetries, profile, ownership=ownership, vct=vct,
+            ))
+        return GameRecord(
+            examples=examples,
+            plies=plies,
+            outcome=outcome_for_black,
+            archive_start=archive_start_flags[g_idx],
+            choice_examples=_choice_examples_for_game(
+                swap2_results[g_idx], outcome_for_black),
+        )
 
     while active:
+        # Streaming (issue #112): hot-swap the evaluator between rounds (games
+        # in flight keep their trees; later leaf evals use the new weights —
+        # the standard continuous-self-play shape).
+        if refresh_evaluator is not None:
+            new_ev = refresh_evaluator()
+            if new_ev is not None:
+                eval_box["ev"] = new_ev
+        n_done_before = len(completed)
         with _profile_timer(profile, "active_list_s"):
             active_games = [games[i] for i in active]
 
@@ -2929,43 +2982,40 @@ def _generate_games_native(
                 while len(games) < n_games and len(next_active) < width:
                     next_active.append(_seed_game())
 
+        # Free finished games' native trees now (never touched again); on the
+        # streaming path also build + hand off chunks and drop their per-game
+        # state so memory stays flat over an unbounded run.
+        if completed and len(completed) > n_done_before:
+            for g_idx, _o, _p in completed[n_done_before:]:
+                games[g_idx] = None
+            if flush_records is not None:
+                flush_queue.extend(completed[n_done_before:])
+                del completed[n_done_before:]
+                if len(flush_queue) >= flush_games:
+                    with _profile_timer(profile, "record_build_s"):
+                        chunk = [_build_record(g, o, p) for g, o, p in flush_queue]
+                    for g_idx, _o, _p in flush_queue:
+                        trajectories[g_idx] = []
+                        vct_maps[g_idx] = []
+                        final_state.pop(g_idx, None)
+                    flush_queue.clear()
+                    flush_records(chunk)
+
         active = next_active
+
+    if flush_records is not None:
+        # Streaming: everything goes through the callback; flush the remainder.
+        if flush_queue:
+            with _profile_timer(profile, "record_build_s"):
+                chunk = [_build_record(g, o, p) for g, o, p in flush_queue]
+            flush_queue.clear()
+            flush_records(chunk)
+        return []
 
     records: list[GameRecord] = []
     with _profile_timer(profile, "record_build_s"):
         for g_idx, outcome_for_black, plies in sorted(completed):
-            examples: list[SelfPlayExample] = []
-            n_initial = initial_plies[g_idx]
-            traj = trajectories[g_idx]
-            ownership = None
-            if record_ownership:
-                fp, term_side = final_state.get(g_idx, (None, 0))
-                ownership = _ownership_target(fp, term_side, outcome_for_black)
-            finalized = _apply_teachers_to_trajectory(
-                traj, outcome_for_black, vcf_teacher=vcf_teacher,
-                vct_teacher=vct_teacher, defense_teacher=defense_teacher,
-                profile=profile)
-            vmaps = vct_maps[g_idx] if record_vct else None
-            for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
-                pi, z = finalized[ply_idx]
-                ply_at_capture = n_initial + ply_idx
-                aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
-                # Per-ply vct map (None for terminal VCT-terminus positions that
-                # sit past the recorded-position count → masked out of the loss).
-                vct = (vmaps[ply_idx]
-                       if vmaps is not None and ply_idx < len(vmaps) else None)
-                examples.extend(_build_examples(
-                    planes, pi, z, side, ply_at_capture, aux_pi,
-                    augment_symmetries, profile, ownership=ownership, vct=vct,
-                ))
-            records.append(GameRecord(
-                examples=examples,
-                plies=plies,
-                outcome=outcome_for_black,
-                archive_start=archive_start_flags[g_idx],
-                choice_examples=_choice_examples_for_game(
-                    swap2_results[g_idx], outcome_for_black),
-            ))
+            records.append(_build_record(g_idx, outcome_for_black, plies))
 
     return records
 
@@ -3005,6 +3055,9 @@ def generate_games(
     record_ownership: bool = False,
     record_vct: bool = False,
     concurrent_games: int = 0,
+    flush_records=None,
+    flush_games: int = 32,
+    refresh_evaluator=None,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
@@ -3018,6 +3071,14 @@ def generate_games(
     instead of a lockstep batch's thinning tail. 0 (default) = legacy lockstep,
     byte-identical. Ignored (with the lockstep behavior) on the pure-Python and
     Gumbel fallback paths.
+
+    `flush_records` (native path only) switches to streaming delivery: completed
+    games are built into GameRecords and handed to the callback in chunks of
+    `flush_games` (their per-game state is freed, so memory stays flat over an
+    unbounded run) and the function returns []. `refresh_evaluator` (native path
+    only) is called once per round; returning a new evaluator hot-swaps the net
+    between rounds — in-flight games keep their trees and finish under the new
+    weights (the standard continuous-self-play shape).
 
     `gumbel_root=True` switches the ROOT to Gumbel AlphaZero selection + Sequential
     Halving (Danihelka et al. 2022): the root samples `gumbel_m` candidate actions
@@ -3181,6 +3242,9 @@ def generate_games(
             record_ownership=record_ownership,
             record_vct=record_vct,
             concurrent_games=concurrent_games,
+            flush_records=flush_records,
+            flush_games=flush_games,
+            refresh_evaluator=refresh_evaluator,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
