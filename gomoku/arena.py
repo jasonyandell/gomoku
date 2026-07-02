@@ -471,55 +471,101 @@ def _build_slots(
     return slots
 
 
-def play_matches_batched(
+def _advance_slots(group: list[_Slot], actions: list[int]) -> None:
+    """Apply one picked action per slot, updating terminal/turn state."""
+    for slot, action in zip(group, actions):
+        side_just_moved = slot.ply % 2
+        slot.state = slot.state.apply(int(action))
+        done, v = slot.state.is_terminal()
+        if done:
+            slot.done = True
+            if v == -1.0:
+                slot.winner_side = side_just_moved
+        else:
+            slot.a_to_move = not slot.a_to_move
+            slot.ply += 1
+
+
+def _result_from_slots(slots: list[_Slot]) -> MatchResult:
+    outcomes: list[tuple[bool, str]] = []
+    for s in slots:
+        if s.winner_side is None:
+            outcomes.append((s.a_is_black, "draw"))
+        else:
+            a_side = 0 if s.a_is_black else 1
+            outcomes.append(
+                (s.a_is_black, "win" if s.winner_side == a_side else "loss")
+            )
+    return _match_result_from_outcomes(outcomes, len(slots))
+
+
+def play_matches_batched_multi(
     agent_a: BatchedAgent,
-    agent_b: BatchedAgent,
+    opponents: list[tuple[BatchedAgent, int, int]],
     *,
-    n_games: int,
-    seed: int = 0,
     random_opening_moves: int = 0,
     start_state: GameState | None = None,
-    opening_states: list[GameState] | None = None,
-) -> MatchResult:
-    """Play A vs B with every game live at once. Result from A's perspective.
+    opening_states_per_opponent: list[list[GameState] | None] | None = None,
+) -> list[MatchResult]:
+    """Play A against SEVERAL opponents at once, all games live together
+    (issue #110). `opponents` is a list of (agent, n_games, seed); returns one
+    `MatchResult` per opponent, from A's perspective, with per-opponent slot
+    seeding identical to a `play_matches_batched(agent_a, agent, ...)` call —
+    interleaving changes wall-clock, not matchup semantics.
 
-    Each round, all games where A is to move go to `agent_a.pick_batch` and
-    all games where B is to move go to `agent_b.pick_batch` — the two calls
-    run concurrently when exactly one side is a net (net-on-MPS overlaps
-    engine-on-CPU; two torch agents would just contend for the device, so
-    those run back to back). Each agent is only ever inside one `pick_batch`
-    call at a time, so agents need no internal thread-safety beyond what
-    their own fan-out uses.
+    Each round, ALL games where A is to move go to one `agent_a.pick_batch`
+    (bigger net batches than per-opponent matches), and each opponent's
+    to-move games go to that opponent's `pick_batch`. With at most one
+    NetAgent in the field, every pick_batch of a round runs concurrently —
+    MPS overlaps every CPU pool/engine at once; with two or more nets they'd
+    contend for the device, so the round runs sequentially. Each agent is
+    only ever inside one pick_batch call at a time.
+
+    Cheap opponents finish their games early and simply drop out of later
+    rounds — no per-opponent barrier.
     """
-    overlap = isinstance(agent_a, NetAgent) != isinstance(agent_b, NetAgent)
-    slots = _build_slots(
-        n_games,
-        seed=seed,
-        random_opening_moves=random_opening_moves,
-        start_state=start_state,
-        opening_states=opening_states,
+    if opening_states_per_opponent is None:
+        opening_states_per_opponent = [None] * len(opponents)
+    fields: list[list[_Slot]] = [
+        _build_slots(
+            n_games,
+            seed=seed,
+            random_opening_moves=random_opening_moves,
+            start_state=start_state,
+            opening_states=opening_states,
+        )
+        for (_agent, n_games, seed), opening_states in zip(
+            opponents, opening_states_per_opponent
+        )
+    ]
+
+    n_nets = sum(
+        isinstance(ag, NetAgent)
+        for ag in [agent_a] + [agent for agent, _n, _s in opponents]
     )
+    overlap = n_nets <= 1
 
     # Safety valve — terminal draw detection ends games at a full board, so
     # this only trips on a buggy agent playing illegal/no-op moves.
     max_rounds = BOARD_SIZE * BOARD_SIZE + 1
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
+    with ThreadPoolExecutor(max_workers=1 + len(opponents)) as ex:
         for _round in range(max_rounds):
-            active = [s for s in slots if not s.done]
-            if not active:
+            group_a: list[_Slot] = []
+            work: list[tuple[list[_Slot], BatchedAgent]] = []
+            for (agent_b, _n, _s), slots in zip(opponents, fields):
+                active = [s for s in slots if not s.done]
+                group_a.extend(s for s in active if s.a_to_move)
+                group_b = [s for s in active if not s.a_to_move]
+                if group_b:
+                    work.append((group_b, agent_b))
+            if not group_a and not work:
                 break
-            group_a = [s for s in active if s.a_to_move]
-            group_b = [s for s in active if not s.a_to_move]
-
-            work = []
             if group_a:
-                work.append((group_a, agent_a))
-            if group_b:
-                work.append((group_b, agent_b))
+                work.insert(0, (group_a, agent_a))
 
-            if overlap and len(work) == 2:
-                results = [
+            if overlap and len(work) > 1:
+                futs = [
                     (
                         group,
                         ex.submit(
@@ -530,7 +576,7 @@ def play_matches_batched(
                     )
                     for group, agent in work
                 ]
-                moved = [(group, fut.result()) for group, fut in results]
+                moved = [(group, fut.result()) for group, fut in futs]
             else:
                 moved = [
                     (
@@ -543,31 +589,38 @@ def play_matches_batched(
                 ]
 
             for group, actions in moved:
-                for slot, action in zip(group, actions):
-                    side_just_moved = slot.ply % 2
-                    slot.state = slot.state.apply(int(action))
-                    done, v = slot.state.is_terminal()
-                    if done:
-                        slot.done = True
-                        if v == -1.0:
-                            slot.winner_side = side_just_moved
-                    else:
-                        slot.a_to_move = not slot.a_to_move
-                        slot.ply += 1
+                _advance_slots(group, actions)
         else:  # pragma: no cover - defensive
-            stuck = [s.idx for s in slots if not s.done]
+            stuck = [s.idx for slots in fields for s in slots if not s.done]
             raise RuntimeError(f"arena exceeded {max_rounds} rounds; stuck games: {stuck}")
 
-    outcomes: list[tuple[bool, str]] = []
-    for s in slots:
-        if s.winner_side is None:
-            outcomes.append((s.a_is_black, "draw"))
-        else:
-            a_side = 0 if s.a_is_black else 1
-            outcomes.append(
-                (s.a_is_black, "win" if s.winner_side == a_side else "loss")
-            )
-    return _match_result_from_outcomes(outcomes, n_games)
+    return [_result_from_slots(slots) for slots in fields]
+
+
+def play_matches_batched(
+    agent_a: BatchedAgent,
+    agent_b: BatchedAgent,
+    *,
+    n_games: int,
+    seed: int = 0,
+    random_opening_moves: int = 0,
+    start_state: GameState | None = None,
+    opening_states: list[GameState] | None = None,
+) -> MatchResult:
+    """Play A vs B with every game live at once. Result from A's perspective.
+
+    Single-opponent front door over `play_matches_batched_multi`: A's
+    to-move games and B's to-move games run concurrently when at most one
+    side is a net (net-on-MPS overlaps engine/pool-on-CPU; two torch agents
+    would just contend for the device, so those run back to back).
+    """
+    return play_matches_batched_multi(
+        agent_a,
+        [(agent_b, n_games, seed)],
+        random_opening_moves=random_opening_moves,
+        start_state=start_state,
+        opening_states_per_opponent=[opening_states],
+    )[0]
 
 
 def play_match_specs(

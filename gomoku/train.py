@@ -2803,7 +2803,7 @@ def main() -> None:
                 from gomoku.arena import (
                     NetAgent,
                     picker_agent_from_spec,
-                    play_matches_batched,
+                    play_matches_batched_multi,
                 )
                 arena_net = NetAgent(eval_evaluator,
                                      sims=args.eval_sims,
@@ -2827,25 +2827,45 @@ def main() -> None:
                 batches.append(("slow", slow_pickers, args.eval_slow_games))
 
             for batch_label, pickers, n_games in batches:
-                for spec_idx, (spec, baseline_picker) in enumerate(pickers):
+                if use_eval_arena:
+                    # Multi-opponent field (#110): the whole batch's games
+                    # live at once — one net pick_batch per round across all
+                    # matchups, baseline picks fanned concurrently. Seeds per
+                    # spec match the old sequential per-baseline calls.
                     m_start = time.time()
-                    if use_eval_arena:
+                    for spec, _p in pickers:
                         if spec.label() not in arena_baseline_agents:
                             arena_baseline_agents[spec.label()] = (
                                 picker_agent_from_spec(spec)
                             )
-                        res = play_matches_batched(
-                            arena_net,
-                            arena_baseline_agents[spec.label()],
-                            n_games=n_games,
-                            seed=args.seed + epoch * 1000 + spec_idx,
-                        )
-                    else:
-                        res = play_match_pickers(
-                            model_picker, baseline_picker,
-                            n_games=n_games,
-                            seed=args.seed + epoch * 1000 + spec_idx,
-                        )
+                    multi_res = play_matches_batched_multi(
+                        arena_net,
+                        [
+                            (
+                                arena_baseline_agents[spec.label()],
+                                n_games,
+                                args.seed + epoch * 1000 + spec_idx,
+                            )
+                            for spec_idx, (spec, _p) in enumerate(pickers)
+                        ],
+                    )
+                    batch_dt = time.time() - m_start
+                    for (spec, _p), res in zip(pickers, multi_res):
+                        key = _baseline_log_key(spec)
+                        log[f"eval/{key}_winrate"] = res.win_rate
+                        log[f"eval/{key}_wins"] = res.wins
+                        log[f"eval/{key}_losses"] = res.losses
+                        log[f"eval/{key}_draws"] = res.draws
+                        # Whole-field time — matchups ran concurrently.
+                        log[f"time/eval_{key}_s"] = batch_dt
+                    continue
+                for spec_idx, (spec, baseline_picker) in enumerate(pickers):
+                    m_start = time.time()
+                    res = play_match_pickers(
+                        model_picker, baseline_picker,
+                        n_games=n_games,
+                        seed=args.seed + epoch * 1000 + spec_idx,
+                    )
                     key = _baseline_log_key(spec)
                     log[f"eval/{key}_winrate"] = res.win_rate
                     log[f"eval/{key}_wins"] = res.wins

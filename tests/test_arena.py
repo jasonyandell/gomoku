@@ -288,3 +288,40 @@ def test_pooled_picker_rejects_torchy_kinds():
 
     with pytest.raises(ValueError):
         PooledPickerAgent("model", {"checkpoint": "x.pt"}, n_workers=2, label="m")
+
+
+# ---------------- multi-opponent field (issue #110) ----------------
+
+
+def test_multi_matches_single_per_opponent():
+    from gomoku.arena import play_matches_batched_multi
+
+    opps = [
+        (PickerAgent(random_player, label="random"), 8, 3),
+        (PickerAgent(heuristic_player, label="heuristic"), 6, 11),
+    ]
+    multi = play_matches_batched_multi(_heur_agent(), opps)
+
+    singles = [
+        play_matches_batched(_heur_agent(), agent, n_games=n, seed=seed)
+        for agent, n, seed in [
+            (PickerAgent(random_player, label="random"), 8, 3),
+            (PickerAgent(heuristic_player, label="heuristic"), 6, 11),
+        ]
+    ]
+    assert len(multi) == 2
+    for m, s in zip(multi, singles):
+        assert (m.wins, m.losses, m.draws, m.n_games) == (
+            s.wins, s.losses, s.draws, s.n_games)
+
+
+def test_multi_result_invariants():
+    from gomoku.arena import play_matches_batched_multi
+
+    multi = play_matches_batched_multi(
+        _rand_agent(),
+        [(_heur_agent(), 4, 0), (_rand_agent(), 10, 1), (_heur_agent(), 6, 2)],
+    )
+    assert [r.n_games for r in multi] == [4, 10, 6]
+    for r in multi:
+        assert r.wins + r.losses + r.draws == r.n_games
