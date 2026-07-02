@@ -5517,3 +5517,56 @@ actuator yet**. What-to-try-next (open directions): target the POLICY directly �
 defensive *policy* target (mask/penalize blunder moves, cf. #43), the defense head at MCTS *inference* time to
 prune blunders, or a curriculum/opponent that actually forces defense. Cross-ref #100/#101 (the structural
 self-play defensive ceiling this head was meant to break), idea-pile #11.
+
+## 2026-07-01 (issue #107) — the sound world: oracle veto + defender terminus + line planes. The attractor is gone.
+
+**Thesis** (from #100/#101/#103's "sensor with no actuator"): every prior VCT injection edited TARGETS
+off-policy; none changed the BEHAVIOR distribution the net distills. The fix: put the oracle in the
+ENVIRONMENT — (1) `--oracle-veto`: per ply, the bulk escape-solve MASKS proven-blunder moves out of
+both the played move and the recorded policy target (on-policy by construction); all-moves-lose ends
+the game as a DEFENDER terminus (z=−1, mirror of #98); with `--vct-terminus` both ends of every game
+are oracle-sound — the twin can never hand over a VCT, so the missing punisher exists from epoch 0.
+(2) `--line-planes`: 8 in-forward line-potential input channels (per-cell × 4-dir × {me,opp} max
+live-5-window count /4) — double threats become LOCAL reads (the claw wound). Both byte-identical-off.
+Code merged `aa91a34`; cell `sound-world` (clone of `moonshot` minus aux-head levers); NO
+--record-vct / --aux-vct-weight (the #103 sensor had no reader; the veto IS the actuator).
+
+**Run:** wandb `zeed2xw5`, from-scratch 9×9 small (345,885 params, 25-ch stem), run base
+`~/data/sound-world-107/`. Smoke (random net, 8 games): **mean 48 plies vs the ~9-10 attractor**,
+two 81-ply draws, 6 defender termini, 24/24 recorded targets zero-mass on proven blunders.
+
+**Result — the #101 attractor is structurally gone.** plies_mean lived in the mid-20s→high-50s for
+the entire first ~1240 epochs (monitor watch, 6 cycles), never trending to 9-10. pl fell
+**4.38→1.34** by e1256 (vs #101: 4.38→2.17 in 2,700 epochs), vl stable ~0.06. Buffer full (1.5M) by
+~e600. ms/game warmed 2200→~830-1040 (sharper play compresses games → oracle cost falls with skill).
+Ladder while it ran: elo 389→~1120, la:2 0%→75%, heuristic 0%→25%, strongly DRAWISH shape.
+
+**Evals @ e1239** (arena `gomoku-arena`, sims=100, 40 games each, bare net): la:4 **3W-0L-37D**;
+la:2 0W-0L-40D; heuristic 5W-3L-32D; **old derby champion (peak.pt): 0W-0L-40D** — the matchup where
+the #100 terminus-only net went **0/120** is now UNLOSEABLE at 5h from scratch. Finisher-hybrid
+(`vct_finish=50`, legacy match path — the batched arena silently drops `vct_finish`, filed **#109**):
+vs heuristic **14W-0L-6D (85%)** vs bare 52.5% — the net REACHES winning positions and doesn't cash
+them (trained where such positions never arise); the oracle converts. vs champ still 0-0-20: no cap50
+VCT ever exists between two sound players. **Mounting evidence 9×9 freestyle is a practical draw**
+(Jason's wall intuition) — the sound world converges toward the game's truth instead of blunder-wins.
+
+**Accidental causal ablation (perf-scout `--oracle-veto-max-cands 24` A/B):** capping veto breadth at
+9×9 → leaked blunders get played → **games collapse to ~11 plies — the attractor returns**. Cap the
+veto, resurrect the disease: the veto is confirmed as THE anti-attractor mechanism, not a bystander.
+
+**Perf (perf-scout, receipts in wiki/topics/mcts-perf-ceiling.md, merged `ec69e1b`):** gen wall =
+oracle 75% / net evals 23% / **native MCTS tree 0.6% (exonerated — "ton of headroom" refuted)**.
+Solver cost = calls × ~44ms tail-grind; **width is FREE** (43.8ms @151 boards ≈ 44.3ms @48) — so:
+merged per-ply solve (bit-identical, sha256 receipt) 1.07×; `--oracle-overlap` (solve under the MPS
+wave) **1.18×, now ON in the cell**; null-board precheck REFUTED at 9×9 (61% fewer boards, +17 calls
+→ slower; default OFF, big-board re-measure). Future levers, leverage-ranked: cross-worker shared
+solve (width-free ⇒ aggregate oracle ÷4), kernel tail pass (0.9ms/node/thread), cap50→25 recall
+study, fp16 eval (1.7×/position, needs TQ canary).
+
+**State:** resumed e1239→ on merged+overlap code (buffer intact, same wandb timeline), verified
+healthy through e1275 — including surviving its worktree being janitor-reclaimed mid-run (#111; all
+data paths live in ~/data, processes on open handles). Oracle proven board-size-parametric (salvaged
+`9863cce`→`fa0dac2`, tests for 11/13). **Next:** let 9×9 run; graduation 11→13 is the attractive
+frontier (walls stop dominating; needs the ÷4 solver lever for veto cost); product shape = net +
+finisher hybrid (#109 unblocks arena-speed hybrid evals); verdict evals stay H2H + white-column,
+never internal elo.
