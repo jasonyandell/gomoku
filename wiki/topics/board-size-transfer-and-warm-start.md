@@ -1,9 +1,24 @@
-# Board-size transfer & warm-start (9×9 → 15×15) — the proven curriculum
+# Board-size transfer, warm-start & the auto-graduating ladder — the proven curriculum
 
-**Status (2026-06-20):** PROVEN, TESTED, READY. This page is the consolidated how-to that
-was missing — the mechanism existed (`scripts/warmstart_15x15.py`, commit `221b314`, tested
-in `tests/test_warmstart.py`) and is how the 15×15 nets were actually born, but it lived only
-in the script docstring + scattered campaign logs. Don't lose it again.
+**Status (updated 2026-07-02):** PROVEN, TESTED, READY. This is THE reference for two things:
+(a) the **cross-board warm-start / graduation mechanics** (partial-load a smaller-board champion
+into a fresh bigger-board net) and (b) the **auto-graduating 9→11→13→15 ladder** that chains
+warm-starts to milk cheap native epochs at each rung. The mechanism existed
+(`scripts/warmstart_15x15.py`, commit `221b314`, tested in `tests/test_warmstart.py`) and is how
+the 15×15 nets were born, but it lived only in the script docstring + scattered campaign logs.
+Don't lose it again.
+
+**Related:** [[training-run-lineage]] (which run warm-started from which),
+[[15x15-training-campaign]] (the destination board's campaign),
+[[sound-world-recipe]] (the 9×9 recipe carried up to 13×13 in #113),
+[[rapfi-idx2-distillation-mine]] (the "Bruce Lee one-position" idx-2 champion — a same-size
+warm-start / aux-head splice target, distinct from cross-board).
+
+**On this page:** [what it is](#what-it-is) · [the board-size guard](#the-board-size-guard-and-head-splices)
+· [why warm-start](#why-it-matters--warm-start-is-the-remedy-for-the-15x15-cold-start-collapse)
+· [the curriculum recipe](#the-curriculum-recipe-era-2--path-a-the-2026-06-20-overnight)
+· [the auto-graduating LADDER](#the-auto-graduating-ladder-911315) · [how to run](#how-to-run-the-transfer-entrypoint)
+· [gotchas](#gotchas).
 
 ## What it is
 
@@ -19,6 +34,26 @@ agnostic conv trunk), almost everything transfers:
   it never silently half-transfers.
 - The swap2 **choice head transfers too** (it's `Linear(value_hidden, N_CHOICES)`, board-size-
   independent); `load_checkpoint` also tolerates missing choice keys (fresh-init fallback).
+
+### The board-size guard, and the head splices
+
+`gomoku/model.py load_checkpoint(...)` (≈`model.py:663`) enforces a **board-size contract**: the
+checkpoint's embedded `board_size` (older pre-15×15 checkpoints predate the field → default 9)
+**must equal the active process board size** or it raises `ValueError` — refusing to build a net
+whose heads disagree with every other shape in the process (≈`model.py:711`). The signature is
+`load_checkpoint(path, device, *, expect_board_size=BOARD_SIZE, force_aux_vct=False)`.
+**Pass `expect_board_size=None` to SKIP the check** — offline inspection only; the warmstart
+script deliberately bypasses `load_checkpoint` entirely (it `torch.load`s the raw payload) so it
+can read a 9×9 source inside a 15×15 process.
+
+Two same-size warm-start splices ride the same partial-load path (distinct from cross-board, but
+worth knowing so you don't confuse them):
+- **swap2 choice head** — a pre-swap2 champion has no `choice_*` weights; `load_checkpoint`
+  builds the head (config default on) and falls its fresh init back in rather than disabling it.
+- **aux VCT-defense head** — `force_aux_vct=True` builds the model WITH the `vct_*` head even when
+  the checkpoint predates it, splicing fresh-init `vct_*` params onto an older same-size champion
+  (e.g. layering the head onto Bruce/15×15 on a `--resume`). Off (default) ⇒ byte-identical load.
+  See [[vct-defense-aux-head-result]].
 
 ## Why it matters — warm-start is the remedy for the 15×15 cold-start collapse
 
@@ -71,7 +106,11 @@ The speed thesis is paying off: **~40 epochs reached before the first human chec
   lose-slowly basin. Not seen. Distinguish from fast-attack collapse (plies falling **with**
   concave buffer-fill AND white% collapsing) — that's the bad version.
 
-## The multi-rung LADDER (9→11→13→15) — the 2026-06-20 overnight, era-2 revised
+## The auto-graduating LADDER (9→11→13→15)
+
+*(2026-06-20 overnight, era-2 revised. This is the same mechanism run TWO ways — the swap2 ladder
+below and the fair-opening ladder #74 further down — differing only in the graduation gate.)*
+
 
 9×9 is too cramped: by ~e100 the swap2 net's defense **saturates the board into
 draws** (e102 last-3 epochs draw-dominant: draws 56/75/56 vs white ~14, black
@@ -110,6 +149,77 @@ only the run-dir differs (board size is the env var). **Orchestrator**
 re-init). The open empirical question — does laddered learning beat a direct 9→15
 warm-start? — is a derby lane (Δelo/Δt vs the existing direct-15 reference); the
 ladder's a priori case is purely epoch-efficiency, not correctness.
+
+### The TWO graduation gates
+
+The ladder is **auto-graduating**: an out-of-git watcher polls the live rung's wandb history
+(never touches the trainer), and when the gate fires it warm-starts the champion up one rung and
+relaunches. Two different gates have been used, one per campaign:
+
+1. **Swap2 ladder (era-2) — DRAWMAX.** Graduate when `max(draw, white, black) == draw` (draws are
+   the strict plurality of self-play outcomes → white's defense has saturated this board). Denoised:
+   draws strict-max for **3 consecutive epochs**, past a **`MIN_EPOCH` guard** (don't graduate
+   during the offense-heavy post-warmstart recovery-V, which is short-games, not draws), with a
+   **per-rung epoch `CAP` backstop** as the anti-hang safety net.
+2. **Fair-opening ladder (era-3, #74) — PLIES-P90 PLATEAU.** Graduate when `plies_p90` **plateaus
+   at its peak for 5 epochs** (promote *before* the net learns to retreat / games shorten). Used by
+   the fixed-fair-opening curriculum (swap2 OFF, canned Rapfi openers re-centered per board), where
+   there's no swap2 negotiation to draw-saturate.
+
+Both gates are implemented in `babysit/ladder_grad.py`, a **pure read of the rung's wandb
+history**: it looks up the `wandb_run_id` embedded in the rung's `latest.pt` and evaluates the
+criterion — the trainer is completely untouched. **Rung 15 is terminal** in both: 15×15 is too big
+to fill, so it basically never draws / never plateaus short — it trains until a STOP sentinel.
+
+### The HONEST caveat — bigger rungs graduated on the CAP, not drawmax
+
+The full swap2 ladder climbed 9→11→13→15 unattended in one night (2026-06-20/21). How each rung
+actually graduated (see [[training-run-lineage]] and `TRAINING_WIKI.md` ≈L4518):
+
+| rung | run | epochs | graduated | how |
+|---|---|---|---|---|
+| 9×9  | `lywhy1ba` | →e102 | 2026-06-20 ~22:50 | **drawmax** (draws 56/75/56 vs white ~14) |
+| 11×11 | `8jsd7qzw` | e0→e401 | 02:50 | **CAP** (stable black-edge equilibrium, never drawmaxed) |
+| 13×13 | `2dvcxh0b` | e0→e424 | 07:40 | **CAP** (same equilibrium; black edge stronger, draws rarer ~10%) |
+| 15×15 | (live)     | e0→   | terminal | runs until `STOP_ladder` |
+
+**Durable lesson: only the smallest board (9×9) cleanly draw-saturates.** With v2a (choice head)
+OFF the swap2 negotiation doesn't balance colors, so on 11 and 13 black keeps a genuine first-move
+edge (white ~25–35% of decisive games; plies long/healthy ~50–70 = defending, NOT the 0% basin)
+and draws never overtake black. So **the CAP backstop — not the drawmax rule — was the real
+graduation mechanism for the bigger rungs.** That's fine (it advanced each rung cleanly, and white
+"fought and learned" at every rung, Jason's bar), but don't overclaim the drawmax gate: it only
+ever fired on 9×9.
+
+### The out-of-git orchestrator scripts (`~/data/swap2/babysit/`)
+
+The ladder's driver lives OUT OF GIT at `/Users/jason/data/swap2/babysit/` (detached, crash-guarded
+shell loops + the pure-read grad watcher). Roster:
+
+| script | role |
+|---|---|
+| `ladder_autochain.sh` | era-2 swap2-ladder orchestrator: detached loop, 20-min train slices, checks graduation between slices, warm-starts + relaunches the next rung. STOP: `touch babysit/STOP_ladder`. |
+| `ladder_grad.py` | the graduation watcher — pure read of the live rung's wandb history via the `wandb_run_id` in `latest.pt`; implements both gates (drawmax / plies-p90-plateau). |
+| `fairladder.sh` | era-3 fixed-fair-opening ladder orchestrator (#74): 15-min slices, warm-starts between rungs, plies-p90 gate. STOP: `touch babysit/STOP_fairladder`. Rung-9 run `eilfnz1e`. |
+| `ladder_status.sh` | human-readable status dump of the running ladder (current rung / epoch / gate progress). |
+| `ladder_eval15.sh` / `ladder_rapfi15.sh` | terminal-rung 15×15 evaluation cadence — periodic Rapfi-NNUE eval while the terminal rung trains (records white-vs-Rapfi off the era-1 0% floor to `babysit/eval_results.jsonl`). |
+
+(These are evidence, not code — reproduce the mechanism from this page rather than depending on the
+out-of-git files; the cells `G-ladder-11/13/15` and `G{9,11,13,15}-fixed-openings` in `run_sweep.py`
+ARE in git and are the `G9-swap2-e2` / fixed-opening recipes verbatim, board size selected by env var.)
+
+### Note (2026-07-02) — #113 re-implemented this warm-start ad-hoc
+
+The 13×13 sound-world graduation (#113, `TRAINING_WIKI.md` 2026-07-02, wandb `8rp0gjpm`) **re-built
+the cross-board warm-start by hand** — "fresh 13×13 net + shape-matching tower copy → strict-loadable
+via the production board-size guard" — because this page had **no index row** and the mechanism
+wasn't discoverable. That's exactly the "don't lose it again" failure this page exists to prevent:
+`scripts/warmstart_15x15.py` already does the partial-load with transfer-accounting assertions
+(it takes `--board-size 13`), and would have saved the reimplementation. **If you're carrying a
+champion up a board size, reach for `warmstart_15x15.py` first.** (Substantive #113 finding, for
+context: the warm 9×9 tower transferred offense but 13×13 **white-defense collapsed** — black forces
+VCT wins by ply 9–13 so white's sharp-defense examples never enter the buffer; they pivoted to a
+from-scratch 13×13 control. See [[sound-world-recipe]] and the #113 entries in `TRAINING_WIKI.md`.)
 
 ## How to run the transfer (entrypoint)
 

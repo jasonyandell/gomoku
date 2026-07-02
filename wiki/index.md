@@ -143,6 +143,20 @@ Durable lessons (era-independent):
 
 ## Page Catalog
 
+### ⟳ Refreshed 2026-07-02 (fan-out wiki pass — pending integration into the task table above)
+
+| Page | What it covers |
+|---|---|
+| [topics/training-run-reference.md](topics/training-run-reference.md) | **Launch or tune ANY run — every knob & switch.** Quick-start (the `run_sweep.py` CLI + the ~10 highest-leverage levers) then a full dictionary across run_sweep/train/worker, grouped by subsystem, with defaults + when-to-change + `file:line` + byte-identical-off notes; ~30 cells cataloged. |
+| [topics/eval-suite.md](topics/eval-suite.md) | **How to EVALUATE a checkpoint** — command-first: `gomoku-arena` vs heuristic/lookahead4/rapfi@50ms/net-vs-net/finisher-A-B + the `gen_poison_check` guardrail. Gotchas: eval the EMA `worker_weights.pt` not raw `epoch*.pt` (#100); the **white column is the defense gate**; board size must match. |
+| [topics/rapfi-pool.md](topics/rapfi-pool.md) | **The Rapfi (Gomocup-winning NNUE) engine pool** — the strength yardstick + distillation teacher: pinned sha256-verified HF binary, warm CPU-only process pool (kills the per-move NNUE start-up tax), think-time strength dial; how arena/eval/teacher each consume it. |
+| [topics/board-size-transfer-and-warm-start.md](topics/board-size-transfer-and-warm-start.md) | **Cross-board warm-start + the auto-graduating 9→11→13→15 ladder** — `warmstart_15x15.py` transfers 98.9% of params (global-pool trunk), reinits the 3 board-bound FCs; the `load_checkpoint` board-size guard; the ladder's two graduation gates + the honest CAP-backstop caveat. (The page #113 re-derived because it had no index row.) |
+| [topics/mega-vct-solver.md](topics/mega-vct-solver.md) | **The on-device GPU VCT solver** — curated: how the `ulong[4]` AND/OR bitboard megakernel works, the call-cost law, the API contract, **and performance** (lanes=K kernel #114 = 1.34× @13×13; the 2026-07-02 finding that the oracle veto is **91% of self-play gen wall ⇒ the perf lever is the solver, not the gen loop**). |
+| [topics/sound-world-recipe.md](topics/sound-world-recipe.md) | **The sound-world line, complete** — 9×9 validated (oracle veto + terminus + line planes), **13×13 graduation a STRUCTURAL NEGATIVE** (#113: attack-only specialist, white 0/20, beaten 40-0 by the old full-game net), + the new **role-invariant rails** ideas and the pivotal open question *is 13×13 a forced black win?* |
+| [topics/vct-mining-research.md](topics/vct-mining-research.md) | **Synthesis hub for the seek-VCT program** — the through-line (net steers / oracle finishes, anti-correlated tractability) tying ~12 mining threads (backward mining, the knife-edge, the 56.1M cascade, idx-2 danger map, shape-library, the learnability trilogy) + a "which page for what" table. |
+| [topics/bruce-lee-model.md](topics/bruce-lee-model.md) | **The "Bruce Lee" model** — the 128×10 15×15 single-opener champion (one kick 10,000 times → master idx-2); wandb `gogpmbhw`, ~50 Δelo plateau, the baseline-to-beat; its one wound = **white 0/12 vs Rapfi**; the distillation / danger-map / aux-head follow-ups and how each turned out. |
+| [topics/net-architecture-and-representation.md](topics/net-architecture-and-representation.md) | **The net + the recovered "Fable" representation rationale** — trunk + two heads, params ≈ width²×depth (small 64×4 = 345,885 vs Bruce 128×10 ~3.05M ⇒ the 14× epoch gap is net-size); the line-planes / global-pool levers; Fable's cited quotes (2026-07-01) + the hybrid/Rapfi north star + an honest box on what was reconstructed vs recorded. |
+
 ### Model Cards
 
 | Card | Role |
