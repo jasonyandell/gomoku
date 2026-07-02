@@ -5570,3 +5570,37 @@ data paths live in ~/data, processes on open handles). Oracle proven board-size-
 frontier (walls stop dominating; needs the ÷4 solver lever for veto cost); product shape = net +
 finisher hybrid (#109 unblocks arena-speed hybrid evals); verdict evals stay H2H + white-column,
 never internal elo.
+
+## 2026-07-01 (issue #107, dated correction) — the defender-terminus uniform-pi wound: white collapse at e1982, root-caused and fixed
+
+**Symptom.** 30-min re-eval after the resume: e1982 vs old derby champ **0W-20L-20D — black 0/0/20,
+white 0W-20L-0D** (ALL white games lost); heuristic 0W-12L-28D. At e1239 the same matchups were
+all-draws / near-clean. Self-metrics (pl falling, plies healthy) saw NOTHING — the #100 lesson again.
+
+**Ruled out, in order:** (1) the new #110 eval code — champ vs heuristic 40W-0L-0D, eval sane; (2) the
+perf-scout merge / `--oracle-overlap` race — poison detector (re-solve every recorded position at full
+breadth, assert recorded pi has zero mass on proven blunders) found **5/309 violations IDENTICALLY**
+with overlap ON, overlap OFF, and on pre-merge code `fa0dac2` at the same seed. **Scout exonerated;
+the wound shipped with the launch code.**
+
+**Root cause (classified violators):** all 5 = side=1(white), last-example-of-game, z=−1,
+**uniform-over-legal pi at a DEFENDER TERMINUS** — the launch design recorded doomed positions with
+pi = uniform over ~70 legal cells ("no move is better; z does the teaching"). At scale that IS the
+teaching: by e1982, black forces a proven all-moves-lose position by ply 9-15 in ~5/8 self-play games,
+so white's most common late-training examples were pure policy noise exactly at the sharpest
+positions → white's policy degraded toward uniform → 20/20 white losses. Delayed onset explained:
+early training rarely reached defender termini; the sharper black got, the higher the poison dose.
+(Launch-day smoke missed it: the spot-check sampled only early, threat-free plies.)
+
+**Fix (merged with this entry):** `_oracle_veto_partition` records NO example for the doomed
+position — the game still ends (z propagates via mate-distance discount; the trap-completing black
+move with real MCTS pi becomes the final example). The poison-detector invariant is now STRICT: no
+recorded example may carry blunder mass. Detector: `scratchpad/poison_check.py` pattern — re-solve
+recorded positions, assert zero blunder mass; run it on any future gen-semantics change.
+
+**Also observed:** black forcing proven wins by ply 9-15 under near-sound defense is evidence 9×9
+freestyle is a fast BLACK WIN within cap50 horizons (not a draw) — the walls do not save white at 9×9.
+
+**Decision:** restart from scratch on fixed code (run dir `sound-world-107b`), keeping the poisoned
+run's artifacts intact as evidence. Cheap (~2.5h to e2000) and gives clean attribution vs a
+buffer-wash resume.
