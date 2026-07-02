@@ -45,6 +45,10 @@ def main() -> None:
     ap.add_argument("--no-oracle", action="store_true",
                     help="bench the bare generator (no terminus/veto/overlap)")
     ap.add_argument("--no-overlap", action="store_true")
+    ap.add_argument("--precheck", action="store_true",
+                    help="enable the null-board oracle precheck (refuted at 9x9 "
+                         "where width was free; re-measured at 13x13 where it "
+                         "isn't — issue #113/#114)")
     ap.add_argument("--device", default="mps")
     ap.add_argument("--tag", default="")
     args = ap.parse_args()
@@ -60,6 +64,7 @@ def main() -> None:
         sp.configure_vct_terminus(enabled=True, budget=args.budget)
         sp.configure_oracle_veto(enabled=True, max_cands=0)
         sp.configure_oracle_overlap(enabled=not args.no_overlap)
+        sp.configure_oracle_precheck(enabled=args.precheck)
         sp._warm_mega_solver()
 
     # Warm the MPS path (compile + first-dispatch costs stay out of the timing).
