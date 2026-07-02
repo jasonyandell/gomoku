@@ -527,6 +527,15 @@ def _escalate_all_blunder_positions(planes_list, surv_slots, vmaps, vmasks,
     _profile_add(profile, "oracle_escalation_boards", float(batch.shape[0]))
 
 
+def _ply_for(ply, g_idx):
+    """Per-game ply lookup. `ply` is either a global int (the lockstep paths,
+    where every active game is at the same round) or a per-game indexable
+    (the continuous-refill native path, where games start at different
+    rounds). Values coincide in lockstep, so helpers using this are
+    byte-identical on the legacy path."""
+    return ply[g_idx] if hasattr(ply, "__getitem__") else ply
+
+
 def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plies,
                             trajectories, completed, final_state, record_ownership,
                             profile, win=None, move=None):
@@ -555,7 +564,8 @@ def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plie
             keep.append(slot_idx)
             continue
         n_initial = initial_plies[g_idx]
-        side = (n_initial + ply) % 2          # the side to move HAS the forced win
+        ply_g = _ply_for(ply, g_idx)
+        side = (n_initial + ply_g) % 2        # the side to move HAS the forced win
         mv = int(move[slot_idx])
         pi_term = np.zeros(N_ACTIONS, dtype=np.float32)
         if 0 <= mv < N_ACTIONS:
@@ -570,7 +580,7 @@ def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plie
             # A VCT terminus is NOT an actual five-in-a-row board, so there is no
             # honest final-ownership target — MASK it (like a max-plies draw).
             final_state[g_idx] = (None, 0)
-        completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+        completed.append((g_idx, outcome_for_black, n_initial + ply_g + 1))
         _profile_add(profile, "vct_terminus_fired", 1.0)
     return [active[s] for s in keep], [active_games[s] for s in keep]
 
@@ -634,12 +644,13 @@ def _oracle_veto_partition(active, active_games, planes_list, pending_vct, ply,
             keep.append(slot_idx)
             continue
         n_initial = initial_plies[g_idx]
-        side = (n_initial + ply) % 2       # the side to move is LOST
+        ply_g = _ply_for(ply, g_idx)
+        side = (n_initial + ply_g) % 2     # the side to move is LOST
         outcome_for_black = -1.0 if side == 0 else 1.0
         if record_ownership:
             # Not a real five-in-a-row board -> ownership target MASKED.
             final_state[g_idx] = (None, 0)
-        completed.append((g_idx, outcome_for_black, n_initial + ply))
+        completed.append((g_idx, outcome_for_black, n_initial + ply_g))
         _profile_add(profile, "oracle_veto_all_lose", 1.0)
     return [active[s] for s in keep], [active_games[s] for s in keep]
 
@@ -2566,6 +2577,7 @@ def _generate_games_native(
     record_aux: bool = False,
     record_ownership: bool = False,
     record_vct: bool = False,
+    concurrent_games: int = 0,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -2605,43 +2617,7 @@ def _generate_games_native(
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
     swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
-    n_archive = 0 if archive is None else int(archive["planes"].shape[0])
-    with _profile_timer(profile, "game_setup_s"):
-        for _ in range(n_games):
-            from_archive = (
-                archive is not None
-                and n_archive > 0
-                and float(rng.random()) < archive_start_frac
-            )
-            swap2_res = None
-            if from_archive:
-                idx = int(rng.integers(0, n_archive))
-                start_state = _gamestate_from_archive(archive, idx)
-                opening_plies = start_state.move_count
-            elif swap2:
-                start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
-            elif fixed_openings:
-                start_state, opening_plies = _fixed_opening_state(rng)
-            elif random_opening_moves > 0:
-                start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
-            else:
-                start_state, opening_plies = GameState.initial(), 0
-            games.append(
-                native_mcts.NativeMCTSGame(
-                    start_state,
-                    c_puct=c_puct,
-                    c_puct_base=c_puct_base,
-                    dirichlet_alpha=dirichlet_alpha,
-                    dirichlet_eps=dirichlet_eps,
-                    seed=int(rng.integers(1, 2**63 - 1)),
-                    forced_playout_k=forced_playout_k,
-                )
-            )
-            initial_plies.append(opening_plies)
-            archive_start_flags.append(from_archive)
-            swap2_results.append(swap2_res)
-
-    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = []
     # Moonshot VCT-defense per-ply targets, kept in LOCKSTEP with `trajectories`:
     # vct_maps[g_idx][k] is the (N_ACTIONS,) blunder map (or None) for the k-th
     # RECORDED position of game g_idx. Terminal VCT-terminus one-hot positions are
@@ -2649,13 +2625,70 @@ def _generate_games_native(
     # get NO vct_maps entry — they sit at the end, so the finalize loop reads a
     # None (masked out) for any ply_idx past the vct_maps length. Off (record_vct
     # False) => never populated, byte-identical to the pre-vct path.
-    vct_maps: list[list] = [[] for _ in range(n_games)]
-    active: list[int] = list(range(n_games))
+    vct_maps: list[list] = []
+    # Game-local ply counts (moves made since gen start, per game). On the
+    # legacy lockstep path every active game shares the same value; continuous
+    # refill (below) is what desynchronizes them.
+    ply_of: list[int] = []
+    n_archive = 0 if archive is None else int(archive["planes"].shape[0])
+
+    def _seed_game() -> int:
+        """Create one new game (same opening logic + RNG draw order as the
+        historical setup loop) and append it to every per-game structure.
+        Returns the new game index."""
+        from_archive = (
+            archive is not None
+            and n_archive > 0
+            and float(rng.random()) < archive_start_frac
+        )
+        swap2_res = None
+        if from_archive:
+            idx = int(rng.integers(0, n_archive))
+            start_state = _gamestate_from_archive(archive, idx)
+            opening_plies = start_state.move_count
+        elif swap2:
+            start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+        elif fixed_openings:
+            start_state, opening_plies = _fixed_opening_state(rng)
+        elif random_opening_moves > 0:
+            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+        else:
+            start_state, opening_plies = GameState.initial(), 0
+        games.append(
+            native_mcts.NativeMCTSGame(
+                start_state,
+                c_puct=c_puct,
+                c_puct_base=c_puct_base,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps,
+                seed=int(rng.integers(1, 2**63 - 1)),
+                forced_playout_k=forced_playout_k,
+            )
+        )
+        initial_plies.append(opening_plies)
+        archive_start_flags.append(from_archive)
+        swap2_results.append(swap2_res)
+        trajectories.append([])
+        vct_maps.append([])
+        ply_of.append(0)
+        return len(games) - 1
+
+    # Continuous refill (issue #112): cap the ACTIVE set at `concurrent_games`
+    # and seed a replacement the moment a game completes, so every merged
+    # oracle solve (one TAIL ~= 44 ms regardless of width) and every MPS
+    # search wave serves a full-width batch instead of the thinning tail of a
+    # lockstep batch. 0 (default) = legacy lockstep, byte-identical.
+    refill = 0 < concurrent_games < n_games
+    width = concurrent_games if refill else n_games
+    with _profile_timer(profile, "game_setup_s"):
+        for _ in range(width):
+            _seed_game()
+
+    active: list[int] = list(range(width))
     completed: list[tuple[int, float, int]] = []
     final_state: dict[int, tuple[np.ndarray, int]] = {}
 
-    ply = 0
-    while active and ply < max_plies:
+    while active:
         with _profile_timer(profile, "active_list_s"):
             active_games = [games[i] for i in active]
 
@@ -2707,10 +2740,10 @@ def _generate_games_native(
                     profile=profile)
                 active, active_games, pending_vct = _apply_oracle_partitions(
                     oracle_box["res"], active, active_games, planes_list,
-                    slot_of, ply, initial_plies, trajectories, completed,
+                    slot_of, ply_of, initial_plies, trajectories, completed,
                     final_state, record_ownership, record_vct, vct_maps,
                     profile)
-                if not active:
+                if not active and not refill:
                     break
 
         # Playout-Cap Randomization: decide per-game-per-ply whether this is a
@@ -2757,15 +2790,16 @@ def _generate_games_native(
         else:
             is_full = None  # every move is full + recorded (production path)
             full_set = None
-            with _profile_timer(profile, "native_search_batch_s"):
-                native_mcts.search_batch(
-                    active_games,
-                    search_evaluator,
-                    n_simulations=n_simulations,
-                    wave_size=wave_size,
-                    add_root_noise=True,
-                )
-            _profile_add(profile, "search_calls", 1.0)
+            if active_games:  # refill: a round can be emptied pre-search
+                with _profile_timer(profile, "native_search_batch_s"):
+                    native_mcts.search_batch(
+                        active_games,
+                        search_evaluator,
+                        n_simulations=n_simulations,
+                        wave_size=wave_size,
+                        add_root_noise=True,
+                    )
+                _profile_add(profile, "search_calls", 1.0)
 
         # Oracle/search overlap: join the background solve and apply the
         # partitions AFTER the search (games the oracle terminates this ply
@@ -2778,17 +2812,18 @@ def _generate_games_native(
                 raise oracle_box["err"]
             active, active_games, pending_vct = _apply_oracle_partitions(
                 oracle_box["res"], active, active_games, planes_list, slot_of,
-                ply, initial_plies, trajectories, completed, final_state,
+                ply_of, initial_plies, trajectories, completed, final_state,
                 record_ownership, record_vct, vct_maps, profile)
-            if not active:
+            if not active and not refill:
                 break
 
         next_active: list[int] = []
         with _profile_timer(profile, "post_search_loop_s"):
             for slot_idx, g_idx in enumerate(active):
                 g = active_games[slot_idx]
+                ply_g = ply_of[g_idx]
                 record_target = is_full is None or g_idx in full_set
-                tau = 1.0 if ply < temperature_moves else temperature_final
+                tau = 1.0 if ply_g < temperature_moves else temperature_final
                 with _profile_timer(profile, "policy_export_s"):
                     pi = g.policy(temperature=tau)
                 # Sound-world oracle veto (issue #107): zero out proven-blunder
@@ -2810,7 +2845,7 @@ def _generate_games_native(
                             pi = _veto_policy(pi, vmap, legal)
                             _profile_add(profile, "oracle_veto_masked", 1.0)
                 n_initial = initial_plies[g_idx]
-                side = (n_initial + ply) % 2
+                side = (n_initial + ply_g) % 2
                 # Sanitize pi before recording the training example: NaN entries
                 # from the native MCTS policy export must not enter the buffer.
                 # _sample_action handles NaN for the *play* path, but trajectories
@@ -2871,22 +2906,30 @@ def _generate_games_native(
                         outcome_for_black = 0.0
                     if record_ownership:
                         # Post-advance root is the TERMINAL board; side-to-move
-                        # (plane 0) is the non-mover, abs parity (n_initial+ply+1)%2.
+                        # (plane 0) is the non-mover, abs parity (n_initial+ply_g+1)%2.
                         final_state[g_idx] = (
                             np.asarray(g.root_planes()).copy(),
-                            (n_initial + ply + 1) % 2,
+                            (n_initial + ply_g + 1) % 2,
                         )
-                    completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+                    completed.append((g_idx, outcome_for_black, n_initial + ply_g + 1))
+                elif ply_g + 1 >= max_plies:
+                    # Per-game max-plies draw (the legacy loop's post-while
+                    # retirement, moved inline for the per-game ply world).
+                    if record_ownership:
+                        final_state[g_idx] = (None, 0)  # ownership MASKED OUT (None), not scored
+                    completed.append((g_idx, 0.0, n_initial + max_plies))
                 else:
                     next_active.append(g_idx)
+                ply_of[g_idx] = ply_g + 1
+
+        # Continuous refill: seed replacements the moment games finish, so the
+        # next round's merged solve + search wave stay at full width.
+        if refill and len(games) < n_games:
+            with _profile_timer(profile, "game_setup_s"):
+                while len(games) < n_games and len(next_active) < width:
+                    next_active.append(_seed_game())
 
         active = next_active
-        ply += 1
-
-    for g_idx in active:
-        if record_ownership:
-            final_state[g_idx] = (None, 0)  # max-plies draw -> ownership MASKED OUT (None), not scored
-        completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
 
     records: list[GameRecord] = []
     with _profile_timer(profile, "record_build_s"):
@@ -2961,11 +3004,20 @@ def generate_games(
     record_aux: bool = False,
     record_ownership: bool = False,
     record_vct: bool = False,
+    concurrent_games: int = 0,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
     All games advance in lockstep: at each ply we batch-MCTS across active games,
     sample an action per game, apply it, and remove any games that ended.
+
+    `concurrent_games` > 0 (native path only) caps the active set at that width
+    and seeds a replacement game the moment one completes (continuous refill,
+    issue #112): every merged oracle solve costs one ~44 ms tail regardless of
+    width, so keeping the batch full amortizes it over `concurrent_games` games
+    instead of a lockstep batch's thinning tail. 0 (default) = legacy lockstep,
+    byte-identical. Ignored (with the lockstep behavior) on the pure-Python and
+    Gumbel fallback paths.
 
     `gumbel_root=True` switches the ROOT to Gumbel AlphaZero selection + Sequential
     Halving (Danihelka et al. 2022): the root samples `gumbel_m` candidate actions
@@ -3128,6 +3180,7 @@ def generate_games(
             record_aux=record_aux,
             record_ownership=record_ownership,
             record_vct=record_vct,
+            concurrent_games=concurrent_games,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)

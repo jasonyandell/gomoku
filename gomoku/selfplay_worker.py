@@ -91,6 +91,13 @@ def parse_args() -> argparse.Namespace:
 
     # Generation knobs (should match the trainer's MCTS config).
     p.add_argument("--games-per-batch", type=int, default=16)
+    p.add_argument("--concurrent-games", type=int, default=0,
+                   help="Continuous refill (issue #112): cap the active set at "
+                        "this width and seed a replacement game the moment one "
+                        "completes, so the per-ply merged oracle solve and the "
+                        "MPS search wave always run at full width. Use with a "
+                        "games-per-batch a few times larger. 0 = legacy "
+                        "lockstep batches (byte-identical). Native path only.")
     p.add_argument("--n-simulations", type=int, default=800)
     p.add_argument("--wave-size", type=int, default=32)
     p.add_argument("--c-puct", type=float, default=1.25,
@@ -878,6 +885,7 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             record_aux=getattr(args, "record_aux", False),
             record_ownership=getattr(args, "record_ownership", False),
             record_vct=getattr(args, "record_vct", False),
+            concurrent_games=getattr(args, "concurrent_games", 0),
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
