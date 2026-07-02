@@ -1,5 +1,12 @@
 # ML Perf Frontier Status
 
+> ⚠️ **ARCHIVED 2026-07-02 — a dated snapshot, NOT current.** This "current
+> focus" is frozen at 2026-05-23: its headline numbers trail
+> [best-cells.md](best-cells.md) ~2×, and it points at the retired pi
+> frontier-lab (`.frontier/lanes.json`, dead since 05-22). The 9×9 perf frontier
+> went quiet late May while work moved to 15×15 + VCT-science. **To operate
+> today, start at the [Ops hub](../ops.md).** Kept as historical evidence.
+
 This page is the current control-room summary for bounded Gomoku performance work. Raw evidence stays in logs, W&B, sweep artifacts, worktrees, and open notes; this page is the curated mixdown.
 
 ## Current Focus

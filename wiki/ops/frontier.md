@@ -1,5 +1,11 @@
 # ML Perf Workflow Frontier
 
+> ⚠️ **RETIRED 2026-07-02 — dead mechanism.** The pi frontier-lab extension that
+> projected this board from `.frontier/lanes.json` is retired; the state file is
+> frozen at 2026-05-22. Superseded by the two-queue scheduler in
+> [gpu-queue.md](gpu-queue.md). To operate today, start at the
+> [Ops hub](../ops.md). Kept as historical evidence.
+
 Source of truth for machine-readable lanes: `.frontier/lanes.json`.
 
 This page is the human-readable board. The frontier lab extension claims lanes from `.frontier/lanes.json`, fans out isolated workers, and asks the wiki curator to roll receipts back into this page.

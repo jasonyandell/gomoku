@@ -3,6 +3,34 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-07-02] Major restructure: hub-of-hubs index + revived Ops hub + curated timeline
+
+Rebuilt the landing page from a 26,680-token wall (it overflowed a single 25k
+fetch) into a **~950-token hub-of-hubs** that fits one fetch with headroom. The
+old index linked ~90 pages inline, with 400–900-word essay-cells; **14 of the 83
+topic pages were orphans** (on disk, never linked). New shape:
+
+- **Pinned top = the [Ops hub](ops.md)** (replaces the "common workflows" header):
+  Train/Eval/Publish workflow pages + the live operating surfaces, each verified
+  live-vs-archived (2026-07-02). Banner-flagged the two dead ops pages
+  ([status.md](ops/status.md) self-superseded, [frontier.md](ops/frontier.md)
+  retired pi-mechanism).
+- **5 knowledge hubs** — [AlphaZero](alphazero.md), [Experiments](experiments.md)
+  (hub-of-hubs; [Seek-VCT](seek-vct.md) nested), [Derby](derby.md),
+  [M5-as-Mainframe](m5-mainframe.md), [Reference](reference.md) — each with a
+  start→now→learned skeleton and a **complete "every page in this hub" index**, so
+  **all 99 pages are reachable from exactly one hub (zero orphans)**.
+- **New [training-timeline.md](training-timeline.md)** — the append-only
+  TRAINING_WIKI (5,799 lines) broken into a ~50-milestone era-grouped index with
+  run ids (curated via a full-notebook extraction pass).
+- Provenance + reducer state preserved in `_archive/` (old index +
+  `manifest.json`, the per-page hub/verdict map that drives future curation passes).
+- New workflow pages: [train-a-model](train-a-model.md), [eval-a-model](eval-a-model.md),
+  [publish-a-model](publish-a-model.md) (the real HuggingFace mechanism from `gomoku/hf.py`).
+
+Built with three ultracode passes (inventory → coverage+manifest → extraction+cutover).
+Fixed a pre-existing broken link in this log (`alphazero-lessons` → `-15x15-gomoku`).
+
 ## [2026-07-01] New page: the VCT-defense aux head — a working sensor with no actuator (#103)
 
 Created [topics/vct-defense-aux-head-result.md](topics/vct-defense-aux-head-result.md) — the outcome of #103,
@@ -276,7 +304,7 @@ New/updated synthesis:
 - Appended sections to [topics/research-lab-charter.md](topics/research-lab-charter.md)
   (clean-milestone-not-stop, run-cap fast-filter, the three-tier redesign #2,
   the training-slice resume-mechanism),
-  [topics/alphazero-lessons.md](topics/alphazero-lessons.md) (threat-semantics +
+  [topics/alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) (threat-semantics +
   founding decisions),
   [topics/perf-bench-vs-real-training-cost.md](topics/perf-bench-vs-real-training-cost.md)
   (plies-ETA), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) (3M

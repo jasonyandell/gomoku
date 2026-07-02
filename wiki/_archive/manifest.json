@@ -1,0 +1,149 @@
+{
+  "generated": "2026-07-02",
+  "pass": 1,
+  "note": "Reducer state for the wiki curation. status advances raw->mapped->curated->merged/retired. Every page assigned to exactly one primary hub; overlaps noted. Source: old index.md descriptions + Pass0 (35 recs) + ops verification (9) + orphan inventory (15).",
+  "hubs": {
+    "ops": {
+      "role": "operational front door (pinned top of index): workflows + live surfaces",
+      "pages": [
+        {"p": "ops/gpu-queue.md", "s": "mapped", "v": "keep-live", "note": "two-queue scheduler doctrine LIVE; lanes closed"},
+        {"p": "ops/best-cells.md", "s": "mapped", "v": "keep-live", "note": "bests registry; last promote 05-23"},
+        {"p": "ops/experiment-ledger.md", "s": "mapped", "v": "keep-live", "note": "TQ promotion gate + schema LIVE; receipts historical"},
+        {"p": "ops/test-ledger.md", "s": "mapped", "v": "keep-live", "note": "Standard Gates LIVE; rows May-22 snapshot"},
+        {"p": "ops/baselines.md", "s": "mapped", "v": "keep-live", "note": "benchmark command cookbook LIVE"},
+        {"p": "ops/research-board.md", "s": "mapped", "v": "refresh", "note": "derby verdict board; 'current' frozen at v9 05-27"},
+        {"p": "ops/status.md", "s": "curated", "v": "archived", "note": "banner added 07-02; self-superseded snapshot"},
+        {"p": "ops/frontier.md", "s": "curated", "v": "retired", "note": "banner added 07-02; dead pi-frontier mechanism"},
+        {"p": "ops/perf-log.md", "s": "mapped", "v": "keep-historical", "note": "append-only journal, last 05-26"}
+      ]
+    },
+    "alphazero": {
+      "role": "the AlphaZero training arc (best-perf-first, headlines, what-worked/didnt)",
+      "pages": [
+        {"p": "topics/alphazero-lessons-15x15-gomoku.md", "s": "mapped", "v": "split", "note": "1255-line essay; split into capacity-vs-search / eval-yardstick / white-defense leaves later"},
+        {"p": "topics/15x15-training-campaign.md", "s": "mapped", "v": "keep-leaf", "note": "campaign log; overlaps feasibility"},
+        {"p": "topics/15x15-era-feasibility-and-plan.md", "s": "mapped", "v": "keep-leaf", "note": "feasibility+phased plan; cross-link m5"},
+        {"p": "topics/training-run-lineage.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/training-run-reference.md", "s": "mapped", "v": "keep-leaf", "note": "also on workflow-train"},
+        {"p": "topics/launch-sequence-runbook.md", "s": "mapped", "v": "keep-leaf", "note": "launch runbook; also workflow-train"},
+        {"p": "topics/net-architecture-and-representation.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/board-size-transfer-and-warm-start.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/sound-world-recipe.md", "s": "mapped", "v": "keep-leaf", "note": "current frontier"},
+        {"p": "topics/loss-floor-bouncing.md", "s": "mapped", "v": "keep-leaf", "note": "dynamics"},
+        {"p": "topics/az-at-scale-vs-laptop.md", "s": "mapped", "v": "keep-leaf", "note": "dynamics"},
+        {"p": "topics/bruce-lee-model.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/white-side-defense-plan.md", "s": "mapped", "v": "keep-leaf", "note": "the binding wound"},
+        {"p": "topics/swap2-opening-protocol.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/eval-teacher-sensei.md", "s": "mapped", "v": "keep-leaf", "note": "teacher distillation; cross reference"},
+        {"p": "topics/rapfi-idx2-distillation-mine.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/wave-of-lockstep-design.md", "s": "mapped", "v": "keep-leaf", "note": "run design WL1"},
+        {"p": "topics/wl2-scale-emulation-design.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/wl5-diagnostics-archive-start-design.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/vct-terminus-selfplay-result.md", "s": "mapped", "v": "keep-leaf", "note": "training result; bridges seek-vct"},
+        {"p": "topics/vct-defense-aux-head-result.md", "s": "mapped", "v": "keep-leaf", "note": "training result; bridges seek-vct"},
+        {"p": "topics/cross-game-value-sidecar.md", "s": "mapped", "v": "keep-leaf", "note": "derby lever; meta-lesson"},
+        {"p": "topics/curated-buffer-and-curriculum-design.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/fpu-reduction-eval-lever.md", "s": "mapped", "v": "keep-leaf", "note": "search/eval lever"},
+        {"p": "topics/swa-averaging.md", "s": "mapped", "v": "keep-leaf", "note": "post-training tool"},
+        {"p": "cards/gomoku-9x9-swap2-era2.md", "s": "mapped", "v": "keep-leaf", "note": "model card"},
+        {"p": "cards/gomoku-15x15-fixed-fair-openings.md", "s": "mapped", "v": "keep-leaf", "note": "model card"}
+      ]
+    },
+    "seek-vct": {
+      "role": "sub-hub of experiments: the net steers / oracle finishes program",
+      "pages": [
+        {"p": "topics/vct-mining-research.md", "s": "mapped", "v": "keep-hub", "note": "the synthesis hub page"},
+        {"p": "topics/mega-vct-solver.md", "s": "mapped", "v": "keep-leaf", "note": "canonical solver API"},
+        {"p": "topics/gpu-vct-feasibility.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/vct-backward-mining.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/vct-reachability-mining.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/idx2-vct-frontier-map.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/vct-cascade-labeler.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/vct-cascade-run-2026-06-30.md", "s": "mapped", "v": "keep-leaf", "note": "median-ply-19 / cap50 findings"},
+        {"p": "topics/shape-library-engine.md", "s": "mapped", "v": "keep-leaf", "note": "the AI Jason wants to build"},
+        {"p": "topics/vct-recognition-learnability.md", "s": "mapped", "v": "keep-leaf", "note": "trilogy: see"},
+        {"p": "topics/seeker-steering-learnability.md", "s": "mapped", "v": "keep-leaf", "note": "trilogy: steer"},
+        {"p": "topics/phi-distance-field-learnability.md", "s": "mapped", "v": "keep-leaf", "note": "trilogy: regress; first L2 model"}
+      ]
+    },
+    "experiments": {
+      "role": "hub of hubs: non-training research threads (seek-vct is the big sub-hub)",
+      "pages": [
+        {"p": "topics/the-claw.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/rapfi-mix9svq-architecture.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/molecule-discovery-toolkit.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/allis-threat-theory.md", "s": "mapped", "v": "keep-leaf", "note": "reference theory"},
+        {"p": "topics/gomoku-standard-strategy.md", "s": "mapped", "v": "keep-leaf", "note": "reference theory"},
+        {"p": "topics/idea-pile.md", "s": "mapped", "v": "keep-leaf", "note": "the seed pile"}
+      ]
+    },
+    "derby": {
+      "role": "the autonomous research lab / Delta-elo-Delta-t engine (charter, roles, autolab)",
+      "pages": [
+        {"p": "topics/research-lab-charter.md", "s": "mapped", "v": "keep-leaf", "note": "the charter"},
+        {"p": "topics/research-lab-session-runbook.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/research-lab-reviewer-role.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/autolab-architecture.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/autolab-supervisor-and-monitor.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/cockpit-vs-autopilot.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/engine-panel-derby-design.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/wall-clock-to-elo-metric.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/fleet-management.md", "s": "mapped", "v": "keep-leaf", "note": "roadmap"},
+        {"p": "topics/workflow-orchestration.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/derby-registration.md", "s": "mapped", "v": "keep-leaf", "note": "intake mechanics"},
+        {"p": "topics/research-loop.md", "s": "mapped", "v": "keep-leaf", "note": "governance / roles"},
+        {"p": "topics/event-log.md", "s": "mapped", "v": "keep-leaf", "note": "lab_log.py event stream"},
+        {"p": "topics/sliding-derby-measured-outcomes-design-v2.md", "s": "mapped", "v": "keep-leaf", "note": "current design of record"},
+        {"p": "topics/sliding-derby-design.md", "s": "mapped", "v": "superseded", "note": "v1 blueprint; superseded by v2; keep as reuse-ledger with banner"},
+        {"p": "topics/workflow-harness-capabilities.md", "s": "mapped", "v": "keep-leaf", "note": "probe appendix under v2; merge-candidate"}
+      ]
+    },
+    "m5-mainframe": {
+      "role": "perf & hardware: pushing the M5 Max",
+      "pages": [
+        {"p": "topics/m5-max-as-mainframe.md", "s": "mapped", "v": "keep-leaf", "note": "guiding lens"},
+        {"p": "topics/mcts-perf-ceiling.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/m5-max-fp16-and-throughput-regimes.md", "s": "mapped", "v": "keep-leaf", "note": "flagship perf findings"},
+        {"p": "topics/perf-bench-vs-real-training-cost.md", "s": "mapped", "v": "keep-leaf", "note": "the fp16 epilogue / runaway trap"},
+        {"p": "topics/m5-max-cross-engine-coupling.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/coreml-design-envelope-and-our-fit.md", "s": "mapped", "v": "keep-leaf", "note": "canonical ANE entry"},
+        {"p": "topics/coreml-ane-residency-lab.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/ane-int8-inference.md", "s": "mapped", "v": "superseded", "note": "absorbed by coreml-design-envelope; keep historical with banner"},
+        {"p": "topics/buffer-bit-packing.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/activity-monitor-perf-runbook.md", "s": "mapped", "v": "keep-leaf"}
+      ]
+    },
+    "reference": {
+      "role": "look-things-up shelf: evals, tools, conventions, sources",
+      "pages": [
+        {"p": "capabilities.md", "s": "mapped", "v": "keep-leaf", "note": "capability map"},
+        {"p": "topics/conventions.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/wiki-operating-model.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/branch-and-worktree-workflow.md", "s": "mapped", "v": "keep-leaf", "note": "canonical lifecycle"},
+        {"p": "topics/worktree-hygiene.md", "s": "mapped", "v": "keep-leaf", "note": "cleanup half + uv gotcha"},
+        {"p": "topics/eval-suite.md", "s": "mapped", "v": "keep-leaf", "note": "also workflow-eval"},
+        {"p": "topics/batched-eval-arena.md", "s": "mapped", "v": "keep-leaf", "note": "arena tool"},
+        {"p": "topics/reliable-eval-set.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/external-engine-baselines.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/gomocup-engines-catalog.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/probe-100pct.md", "s": "mapped", "v": "keep-leaf", "note": "eval probe driver"},
+        {"p": "topics/mining-validation-archives.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "topics/rapfi-pool.md", "s": "mapped", "v": "keep-leaf", "note": "tool: Rapfi HF pool"},
+        {"p": "topics/playing-the-model.md", "s": "mapped", "v": "keep-leaf", "note": "also workflow-publish"},
+        {"p": "topics/containerize-training-runs.md", "s": "mapped", "v": "keep-leaf", "note": "backlog"},
+        {"p": "sources/karpathy-llm-wiki.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "sources/gomocup-az-techniques-2026-05-27.md", "s": "mapped", "v": "keep-leaf"},
+        {"p": "sources/gomocup-external-engines-2026-05-22.md", "s": "mapped", "v": "keep-leaf"}
+      ]
+    }
+  },
+  "core_not_in_a_hub": ["index.md", "log.md", "../AGENTS.md", "../TRAINING_WIKI.md"],
+  "todos": [
+    "started-perf eps/hr in index you-are-here (from TRAINING_WIKI)",
+    "derby where-it-stopped (from research-board + sweep_runs)",
+    "publish-a-model HF page written fresh (mechanism buried in autolab-architecture)",
+    "Pass T: extract TRAINING_WIKI headlines up into hubs (cite back)",
+    "later: split alphazero-lessons essay into leaves"
+  ]
+}
