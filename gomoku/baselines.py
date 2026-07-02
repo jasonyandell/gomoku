@@ -18,6 +18,25 @@ from gomoku.game import BOARD_SIZE, GameState, WIN_LEN
 
 Player = Callable[[GameState, np.random.Generator], int]
 
+# Native lookahead search (issue #110): compiled per board size like the
+# state-ops/MCTS extensions. Move-identical to the pure-Python path below;
+# GOMOKU_DISABLE_NATIVE_LOOKAHEAD=1 (or a missing build) falls back.
+_NATIVE_LOOKAHEAD = None
+try:  # pragma: no cover - exercised only when the extension exists
+    import os as _os
+
+    if not _os.environ.get("GOMOKU_DISABLE_NATIVE_LOOKAHEAD"):
+        if BOARD_SIZE == 9:
+            from gomoku import _lookahead_native as _NATIVE_LOOKAHEAD
+        elif BOARD_SIZE == 11:
+            from gomoku import _lookahead_native11 as _NATIVE_LOOKAHEAD
+        elif BOARD_SIZE == 13:
+            from gomoku import _lookahead_native13 as _NATIVE_LOOKAHEAD
+        elif BOARD_SIZE == 15:
+            from gomoku import _lookahead_native15 as _NATIVE_LOOKAHEAD
+except ImportError:  # pragma: no cover
+    _NATIVE_LOOKAHEAD = None
+
 
 # ----- Pre-computed length-5 windows -----
 # Each row is a (WIN_LEN,) array of flat-board indices forming one line of 5.
@@ -476,10 +495,12 @@ def _negamax(state: GameState, depth: int, alpha: float, beta: float) -> float:
         return best_q
 
     candidates = _candidate_moves(state)
-    # Move ordering: try moves with higher static score first to maximise alpha-beta cuts.
+    # Move ordering: try moves with higher static score first to maximise
+    # alpha-beta cuts. Stable sort so ties keep ascending cell order — the
+    # native port mirrors this ordering exactly (parity-testable, #110).
     mine, opp = _flat_planes(state)
     move_scores = _score_cells(mine, opp, candidates)
-    order = np.argsort(-move_scores)
+    order = np.argsort(-move_scores, kind="stable")
     candidates = candidates[order]
     # Restrict the branching at internal nodes: only keep top-K. The full neighbor
     # set still gets considered at the ROOT (caller's loop); this affects deeper
@@ -507,46 +528,65 @@ def _negamax(state: GameState, depth: int, alpha: float, beta: float) -> float:
     return best
 
 
+def _root_best_actions(state: GameState, depth: int) -> list[int]:
+    """The lookahead root decision, minus the rng tie-break: the list of
+    tied-best actions, in discovery order. The native port returns the
+    identical list (`tests/test_lookahead_native.py`)."""
+    mine, opp = _flat_planes(state)
+    legal = state.legal_actions()
+    all_scores = _score_all_moves(mine, opp)
+
+    # Step 1: shortcut for immediate wins (cheap and avoids depth=0 noise).
+    my_wins = _find_immediate_wins(mine, opp, legal)
+    if my_wins.size > 0:
+        m = all_scores[my_wins].max()
+        return [int(a) for a in my_wins[all_scores[my_wins] == m]]
+
+    candidates = _candidate_moves(state)
+    # Order by static score for better pruning (stable: ties keep ascending
+    # cell order, mirrored by the native port).
+    m_scores = all_scores[candidates]
+    order = np.argsort(-m_scores, kind="stable")
+    candidates = candidates[order]
+
+    best_val = -np.inf
+    best_actions: list[int] = []
+    alpha = -np.inf
+    beta = np.inf
+    for a in candidates:
+        child = state.apply(int(a))
+        done2, v2 = child.is_terminal()
+        if done2 and v2 < 0:
+            # Immediate win (should have been caught by my_wins; defensive).
+            val = _MATE + depth
+        else:
+            val = -_negamax(child, depth - 1, -beta, -alpha)
+        if val > best_val:
+            best_val = val
+            best_actions = [int(a)]
+        elif val == best_val:
+            best_actions.append(int(a))
+        if best_val > alpha:
+            alpha = best_val
+    return best_actions
+
+
 def lookahead_player(depth: int = 4) -> Player:
-    """Return a player that runs negamax+alpha-beta to `depth` plies."""
+    """Return a player that runs negamax+alpha-beta to `depth` plies.
+
+    Uses the native C search (`gomoku._lookahead_native*`) when available —
+    move-identical to the Python path (same ordering, same tie-sets, same rng
+    consumption); `GOMOKU_DISABLE_NATIVE_LOOKAHEAD=1` forces pure Python."""
 
     def play(state: GameState, rng: np.random.Generator) -> int:
-        mine, opp = _flat_planes(state)
-        legal = state.legal_actions()
-        all_scores = _score_all_moves(mine, opp)
-
-        # Step 1: shortcut for immediate wins (cheap and avoids depth=0 noise).
-        my_wins = _find_immediate_wins(mine, opp, legal)
-        if my_wins.size > 0:
-            return _argmax_with_tiebreak(my_wins, all_scores[my_wins], rng)
-
-        candidates = _candidate_moves(state)
-        # Order by static score for better pruning.
-        m_scores = all_scores[candidates]
-        order = np.argsort(-m_scores)
-        candidates = candidates[order]
-
-        best_val = -np.inf
-        best_actions: list[int] = []
-        alpha = -np.inf
-        beta = np.inf
-        for a in candidates:
-            child = state.apply(int(a))
-            done2, v2 = child.is_terminal()
-            if done2 and v2 < 0:
-                # Immediate win (should have been caught by my_wins; defensive).
-                val = _MATE + depth
-            else:
-                val = -_negamax(child, depth - 1, -beta, -alpha)
-            if val > best_val:
-                best_val = val
-                best_actions = [int(a)]
-            elif val == best_val:
-                best_actions.append(int(a))
-            if best_val > alpha:
-                alpha = best_val
-        if len(best_actions) == 1:
-            return best_actions[0]
-        return int(rng.choice(np.asarray(best_actions)))
+        if _NATIVE_LOOKAHEAD is not None:
+            acts = _NATIVE_LOOKAHEAD.best_actions(
+                np.ascontiguousarray(state.board), depth, state.move_count
+            )
+        else:
+            acts = _root_best_actions(state, depth)
+        if len(acts) == 1:
+            return int(acts[0])
+        return int(rng.choice(np.asarray(acts)))
 
     return play

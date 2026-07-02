@@ -18,6 +18,11 @@ setup(
             sources=["gomoku/_mcts_native.c"],
             include_dirs=[np.get_include()],
         ),
+        Extension(
+            "gomoku._lookahead_native",
+            sources=["gomoku/_lookahead_native.c"],
+            include_dirs=[np.get_include()],
+        ),
         # Larger-board builds: thin shims that #define BOARD_SIZE N and #include
         # the shared implementation. gomoku.state_ops / gomoku.native_mcts pick
         # the module matching the active board size at import time. The 11x11 and
@@ -35,6 +40,11 @@ setup(
             include_dirs=[np.get_include()],
         ),
         Extension(
+            "gomoku._lookahead_native11",
+            sources=["gomoku/_lookahead_native11.c"],
+            include_dirs=[np.get_include()],
+        ),
+        Extension(
             "gomoku._state_ops_native13",
             sources=["gomoku/_state_ops_native13.c"],
             include_dirs=[np.get_include()],
@@ -45,6 +55,11 @@ setup(
             include_dirs=[np.get_include()],
         ),
         Extension(
+            "gomoku._lookahead_native13",
+            sources=["gomoku/_lookahead_native13.c"],
+            include_dirs=[np.get_include()],
+        ),
+        Extension(
             "gomoku._state_ops_native15",
             sources=["gomoku/_state_ops_native15.c"],
             include_dirs=[np.get_include()],
@@ -52,6 +67,11 @@ setup(
         Extension(
             "gomoku._mcts_native15",
             sources=["gomoku/_mcts_native15.c"],
+            include_dirs=[np.get_include()],
+        ),
+        Extension(
+            "gomoku._lookahead_native15",
+            sources=["gomoku/_lookahead_native15.c"],
             include_dirs=[np.get_include()],
         ),
     ],

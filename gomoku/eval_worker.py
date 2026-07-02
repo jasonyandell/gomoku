@@ -33,7 +33,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from gomoku.arena import NetAgent, PickerAgent, play_matches_batched
+from gomoku.arena import (
+    NetAgent,
+    picker_agent_from_spec,
+    play_matches_batched_multi,
+)
 from gomoku.eval import mcts_picker, play_match_parallel, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
@@ -201,6 +205,13 @@ def main() -> None:
         and args.vct_finish_nodes == 0
     )
     use_arena = not args.no_arena and levers_off
+    # Arena-side baseline agents are built ONCE and reused across epochs —
+    # pooled pickers (lookahead) keep their worker pool warm for the whole
+    # daemon lifetime (issue #110).
+    arena_baseline_agents = (
+        {raw: picker_agent_from_spec(s) for raw, s in zip(raw_specs, specs)}
+        if use_arena else {}
+    )
     if not args.no_arena and not levers_off:
         print("[eval] arena disabled: an eval lever (--eval-vcf-nodes / "
               "--fpu-reduction-c / --reuse-tree / --proven-prop / "
@@ -242,16 +253,35 @@ def main() -> None:
             NetAgent(evaluator, sims=args.sims, c_puct=args.c_puct, label="model")
             if use_arena else None
         )
+        # Multi-opponent field (#110): ALL baselines' games live in one arena
+        # field — one net pick_batch per round across every matchup, every
+        # baseline's CPU/pool picks running concurrently, cheap baselines
+        # finishing early instead of waiting their turn. Per-opponent seeds
+        # match what the sequential per-baseline calls used.
+        arena_results: dict[str, "MatchResult"] = {}
+        if use_arena:
+            multi = play_matches_batched_multi(
+                arena_net,
+                [
+                    (
+                        arena_baseline_agents[raw],
+                        args.n_games,
+                        args.seed + epoch_tag * 1000 + spec_idx,
+                    )
+                    for spec_idx, (raw, _s, _p) in enumerate(baseline_pickers)
+                ],
+            )
+            arena_results = {
+                raw: res
+                for (raw, _s, _p), res in zip(baseline_pickers, multi)
+            }
         for spec_idx, (raw_spec, spec, baseline_picker) in enumerate(baseline_pickers):
             t0 = time.perf_counter()
             match_seed = args.seed + epoch_tag * 1000 + spec_idx
             if use_arena:
-                res = play_matches_batched(
-                    arena_net,
-                    PickerAgent(baseline_picker, label=spec.label()),
-                    n_games=args.n_games,
-                    seed=match_seed,
-                )
+                # Whole-field wall time is time/eval_pass_s; the per-spec
+                # timing below only measures result bookkeeping.
+                res = arena_results[raw_spec]
             elif args.n_workers > 1:
                 if args.vct_finish_nodes > 0:
                     raise SystemExit(

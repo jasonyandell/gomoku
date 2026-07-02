@@ -75,8 +75,7 @@ Output:
 NO training, NO new lane, NO derby cell. Eval-only on a frozen checkpoint.
 
 If the Δelo Derby is currently running, the driver refuses to proceed unless
-``--i-know-derby-is-running`` is passed (same defensive pattern as
-``scripts/reclaim_worktrees.py``). The probe is eval-only and does NOT touch
+``--i-know-derby-is-running`` is passed. The probe is eval-only and does NOT touch
 the derby's checkpoints or wandb, but the GPU lane is single-tenant.
 """
 from __future__ import annotations
@@ -1095,7 +1094,7 @@ def main(argv: list[str] | None = None,
         return 0
 
     # Defensive: refuse to compete with a live derby unless explicitly
-    # acknowledged. Same pattern as scripts/reclaim_worktrees.py.
+    # acknowledged.
     if derby_check() and not args.i_know_derby_is_running:
         print("error: delo_derby.py appears to be running. The probe is "
               "eval-only (does not touch derby checkpoints / wandb) but the "

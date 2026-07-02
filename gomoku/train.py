@@ -1706,6 +1706,10 @@ def main() -> None:
     # Build baseline pickers once (stateless across calls — RNG is passed in).
     fast_pickers = [(s, build_player(s)) for s in fast_specs]
     slow_pickers = [(s, build_player(s)) for s in slow_specs]
+    # Arena-side agents for the in-trainer eval block, built lazily on first
+    # eval and reused across epochs so a pooled picker (lookahead) keeps its
+    # worker pool warm (issue #110). Keyed by spec label.
+    arena_baseline_agents: dict = {}
     eval_counter = 0
 
     # Pre-build the self-play opponent picker if requested. 'self' = vanilla
@@ -2796,7 +2800,11 @@ def main() -> None:
             )
             use_eval_arena = not args.no_eval_arena and eval_levers_off
             if use_eval_arena:
-                from gomoku.arena import NetAgent, PickerAgent, play_matches_batched
+                from gomoku.arena import (
+                    NetAgent,
+                    picker_agent_from_spec,
+                    play_matches_batched_multi,
+                )
                 arena_net = NetAgent(eval_evaluator,
                                      sims=args.eval_sims,
                                      c_puct=args.c_puct,
@@ -2819,21 +2827,45 @@ def main() -> None:
                 batches.append(("slow", slow_pickers, args.eval_slow_games))
 
             for batch_label, pickers, n_games in batches:
+                if use_eval_arena:
+                    # Multi-opponent field (#110): the whole batch's games
+                    # live at once — one net pick_batch per round across all
+                    # matchups, baseline picks fanned concurrently. Seeds per
+                    # spec match the old sequential per-baseline calls.
+                    m_start = time.time()
+                    for spec, _p in pickers:
+                        if spec.label() not in arena_baseline_agents:
+                            arena_baseline_agents[spec.label()] = (
+                                picker_agent_from_spec(spec)
+                            )
+                    multi_res = play_matches_batched_multi(
+                        arena_net,
+                        [
+                            (
+                                arena_baseline_agents[spec.label()],
+                                n_games,
+                                args.seed + epoch * 1000 + spec_idx,
+                            )
+                            for spec_idx, (spec, _p) in enumerate(pickers)
+                        ],
+                    )
+                    batch_dt = time.time() - m_start
+                    for (spec, _p), res in zip(pickers, multi_res):
+                        key = _baseline_log_key(spec)
+                        log[f"eval/{key}_winrate"] = res.win_rate
+                        log[f"eval/{key}_wins"] = res.wins
+                        log[f"eval/{key}_losses"] = res.losses
+                        log[f"eval/{key}_draws"] = res.draws
+                        # Whole-field time — matchups ran concurrently.
+                        log[f"time/eval_{key}_s"] = batch_dt
+                    continue
                 for spec_idx, (spec, baseline_picker) in enumerate(pickers):
                     m_start = time.time()
-                    if use_eval_arena:
-                        res = play_matches_batched(
-                            arena_net,
-                            PickerAgent(baseline_picker, label=spec.label()),
-                            n_games=n_games,
-                            seed=args.seed + epoch * 1000 + spec_idx,
-                        )
-                    else:
-                        res = play_match_pickers(
-                            model_picker, baseline_picker,
-                            n_games=n_games,
-                            seed=args.seed + epoch * 1000 + spec_idx,
-                        )
+                    res = play_match_pickers(
+                        model_picker, baseline_picker,
+                        n_games=n_games,
+                        seed=args.seed + epoch * 1000 + spec_idx,
+                    )
                     key = _baseline_log_key(spec)
                     log[f"eval/{key}_winrate"] = res.win_rate
                     log[f"eval/{key}_wins"] = res.wins

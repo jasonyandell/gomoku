@@ -94,3 +94,37 @@ Reminder: the switch changes eval *numbers* slightly (statistically
 equivalent, not byte-identical) — verdicts recorded pre/post switch are not
 directly comparable; the derby runner should note the changeover on the
 research board.
+
+## CPU-side parallelism + native lookahead (#110, 2026-07-01)
+
+#106 fixed the net side (batched MPS); the CPU side still capped at 100% of
+one core. Three composing fixes (all on the `#110` branch):
+
+1. **`PooledPickerAgent`** — expensive pickers (`lookahead`) fan each round's
+   picks across a persistent spawn-Pool. Workers build the picker torch-free
+   from `(kind, kwargs)` (no model load, no Metal); each pick ships
+   `(state, seed)` with the seed drawn from the slot's rng in the parent, so
+   same-seed runs stay deterministic. Cheap pickers (heuristic ~0.03 ms/move)
+   keep the plain loop. Default workers `min(12, cpu-4)`;
+   `GOMOKU_PICKER_WORKERS` env / `--picker-workers` CLI; `1` disables.
+2. **`play_matches_batched_multi`** — A vs SEVERAL opponents in one field:
+   one net `pick_batch` per round across all matchups, every opponent's CPU
+   picks concurrent, cheap baselines finish early. Per-opponent seeding
+   matches the old sequential calls (tested), so matchup semantics are
+   unchanged. `eval_worker` and the in-trainer eval now play all their
+   baselines in one field; `play_matches_batched` is the single-opponent
+   front door over it.
+3. **Native negamax** (`gomoku/_lookahead_native.c`) — the whole lookahead
+   player in C, **move-identical** to Python (stable ordering + exact
+   integer-valued double weights; `tests/test_lookahead_native.py` asserts
+   equal tied-best lists, and whole matches reproduce W-L-D exactly).
+   `GOMOKU_DISABLE_NATIVE_LOOKAHEAD=1` for A/B; per-board-size shims like
+   the other native extensions.
+
+**Measured (M5 Max):** lookahead4 38.6 → 1.5 ms/move (~26×); the 48-game
+heuristic-vs-lookahead4 arena match 35.6 s → 0.30 s (~120× composed,
+99% → 650%+ CPU). Note the pooled path consumes slot rngs differently than
+the serial path (one seed-draw per pick vs tie-break-only), so pooled vs
+serial results differ game-by-game while both stay seed-deterministic and
+statistically equivalent — switch the derby gate between rounds, same rule
+as the #106 arena swap.

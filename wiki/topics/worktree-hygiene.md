@@ -1,7 +1,19 @@
-# Worktree & branch hygiene — the janitor, not a procedure
+# Worktree & branch hygiene
 
-**Status:** canonical (the janitor's deep-dive). The overall branch/worktree
-workflow lives in
+**Status: the janitor is RETIRED (2026-07-01, Jason).** `reclaim_worktrees.py`
+and `session_janitor.sh` were removed on the #110 branch after the janitor
+reclaimed `~/code/gomoku-sound-world-run` — a "clean + fully-merged" sibling
+worktree that a LIVE training run (trainer + 4 self-play workers) was
+executing from. Its liveness check covered Claude-session PID locks, not
+*arbitrary processes running out of the tree*; "clean + merged" says nothing
+about live processes, and the venv/code deletion left the run one lazy import
+away from crashing. Jason's verdict: not as safe as believed, value minimal.
+**Cleanup is manual again: before `git worktree remove`, check
+`ps aux | grep <path>` for live tenants.** The incident run survived — the
+path was recreated as a detached worktree at main + `uv sync` before anything
+crashed. The sections below are kept as history of the retired design.
+
+The overall branch/worktree workflow lives in
 [branch-and-worktree-workflow.md](branch-and-worktree-workflow.md); this page
 is its cleanup half.
 Established 2026-05-25 after the repo had silently grown to **26 worktrees /

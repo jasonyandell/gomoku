@@ -117,7 +117,9 @@ class PickerAgent(BatchedAgent):
     """Adapter for a scalar `Picker` (random/heuristic/lookahead/...).
 
     Pure-Python pickers are GIL-bound, so a thread fan-out buys nothing —
-    a plain loop keeps it simple and deterministic.
+    a plain loop keeps it simple and deterministic. For expensive pickers
+    (lookahead) use `PooledPickerAgent`, which sidesteps the GIL with a
+    process pool.
     """
 
     def __init__(self, picker, *, label: str) -> None:
@@ -126,6 +128,129 @@ class PickerAgent(BatchedAgent):
 
     def pick_batch(self, states: list[GameState], rngs: list[Rng]) -> list[int]:
         return [int(self.picker(s, r)) for s, r in zip(states, rngs)]
+
+
+# ---------------- Pooled CPU pickers (issue #110) ----------------
+#
+# Within an arena round every to-move game's pick is independent, so an
+# expensive CPU picker (lookahead) fans across a persistent spawn pool.
+# Workers build the picker from (kind, kwargs) at init and never import
+# torch — `gomoku.baselines` is deliberately torch-free — so worker startup
+# is cheap and there is no Metal/MPS anywhere near the pool.
+
+_POOL_PICKER = None  # per-worker picker, set once by the pool initializer
+
+
+def _torch_free_picker(kind: str, kwargs: dict[str, str]):
+    """Build a picker from the torch-free subset of the `gomoku.match` spec
+    kinds. Raises for kinds that need torch/subprocesses (model/external)."""
+    from gomoku import baselines
+
+    if kind == "random":
+        return baselines.random_player
+    if kind == "heuristic":
+        return baselines.heuristic_player
+    if kind == "defensive":
+        return baselines.defensive_player
+    if kind == "pacifist":
+        max_own = int(kwargs.get("max_own_line", "3"))
+
+        def _pacifist(state, rng, *, _m=max_own):
+            return baselines.pacifist_blocker(state, rng, max_own_line=_m)
+
+        return _pacifist
+    if kind == "lookahead":
+        return baselines.lookahead_player(depth=int(kwargs.get("depth", "4")))
+    raise ValueError(f"no torch-free picker for kind {kind!r}")
+
+
+def _picker_pool_init(kind: str, kwargs: dict[str, str]) -> None:
+    global _POOL_PICKER
+    _POOL_PICKER = _torch_free_picker(kind, kwargs)
+
+
+def _picker_pool_pick(task: tuple[GameState, int]) -> int:
+    state, seed = task
+    return int(_POOL_PICKER(state, np.random.default_rng(seed)))
+
+
+def default_picker_workers() -> int:
+    """Worker count for pooled pickers: `GOMOKU_PICKER_WORKERS` env override,
+    else leave headroom for the trainer/derby sharing this machine."""
+    import os
+
+    env = os.environ.get("GOMOKU_PICKER_WORKERS")
+    if env:
+        return max(1, int(env))
+    return max(1, min(12, (os.cpu_count() or 8) - 4))
+
+
+class PooledPickerAgent(BatchedAgent):
+    """A torch-free picker fanned across a persistent spawn-Pool.
+
+    Each pick ships (state, seed) — a 9x9 state is tiny next to a lookahead4
+    tree (~20k Python node visits), so IPC is noise. The seed is drawn from
+    the slot's rng in the parent, so same-seed runs stay deterministic and
+    results map back by index. The pool is created lazily on first use and
+    persists across rounds (and matches, if the agent is reused).
+    """
+
+    def __init__(
+        self,
+        kind: str,
+        kwargs: dict[str, str] | None = None,
+        *,
+        n_workers: int | None = None,
+        label: str,
+    ) -> None:
+        _torch_free_picker(kind, dict(kwargs or {}))  # fail fast on bad kind
+        self.kind = kind
+        self.kwargs = dict(kwargs or {})
+        self.n_workers = n_workers if n_workers else default_picker_workers()
+        self.label = label
+        self._pool = None
+
+    def _ensure_pool(self):
+        if self._pool is None:
+            import multiprocessing as mp
+
+            ctx = mp.get_context("spawn")
+            self._pool = ctx.Pool(
+                self.n_workers,
+                initializer=_picker_pool_init,
+                initargs=(self.kind, self.kwargs),
+            )
+        return self._pool
+
+    def pick_batch(self, states: list[GameState], rngs: list[Rng]) -> list[int]:
+        pool = self._ensure_pool()
+        tasks = [(s, int(r.integers(2**63))) for s, r in zip(states, rngs)]
+        # chunksize=1: tasks are ~ms-scale, so best load balance wins.
+        return [int(a) for a in pool.map(_picker_pool_pick, tasks, chunksize=1)]
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+            self._pool.join()
+            self._pool = None
+
+
+def picker_agent_from_spec(
+    spec,
+    *,
+    picker_workers: int | None = None,
+) -> BatchedAgent:
+    """Arena agent for a non-model `PlayerSpec`: pool the expensive kinds
+    (lookahead), plain loop for the cheap ones (heuristic is ~0.03 ms/move —
+    IPC would cost more than it saves)."""
+    workers = picker_workers if picker_workers is not None else default_picker_workers()
+    if spec.kind == "lookahead" and workers > 1:
+        return PooledPickerAgent(
+            spec.kind, spec.kwargs, n_workers=workers, label=spec.label()
+        )
+    from gomoku.match import build_player
+
+    return PickerAgent(build_player(spec), label=spec.label())
 
 
 class EnginePoolAgent(BatchedAgent):
@@ -192,6 +317,7 @@ def build_agent(
     default_sims: int = 100,
     wave_size: int = 16,
     engine_pool_size: int = 8,
+    picker_workers: int | None = None,
 ) -> BatchedAgent:
     """Build a `BatchedAgent` from a player spec string.
 
@@ -229,7 +355,7 @@ def build_agent(
         )
         return EnginePoolAgent(pool, label=f"rapfi@{timeout_ms}ms")
 
-    from gomoku.match import build_player, parse_spec
+    from gomoku.match import parse_spec
 
     spec = parse_spec(spec_str)
 
@@ -264,7 +390,7 @@ def build_agent(
         )
         return EnginePoolAgent(pool, label=spec.label())
 
-    return PickerAgent(build_player(spec), label=spec.label())
+    return picker_agent_from_spec(spec, picker_workers=picker_workers)
 
 
 # ---------------- The arena ----------------
@@ -345,55 +471,101 @@ def _build_slots(
     return slots
 
 
-def play_matches_batched(
+def _advance_slots(group: list[_Slot], actions: list[int]) -> None:
+    """Apply one picked action per slot, updating terminal/turn state."""
+    for slot, action in zip(group, actions):
+        side_just_moved = slot.ply % 2
+        slot.state = slot.state.apply(int(action))
+        done, v = slot.state.is_terminal()
+        if done:
+            slot.done = True
+            if v == -1.0:
+                slot.winner_side = side_just_moved
+        else:
+            slot.a_to_move = not slot.a_to_move
+            slot.ply += 1
+
+
+def _result_from_slots(slots: list[_Slot]) -> MatchResult:
+    outcomes: list[tuple[bool, str]] = []
+    for s in slots:
+        if s.winner_side is None:
+            outcomes.append((s.a_is_black, "draw"))
+        else:
+            a_side = 0 if s.a_is_black else 1
+            outcomes.append(
+                (s.a_is_black, "win" if s.winner_side == a_side else "loss")
+            )
+    return _match_result_from_outcomes(outcomes, len(slots))
+
+
+def play_matches_batched_multi(
     agent_a: BatchedAgent,
-    agent_b: BatchedAgent,
+    opponents: list[tuple[BatchedAgent, int, int]],
     *,
-    n_games: int,
-    seed: int = 0,
     random_opening_moves: int = 0,
     start_state: GameState | None = None,
-    opening_states: list[GameState] | None = None,
-) -> MatchResult:
-    """Play A vs B with every game live at once. Result from A's perspective.
+    opening_states_per_opponent: list[list[GameState] | None] | None = None,
+) -> list[MatchResult]:
+    """Play A against SEVERAL opponents at once, all games live together
+    (issue #110). `opponents` is a list of (agent, n_games, seed); returns one
+    `MatchResult` per opponent, from A's perspective, with per-opponent slot
+    seeding identical to a `play_matches_batched(agent_a, agent, ...)` call —
+    interleaving changes wall-clock, not matchup semantics.
 
-    Each round, all games where A is to move go to `agent_a.pick_batch` and
-    all games where B is to move go to `agent_b.pick_batch` — the two calls
-    run concurrently when exactly one side is a net (net-on-MPS overlaps
-    engine-on-CPU; two torch agents would just contend for the device, so
-    those run back to back). Each agent is only ever inside one `pick_batch`
-    call at a time, so agents need no internal thread-safety beyond what
-    their own fan-out uses.
+    Each round, ALL games where A is to move go to one `agent_a.pick_batch`
+    (bigger net batches than per-opponent matches), and each opponent's
+    to-move games go to that opponent's `pick_batch`. With at most one
+    NetAgent in the field, every pick_batch of a round runs concurrently —
+    MPS overlaps every CPU pool/engine at once; with two or more nets they'd
+    contend for the device, so the round runs sequentially. Each agent is
+    only ever inside one pick_batch call at a time.
+
+    Cheap opponents finish their games early and simply drop out of later
+    rounds — no per-opponent barrier.
     """
-    overlap = isinstance(agent_a, NetAgent) != isinstance(agent_b, NetAgent)
-    slots = _build_slots(
-        n_games,
-        seed=seed,
-        random_opening_moves=random_opening_moves,
-        start_state=start_state,
-        opening_states=opening_states,
+    if opening_states_per_opponent is None:
+        opening_states_per_opponent = [None] * len(opponents)
+    fields: list[list[_Slot]] = [
+        _build_slots(
+            n_games,
+            seed=seed,
+            random_opening_moves=random_opening_moves,
+            start_state=start_state,
+            opening_states=opening_states,
+        )
+        for (_agent, n_games, seed), opening_states in zip(
+            opponents, opening_states_per_opponent
+        )
+    ]
+
+    n_nets = sum(
+        isinstance(ag, NetAgent)
+        for ag in [agent_a] + [agent for agent, _n, _s in opponents]
     )
+    overlap = n_nets <= 1
 
     # Safety valve — terminal draw detection ends games at a full board, so
     # this only trips on a buggy agent playing illegal/no-op moves.
     max_rounds = BOARD_SIZE * BOARD_SIZE + 1
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
+    with ThreadPoolExecutor(max_workers=1 + len(opponents)) as ex:
         for _round in range(max_rounds):
-            active = [s for s in slots if not s.done]
-            if not active:
+            group_a: list[_Slot] = []
+            work: list[tuple[list[_Slot], BatchedAgent]] = []
+            for (agent_b, _n, _s), slots in zip(opponents, fields):
+                active = [s for s in slots if not s.done]
+                group_a.extend(s for s in active if s.a_to_move)
+                group_b = [s for s in active if not s.a_to_move]
+                if group_b:
+                    work.append((group_b, agent_b))
+            if not group_a and not work:
                 break
-            group_a = [s for s in active if s.a_to_move]
-            group_b = [s for s in active if not s.a_to_move]
-
-            work = []
             if group_a:
-                work.append((group_a, agent_a))
-            if group_b:
-                work.append((group_b, agent_b))
+                work.insert(0, (group_a, agent_a))
 
-            if overlap and len(work) == 2:
-                results = [
+            if overlap and len(work) > 1:
+                futs = [
                     (
                         group,
                         ex.submit(
@@ -404,7 +576,7 @@ def play_matches_batched(
                     )
                     for group, agent in work
                 ]
-                moved = [(group, fut.result()) for group, fut in results]
+                moved = [(group, fut.result()) for group, fut in futs]
             else:
                 moved = [
                     (
@@ -417,31 +589,38 @@ def play_matches_batched(
                 ]
 
             for group, actions in moved:
-                for slot, action in zip(group, actions):
-                    side_just_moved = slot.ply % 2
-                    slot.state = slot.state.apply(int(action))
-                    done, v = slot.state.is_terminal()
-                    if done:
-                        slot.done = True
-                        if v == -1.0:
-                            slot.winner_side = side_just_moved
-                    else:
-                        slot.a_to_move = not slot.a_to_move
-                        slot.ply += 1
+                _advance_slots(group, actions)
         else:  # pragma: no cover - defensive
-            stuck = [s.idx for s in slots if not s.done]
+            stuck = [s.idx for slots in fields for s in slots if not s.done]
             raise RuntimeError(f"arena exceeded {max_rounds} rounds; stuck games: {stuck}")
 
-    outcomes: list[tuple[bool, str]] = []
-    for s in slots:
-        if s.winner_side is None:
-            outcomes.append((s.a_is_black, "draw"))
-        else:
-            a_side = 0 if s.a_is_black else 1
-            outcomes.append(
-                (s.a_is_black, "win" if s.winner_side == a_side else "loss")
-            )
-    return _match_result_from_outcomes(outcomes, n_games)
+    return [_result_from_slots(slots) for slots in fields]
+
+
+def play_matches_batched(
+    agent_a: BatchedAgent,
+    agent_b: BatchedAgent,
+    *,
+    n_games: int,
+    seed: int = 0,
+    random_opening_moves: int = 0,
+    start_state: GameState | None = None,
+    opening_states: list[GameState] | None = None,
+) -> MatchResult:
+    """Play A vs B with every game live at once. Result from A's perspective.
+
+    Single-opponent front door over `play_matches_batched_multi`: A's
+    to-move games and B's to-move games run concurrently when at most one
+    side is a net (net-on-MPS overlaps engine/pool-on-CPU; two torch agents
+    would just contend for the device, so those run back to back).
+    """
+    return play_matches_batched_multi(
+        agent_a,
+        [(agent_b, n_games, seed)],
+        random_opening_moves=random_opening_moves,
+        start_state=start_state,
+        opening_states_per_opponent=[opening_states],
+    )[0]
 
 
 def play_match_specs(
@@ -456,6 +635,7 @@ def play_match_specs(
     default_sims: int = 100,
     wave_size: int = 16,
     engine_pool_size: int = 8,
+    picker_workers: int | None = None,
 ) -> MatchResult:
     """Spec-string front door: build both agents, play, tear down."""
     agent_a = build_agent(
@@ -464,6 +644,7 @@ def play_match_specs(
         default_sims=default_sims,
         wave_size=wave_size,
         engine_pool_size=engine_pool_size,
+        picker_workers=picker_workers,
     )
     try:
         agent_b = build_agent(
@@ -472,6 +653,7 @@ def play_match_specs(
             default_sims=default_sims,
             wave_size=wave_size,
             engine_pool_size=engine_pool_size,
+            picker_workers=picker_workers,
         )
         try:
             return play_matches_batched(
@@ -515,6 +697,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--wave-size", type=int, default=16)
     p.add_argument("--engine-pool-size", type=int, default=8,
                    help="warm engines per external opponent")
+    p.add_argument("--picker-workers", type=int, default=None,
+                   help="process-pool size for expensive CPU pickers "
+                        "(lookahead); default GOMOKU_PICKER_WORKERS env or "
+                        "cpu_count-4 capped at 12; 1 disables the pool")
     p.add_argument("--json", action="store_true", help="emit JSON result")
     args = p.parse_args(argv)
 
@@ -533,6 +719,7 @@ def main(argv: list[str] | None = None) -> int:
         default_sims=args.sims,
         wave_size=args.wave_size,
         engine_pool_size=args.engine_pool_size,
+        picker_workers=args.picker_workers,
     )
     dt = time.time() - t0
 
