@@ -5639,3 +5639,161 @@ heuristic where bare draws) — bare-net drawishness is division of labor, not w
 the cross-worker shared oracle solve (÷4, width-is-free law) — filed. Runs preserved:
 `~/data/sound-world-107` (poisoned, evidence), `~/data/sound-world-107b` (clean, resumable e1540,
 wandb zeed2xw5→107b run).
+
+## 2026-07-02 (issue #113, 13×13 sound-world graduation) — SLICE 1: offense transfers, white-defense collapses (undertraining, NOT poison); wandb 8rp0gjpm
+
+**Setup:** carry the validated #107 sound-world recipe up to 13×13. WARM-STARTED from
+9×9 107b e1540 — the conv tower (75 params, the threat-shape features) transferred; the
+board-shaped FC heads (`policy_fc`, `value_fc1`) are flattened-board and were REINIT fresh
+for 13×13 (seed built offline: fresh 13×13 net + shape-matching tower copy → strict-loadable
+via the production board-size guard). Run dir `~/data/sound-world-13`, cell `sound-world`
+unchanged (full-breadth veto + vct-terminus + oracle-overlap + line-planes), 40-min slices,
+resume-latest cadence. Fresh wandb run 8rp0gjpm (lineage cleaned — no 9×9 run-id inherited).
+
+**Slice 1 (40 min → e801):** `pl` 3.36→2.18, `vl` 0.047 (value transferred well from tower),
+buffer full 1.5M. `selfplay/plies` slid 27–30 → stabilized ~14–17 (did NOT crash to 9). Warm
+tower = strong attacker → cap50 VCT-terminus fires earlier as policy sharpens.
+
+**Eval @ e801 (batched arena, EMA worker_weights.pt, n=40/matchup, sims=100, 13×13):**
+| matchup | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 0-8-12 | **0-20-0** |
+| bare vs lookahead:4 | 6-10-4 | **0-18-2** |
+| finisher(50) vs heuristic | **12**-8-0 | **0-20-0** |
+| finisher(50) vs lookahead:4 | 11-9-0 | 2-17-1 |
+Offense is REAL: the cap50 finisher takes black from 0 wins (bare) to 11–12. WHITE is 0/20
+in every config — total defensive collapse, even vs the weak heuristic. (Note: no 13×13 champ
+opponent exists yet — a 9×9 net can't play 13×13; heuristic/lookahead are the board-agnostic
+rulers.)
+
+**Poison guardrail: 0/612 positions with blunder mass (clean).** So the white collapse is NOT
+the #107 uniform-pi wound — the fix holds at 13×13. Poison-gen output corroborates the eval:
+31/32 self-play games end decisive (outcome 1.0) by ~ply 13 → black forces a fast VCT, white
+almost never holds in self-play.
+
+**Interpretation (working, to falsify over next slices):** UNDERTRAINING of the reinit'd
+defense heads, not a defect. The warm tower gives offense for free (transfers) but 13×13 white
+defense is a policy/value-head skill that must be relearned from fresh init, and 735 epochs on
+`pl`=2.18 is early (9×9 sound world defended only near `pl`~1.3 / ~1300 epochs). WATCH: does
+white recover as `pl` converges? Secondary concern — plies FELL here (30→14) whereas the 9×9
+sound world plies ROSE as defense developed; if the warm-started aggressive tower is actively
+suppressing defense development, from-scratch may be the cleaner path. ESCALATION LINE: if by
+~slice 4 (`pl` < 1.6) white is still <10% vs heuristic, flag Jason + recommend a from-scratch
+13×13 control. Decision: CONTINUE (poison clean, offense transferring, too early to judge).
+
+## 2026-07-02 (issue #113, cont.) — SLICE 2 confirms warm-start ATTACK-COLLAPSE; pivoting the loop to a from-scratch 13×13 control
+
+**Slice 2 @ e1500** (wandb 8rp0gjpm): pl 2.18→2.01 (PLATEAUING, not marching to 1.3), vl 0.032,
+plies flat ~14. Eval (EMA, n=40, 13×13):
+| config | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 7-7-6 (↑ from slice-1 0-8-12) | **0-20-0** |
+| finisher vs heuristic | **20-0-0** | **0-20-0** |
+| bare vs lookahead:4 | 4-14-2 | 0-18-2 |
+Poison CLEAN (0/414). Poison-gen: 32/32 self-play games decisive by ply 9–13, several at the
+9-ply FLOOR (fastest possible five).
+
+**Diagnosis (confirmed over 2 slices):** attack-collapse caused by the aggressive warm-start.
+Black offense → perfect (20-0 finisher); white defense → perfect ZERO (0/20 every config, no
+movement across 2 slices, pl plateaued ~2.0). MECHANISM: the warm 9×9 tower forces black VCT
+wins by ply 9–13 in self-play, so white is ALWAYS already-lost when threats appear → the veto
+masks all white's moves → defender terminus → **white sharp-defense examples never enter the
+buffer**. So white cannot learn defense at any slice count; the slice-4/pl<1.6 gate is moot
+because pl won't reach 1.6 (no gradient left — offense saturated, white starved). Contrast 9×9
+sound world: plies ROSE (20s→50s), white could draw. Here plies FELL to the floor.
+
+**Decision — PIVOT to a from-scratch 13×13 control** (deviating from the stated slice-4 gate
+deliberately; the mechanism makes more warm-start slices ~zero-information). From-scratch is the
+VALIDATED sound-world recipe and the documented #113 alternative; it is the control that
+DISTINGUISHES the two hypotheses: (H1) warm-start broke it → from-scratch plies RISE like 9×9,
+white learns; (H2) the 13×13 veto itself is broken/insufficient at 169 cells → from-scratch
+ALSO collapses to the 9-ply floor. Either result is decisive. Warm-start run PRESERVED intact
+(~/data/sound-world-13, HF jasonyandell/gomoku-13x13, wandb 8rp0gjpm) as evidence; Jason can
+resume it if he disagrees with the pivot. From-scratch run dir: ~/data/sound-world-13-scratch,
+fresh wandb. Escalate to Jason with the H1/H2 verdict once from-scratch has ~3–4 slices.
+
+## 2026-07-02 (issue #113, cont.) — FROM-SCRATCH control slice 1: white ALSO 0/20 at matched epoch (H1/H2 undecided; leaning watch H2); wandb uublz536
+
+**From-scratch slice 1 @ e814** (fresh 13×13 sound-world, no resume; wandb uublz536): pl 1.83
+(converging FASTER than warm-start's 2.18 @ e801 — no transferred-bias fight), vl 0.053, plies
+~16-18. Eval (EMA, n=40, 13×13):
+| config | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 0-11-9 | **0-20-0** |
+| finisher vs heuristic | 14-6-0 | **0-20-0** |
+Poison CLEAN (0/411). Poison-gen plies cluster 9–13 with MANY at the 9-floor (like warm-start).
+
+**Read:** at MATCHED slice-1 epoch, from-scratch ≈ warm-start on the white gate — both white 0/20.
+So slice 1 does NOT separate H1 (warm-start was the seed problem) from H2 (13×13 sound-world can't
+teach white defense within cap50 regardless of seed). The warm-start/from-scratch DIVERGENCE (if
+any) must show in slices 2–4: does from-scratch white climb off 0 + plies RISE (H1), or stay stuck
++ plies floored (H2)? Hopeful-for-H1 signs: from-scratch pl lower/faster (1.83 vs 2.18), plies not
+yet floored (~17 vs warm-start's 14→9). Worrying-for-H2 sign: from-scratch self-play ALSO forces
+fast black wins (poison plies many 9s) — the same white-starvation mechanism could bite from scratch
+too. NB vs heuristic (a WEAK non-forcing opponent), white 0/20 is NET weakness not game-unfairness
+(a sound white should beat heuristic-as-black), so white defense IS learnable in principle — the
+question is whether THIS recipe teaches it at 13×13. Continuing from-scratch; escalate to Jason with
+the H1/H2 verdict at scratch-slice ~3–4. Now launching scratch-slice 2.
+
+## 2026-07-02 (issue #113, cont.) — FROM-SCRATCH slice 2: white STILL 0/20 at BETTER pl than warm-start → H2 strengthening (structural, not seed)
+
+**From-scratch slice 2 @ e1531** (wandb uublz536): pl 1.83→1.74 (better than warm-start's 2.0 @
+matched e1500), vl 0.039, plies still flat ~14. Eval (EMA, n=40):
+| config | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 4-13-3 (↑ from 0-11-9) | **0-20-0** |
+| finisher vs heuristic | 15-5-0 | **0-20-0** |
+Poison CLEAN (0/410).
+
+**KEY COMPARISON (matched ~e1500–1530):** warm-start = white 0/20, plies ~14, pl 2.0; from-scratch
+= white 0/20, plies ~14, pl 1.74. From-scratch has BETTER policy convergence but IDENTICAL white
+result and IDENTICAL flat plies — the faster pl is buying only OFFENSE (black bare 0→4, finisher
+15), zero defense. Two independent runs (warm + scratch) now both show white EXACTLY 0/20 across 2
+slices each with flat plies → the white-defense failure is looking STRUCTURAL to the sound-world
+recipe at 13×13, NOT a warm-start seed artifact. Shared mechanism: black forces fast VCT wins (plies
+~14, poison plies cluster at 9) → white always already-lost in self-play → veto masks white's moves →
+white sharp-defense examples never enter the buffer → white can't learn to defend at any pl.
+Distinguishes from 9×9 where the veto made plies RISE (20s→50s) and white could draw.
+
+**Plan:** running scratch-slice 3 — pl should cross under ~1.6 toward the 9×9 white-defense zone
+(~1.3); a genuine last test of whether white emerges late. If white is STILL ~0 at pl<1.6 with flat
+plies → H2 CONFIRMED, escalate to Jason with the recipe-change recommendation. This is shaping up to
+be the night's headline learning: the 9×9 sound-world recipe does NOT transfer white defense to 13×13
+under a fixed cap50 terminus — the bigger board lets black force wins before white ever learns to hold.
+
+## 2026-07-02 (issue #113, morning) — Comprehensive 13×13 eval + perf isolation: sound-world nets are ATTACK-ONLY specialists (lose to everything that defends); the OLD full-game net is stronger; perf gain was NET SIZE, not the gen path
+
+Ran on Jason's request after the overnight loop. **Jason's stated predictions (PVE bet, logged before results):** eval — (P1) both nets NOT always lose vs rapfi@50ms; (P2) both win-or-draw vs simple heuristics; (P3) warm-start wins H2H vs from-scratch. perf — (P4) much faster gen rate; (P5) similar train rate.
+
+**EVAL MATRIX** (n=40 each, EMA worker_weights, sims=100, 13×13; our two nets FINISHER-armed vct_finish=50):
+| # | matchup | result (A w-l-d) | black | white |
+|---|---|---|---|---|
+| 1 | from-scratch+fin vs **rapfi@50ms** | 0-40-0 (0%) | 0/20 | 0/20 |
+| 2 | warm-start+fin vs **rapfi@50ms** | 0-40-0 (0%) | 0/20 | 0/20 |
+| 3 | from-scratch+fin vs warm-start+fin [H2H] | 20-20 (50%) | 20-0 | 0-20 |
+| 4 | from-scratch+fin vs **OLD 128×10** (bare) | 0-40-0 (0%) | 0/20 | 0/20 |
+| 5 | warm-start+fin vs **OLD 128×10** (bare) | 0-40-0 (0%) | 0/20 | 0/20 |
+| 6 | OLD 128×10 (bare) vs **rapfi@50ms** [anchor] | 3-37 (7.5%) | 3/20 | 0/20 |
+OLD = G-ladder-13-board13 e424 (large 128×10, swap2/full-game recipe, NO cap50 terminus, self-play plies 50–64). Earlier smoke: OLD went 2-0 as WHITE vs heuristic (our terminus nets are 0/20 white).
+
+**PREDICTIONS SCORED:**
+- P1 (both not-always-lose vs rapfi) → **REFUTED.** Both lose 40/40 = 100% vs rapfi, even finisher-armed.
+- P2 (win-or-draw vs heuristic) → **HALF.** Win as black (finisher 20-0/15-5), but LOSE as white 0/20 — not always win-or-draw.
+- P3 (warm-start wins H2H) → **REFUTED.** Exactly 50/50, purely color-determined (whoever is BLACK wins by forcing a VCT; both nets are behaviorally identical attack specialists — no skill delta).
+- P4 (much faster gen rate) → **REFUTED** (see perf below).
+- P5 (similar train rate) → **CONFIRMED.**
+
+**THE FINDING:** the sound-world/cap50-terminus recipe produces an ATTACK-ONLY SPECIALIST at 13×13. The finisher only fires when a forced VCT exists; a defending opponent (rapfi, or even our own OLD net) never hands one over → the finisher never fires → the bare attack-only net plays → 0%. Our nets only "win" when the opponent lets them force a fast VCT (weak heuristic-as-black, or their own twin when black). **The OLD "we-never-focused-on-it" 128×10 net BEATS both sound-world nets 40-0 AND scores 7.5% vs rapfi where ours score 0%** — because it trained on FULL games and learned to DEFEND. This is the overnight H2 white-defense wound taken to its conclusion: no defense ⇒ lose to everything that defends. Net+finisher is NOT a product at 13×13; it's a black-only party trick.
+
+**PERF ISOLATION** (bench_gen_refill, SAME small 64×4 net, 13×13, sims=100 — net size held constant):
+| config | games/min | aug_pos/s | oracle_s / wall_s |
+|---|---|---|---|
+| oracle ON, lockstep (concurrent=0) | 215.6 | 449 | 16.2 / 17.8 (91%) |
+| oracle ON, streaming (concurrent=64→256) | 216.4 | 451 | 16.2 / 17.7 |
+| oracle OFF, lockstep | 638 | 2497 | 0 |
+| oracle OFF, streaming | 644 | 2520 | 0 |
+- Streaming ≈ lockstep in a SINGLE process, oracle-on OR off. #112's 3.4× win was 8-proc FLEET → 1 wide proc, a DIFFERENT comparison; the refill loop itself adds ~0 single-process throughput here.
+- The **VCT oracle veto is the gen bottleneck at 13×13**: 91% of wall, cuts throughput ~3× (640→216 games/min). That's the #114-kernel domain, not the gen loop.
+- **The overnight "14× faster epoch (45s→3.1s)" was ~ENTIRELY NET SIZE** (large 128×10 train ~44s → small 64×4 train ~2.7s); train time is net-size-bound (P5 confirmed). The "2 results overnight" was bought by the SMALL NET + unattended looping, NOT a gen-path perf overhaul.
+
+**Takeaways:** (1) if we want a STRONG 13×13 net, the full-game (defense-learning) recipe beats the terminus recipe — the OLD net is the better lineage; (2) the sound-world recipe needs a real modification to teach defense at 13×13 (raise terminus budget / white curriculum) before it's worth more GPU; (3) perf: the lever for faster sound-world gen at 13×13 is the VCT solver (oracle = 91% of gen), not the gen loop.
