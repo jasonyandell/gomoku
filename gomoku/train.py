@@ -1706,6 +1706,10 @@ def main() -> None:
     # Build baseline pickers once (stateless across calls — RNG is passed in).
     fast_pickers = [(s, build_player(s)) for s in fast_specs]
     slow_pickers = [(s, build_player(s)) for s in slow_specs]
+    # Arena-side agents for the in-trainer eval block, built lazily on first
+    # eval and reused across epochs so a pooled picker (lookahead) keeps its
+    # worker pool warm (issue #110). Keyed by spec label.
+    arena_baseline_agents: dict = {}
     eval_counter = 0
 
     # Pre-build the self-play opponent picker if requested. 'self' = vanilla
@@ -2796,7 +2800,11 @@ def main() -> None:
             )
             use_eval_arena = not args.no_eval_arena and eval_levers_off
             if use_eval_arena:
-                from gomoku.arena import NetAgent, PickerAgent, play_matches_batched
+                from gomoku.arena import (
+                    NetAgent,
+                    picker_agent_from_spec,
+                    play_matches_batched,
+                )
                 arena_net = NetAgent(eval_evaluator,
                                      sims=args.eval_sims,
                                      c_puct=args.c_puct,
@@ -2822,9 +2830,13 @@ def main() -> None:
                 for spec_idx, (spec, baseline_picker) in enumerate(pickers):
                     m_start = time.time()
                     if use_eval_arena:
+                        if spec.label() not in arena_baseline_agents:
+                            arena_baseline_agents[spec.label()] = (
+                                picker_agent_from_spec(spec)
+                            )
                         res = play_matches_batched(
                             arena_net,
-                            PickerAgent(baseline_picker, label=spec.label()),
+                            arena_baseline_agents[spec.label()],
                             n_games=n_games,
                             seed=args.seed + epoch * 1000 + spec_idx,
                         )

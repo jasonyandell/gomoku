@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from gomoku.arena import NetAgent, PickerAgent, play_matches_batched
+from gomoku.arena import NetAgent, picker_agent_from_spec, play_matches_batched
 from gomoku.eval import mcts_picker, play_match_parallel, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
@@ -201,6 +201,13 @@ def main() -> None:
         and args.vct_finish_nodes == 0
     )
     use_arena = not args.no_arena and levers_off
+    # Arena-side baseline agents are built ONCE and reused across epochs —
+    # pooled pickers (lookahead) keep their worker pool warm for the whole
+    # daemon lifetime (issue #110).
+    arena_baseline_agents = (
+        {raw: picker_agent_from_spec(s) for raw, s in zip(raw_specs, specs)}
+        if use_arena else {}
+    )
     if not args.no_arena and not levers_off:
         print("[eval] arena disabled: an eval lever (--eval-vcf-nodes / "
               "--fpu-reduction-c / --reuse-tree / --proven-prop / "
@@ -248,7 +255,7 @@ def main() -> None:
             if use_arena:
                 res = play_matches_batched(
                     arena_net,
-                    PickerAgent(baseline_picker, label=spec.label()),
+                    arena_baseline_agents[raw_spec],
                     n_games=args.n_games,
                     seed=match_seed,
                 )

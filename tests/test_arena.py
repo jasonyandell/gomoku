@@ -152,10 +152,16 @@ def test_arena_far_fewer_evaluator_calls_than_sequential():
 
 
 def test_build_agent_picker_kinds():
+    from gomoku.arena import PooledPickerAgent
+
     assert isinstance(build_agent("random"), PickerAgent)
+    # Expensive kinds (lookahead) get the process pool by default (#110).
     a = build_agent("lookahead:depth=2")
-    assert isinstance(a, PickerAgent)
+    assert isinstance(a, PooledPickerAgent)
     assert a.label == "lookahead:depth=2"
+    a.close()
+    b = build_agent("lookahead:depth=2", picker_workers=1)
+    assert isinstance(b, PickerAgent)
 
 
 def test_build_agent_model_requires_checkpoint():
@@ -237,3 +243,48 @@ def test_h2h_opening_states_match_legacy_derivation():
     for k in range(3):
         want, _ = _random_opening_state(np.random.default_rng(seed + k), plies)
         assert np.array_equal(got[k].board, want.board)
+
+
+# ---------------- pooled pickers (issue #110) ----------------
+
+
+def test_picker_agent_from_spec_routing():
+    from gomoku.arena import PooledPickerAgent, picker_agent_from_spec
+    from gomoku.match import parse_spec
+
+    heur = picker_agent_from_spec(parse_spec("heuristic"))
+    assert isinstance(heur, PickerAgent)
+    look = picker_agent_from_spec(parse_spec("lookahead:depth=2"), picker_workers=2)
+    assert isinstance(look, PooledPickerAgent)
+    look.close()
+    # workers=1 disables the pool entirely
+    solo = picker_agent_from_spec(parse_spec("lookahead:depth=2"), picker_workers=1)
+    assert isinstance(solo, PickerAgent)
+
+
+def test_pooled_picker_legal_and_deterministic():
+    from gomoku.arena import PooledPickerAgent
+
+    agent = PooledPickerAgent("lookahead", {"depth": "2"}, n_workers=2, label="l2")
+    try:
+        states = []
+        s = GameState.initial()
+        rng = np.random.default_rng(7)
+        for _ in range(6):
+            states.append(s)
+            s = s.apply(int(rng.choice(s.legal_actions())))
+
+        picks1 = agent.pick_batch(states, [np.random.default_rng(i) for i in range(len(states))])
+        picks2 = agent.pick_batch(states, [np.random.default_rng(i) for i in range(len(states))])
+        assert picks1 == picks2
+        for st, a in zip(states, picks1):
+            assert st.legal_mask()[a]
+    finally:
+        agent.close()
+
+
+def test_pooled_picker_rejects_torchy_kinds():
+    from gomoku.arena import PooledPickerAgent
+
+    with pytest.raises(ValueError):
+        PooledPickerAgent("model", {"checkpoint": "x.pt"}, n_workers=2, label="m")
