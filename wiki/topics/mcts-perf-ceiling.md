@@ -242,3 +242,61 @@ When estimating production speedup from an isolated bench:
   dispatching.
 
 Saved as memory `project_perf_bench_lesson` for cross-session recall.
+
+## 2026-07-01 — The oracle-dominated regime (sound-world #107) and its levers
+
+The #107 gen recipe (`--vct-terminus --oracle-veto`, cap50) moved the gen
+bottleneck OFF the net/search entirely: at the live config (8 games/batch,
+sims=100, wave=32, GPU-quiet, weights=v1239), one batch profiled as **oracle
+75% / evaluator 23% / native tree work 0.6% / python ~1%** (wall 5.11 s =
+terminus solve 1.45 + defense escape-solve 2.40 + search 1.19 [evaluator 1.16
+of it] + 0.06). Games desync, so the per-ply solver batch is ~150 boards
+(~8 games × ~legal-cells children + terminus boards).
+
+**Correction to the call-cost-law intuition at this operating point:** the
+"one call = one tail, flat in B" law holds for big `max_nodes` on hard boards;
+at **cap50 with ~10–1000 board batches the call is WIDTH/WORK-bound, not
+tail-bound** (measured: empty boards ~0.3–1 ms at any B — dispatch+sync is
+negligible; realistic boards scale ~2–3× when B goes 8→800). Consequences:
+merging calls saves only the dispatch (~1 ms), and skipping whole waves early
+saves ~nothing — the trivial call is its own cheap precondition. The real
+lever is **reducing solver board-work**.
+
+Levers landed 2026-07-01 (branch `worktree-agent-abc3efd96c269e71e`,
+`gomoku/self_play.py`; A/B receipts in the session log / final report):
+
+1. **Merged per-ply solve** (`_oracle_ply_solve`, default-on): terminus +
+   defense children in ONE dispatch. Bit-identical (per-thread node budget =>
+   batch-composition-independent verdicts; `return_move` selects the same
+   kernel). Worth ~1.07× alone.
+2. **Null-board precheck** (`--no-oracle-precheck` to disable; default ON,
+   byte-identical BY PROOF): solve the "I pass" board per position in phase 1;
+   a CLEAN no-win (win=False AND hit_cap=False) proves every escape child is
+   no-win (freestyle monotonicity + solver 0-FP), so children are never built
+   or solved. A **capped** null is NOT skippable (the child's extra defender
+   stone can prune the attacker's tree into the node budget). Measured on live
+   gen positions: 67.9% of plies clean → **63.9% of children solver-work
+   skipped**; the veto-stretched endgame (plies 40+) is ~all clean, early-mid
+   plies 10–29 are the hot band (~52–55%).
+3. **Oracle/search overlap** (`--oracle-overlap`, default OFF, flag-gated):
+   the merged solve runs in a background thread while the MPS wave searches;
+   partitions apply post-search. MLX releases the GIL, but **MLX and MPS
+   contend for the same GPU** (evaluator ~2× slower while a solve runs), so
+   the overlap gain is partial, not min(solve, search). Deterministic per
+   seed; not guaranteed byte-identical to serial order (terminated games are
+   searched-and-discarded on their firing ply → evaluator batch shapes shift —
+   the wave-size-change numeric class).
+4. **Staged veto breadth** (`--oracle-veto-max-cands K`, default 0 = full):
+   K-nearest stage 1 + full-breadth escalation only for all-tested-blunder
+   positions (defender terminus stays exactly sound). **WARNING (measured):**
+   at 9×9/K=24 games collapse from ~25 to ~11 plies — missed vetoes are played
+   blunders, gutting exactly the anti-attractor effect #107 wants. This is a
+   BIG-BOARD lever (N² children growth), to be tuned there with a leak-rate
+   measurement, not a 9×9 speed knob.
+
+Side notes: `--fp16-eval` measured **1.7× faster per position** here
+(0.075 vs 0.127 ms/pos) but changes eval numerics (different games) — still
+needs the TQ canary per the L06/L11b' entries above. The MCTS engine itself
+(hypothesis "the impl has headroom") is 0.6% of gen wall at sims=100 — no
+meaningful headroom left there; after the oracle levers the next wall is the
+evaluator's ~2 ms/call MPS dispatch floor (see the sections above).
