@@ -37,7 +37,6 @@ attractor returns (K=24 ablation) — causal, not correlational.
 
 ## Known open edges
 - White-vs-lookahead:4 softness at 9×9 (5/20 white losses @ e1368) — unsettled when the chapter closed.
-- Batched arena drops `vct_finish` silently (#109) — hybrid evals need the legacy path until fixed.
 - 13×13 graduation prerequisite: cross-worker shared oracle solve (width-is-free ⇒ ÷4 aggregate
   oracle time; wiki/topics/mcts-perf-ceiling.md). Product shape = net + cap50 finisher (95% vs
   heuristic on 9×9 where bare-net draws).
