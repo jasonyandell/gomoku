@@ -5604,3 +5604,38 @@ freestyle is a fast BLACK WIN within cap50 horizons (not a draw) — the walls d
 **Decision:** restart from scratch on fixed code (run dir `sound-world-107b`), keeping the poisoned
 run's artifacts intact as evidence. Cheap (~2.5h to e2000) and gives clean attribution vs a
 buffer-wash resume.
+
+## 2026-07-02 (issue #107, closing entry) — 107b validates the fix; the 9×9 sound-world chapter closes with a carry-forward recipe
+
+**107b eval @ e1368** (fresh run on fixed code; same battery as run A's e1239, arena sims=100 n=40,
+finisher via legacy path):
+| matchup | 107b e1368 | run A e1239 (pre-collapse) |
+|---|---|---|
+| old derby champ, bare | **0W-0L-40D, color-symmetric (20D/20D)** | 0-0-40 |
+| heuristic, bare | 0W-0L-40D | 5W-3L-32D |
+| la:2, bare | 0-0-40 | 0-0-40 |
+| la:4, bare | 0W-5L-35D (all 5 as WHITE) | 3W-0L-37D |
+| heuristic, finisher(cap50) | **18W-0L-2D (95%)** | 14W-0L-6D (85%) |
+| la:4, finisher | 0W-1L-19D | — |
+The uniform-pi wound stayed closed (champ column clean + symmetric where run A later collapsed
+20/20 as white); the white-vs-la:4 softness (5/20) is the open question the run didn't live long
+enough to settle (stopped e1540; the e2000 bet — white holds champ + finisher ≥70% heuristic —
+retires UNSETTLED, leaning held). la:4's brute 4-ply tactics still poke white occasionally.
+
+**Chapter verdict (Jason, 2026-07-02): "9×9 has taught us what it can."** What it taught, in one
+entry: (1) the actuator belongs in the ENVIRONMENT (oracle veto at gen), not the loss — one day of
+the sound world beat weeks of target-side injection; (2) the veto is causally THE anti-attractor
+mechanism (K-cap ablation resurrects the 9-ply attractor); (3) never hand the policy head a
+"harmless" degenerate target — the uniform-pi shrug scaled into white's collapse precisely because
+the experiment SUCCEEDED (dose ∝ black's skill); (4) self-metrics cannot see self-play diseases —
+H2H + color columns only (third confirmation); (5) 9×9 freestyle within cap50 is a fast BLACK WIN
+(proven all-moves-lose by ply 9-15 vs sound defense) — the walls cap trap complexity, they don't
+save white; two sound players draw; (6) the product shape is net + oracle finisher (95% vs
+heuristic where bare draws) — bare-net drawishness is division of labor, not weakness.
+
+**Carry-forward recipe → 13×13** (wiki/topics/sound-world-recipe.md): cell `sound-world` = terminus
++ veto + `--oracle-overlap` + line-planes + no-example-at-defender-terminus, gate on
+`gen_poison_check` (scripts/) before trusting any gen-semantics change. Perf prerequisite for 13×13:
+the cross-worker shared oracle solve (÷4, width-is-free law) — filed. Runs preserved:
+`~/data/sound-world-107` (poisoned, evidence), `~/data/sound-world-107b` (clean, resumable e1540,
+wandb zeed2xw5→107b run).
