@@ -1969,7 +1969,7 @@ CELLS: dict[str, Cell] = {
                 global_pool=True,
                 extra_worker_args=["--value-discount", "0.98",
                                    "--vct-terminus", "--vct-terminus-budget", "50",
-                                   "--oracle-veto"],
+                                   "--oracle-veto", "--oracle-overlap"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--line-planes"]),
     # MOONSHOT-BRUCE-IDX2 (issue #102 pivot). The from-scratch 9x9 'moonshot'

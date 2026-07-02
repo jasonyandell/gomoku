@@ -64,6 +64,8 @@ from gomoku.self_play import (
     configure_draw_value,
     configure_search_contempt,
     configure_vcf_teacher,
+    configure_oracle_overlap,
+    configure_oracle_precheck,
     configure_oracle_veto,
     configure_vct_teacher,
     configure_vct_terminus,
@@ -225,6 +227,39 @@ def parse_args() -> argparse.Namespace:
                         "with --vct-terminus (attacker end) for fully "
                         "oracle-sound games. Native (non-Gumbel) path only. "
                         "Default OFF = byte-identical self-play.")
+    p.add_argument("--oracle-veto-max-cands", type=int, default=0,
+                   help="Staged-escalation breadth cap for the --oracle-veto "
+                        "escape-solve (big-board lever). 0 (default) = FULL "
+                        "breadth every ply (the original #107 semantics). K > 0 "
+                        "= stage 1 solves only the K empty cells nearest "
+                        "existing stones and vetoes proven blunders among them "
+                        "(an untested cell is never vetoed — conservative-"
+                        "safe); a position whose tested cells ALL lose is "
+                        "escalated to full breadth before the defender-"
+                        "terminus check, which stays exactly sound.")
+    p.add_argument("--oracle-precheck", action=argparse.BooleanOptionalAction,
+                   default=False,
+                   help="Null-board precheck for the escape-solve (byte-"
+                        "identical results): a position whose null board ('I "
+                        "pass') is a CLEAN no-win at the cap provably has no "
+                        "blunder cells (freestyle monotonicity + solver 0-FP), "
+                        "so its children are never built or solved. Default "
+                        "OFF — measured SLOWER at the 9x9 live config (per-"
+                        "call solver cost is ~constant: width is free, and "
+                        "the phase-2 split adds calls). A big-board "
+                        "experiment only.")
+    p.add_argument("--oracle-overlap", action="store_true", default=False,
+                   help="Perf: run the per-ply bulk oracle solve (MLX/Metal) in "
+                        "a background thread WHILE the native MCTS wave "
+                        "searches on MPS, applying terminus/veto partitions "
+                        "post-search. Hides the smaller of (solve, search) "
+                        "almost entirely. NOT byte-identical to the serial "
+                        "order: oracle-terminated games are searched-and-"
+                        "discarded on their final ply, which shifts evaluator "
+                        "batch shapes (same numeric class as a wave-size "
+                        "change); targets and records are unchanged in kind, "
+                        "and the flag-on path is deterministic per seed. "
+                        "Default OFF = byte-identical serial order.")
     p.add_argument("--defense-teacher", action="store_true", default=False,
                    help="Enable the exact DEFENSIVE teacher (value-only): mirror "
                         "of --vcf-teacher. When the OPPONENT has a proven forced "
@@ -978,7 +1013,16 @@ def main() -> None:
                            defense_max_cands=getattr(args, "vct_defense_max_cands", 0))
     # Sound-world oracle veto (issue #107): no-op unless --oracle-veto is set
     # (gated purely on the process global; default-off never imports MLX).
-    configure_oracle_veto(enabled=args.oracle_veto)
+    # --oracle-veto-max-cands K > 0 = staged-escalation breadth (big-board
+    # lever); 0 keeps the original full-breadth-every-ply semantics.
+    configure_oracle_veto(enabled=args.oracle_veto,
+                          max_cands=args.oracle_veto_max_cands)
+    # Oracle/search overlap (perf): run the per-ply mega-solve concurrently
+    # with the MPS search wave. Default OFF = byte-identical serial order.
+    configure_oracle_overlap(enabled=args.oracle_overlap)
+    # Null-board precheck (perf): byte-identical results, default OFF
+    # (measured slower at 9x9 — big-board experiment only).
+    configure_oracle_precheck(enabled=args.oracle_precheck)
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
     # policy_mode (#43): switch to stamping the saving move on the policy head.
