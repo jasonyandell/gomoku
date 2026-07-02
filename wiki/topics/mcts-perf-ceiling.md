@@ -332,3 +332,50 @@ bound" reading above and refutes lever #2 as a 9×9 speedup:
   memory-layout pass on `mega_vct_bb` attacks the floor directly; (3) lower
   cap (cap50→cap25) = semantics change, needs a recall measurement first
   (cascade data says cap50 ≈ 98.8% of VCTs; cap25 recall unknown).
+
+## 2026-07-01 — Lever (1) LANDED as continuous-refill consolidation (#112); the law gains a divergence bump; 13×13 census says the next wall is the kernel (#114)
+
+**What shipped (merged to main, `Closes #112`):** the cross-worker shared solve
+landed as the *worker-consolidation* option, plus a lever the filing didn't
+anticipate: **continuous game refill** (`--concurrent-games W`, `--stream`).
+`_generate_games_native` now tracks per-game plies (legacy lockstep is
+byte-identical: values coincide) and seeds a replacement game the moment one
+completes, so every merged per-ply solve and every MPS search wave runs at
+full width W instead of paying the lockstep batch's thinning tail (baseline:
+81 solve calls to finish an 8-game batch of mean ~26 plies — 10.1 calls/game;
+at W=256 it's ~0.5 calls/game). `--stream` makes production continuous:
+chunks of finished games flush to the trainer as they complete and
+`worker_weights.pt` hot-reloads between rounds (in-flight games finish under
+the new net). The `sound-world` cell is rewired: ONE streaming worker at
+W=256 replaces the 4×8 fleet.
+
+**Measured (bench_gen_refill.py, 107b champion weights, live semantics):**
+one process = 4,080 aug-pos/s at W=256 / 5,579 at W=512 vs the whole 4-worker
+fleet's ~1,000–1,300 → **~3.4–4.6×**, with the solve fully hidden under
+search (join stall 0.3 s) and evaluator cost down 186→14–20 µs/pos from batch
+fattening alone. `gen_poison_check`: 0/174 legacy, 0/1790 refill.
+
+**Law amendment — width is free only up to a divergence bump:** per-call cost
+at cap50, GPU-quiet: 44 ms @ ~150 boards → 108 ms @ 862 → 116 ms @ 1,708 →
+148 ms @ 7,276. Intra-simdgroup divergence loads the call ~2.5× as hard lanes
+appear in every simdgroup, then SATURATES — so beyond ~1k boards width rides
+~free again, which is exactly what refill exploits.
+
+**13×13 (the #113 prerequisite) — measured, and the story inverts:** the
+solve is 100% of the binding constraint (oracle 87–89 s of a 92–94 s wall at
+W=64; search idles 45 s at the join; fp16-eval frees the evaluator 70.6→44.2 s
+— the bandwidth-bound prediction holds at bigger boards — and buys ~nothing).
+Refill still gives 2.8× over lockstep per process (539 vs 192 aug-pos/s), but
+the resolve census on 22 captured real veto batches kills the "tail" mental
+model at 13×13: **48.0% of boards solve @budget 10, 9.5% @11–50, 42.5% CAP at
+50** — half the batch grinds to cap, every simdgroup is saturated. Measured
+consequences (verdict-equality asserted): budget ladder 10→50 = **0.83×
+(loss)**; oracle-sort resolve-class clustering (upper bound of any hardness
+sort) = 0.98×; tg 64/128 = 1.00×; **null-board precheck refuted AGAIN at
+13×13 (0.59×)** by a new mechanism — the null boards are themselves cap-bound
+mid-game (opp-has-VCT at 13×13 IS the bottomless search), so phase 1 costs
+more than the skip saves (at 9×9 it was refuted because width was free).
+Receipts + attack list in issue #114: (1) multi-thread-per-board kernel
+rewrite (the per-node cost every capped lane pays), (2) cap50→cap25 recall
+study (the 9.5% census bucket bounds the 13×13 miss rate), (3) veto-breadth
+staging with a leak-rate measurement (last resort, semantics-gated).
