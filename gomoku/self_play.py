@@ -211,6 +211,50 @@ def configure_oracle_overlap(enabled: bool | None = None) -> None:
         _ORACLE_OVERLAP_ENABLED = bool(enabled)
 
 
+# Attacker-preserve mask (sound-world idea #2 — learn CLOSING on-policy). The
+# complement of the defender veto: when the side to move has a CLEAN proven VCT
+# win, restrict the root visit distribution — both the played move AND the
+# recorded policy target `pi` — to the winmask (ALL winning first moves, the
+# moves that PRESERVE the forced win). Any move that lets the win-class slip
+# (win -> draw/loss) is masked out, so the net learns the forcing TAIL
+# on-policy instead of renting conversion from the oracle finisher at inference
+# (9x9: the bare net attacks but draws, finisher converts 95%). Paired with
+# play-on (NO --vct-terminus) + the defender veto, this is the "rails" recipe:
+# both sides play soundly and the game plays out to a natural five, z = actual
+# result. Uses ONE bulk complete-mode mega-solve per ply over the mover-to-move
+# root boards (the call-cost law; width is free). Masks on `win=True` alone
+# (always sound — the kernel has 0 false-positives; a capped complete-mode proof
+# yields a PARTIAL winmask that only over-restricts to a subset of proven-winning
+# moves, never unsound — see _attacker_preserve_solve). Native gen path only.
+# Default OFF = byte-identical self-play.
+_ATTACKER_PRESERVE_ENABLED = False
+
+
+def configure_attacker_preserve(enabled: bool | None = None) -> None:
+    """Enable / parameterize the gen-side attacker-preserve mask (process-wide).
+    None leaves it unchanged. Call once before generation. Gating is purely on
+    this global, so the default-off path is byte-identical self-play and never
+    imports MLX. See _ATTACKER_PRESERVE_ENABLED for the semantics."""
+    global _ATTACKER_PRESERVE_ENABLED
+    if enabled is not None:
+        _ATTACKER_PRESERVE_ENABLED = bool(enabled)
+
+
+def _preserve_solver():
+    """Lazy-import the BASE mega VCT solver for the attacker-preserve
+    complete-mode solve. Deliberately NOT the lanes-wrapped `_load_mega_solver`
+    handle: `complete=True` is an optional output and the lanes=K kernel raises
+    on optional outputs (mega-solver invariant #11)."""
+    from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+    return solve_vct_mega_bb
+
+
+def _cells_from_words(words):
+    """Unpack a (4,) uint64 cell bitmask (kernel bit r*N+c) to flat indices."""
+    from scripts.vct_metal.mega_vct_bb import cells_from_words
+    return cells_from_words(words)
+
+
 def _load_mega_solver():
     """Lazy-import the MLX mega VCT solver (one-time Metal compile on first
     call; coexists with the PyTorch/MPS evaluator in-process, verified)."""
@@ -239,6 +283,21 @@ def _warm_mega_solver() -> None:
         solver(np.zeros((1, 2, BOARD_SIZE, BOARD_SIZE), dtype=bool),
                max_nodes=1, return_move=True)
         _MEGA_WARMED = True
+
+
+_MEGA_PRESERVE_WARMED = False
+
+
+def _warm_preserve_solver() -> None:
+    """One tiny synchronous complete-mode solve so the attacker-preserve kernel
+    variant (`complete=True`, a distinct compiled kernel) is compiled on the
+    MAIN thread before any background-thread solve (overlap mode). Idempotent."""
+    global _MEGA_PRESERVE_WARMED
+    if not _MEGA_PRESERVE_WARMED:
+        solver = _preserve_solver()
+        solver(np.zeros((1, 2, BOARD_SIZE, BOARD_SIZE), dtype=bool),
+               max_nodes=1, complete=True, return_move=True)
+        _MEGA_PRESERVE_WARMED = True
 
 
 def _terminus_boards(arrs):
@@ -317,6 +376,51 @@ def _vct_defense_solve(planes_list, max_cands=0):
     for k in np.flatnonzero(win):
         maps[owner_pos[k]][owner_cell[k]] = 1.0
     return maps, masks
+
+
+def _attacker_preserve_solve(planes_list):
+    """Attacker-preserve labeler (sound-world idea #2). For each input position
+    (side-to-move = mover), if the mover has a proven VCT win, return a
+    (N_ACTIONS,) bool mask of the winning first moves — the moves that PRESERVE
+    the forced win; else None. `planes_list` is one (N_INPUT_PLANES, N, N) stack
+    per position in the side-to-move-relative convention (attacker = plane 0 =
+    mover, defender = plane HISTORY_PLY). ONE bulk-synchronous complete-mode
+    solve_vct_mega_bb call over the mover-to-move root boards (the call-cost law;
+    width is free) — never per-game.
+
+    Gate: `win` ALONE, NOT `win & ~hit_cap`. `complete=True` enumerates EVERY
+    winning first move, so it exhausts the per-board node budget (`hit_cap=True`)
+    on almost every genuinely winning board — gating on ~hit_cap would skip
+    nearly all real wins. This is SOUND because the megakernel never reports a
+    false win (0 FP, cap only causes false NEGATIVES), so `win=True` is always a
+    real proof, and every bit of the (possibly partial, on a capped board)
+    winmask is an INDEPENDENTLY proven winning move. A partial winmask only
+    OVER-restricts (to a subset of proven-winning moves) — never unsound; the
+    net still learns to close, just less diversely, and a higher budget widens
+    the mask.
+
+    Returns a list aligned with `planes_list`: each entry is a (N_ACTIONS,) bool
+    "preserve" mask (True on winning first moves) or None (no proven win)."""
+    solver = _preserve_solver()
+    arrs = [np.asarray(p) for p in planes_list]
+    boards = _terminus_boards(arrs)
+    # complete=True flips `win` to "∃ a winning first move" and appends the
+    # winmask of the winning first moves (fixed output order: move, winmask).
+    win, _hit, _move, winmask = solver(
+        boards, max_nodes=_VCT_TERMINUS_BUDGET, complete=True, return_move=True)
+    win = np.asarray(win).astype(bool)
+    winmask = np.asarray(winmask)
+    out: list[np.ndarray | None] = []
+    for i in range(len(arrs)):
+        if not win[i]:
+            out.append(None)
+            continue
+        cells = np.asarray(_cells_from_words(winmask[i]), dtype=np.int64)
+        m = np.zeros(N_ACTIONS, dtype=bool)
+        if cells.size:
+            m[cells] = True
+        out.append(m if m.any() else None)
+    return out
 
 
 def _stack_children(me: np.ndarray, opp: np.ndarray, cands: np.ndarray):
@@ -622,6 +726,29 @@ def _veto_policy(pi: np.ndarray, vmap: np.ndarray, legal: np.ndarray) -> np.ndar
     if n <= 0.0:                       # defensive: should be unreachable
         return (legal.astype(np.float32) / max(legal.sum(), 1)).astype(np.float32)
     return fallback / n
+
+
+def _preserve_policy(pi: np.ndarray, pmask: np.ndarray) -> np.ndarray:
+    """Restrict a root visit distribution to the moves that PRESERVE the mover's
+    forced win (attacker-preserve, idea #2).
+
+    `pmask` is the (N_ACTIONS,) bool winning-first-move mask from
+    :func:`_attacker_preserve_solve` (every True cell is a proven winning VCT
+    first move). Returns a renormalized distribution with mass only on
+    win-preserving moves. If the search put ALL its mass off the winning moves,
+    falls back to uniform over the winning moves (which are guaranteed to exist —
+    the caller only masks when pmask is non-empty). Every kept move is a proven
+    win, so this is sound: the recorded target and the played move both preserve
+    the forced win, teaching the net to CLOSE on-policy."""
+    keep = np.where(pmask, pi, 0.0)
+    s = keep.sum()
+    if s > 0.0 and np.isfinite(s):
+        return (keep / s).astype(np.float32)
+    fallback = pmask.astype(np.float32)
+    n = fallback.sum()
+    if n <= 0.0:                       # defensive: caller guarantees non-empty
+        return pi.astype(np.float32)
+    return (fallback / n).astype(np.float32)
 
 
 def _oracle_veto_partition(active, active_games, planes_list, pending_vct, ply,
@@ -2771,7 +2898,8 @@ def _generate_games_native(
         # runs, and the partitions apply post-search (flag-gated; see the
         # semantics note at the flag). Default features OFF = byte-identical.
         pending_vct: dict[int, np.ndarray | None] = {}
-        oracle_wanted = _VCT_TERMINUS_ENABLED or record_vct or _ORACLE_VETO_ENABLED
+        oracle_wanted = (_VCT_TERMINUS_ENABLED or record_vct
+                         or _ORACLE_VETO_ENABLED or _ATTACKER_PRESERVE_ENABLED)
         oracle_box: dict = {}
         oracle_thread = None
         planes_list: list | None = None
@@ -2783,15 +2911,22 @@ def _generate_games_native(
             defense_cands = (
                 _VETO_MAX_CANDS if _ORACLE_VETO_ENABLED else _VCT_DEFENSE_MAX_CANDS)
             want_defense = record_vct or _ORACLE_VETO_ENABLED
+            want_preserve = _ATTACKER_PRESERVE_ENABLED
             if _ORACLE_OVERLAP_ENABLED:
                 _warm_mega_solver()   # compile on the main thread, once
+                if want_preserve:
+                    _warm_preserve_solver()
 
                 def _oracle_bg(pl=planes_list, dc=defense_cands,
-                               wt=_VCT_TERMINUS_ENABLED, wd=want_defense):
+                               wt=_VCT_TERMINUS_ENABLED, wd=want_defense,
+                               wp=want_preserve):
                     try:
                         oracle_box["res"] = _oracle_ply_solve(
                             pl, want_terminus=wt, want_defense=wd,
                             defense_max_cands=dc, profile=profile)
+                        if wp:
+                            with _profile_timer(profile, "attacker_preserve_s"):
+                                oracle_box["preserve"] = _attacker_preserve_solve(pl)
                     except BaseException as exc:  # pragma: no cover - re-raised
                         oracle_box["err"] = exc
 
@@ -2802,6 +2937,10 @@ def _generate_games_native(
                     planes_list, want_terminus=_VCT_TERMINUS_ENABLED,
                     want_defense=want_defense, defense_max_cands=defense_cands,
                     profile=profile)
+                if want_preserve:
+                    with _profile_timer(profile, "attacker_preserve_s"):
+                        oracle_box["preserve"] = _attacker_preserve_solve(
+                            planes_list)
                 active, active_games, pending_vct = _apply_oracle_partitions(
                     oracle_box["res"], active, active_games, planes_list,
                     slot_of, ply_of, initial_plies, trajectories, completed,
@@ -2908,6 +3047,21 @@ def _generate_games_native(
                                 planes_list[slot_of[g_idx]])
                             pi = _veto_policy(pi, vmap, legal)
                             _profile_add(profile, "oracle_veto_masked", 1.0)
+                # Attacker-preserve (issue #116, idea #2): when the mover has a
+                # CLEAN proven VCT, restrict pi to the winning first moves so the
+                # net learns to CLOSE on-policy. Applied AFTER the veto (a
+                # winning move never hands the opponent a VCT, so the veto never
+                # touches it — the preserve set is a strict subset of the
+                # non-blunder set) and BEFORE pi is recorded or sampled — the
+                # same one masking point, both consumers.
+                if _ATTACKER_PRESERVE_ENABLED:
+                    pmaps = oracle_box.get("preserve")
+                    if pmaps is not None:
+                        pmask = pmaps[slot_of[g_idx]]
+                        if pmask is not None and pmask.any():
+                            with _profile_timer(profile, "attacker_preserve_mask_s"):
+                                pi = _preserve_policy(pi, pmask)
+                                _profile_add(profile, "attacker_preserve_masked", 1.0)
                 n_initial = initial_plies[g_idx]
                 side = (n_initial + ply_g) % 2
                 # Sanitize pi before recording the training example: NaN entries
