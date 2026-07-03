@@ -1992,6 +1992,45 @@ CELLS: dict[str, Cell] = {
                                    "--stream", "--concurrent-games", "256"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
                                   "--line-planes"]),
+    # RAILS-V0 (issue #116, sound-world idea #1+#2). The direct follow-up to the
+    # #113 13x13 NEGATIVE result (the cap-terminus STARVES white defense: black
+    # forces a fast VCT, the veto masks all white's moves, the defender terminus
+    # fires, white's sharp-defense examples never enter the buffer). The fix:
+    # DROP the attacker terminus and PLAY ON to a natural five — z = the actual
+    # result — so black's forced win no longer ejects white from the buffer and
+    # white stays ON-POLICY everywhere. Keep the defender --oracle-veto (both
+    # sides stay sound) and add --attacker-preserve (when the mover has a proven
+    # VCT, the recorded+played policy is restricted to the winning first moves —
+    # the net learns to CLOSE on-policy instead of renting conversion from the
+    # oracle finisher). FRESH 15x15 small net + --line-planes (mirror the #113
+    # net sizing), launched from the idx-2 opener ONLY (the fairest measured
+    # 15x15 opening, the Bruce-Lee board): launch with
+    #   GOMOKU_BOARD_SIZE=15 GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8
+    # NB no --vct-terminus (play-on); --vct-terminus-budget still sets the shared
+    # veto/preserve solve cap (cap25). --buffer-recency-frac 0.5 is mandatory at
+    # a 1M ring or the training distribution goes stationary (§13 durable lesson).
+    "rails-v0": Cell("rails-v0", sgd_per_game=1.0,
+                buffer_size=1_000_000, games_per_epoch=64,
+                size="small", stem_padding=1, n_simulations=100,
+                n_workers=1, games_per_batch=64, wave_mode=False,
+                c_puct=1.25, c_puct_base=19652.0,
+                dirichlet_alpha=0.13, dirichlet_eps=0.25,
+                temperature_moves=30, temperature_final=0.1,
+                sgd_per_position=0.0025, save_buffer_every=100,
+                ema_tau=0.99, grad_accum_steps=4,
+                opponent_mix_recent=0.4, opponent_mix_history=0.1,
+                opponent_mix_recent_window=100,
+                weights_poll_min_sec=2.0, weights_poll_max_sec=8.0,
+                epochs=1_000_000, random_opening_moves=0,
+                global_pool=True, swap2=False, fixed_openings=True,
+                extra_worker_args=["--value-discount", "0.98",
+                                   "--vct-terminus-budget", "25",
+                                   "--oracle-veto", "--oracle-overlap",
+                                   "--attacker-preserve",
+                                   "--stream", "--concurrent-games", "256"],
+                extra_train_args=["--sgd-steps-per-epoch", "64",
+                                  "--line-planes", "--pack-buffer",
+                                  "--buffer-recency-frac", "0.5"]),
     # MOONSHOT-BRUCE-IDX2 (issue #102 pivot). The from-scratch 9x9 'moonshot'
     # learned the VCT-defense REPRESENTATION (vct_loss dropped) but never changed
     # self-play behavior — plies stayed pinned at the 9x9 self-play ceiling, so the

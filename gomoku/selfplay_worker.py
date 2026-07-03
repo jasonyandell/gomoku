@@ -64,6 +64,7 @@ from gomoku.self_play import (
     configure_draw_value,
     configure_search_contempt,
     configure_vcf_teacher,
+    configure_attacker_preserve,
     configure_oracle_overlap,
     configure_oracle_precheck,
     configure_oracle_veto,
@@ -241,6 +242,20 @@ def parse_args() -> argparse.Namespace:
                         "DEFENDER TERMINUS (side to move loses, z=-1). Composes "
                         "with --vct-terminus (attacker end) for fully "
                         "oracle-sound games. Native (non-Gumbel) path only. "
+                        "Default OFF = byte-identical self-play.")
+    p.add_argument("--attacker-preserve", action="store_true", default=False,
+                   help="Attacker-preserve mask (issue #116, sound-world idea "
+                        "#2): every self-play ply, if the side to move has a "
+                        "proven VCT win (GPU oracle complete-mode, the "
+                        "--vct-terminus-budget cap), MASK the root visit "
+                        "distribution — both the move played AND the recorded "
+                        "policy target — to the winmask (ALL winning first "
+                        "moves), dropping any move that lets the forced-win "
+                        "class slip. Teaches the net to CLOSE on-policy (fold "
+                        "the oracle finisher into the net) instead of only "
+                        "attacking. The attacker complement of --oracle-veto; "
+                        "pair with the veto and NO --vct-terminus for the "
+                        "play-on 'rails' recipe. Native (non-Gumbel) path only. "
                         "Default OFF = byte-identical self-play.")
     p.add_argument("--oracle-veto-max-cands", type=int, default=0,
                    help="Staged-escalation breadth cap for the --oracle-veto "
@@ -1037,6 +1052,11 @@ def main() -> None:
     # lever); 0 keeps the original full-breadth-every-ply semantics.
     configure_oracle_veto(enabled=args.oracle_veto,
                           max_cands=args.oracle_veto_max_cands)
+    # Attacker-preserve mask (issue #116, sound-world idea #2): no-op unless
+    # --attacker-preserve is set (gated purely on the process global; default-
+    # off never imports MLX). When on, restricts the recorded+played policy to
+    # the winmask on positions with a clean proven VCT — the net learns to CLOSE.
+    configure_attacker_preserve(enabled=args.attacker_preserve)
     # Oracle/search overlap (perf): run the per-ply mega-solve concurrently
     # with the MPS search wave. Default OFF = byte-identical serial order.
     configure_oracle_overlap(enabled=args.oracle_overlap)
