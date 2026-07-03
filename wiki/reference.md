@@ -11,9 +11,11 @@ evals** (including forgotten ones), the **tools**, and cross-cutting conventions
 | Page | Role |
 |---|---|
 | [capabilities.md](capabilities.md) | The one-screen capability map (mine · pretrain · train · evaluate · search · operate). |
-| [conventions.md](topics/conventions.md) | Deny-list autonomy, merge-commits-never-rebase, memories-also-go-to-wiki, Opus-minutes. |
+| [conventions.md](topics/conventions.md) | Deny-list autonomy, merge-commits-never-rebase, memory-narrow-project-knowledge-to-wiki, Opus-minutes. |
 | [wiki-operating-model.md](topics/wiki-operating-model.md) | This wiki's adaptation of the LLM-wiki pattern. |
 | [AGENTS.md](../AGENTS.md) | Schema for agents (native twin of CLAUDE.md). |
+| [branch-and-worktree-workflow.md](topics/branch-and-worktree-workflow.md) | The canonical worktree lifecycle: worktree off main → feat branch → merge --no-ff → push → teardown. |
+| [worktree-hygiene.md](topics/worktree-hygiene.md) | Cleanup rules (check for live processes first) + the uv editable-install gotcha. |
 
 ## Training-dynamics reference
 
@@ -30,7 +32,7 @@ evals** (including forgotten ones), the **tools**, and cross-cutting conventions
 | [reliable-eval-set.md](topics/reliable-eval-set.md) | What's a RELIABLE eval? (wine engines shelved; net-vs-net + heuristic/lookahead + native Rapfi anchor). |
 | [external-engine-baselines.md](topics/external-engine-baselines.md) | Rated OSS Gomocup engine candidates + the native Rapfi-NNUE anchor. |
 | [gomocup-engines-catalog.md](topics/gomocup-engines-catalog.md) | Which external engines are open-source / runnable. |
-| [reliable-eval-set.md](topics/reliable-eval-set.md) · [probe-100pct.md](topics/probe-100pct.md) | The distance-to-100% sweep driver. |
+| [probe-100pct.md](topics/probe-100pct.md) | The distance-to-100% sweep driver. |
 | [mining-validation-archives.md](topics/mining-validation-archives.md) | Mine/use validation archives. |
 
 ## Tools
