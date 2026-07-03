@@ -1868,3 +1868,24 @@ eval502=e500 and e588_best=e605), and reconciled the small-net param count (**34
 vs 395,605 @ 13×13** — the +49,720 is the board-area flatten in `policy_fc`+`value_fc1`; the
 raw 396,774 state_dict also counts BatchNorm buffers). A **high-level curation pass is still
 pending** (this stage was facts-in-place-and-organized, not synthesis).
+
+## [2026-07-03] Perf-blitz fan-out wrap: kernel lane COMPLETE, cap25 gate MET (~2x, human-gated flip), trainer fat trimmed (#114/#115)
+
+Three parallel verified-first agent lanes closed out the day-1 leverage list (GPU benches serialized
+via an atomic mkdir lock). (1) **lanes=K kernel: COMPLETE** — K-sweep saturated (K8=1.34x/K16=1.36x
+real-gen; synthetic 1.60x@K8, K16 regresses past the B×K≈25k thread-inflation ceiling); byte-identity
+green K∈{2..32}; shared-stack rewrite explicitly not pursued; `bench_lanes13 --synth` self-check
+shipped. Prefer GOMOKU_VCT_LANES=16 at 13×13 if enabling. (2) **cap50→cap25 recall study: gate MET** —
+recall of cap50-proven vetoes at cap25 = 98.64% (9×9 champ) / 99.39% (13×13 full-game) / **99.93%
+(13×13 sound-world net)**; solve ~**1.98×** both sizes, composable with lanes=K (composed 13×13 stack
+≈2.7× on the ~90%-of-wall component). All proven wins are defense escape-children (terminus fires 0);
+monotonicity/leak-capped invariants + poison@25 clean. **Flip is HUMAN-GATED** (#114, label swapped):
+recommended board-size-conditional (cap25 @13×13+, keep cap50 @9×9 — marginal recall AND not the
+bottleneck there); caveats = distribution-dependence, leaks-are-played-blunders (K-cap precedent),
+Δelo slice pending. Tooling: `scripts/vct_metal/cap25_recall_study.py`, `GOMOKU_POISON_BUDGET`.
+(3) **Trainer quick wins (#115 closed)**: fused L2 (-9.7%/step, gradient bitwise-identical;
+_foreach_norm SLOWER on MPS, _foreach_pow won), ~15 host syncs/step → one packed transfer
+(byte-matched logs), `--shape-stats-every` (default 10; ~230 ms/epoch amortized at 1.5M rows), plus
+the honest profile: at fixed sgd-steps=64 the epoch is GEN-dominated (train 1.4–1.9 s vs gen 10–34 s
+at 13×13) — the trainer was never the wall. Same-seed 3-epoch trajectory identical before/after;
+1129 tests green. Receipts: #114/#115 comments.
