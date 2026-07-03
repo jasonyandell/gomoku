@@ -3,6 +3,17 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-07-03] reference.md touch-up: three cosmetic nits
+
+Fixed a malformed Evals row (dropped a duplicate `reliable-eval-set.md` link
+prefixed onto the `probe-100pct.md` row), surfaced
+[branch-and-worktree-workflow.md](topics/branch-and-worktree-workflow.md) and
+[worktree-hygiene.md](topics/worktree-hygiene.md) into the "Capabilities &
+conventions" table (previously only reachable via the full page index), and
+corrected the backwards "memories-also-go-to-wiki" blurb to
+"memory-narrow-project-knowledge-to-wiki" to match the actual doctrine in
+[conventions.md](topics/conventions.md) § What belongs in memory vs the wiki.
+
 ## [2026-07-02] Curation pass: fact-correctness audit + fix (28 pages)
 
 After the hub-of-hubs restructure, ran a **content-correctness curation pass** (the
