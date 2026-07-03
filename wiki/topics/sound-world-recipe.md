@@ -194,6 +194,16 @@ unfairness). Idea 3's oracle probe tells us whether the openings piece is REQUIR
 is the candidate recipe that could carry the sound world from a 9×9 proof-of-concept to a genuinely
 strong, defends-and-closes net at 13×13 and beyond.
 
+**Status — rails-v0 LAUNCHED (2026-07-03, #116, wandb `vraf0b6e`, 15×15 idx-2).** Ideas 1+2 are live:
+terminus DROPPED (play-on to a natural five), `--oracle-veto` + `--attacker-preserve` keep both sides
+sound. Earliest read (8 min / e235 — NOT an overnight run; see the TRAINING_WIKI framing-correction
+entry) is **encouraging on the core hypothesis**: white takes a real **37% share of decisive self-play
+games** (vs #113's structural 0/20), plies play out at ~32 (p90 50, well above the #113 ~9–14 floor),
+and both colors carry value/policy gradient — the white-starvation mechanism is not firing. Bets P1/P2
+provisional-PASS from self-play; throughput bet CONFIRMED-down (~3.3 s/ep). P3 (bare-net conversion)
+and the Rapfi arena verdict await a matured net (trigger ~`loss/policy < 1.6`). One live watch item:
+`sample_reuse_ratio ≈ 8.5` (n_workers=1 gen-starved, §12) — add a worker if it persists past ring-fill.
+
 ## See also
 - [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) — the #98 attacker terminus this recipe composes with.
 - [vct-mining-research.md](vct-mining-research.md) — the VCT-mining reference (whole-net vs oracle split, the mining hub).
