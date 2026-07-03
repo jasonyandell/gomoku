@@ -378,6 +378,20 @@ widths (the 1.72× narrow number is the mechanism at its best).
 on for the gen oracle path — off = the byte-identical base kernel. `tg` must be a
 multiple of 32; v1 is base-verdict-only (optional outputs / work_steal raise).
 
+**Lane verdict — COMPLETE (2026-07-03 fan-out wrap, #114).** The K-sweep is
+saturated and the lever is closed out. Real-gen 13×13: **K8 = 1.34× / K16 =
+1.36×** (K16 ≥ K8 everywhere on real batches — so **the recommended knob at 13×13
+is `GOMOKU_VCT_LANES=16`**, not the 1.34×-headline K8). Synthetic random-stack
+(B=1500): **K8 = 1.60× is the peak; K16 = 1.47× REGRESSES** because B×K ≈ 24k
+crosses the **~25k B×K thread-inflation ceiling** (synthetic runs hotter than
+real-gen: 2.8% capped vs 42.5%). Byte-identity re-confirmed across **K ∈ {2..32}**.
+The **shared-stack-in-threadgroup rewrite was explicitly REJECTED** — it needs the
+barriers the barrier-free replicated-state design avoids, a research-grade rewrite
+for a sliver past 1.36×. Self-check shipped: `bench_lanes13.py --synth`
+(checkpoint-free random-stack K-sweep + per-batch verdict-equality assert). **Still
+default-OFF in production** — built and verified, but only the cap25 flip (§5.6) is
+live in the `sound-world` cell; enable `lanes=16` for a ~1.36× multiplier on top.
+
 ### 5.4 Hardness is bimodal; MAXD=32 is sufficient (#95)
 Resolution across the mixed population is **bimodal**: 70–85% of boards resolve at
 budget *10*, then a steep plateau, then a **near-bottomless hard tail** that 80×
@@ -430,13 +444,44 @@ Two load-bearing findings:
    overhaul. Do not cite it as a single-process refill speedup.
 
 **PERF LEVER PRIORITY:** because the oracle dominates, the lever for faster
-sound-world gen is the **VCT solver/kernel** (`lanes=K`, cap50→cap25 recall study,
-tighter per-node work), **not** the gen loop. Prior 9×9-era levers on
+sound-world gen is the **VCT solver/kernel** — both blitz levers landed here:
+`lanes=K` (§5.3, verdict COMPLETE, default-OFF) and the **cap50→cap25 budget flip
+(§5.6, LIVE in the cell)**, not the gen loop. Prior 9×9-era levers on
 `gomoku/self_play.py` (merged per-ply solve = 1.06–1.07× byte-identical default-on;
 null-board precheck **refuted** at both 9×9 and 13×13; oracle/search overlap =
 1.18× via GIL-released MLX under MPS contention) are second-order next to the
 kernel floor. Full gen-loop lever history + the bimodal 13×13 census:
 [mcts-perf-ceiling.md](mcts-perf-ceiling.md) (2026-07-01 / 2026-07-02 sections).
+
+### 5.6 The cap50→cap25 budget flip (#114, LANDED 2026-07-03)
+The blitz's third lever: halve the per-board node cap. In the sound-world loop the
+one `--vct-terminus-budget` flag is `max_nodes` for EVERY solve — attacker terminus
+AND the per-ply veto escape-children (`_VCT_TERMINUS_BUDGET`, `gomoku/self_play.py`)
+— and the veto is ~91% of 13×13 gen wall (§5.5), so the cap is the throughput dial.
+
+**Recall study (receipts `scripts/vct_metal/cap25_recall_receipts.md` +
+`cap25_recall_study.py`).** *Recall* = cap50-proven vetoes still proven at cap25:
+
+| net / corpus | recall | leaks | solve speedup |
+|---|---|---|---|
+| 13×13 `sound-world-13-scratch` (the recipe net) | **99.93%** | 30 / 40,961 | — |
+| 13×13 `swap2/G-ladder-13` full-game | **99.39%** | 525 / 85,884 | ~1.98× (29.8→15.1 s) |
+| 9×9 champion `107b` (worst case) | **98.64%** | 164 / 12,094 | ~1.95× (6.80→3.49 s) |
+
+Halving the cap ≈ halves the solve wall (**~1.98×**). Every recovered proven-win is
+a DEFENSE escape-child — the attacker terminus fires **0** forced-VCT-for-mover at a
+self-play root, so recall is entirely the soundness-critical veto path. Two kernel
+invariants, **0 violations everywhere**: monotonicity (`proven@25 ⊆ proven@50`) and
+leak-capped (every leak is `hit_cap@25` — a genuinely harder proof, never a wrong
+verdict). Plumbing guardrail `GOMOKU_POISON_BUDGET=25 gen_poison_check.py` = 0/174.
+
+**Decision + ship (Jason, 2026-07-03):** *"cap25 is large savings and minimal cost.
+I'll happily pay 2% gap on the high end in order to get the speedup."* Landed as a
+**flat `--vct-terminus-budget` 50→25 on the `sound-world` cell** (commit `8e2d9e1`,
+merge `09c067b`) — not board-size-conditional logic; the code note says a 9×9 rerun
+may override back to 50. The **eval-time finisher stays cap50** (`vct_finish=50`).
+Composed with `lanes=16` the 13×13 solver stack is ≈**2.7×** on the ~90%-of-wall
+component. See [sound-world-recipe.md](sound-world-recipe.md) § Oracle budget.
 
 ---
 

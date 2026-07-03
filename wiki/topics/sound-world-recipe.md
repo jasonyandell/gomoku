@@ -13,7 +13,11 @@ stay the net's own (constrained) search, on-policy by construction. Cap the veto
 attractor returns (K=24 ablation) — causal, not correlational.
 
 ## The levers (all byte-identical-off)
-- `--vct-terminus --vct-terminus-budget 50` (worker): attacker end, one-hot on the oracle move (#98).
+- `--vct-terminus --vct-terminus-budget 25` (worker): attacker end, one-hot on the oracle move (#98).
+  **Cap25 as of 2026-07-03** (#114, Jason-approved; was cap50 through the 9×9 chapter). This single
+  flag is the shared oracle node cap for BOTH the terminus test AND the per-ply veto escape-solves
+  (`_VCT_TERMINUS_BUDGET`, `gomoku/self_play.py`), so it is the gen-throughput dial — see
+  § Oracle budget: the cap50→cap25 flip. *(The eval-time finisher stays cap50.)*
 - `--oracle-veto` (worker): per-ply bulk escape-solve at FULL breadth; proven-losing moves masked
   from played move AND recorded pi; all-legal-lose ⇒ defender terminus, z=−1, **NO example recorded
   for the doomed position** (the uniform-pi shrug collapsed white at scale — the #107 wound; see
@@ -35,12 +39,47 @@ attractor returns (K=24 ablation) — causal, not correlational.
 3. Never record a degenerate policy target "for the value signal" — drop the example; discounting
    carries z.
 
+## Oracle budget: the cap50→cap25 flip (#114, 2026-07-03)
+`--vct-terminus-budget` is the single node cap governing EVERY oracle solve in the loop — the attacker
+terminus test AND the per-ply veto escape-child solves (`_VCT_TERMINUS_BUDGET`, `gomoku/self_play.py`
+lines 263/315/459/480/529) — and the veto solve is [~91% of 13×13 gen wall](mega-vct-solver.md) (§5.5),
+so the cap is the throughput dial. The perf blitz measured lowering it 50→25.
+
+**The recall study (gate MET; receipts `scripts/vct_metal/cap25_recall_receipts.md` +
+`cap25_recall_study.py`, #114).** *Recall* = the fraction of cap50-proven vetoes still proven at cap25:
+**99.93%** (13×13 sound-world-scratch net; 30 leaks / 40,961) / **99.39%** (13×13 full-game
+swap2/G-ladder; 525 / 85,884) / **98.64%** (9×9 champion `107b`, the worst case; 164 / 12,094). Solve
+**~1.98×** at both sizes (halving the cap ≈ halves the solve wall). Every cap50-proven win recovered is
+a DEFENSE escape-child — the attacker terminus fires **0** forced-VCT-for-mover at any self-play root,
+so the recall question is entirely the soundness-critical defense-veto path. Two kernel invariants held
+with 0 violations everywhere: monotonicity (`proven@25 ⊆ proven@50`) and leak-capped (every leak board
+is `hit_cap@25`, i.e. a genuinely-harder proof, not a wrong verdict). Plumbing guardrail
+`GOMOKU_POISON_BUDGET=25 gen_poison_check.py` = **0/174**. A missed veto is a *played blunder* (the
+K-cap precedent, § Why it works); the residual ~0.07–1.36% leak is distribution-dependent.
+
+**The decision (Jason, 2026-07-03).** *"cap25 is large savings and minimal cost. I'll happily pay 2%
+gap on the high end in order to get the speedup."* **LANDED:** the `sound-world` cell's
+`--vct-terminus-budget` 50→25 (one flag value; commit `8e2d9e1`, merge `09c067b`, `Closes #114`). This
+is a **flat cap25 on the one cell**, not board-size-conditional logic — the study *recommended* cap25 at
+13×13 / keep cap50 at 9×9, but what shipped is a single value plus the code note "a 9×9 rerun (closed
+chapter) may prefer 50 — override per run." **The eval-time finisher stays cap50** (`vct_finish=50`):
+one cheap call per round buys conversion strength. Composed with the (default-OFF) `lanes=K` kernel the
+13×13 solver stack is ≈**2.7×** on the ~90%-of-wall component — see
+[mega-vct-solver.md](mega-vct-solver.md) §5.3/§5.5 and [mcts-perf-ceiling.md](mcts-perf-ceiling.md).
+
 ## Known open edges
 - White-vs-lookahead:4 softness at 9×9 (5/20 white losses @ e1368) — unsettled when the chapter closed.
-- 13×13 gen **perf** prerequisite (still open): cross-worker shared oracle solve (width-is-free ⇒ ÷4
-  aggregate oracle time; wiki/topics/mcts-perf-ceiling.md). Product shape = net + cap50 finisher (95%
-  vs heuristic on 9×9 where bare-net draws). **NB the 13×13 graduation itself was attempted and is a
-  STRUCTURAL NEGATIVE — see the #113 section below; this bullet is only the perf note, not an untried plan.**
+- 13×13 gen **perf** prerequisite — **RESOLVED 2026-07-01/03** (dated correction; the original framing
+  below, "cross-worker shared oracle solve, still open — width-is-free ⇒ ÷4 aggregate oracle time," was
+  superseded by measurement). The blitz landed the levers: continuous-refill fleet-consolidation (#112),
+  the `lanes=K` multi-thread-per-board kernel (#114, built + verified, default-OFF), and the cap50→cap25
+  oracle-budget flip (#114, live in this cell — § Oracle budget above). Correction to the ÷4 intuition:
+  streaming ≈ lockstep at EQUAL width in a single process (216 vs 216 games/min @13×13); #112's 3.4–4.6×
+  was a *fleet → one-wide-process* comparison. See the § Perf isolation below and
+  [mega-vct-solver.md](mega-vct-solver.md) §5.5. Product shape = net + **cap50** finisher (95% vs
+  heuristic on 9×9 where bare-net draws; the finisher stays cap50 even though gen went cap25). **NB the
+  13×13 graduation itself was attempted and is a STRUCTURAL NEGATIVE — see the #113 section below; this
+  bullet is only the perf note, not an untried plan.**
 
 ## 13×13 graduation (#113, 2026-07-02) — the NEGATIVE result: an attack-only specialist
 
@@ -161,6 +200,7 @@ strong, defends-and-closes net at 13×13 and beyond.
 - [vct-backward-mining.md](vct-backward-mining.md) — VCT mining research lineage.
 - [white-side-defense-plan.md](white-side-defense-plan.md) — the white-defense problem this line keeps colliding with.
 - [swap2-opening-protocol.md](swap2-opening-protocol.md) — the fair-openings piece of idea #4 (and the idx-2 connection).
-- [mega-vct-solver.md](mega-vct-solver.md) — the GPU oracle that can probe the 13×13 forced-win question.
+- [mega-vct-solver.md](mega-vct-solver.md) — the GPU oracle that can probe the 13×13 forced-win question (§5.3 `lanes=K`, §5.5 the veto = ~91% of gen wall).
+- [batched-eval-arena.md](batched-eval-arena.md) — the eval-time cap50 VCT finisher (#109) that turns the bare net into the 95%-vs-heuristic product.
 - [net-architecture-and-representation.md](net-architecture-and-representation.md) — the net + line-planes representation this recipe trains (param counts, presets).
 - [the-claw.md](the-claw.md) — the double-threat / line-planes representation motivation (net-architecture context).
