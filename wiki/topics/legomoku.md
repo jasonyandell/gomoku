@@ -128,6 +128,14 @@ mid-game gets *named and reused* — each subtree relearns it. LeGomoku's latent
 if it earns its keep, would BE the molecule layer, and the architecture target
 shifts from "a better search" to **a dialogue of searches**.
 
+**The ceiling argument (Jason, on the way out the door):** the feedback is the
+crux — it's all interconnected in a human. A system *blind to the feedback*
+can only **approach** Rapfi, never exceed it: brilliant minds built something
+that friggin RULES at search, and matching their hand-built loop from below
+has an asymptote at their skill. The return channel isn't an optimization —
+it's the only structural bet that clears the ceiling. (Pre-stated framing,
+not a claim; falls with the rest if the spikes splat.)
+
 Existing local evidence the molecule layer is non-trivial:
 - **The claw** ([the-claw.md](the-claw.md)) — a proven-optimal defensive
   structure that is *provably invisible to line-organized eval*. A molecule
