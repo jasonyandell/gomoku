@@ -22,6 +22,7 @@ it cleanly. The largest by far is the **seek-VCT program** — it gets its own h
 | **Molecule discovery toolkit** (methods from comp-genetics) | v0 blocking-probe was NEGATIVE (blocking is itself line-shaped); pivot to position-dependent objectives | recorded — [molecule-discovery-toolkit.md](topics/molecule-discovery-toolkit.md) |
 | **swap2 opening protocol** (#72 — the "real" white fix) | Rebalances the GAME; white wins 27% in swap2 self-play vs ~0% empty-board; strength still ~parity | recorded — [swap2-opening-protocol.md](topics/swap2-opening-protocol.md) |
 | **Rapfi idx-2 distillation mine** ("Bruce Lee one-position") | Mine Rapfi at ~700 mv/s → pretrain → warm-start; one-hot harms, soft-target is the fix | recorded — [rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |
+| **LeGomoku** — latent-space world model; can it make a better *search*? | Brainstorm only; "probably goes splat" is the honest prior (the Texas-42 wall), pre-stated bets on record; expected to grow child pages | proposed 2026-07-03 — [legomoku.md](topics/legomoku.md) |
 
 ## Reference theory (external, for these experiments)
 
@@ -35,7 +36,7 @@ it cleanly. The largest by far is the **seek-VCT program** — it gets its own h
 
 ## Full page index — every page in this hub
 
-*Complete map (8 pages); the sections above surface the headline ones.*
+*Complete map (9 pages); the sections above surface the headline ones.*
 
 | Page | Note |
 |---|---|
@@ -44,6 +45,7 @@ it cleanly. The largest by far is the **seek-VCT program** — it gets its own h
 | [molecule-discovery-toolkit.md](topics/molecule-discovery-toolkit.md) |  |
 | [swap2-opening-protocol.md](topics/swap2-opening-protocol.md) |  |
 | [rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |  |
+| [legomoku.md](topics/legomoku.md) | proposed; brainstorm hub-in-waiting |
 | [allis-threat-theory.md](topics/allis-threat-theory.md) | reference theory |
 | [gomoku-standard-strategy.md](topics/gomoku-standard-strategy.md) | reference theory |
 | [idea-pile.md](topics/idea-pile.md) | the seed pile |
