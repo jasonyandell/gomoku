@@ -3,7 +3,7 @@ lanes=K multi-thread-per-board kernel against base on them (issue #114).
 
 Day-1 (#114) captured 22 real 13x13 batches in a throwaway scratchpad that did
 not survive the session; this is the committed, reproducible version of that
-methodology. Two modes:
+methodology. Three modes:
 
   # 1) capture: run a short live-semantics gen (vct-terminus cap50 + full-breadth
   #    veto) and record every (boards, max_nodes) the oracle actually dispatched:
@@ -15,6 +15,11 @@ methodology. Two modes:
   #    asserting (win, hit, move) equality on every batch:
   GOMOKU_BOARD_SIZE=13 uv run python scripts/vct_metal/bench_lanes13.py \
       --bench /tmp/b13.npz --lanes 2,4,8,16
+
+  # 3) synth: checkpoint-free self-check — random mid-game stacks, K-sweep vs
+  #    base, (win,hit,move) equality asserted (no gen capture / checkpoint):
+  GOMOKU_BOARD_SIZE=13 uv run python scripts/vct_metal/bench_lanes13.py \
+      --synth --board-size 13 --synth-b 1500 --lanes 2,4,8,16
 """
 from __future__ import annotations
 
@@ -111,10 +116,59 @@ def bench(args) -> None:
               f"(verdicts identical)")
 
 
+def synth(args) -> None:
+    """Checkpoint-free self-check: random mid-game stacks, K-sweep vs base,
+    (win,hit,move) equality asserted on the batch. No gen capture / no
+    checkpoint needed — a fast sanity probe for invariant #11 + the
+    monotone-then-saturating speedup shape. The ABSOLUTE speedup depends on
+    batch character (random stacks resolve faster than the real 13x13 census,
+    so the per-node scan is a bigger share ⇒ higher K-speedup than the
+    real-gen 1.34x); use --bench on a real capture for production numbers.
+    """
+    from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+
+    n = args.board_size
+    nn = n * n
+    lanes = [int(x) for x in args.lanes.split(",")]
+    rng = np.random.default_rng(args.seed)
+    boards = np.zeros((args.synth_b, 2, n, n), dtype=bool)
+    flat = boards.reshape(args.synth_b, 2, nn)
+    for b in range(args.synth_b):
+        cells = rng.permutation(nn)[:args.stones]
+        flat[b, 0, cells[0::2]] = True   # side-to-move
+        flat[b, 1, cells[1::2]] = True
+    ref = solve_vct_mega_bb(boards, max_nodes=args.budget, return_move=True)
+    for k in lanes:  # warm each variant out of the timing
+        solve_vct_mega_bb(boards[:8], max_nodes=10, return_move=True, lanes=k)
+
+    nwin, ncap = int(ref[0].sum()), int(ref[1].sum())
+    print(f"synth N={n} B={args.synth_b} stones={args.stones} budget={args.budget}"
+          f" reps={args.reps} | base win={nwin} ({100*nwin/args.synth_b:.1f}%) "
+          f"capped={ncap} ({100*ncap/args.synth_b:.1f}%)")
+    results = {}
+    for k in [1] + lanes:
+        kw = {} if k == 1 else {"lanes": k}
+        best = None
+        for _ in range(args.reps):
+            t0 = time.perf_counter()
+            out = solve_vct_mega_bb(boards, max_nodes=args.budget,
+                                    return_move=True, **kw)
+            dt = time.perf_counter() - t0
+            best = dt if best is None else min(best, dt)
+        for name, a, r in zip(("win", "hit", "move"), out, ref):
+            assert np.array_equal(np.asarray(a), np.asarray(r)), \
+                f"verdict mismatch at lanes={k} ({name})"
+        results[k] = best
+        print(f"lanes={k:>2}  {best*1e3:7.1f} ms  vs base {results[1]/best:.2f}x  "
+              f"(verdicts identical)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--capture", help="output npz path (capture mode)")
     ap.add_argument("--bench", help="input npz path (bench mode)")
+    ap.add_argument("--synth", action="store_true",
+                    help="checkpoint-free random-stack self-check + K-sweep")
     ap.add_argument("--ckpt")
     ap.add_argument("--games", type=int, default=48)
     ap.add_argument("--concurrent", type=int, default=32)
@@ -125,14 +179,19 @@ def main() -> None:
     ap.add_argument("--device", default="mps")
     ap.add_argument("--lanes", default="2,4,8,16")
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--board-size", type=int, default=13, help="synth board N")
+    ap.add_argument("--synth-b", type=int, default=1500, help="synth batch size")
+    ap.add_argument("--stones", type=int, default=44, help="synth stones/board")
     args = ap.parse_args()
     if args.capture:
         assert args.ckpt, "--capture needs --ckpt"
         capture(args)
     elif args.bench:
         bench(args)
+    elif args.synth:
+        synth(args)
     else:
-        ap.error("pick --capture or --bench")
+        ap.error("pick --capture, --bench, or --synth")
 
 
 if __name__ == "__main__":
