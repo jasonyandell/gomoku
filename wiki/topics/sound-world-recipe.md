@@ -210,10 +210,21 @@ positions are all *losses from hopeless states*: white learns "all lost" (pl ris
 low-entropy forced-win tails poison value (vl→0.05). **Removing the terminus (idea #1) is necessary but
 NOT sufficient on a side-favored opening.** Two levers, in order: **(1) tail subsampling** — drop a
 fraction of the post-proven-VCT tail so the buffer isn't dominated by certain-outcome black-win tails
-(attacks both the value-poisoning and the starvation-of-learnable-white-positions; being staged behind
-a flag, byte-identical off, Jason-gated); **(2) fairer opening** — swap2 / a less black-favored opener
-than idx-2 (a sound white can only learn to hold a game that is actually holdable; recipe open-dir
-#3/#4). Full dynamics + the different-pathway nuance: TRAINING_WIKI 2026-07-03 flip-correction entry.
+(attacks both the value-poisoning and the starvation-of-learnable-white-positions; STAGED behind flag
+`--tail-subsample`, byte-identical off, 35 tests green, #118, Jason-gated); **(2) fairer opening** —
+swap2 / a less black-favored opener than idx-2 (a sound white can only learn to hold a game that is
+actually holdable; recipe open-dir #3/#4). Full dynamics + the different-pathway nuance: TRAINING_WIKI
+2026-07-03 flip-correction + close-out entries.
+
+**Closed at e5524 (5.45 h, 234,487 games), graceful shutdown, wandb finished.** The pathology matured
+to the floor (plies 12.5, vl 0.030, white-share ~0.015) — clean, unambiguous confirmatory evidence.
+**One genuinely NEW capability signal, though** (Jason's morning eyeball, banked alongside the
+pathology): a mid-game **MOMENTUM SWING** — white was winning a game, played one weak move, and black
+*capitalized on the blunder to flip and win*. No prior lineage's opponent ever engineered a swing (they
+were static attack-only specialists — forced win or nothing). Anecdotal + not shown reliable, but it
+says the play-on + rails recipe is teaching real **blunder-punishing / game-reversing tactics**, not
+just failing in a new way. Worth a dedicated probe on any future rails run (inject a white blunder →
+does black punish?). The pathology is the headline; the swing is the encouraging footnote.
 
 ## See also
 - [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) — the #98 attacker terminus this recipe composes with.
