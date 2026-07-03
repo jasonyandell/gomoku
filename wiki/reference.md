@@ -50,11 +50,12 @@ evals** (including forgotten ones), the **tools**, and cross-cutting conventions
 [karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) ·
 [sid-bidasaria-stop-babysitting-agents-2026-05-20.md](sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md) ·
 [gomocup-az-techniques-2026-05-27.md](sources/gomocup-az-techniques-2026-05-27.md) ·
-[gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md)
+[gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md) ·
+[incognito-claude-beat-rapfi-2026-07-03.md](sources/incognito-claude-beat-rapfi-2026-07-03.md)
 
 ## Full page index — every page in this hub
 
-*Complete map (23 pages); the sections above surface the headline ones.*
+*Complete map (24 pages); the sections above surface the headline ones.*
 
 | Page | Note |
 |---|---|
@@ -81,3 +82,4 @@ evals** (including forgotten ones), the **tools**, and cross-cutting conventions
 | [sid-bidasaria-stop-babysitting-agents-2026-05-20.md](sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md) |  |
 | [gomocup-az-techniques-2026-05-27.md](sources/gomocup-az-techniques-2026-05-27.md) |  |
 | [gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md) |  |
+| [incognito-claude-beat-rapfi-2026-07-03.md](sources/incognito-claude-beat-rapfi-2026-07-03.md) | incognito-Claude take; same-prior caveat |
