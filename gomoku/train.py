@@ -196,6 +196,24 @@ def wdl_target_from_z(z: torch.Tensor) -> torch.Tensor:
     return torch.stack([w, d, l], dim=-1)
 
 
+def _l2_sum_of_squares(model) -> torch.Tensor:
+    """Sum of squares of all trainable params — the explicit L2 penalty term.
+
+    Fused replacement for ``sum((p ** 2).sum() for p in params)`` (#115): one
+    ``torch._foreach_pow`` collapses the ~41 per-parameter square kernels into a
+    single launch, killing the per-microbatch dispatch storm. The GRADIENT this
+    feeds ``backward()`` (2*p per param — the only thing the optimizer consumes,
+    i.e. the actual training semantics) is BITWISE-IDENTICAL to the old Python
+    loop; the scalar VALUE matches to fp32 reduction rounding (~7e-8 relative,
+    from stack-reduce vs Python left-fold add order). This is deliberately NOT
+    folded into AdamW's ``weight_decay`` — that would change the update rule; it
+    stays an explicit additive penalty layered on top of weight_decay (the
+    double-regularization is preserved exactly).
+    """
+    params = [p for p in model.parameters() if p.requires_grad]
+    return torch.stack([t.sum() for t in torch._foreach_pow(params, 2)]).sum()
+
+
 def train_step(
     model,
     optimizer,
@@ -430,7 +448,7 @@ def train_step(
         loss = loss + teacher_weight * teacher_ce
         teacher_l_val = float(teacher_ce.detach())
     if l2_weight > 0:
-        l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
+        l2 = _l2_sum_of_squares(model)
         loss = loss + l2_weight * l2
     # Scale loss BEFORE backward when accumulating, so the summed gradient
     # over N microbatches equals the gradient of the mean loss over N*B
@@ -473,17 +491,34 @@ def train_step(
             ce_cpu = per_policy_ce.detach()
             ve_cpu = per_value_se.detach()
             side_long = side.long()
-            for s in (0, 1):
-                mask = (side_long == s)
-                if bool(mask.any()):
-                    out[f"train/policy_ce/side_{s}"] = float(ce_cpu[mask].mean())
-                    out[f"train/value_mse/side_{s}"] = float(ve_cpu[mask].mean())
             ply_long = ply.long()
-            for lo, hi, label in ((0, 10, "ply_00_10"), (10, 25, "ply_10_25"), (25, 60, "ply_25_60")):
-                mask = (ply_long >= lo) & (ply_long < hi)
-                if bool(mask.any()):
-                    out[f"train/policy_ce/{label}"] = float(ce_cpu[mask].mean())
-                    out[f"train/value_mse/{label}"] = float(ve_cpu[mask].mean())
+            # Per-bucket CE/MSE diagnostics. The old code did up to 15
+            # float()/bool() host syncs per microbatch here (a .any() + two
+            # .mean() per bucket, 5 buckets). Instead compute every bucket's
+            # masked means AND counts on-device, then do ONE packed .cpu()
+            # transfer (#115) — same one-transfer pattern make_torch_evaluator
+            # uses. `ce_cpu[m].mean()` is the SAME masked_select+mean reduction
+            # as before, so the logged values are bitwise-identical; empty
+            # buckets produce nan means and are dropped via the count guard
+            # (count == 0 <=> the old `mask.any()` was False), so the exact same
+            # keys are emitted on the exact same batches.
+            buckets = [
+                ("side_0", side_long == 0),
+                ("side_1", side_long == 1),
+                ("ply_00_10", (ply_long >= 0) & (ply_long < 10)),
+                ("ply_10_25", (ply_long >= 10) & (ply_long < 25)),
+                ("ply_25_60", (ply_long >= 25) & (ply_long < 60)),
+            ]
+            ce_means = torch.stack([ce_cpu[m].mean() for _, m in buckets])
+            ve_means = torch.stack([ve_cpu[m].mean() for _, m in buckets])
+            counts = torch.stack([m.sum() for _, m in buckets]).to(ce_means.dtype)
+            ce_vals, ve_vals, cnt_vals = torch.stack(
+                [ce_means, ve_means, counts], dim=0
+            ).cpu().tolist()
+        for i, (label, _) in enumerate(buckets):
+            if cnt_vals[i] > 0:
+                out[f"train/policy_ce/{label}"] = ce_vals[i]
+                out[f"train/value_mse/{label}"] = ve_vals[i]
     return out
 
 
@@ -530,7 +565,7 @@ def choice_step(
     choice_ce = -(target * logp).sum(dim=-1).mean()
     loss = choice_weight * choice_ce
     if l2_weight > 0:
-        l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
+        l2 = _l2_sum_of_squares(model)
         loss = loss + l2_weight * l2
     loss.backward()
     optimizer.step()
@@ -1180,6 +1215,14 @@ def parse_args() -> argparse.Namespace:
                         "buffer) every N epochs. Set higher than --save-every "
                         "to throttle disk IO; older latest.pt is still valid "
                         "for resume, just slightly stale.")
+    p.add_argument("--shape-stats-every", type=int, default=10,
+                   help="Compute the buffer-shape snapshot (buffer/* wandb keys) "
+                        "every N epochs. shape_stats() is an O(buffer) full-plane "
+                        "scan (~25ms/150k rows at 13x13); running it every epoch "
+                        "(the pre-#115 default) is wasted work on a slowly-evolving "
+                        "buffer. On the epochs it runs, the SAME keys are logged; "
+                        "on the others they're omitted (W&B renders a gap). Set to "
+                        "1 for the pre-#115 every-epoch behavior.")
     p.add_argument("--keep-last-n", type=int, default=3,
                    help="Auto-prune older epoch checkpoints, keeping only this many "
                         "of the most recent ones (plus whatever `latest.pt` points to). "
@@ -2717,10 +2760,16 @@ def main() -> None:
             "train/positions_this_cycle": n_positions_this_cycle,
             **wave_metrics,
             **train_metrics,
-            # Buffer-shape snapshot: distribution over n_stones buckets + z mix.
-            # Computed every cycle so wandb shows shape evolution over time.
-            **buffer.shape_stats(),
         }
+        # Buffer-shape snapshot: distribution over n_stones buckets + z mix.
+        # shape_stats() is an O(buffer) full-plane scan (#115); gate it to every
+        # --shape-stats-every epochs (default 10) instead of every cycle — the
+        # buffer's shape evolves slowly, so the every-epoch scan was wasted work.
+        # On the epochs it runs the SAME buffer/* keys are logged; on the others
+        # they're omitted (W&B renders a gap, exactly like the conditional
+        # plies_log keys above). --shape-stats-every 1 restores the old cadence.
+        if (epoch + 1) % args.shape_stats_every == 0:
+            log.update(buffer.shape_stats())
         # Reanalyze metrics (bead derby-fm9). Only emit when the lever is on
         # AND a cycle actually ran this epoch — keeps OFF-path log keys
         # byte-identical to the pre-lever baseline.
