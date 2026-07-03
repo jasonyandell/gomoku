@@ -1963,6 +1963,15 @@ CELLS: dict[str, Cell] = {
     # ~1,000-1,300 (~3.4x); gen_poison_check 0-violation (legacy + refill).
     # Trainer side unchanged: fixed --sgd-steps-per-epoch 64 is runaway-proof
     # under the higher inflow (the LF1 lesson).
+    # CAP25 (issue #114, Jason-approved 2026-07-03): oracle budget 50 -> 25 =
+    # ~1.98x solve (the ~90%-of-wall component at 13x13). Recall of cap50-
+    # proven vetoes at cap25: 99.93% (13x13 sound-world net) / 99.39% (13x13
+    # full-game) / 98.64% (9x9 champ) — Jason accepts up to the ~2% high-end
+    # leak for the speedup ("large savings and minimal cost"). Receipts:
+    # scripts/vct_metal/cap25_recall_receipts.md + #114. poison@25: 0/174.
+    # A 9x9 rerun (closed chapter) may prefer 50 — override per run.
+    # NB: the eval-time FINISHER stays cap50 (vct_finish=50) — conversion
+    # strength is worth one cheap call per round there.
     "sound-world": Cell("sound-world", sgd_per_game=1.0,
                 buffer_size=1_500_000, games_per_epoch=64,
                 size="small", stem_padding=1, n_simulations=100,
@@ -1978,7 +1987,7 @@ CELLS: dict[str, Cell] = {
                 epochs=1_000_000, random_opening_moves=0,
                 global_pool=True,
                 extra_worker_args=["--value-discount", "0.98",
-                                   "--vct-terminus", "--vct-terminus-budget", "50",
+                                   "--vct-terminus", "--vct-terminus-budget", "25",
                                    "--oracle-veto", "--oracle-overlap",
                                    "--stream", "--concurrent-games", "256"],
                 extra_train_args=["--sgd-steps-per-epoch", "64",
