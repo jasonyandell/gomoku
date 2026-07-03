@@ -1929,3 +1929,15 @@ _foreach_norm SLOWER on MPS, _foreach_pow won), ~15 host syncs/step → one pack
 the honest profile: at fixed sgd-steps=64 the epoch is GEN-dominated (train 1.4–1.9 s vs gen 10–34 s
 at 13×13) — the trainer was never the wall. Same-seed 3-epoch trajectory identical before/after;
 1129 tests green. Receipts: #114/#115 comments.
+
+## [2026-07-03] LeGomoku proposed — latent-space world-model experiment enters the Experiments hub
+
+New thread [topics/legomoku.md](topics/legomoku.md) (brainstorm only, no code): can a JEPA-style
+latent world model make a *better search* for a rule-following game? Weak version (learned simulator)
+pre-killed (MuZero precedent — rules are free); strong version = learn the threat-space abstraction
+Allis hand-built, search over macro-moves (forcing exchanges) at fixed node budget. Honest prior from
+Jason's Texas-42 world-model splat: these models wall on the non-geometrical ("well who friggin
+knows"); gomoku's analog is search-fog, not hidden state — "probably goes splat," pre-stated bets on
+record. Unfair advantages logged: VCT oracle as latent-geometry ground truth, 234k rails-v0 games on
+disk, the momentum-swing eval. First spike scoped: k-step latent unroll value-fidelity on contested
+positions. Second stated goal is the learning itself — a written-down splat is a win.
