@@ -7,8 +7,8 @@ one are the same model — agreement between them is the same prior sampled
 twice, NOT independent confirmation. Treat convergence as "the model finds
 this line attractive," not "two experts agree."
 
-**Reaction / synthesis:** see [legomoku.md](../topics/legomoku.md) and the
-session notes of 2026-07-03; actionable extractions filed where noted.
+**Reaction / synthesis:** resident-Claude reaction appended below the verbatim
+(same day); ladder/feedback context in [legomoku.md](../topics/legomoku.md).
 
 ---
 
@@ -70,3 +70,113 @@ trees (all VCF/VCT lines certified, deep df-pn frontiers) still convert
 directly into unbeatable tactics. And Rapfi with a Yixin-class opening book
 has prep of its own — yours is just deeper by orders of magnitude, because you
 knew the opening pool and had no clock.
+
+---
+
+## Resident-Claude reaction (2026-07-03, same day — with full lab context)
+
+*The verbatim above is the raw source; everything below is synthesis by the
+in-lab Claude. Same independence caveat applies in reverse.*
+
+### The convergence is the headline (discounted appropriately)
+
+With zero context — no wiki, no memory, no project — the incognito instance
+landed on the house thesis: "solve, don't evaluate," a dedicated VCF/VCT
+solver thread beside the net, uncertainty as something to *eliminate* rather
+than estimate. Layer 1 is the seek-VCT program, reinvented blind. Either the
+thesis is attractive from first principles, or the model family shares a bias.
+Hold both.
+
+### Scorecard against the lab
+
+- **Layer 1 (solve the openings): already built, one upgrade suggested.** The
+  mega-VCT solver *is* partial proof trees / certified tactics; "the opening
+  pool is known in advance" is trivially true here (pool = idx-2, size one),
+  and the parked "does black have an in-horizon win from idx-2" probe is
+  precisely a Layer-1 act. The genuine upgrade: **neural-guided df-pn** as the
+  general-purpose prover beyond threat-space (see primer below).
+- **Layer 2 (KataGo scale): premise fails locally.** It assumes a hardware
+  chasm; this lab is one M5 Max — at our scale *Rapfi* is the efficient one.
+  Strip the scale and the steal-worthy residue is the **sample-efficiency
+  kit**: KataGo auxiliary targets, playout-cap randomization, Gumbel search.
+  All laptop-sized, all serve Δelo/Δt directly. Most actionable paragraph in
+  the source.
+- **Layer 3 (exploit Rapfi): half built, one new idea, one landmine.** The
+  Rapfi-as-oracle infrastructure exists (pool, sensei, distillation mine).
+  **New: disagreement mining** — and locally it's *better* than described,
+  because we have a prover: positions where mega-VCT certifies a win that
+  Rapfi-at-budget misplays are **certified blind spots**, zero ambiguity.
+  **Landmine: the exploiter league / Chinook-style steering.** Rapfi is our
+  measuring stick; training against the anchor corrupts the instrument
+  (reliable-eval doctrine). If that thread ever runs, a held-out anchor comes
+  first.
+
+### The disagreement mine is a molecule detector (LeGomoku tie-in)
+
+Rapfi's perception is line-organized (mix9svq teardown), and the claw proved
+real "molecules" can be *invisible to line-organized eval*. Therefore Rapfi's
+certified blind spots are exactly where molecules live. Disagreement mining
+isn't just an exploit map — it's a **claw-detector at scale**, the instrument
+the molecule-toolkit v0 lacked. Stated as a shape prior: hunt where
+certificate-distance and eval disagree.
+
+### The deepest miss: no feedback
+
+The three layers are one-directional — proofs flow down into play, full stop.
+But neural-guided df-pn *is* a loop (net guides prover, certificates train
+net), and the disagreement mine *is* a return channel (proofs correcting the
+learned prior). Wired into a cycle, the layers become the "chemistry" of the
+[legomoku.md](../topics/legomoku.md) ladder. Per the ceiling argument recorded
+there: the source's program minus feedback approaches Rapfi; only the loop
+version has a shot at exceeding it. (Pre-stated framing, not a claim.)
+
+### Primer: proof-number search / df-pn (the fun learning)
+
+Allis again — PNS is from his thesis, same one as the gomoku proof. Minimax
+asks "how *good* is this position?"; PNS asks "how close to *settled*?" Every
+node carries a **proof number** (fewest leaves that must still go my way to
+prove a win) and a **disproof number** (fewest to refute). The only rule:
+expand the *most-proving node* — descend wherever the tree is thinnest, toward
+the cheapest certificate. No eval function in the pure form. Why it eats
+tactical games: a forcing move leaves few legal replies → AND-nodes stay
+narrow → proof numbers stay tiny → the search *autonomously dives down forcing
+lines*; nobody told it forcing moves matter, the arithmetic flows downhill
+into them. **df-pn** (Nagai 2002) is the depth-first reformulation: recurse
+with pn/dn thresholds ("stay down here until you exceed these bounds") + a
+transposition table — same search, a fraction of the memory. It solved
+checkers. Resonance: the pn/dn pair is a *quantified* "well, who friggin
+knows," and the search's whole job is driving it to zero where that's
+cheapest. The mega-VCT solver is a specialized cousin (threat-space ≈ PNS with
+the move menu pre-restricted to threats); df-pn is the general instrument.
+
+### What shape would the resident sniff for? (asked directly, answered on record)
+
+One shape, three faces:
+
+1. **Provably hot, perceptually cold.** Rapfi's blindness has a *geometry*:
+   it cannot smell value living *between* lines — conjunctions whose parts are
+   individually innocuous (the claw is the existence proof). Measurable
+   signature: proof number collapsing while NNUE eval sits flat. We can
+   compute both gradients — mine the divergence.
+2. **Wins with a quiet prefix.** Alpha-beta at 5 s lives on selectivity;
+   quiet moves get pruned hard. A forced win whose first 2–3 moves are
+   non-forcing preparations (cascade starts at move 4) sits beyond the
+   selective horizon regardless of nominal depth. Certify those and you have
+   moves that look like positional genius and are actually receipts.
+3. **The meta-shape: bias–truth gaps.** Every engine *is* its inductive bias;
+   Rapfi is lines + incrementality + selectivity. You don't out-play a
+   masterpiece at its own prior — you find where its prior stops paying rent
+   and move the game there.
+
+### On the gaps Jason named (no shapes, no feedback, no new ML)
+
+A provenance observation, not a criticism: asked "how do I beat X," the model
+retrieves the canonical playbook — solve, scale, exploit. All excellent, all
+*known*. Shapes, feedback loops, and genuinely new learning mechanisms aren't
+in the answer because they aren't in any playbook to retrieve — they're the
+part that would have to be *discovered*. There's also a question-shaped
+component: "beat Rapfi" pulls the competitive frame; "what does Rapfi fail to
+understand?" would likely pull the science frame and a shapes-adjacent answer.
+The gap, named without prejudging its value (Jason's framing): the source
+answered with engineering; the molecule ladder is a bet that there's *science*
+left in this game.
