@@ -5813,3 +5813,29 @@ OLD = G-ladder-13-board13 e424 (large 128×10, swap2/full-game recipe, NO cap50 
 - **Risk being watched:** the buffer tilting toward low-entropy forced-tail positions (attacker-preserve one-hot-ish targets on long forcing tails). Death-tells: `loss/value` → <0.08 (value poisoning), `plies` collapsing to the floor (attack-collapse returned), or `train/sample_reuse_ratio` <1 (gen flood) / ≫4 (gen starved) — adjust n_workers per the §12 buffer-balance knob.
 
 Overnight monitoring: wandb `plies_mean`, `loss/policy`, `loss/value`, white-share, `sample_reuse_ratio`, s/epoch (Jason predicts 8–20s trainer-bound at the small net). Gate on H2H + per-color columns in the morning, never internal loss. Results to follow in append-only entries below.
+
+## 2026-07-03 (issue #116, RAILS-V0 EARLY READ + FRAMING CORRECTION) — the "overnight" never happened: run is 8 MINUTES old at check-in; bets scored provisionally from self-play, heavy eval DEFERRED
+
+**Framing correction (authoritative, from the W&B server timestamp + wandb debug log, not the wall-clock narrative).** A replacement driver session was briefed to do an "overnight rails-v0 morning close-out." That premise is **factually wrong.** W&B run `vraf0b6e` `created_at = 2026-07-03T06:56:44Z = 01:56 CDT`; the trainer/worker pids (40240/40275) both have process-start 01:56 AM; the wandb config shows `resume: None`. At check-in the machine clock read **02:04 CDT** — the run is **~8 minutes / ~235 epochs old**, and 01:56 is the **ORIGINAL launch, NOT a watchdog relaunch** (fresh wandb init, no resume). There was no overnight trajectory to reconstruct. The predecessor ("rails-15") logged the launch entry + the "epoch ~120" early signal and was stopped ~8 min later. Recording this so no future session mistakes this run for a matured overnight campaign.
+
+**Run health @ e235 (alive, healthy, progressing ~3.3 s/epoch):**
+| metric | value | read |
+|---|---|---|
+| `selfplay/plies_mean` | 49.5 (e105) → **32** (e230–234), p10 17 / p50 29 / p90 50 | above the #113 ~9–14 floor; the drop is random-net→sharpening, not collapse. Sparse (3 points). |
+| `loss/policy` | 4.99 → **3.39** monotone | converging; still near-random (policy_acc 0.33) — 8 min in. |
+| `loss/value` | 0.29 → dipped 0.08 (e120) → settled **~0.16** | NOT poisoned; never stuck <0.08. |
+| `train/sample_reuse_ratio` | 7.4 → **8.5** | **HIGH (≫4 = gen-starved, §12).** n_workers=1 trainer outruns gen (`selfplay/new_games=0` most epochs). The one live watch item. |
+| `time/epoch_s` | **~3.3** stable | trainer-bound at the small 64×4 net. |
+| buffer | 0 → **537k** of the 1M ring; `frac_current 0`, `z_wins 0.503 / z_losses 0.494 / z_draws 0.004` | filling fast (streaming concurrent=256); balanced win/loss. |
+| self-play decisive (cumulative) | black **1070** / white **620** / draws 1 → **white share 0.367** | recent batches 16W/48B, 13W/54B. |
+| per-side | pl black 3.26 / white 3.60; value-mse black 0.155 / white 0.161 | BOTH colors training — no one-sided starvation. |
+
+**PRE-STATED BETS SCORED (provisional, 8-min read — self-play data only; no GPU eval burned):**
+- **Throughput bet → CONFIRMED (down).** Jason 8–10 s/ep, Fable hedged ≤20, launch ~3.5 → **actual ~3.3 s/ep**. Both predictions beaten downward; trainer-bound at the small net as expected.
+- **P1 (plies RISE vs the terminus-era ~9–14 floor) → PROVISIONAL PASS, watch.** plies ~32 (p90 50) sits **well above** the #113 floor — games play out, white is not ejected. Caveat: only 3 plies points and a within-run decline from the ~49 early-random peak; if it slides toward the floor as pl drops, revisit (attack-collapse tell).
+- **P2 (white column ALIVE, not #113's 0/20) → PROVISIONAL PASS (self-play).** White wins **37%** of decisive self-play games (620/1690) — decisively off the 0/20 signature; both colors show real value/policy gradient. This is the falsifiable P2 signal and it needs **no GPU**. Arena H2H confirmation deferred (below).
+- **P3 (bare-net conversion improves) → NOT YET SCOREABLE.** pl 3.4 is a near-random net; conversion is meaningless at 8 min. Score after maturity.
+
+**Eval DEFERRED, deliberately (ML judgment + tenant respect).** The briefed "arena H2H + white-column eval on the latest checkpoint" was NOT run, for three compounding reasons: (1) the checkpoint is **8 minutes / pl 3.4** — below hint-level signal; (2) at **15×15 the heuristic/lookahead ladder saturates at 0.0 win-rate from epoch 0** (`scripts/ladder_eval_15x15.py` docstring), so a "vs-heuristic white column" tests nothing here — the only honest 15×15 yardstick is **Rapfi (CPU)**, against which a pl-3.4 net loses 40/40 for zero signal; (3) the live trainer **owns the GPU** and short noisy evals compete for nothing. The real close-out eval (Rapfi at 15×15 + per-color split) should run once the net matures (trigger ~`loss/policy < 1.6`, cf. #113 where meaningful evals landed at pl ~1.7). Filed as **#117**.
+
+**Live watch item / recommendation.** `sample_reuse_ratio ≈ 8.5` (≫4) says the single self-play worker can't feed the trainer — most epochs record `new_games=0`. Not yet harmful (buffer still filling, losses healthy), but as the 1M ring saturates this risks staleness. Per the §12 buffer-balance knob, if reuse stays ≫4 after the ring fills, add a second worker (or cut `--sgd-steps-per-epoch`). Death-tells all currently NEGATIVE: vl not <0.08, plies not floored, reuse not <1. Continuing to watch light-touch; one relaunch authorized if it dies.
