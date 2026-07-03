@@ -62,6 +62,14 @@ repo but precompiled executables only; **CLOSED** = no public source at all.
 actual build attempt — for whether it could plausibly compile/run on M-series
 macOS.
 
+> **Rating-pool note:** the Elo figures in this table (Rapfi ~3073, KataGomo
+> ~2879, AlphaGomoku ~2781, …) come from a **different rating pool/year** than our
+> internal-anchor numbers in [external-engine-baselines.md](external-engine-baselines.md)
+> and [rapfi-pool.md](rapfi-pool.md) (Rapfi ~2625, AlphaGomoku ~2256, KataGomo
+> ~2254). They are not directly comparable — Rapfi's strength is **not**
+> single-valued-canonical across pools; use the internal-anchor numbers for our
+> calibration.
+
 | Engine | Best Gomocup (rank/yr) | Source | Repo URL | License | Lang | ARM build? | Approach |
 |---|---|---|---|---|---|---|---|
 | **Rapfi** | **#1** 2022–2025 (Elo ~3073) | **OPEN** | [dhbloo/rapfi](https://github.com/dhbloo/rapfi) | GPL-3.0 | C++17 | **Yes** — CMake preset `arm64-clang-NEON-DOTPROD`, built & runs here | alpha-beta + **NNUE** |

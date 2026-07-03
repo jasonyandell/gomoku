@@ -6,6 +6,13 @@ claim that GPU percent is the objective.
 
 ## Current Read
 
+> **Era note:** this page is pre-oracle (2026-05-20/21). The native hot-path
+> boundary it points at is no longer the current dominant lever — since the VCT
+> oracle-veto era the **oracle veto is ~91% of 13×13 self-play gen wall-clock**
+> and is the top perf lever. See the "2026-07 oracle-dominated regime" sections
+> in [mcts-perf-ceiling.md](mcts-perf-ceiling.md) before treating the boundaries
+> below as the next win.
+
 The 2026-05-20 evidence in [mcts-perf-ceiling.md](mcts-perf-ceiling.md) said the
 MPS utilization ceiling was structural: tiny forwards were separated by Python
 MCTS/state work. The 2026-05-21 native MCTS pass confirms the diagnosis:
@@ -116,4 +123,6 @@ Do not chase Activity Monitor GPU percent by collapsing workers or inflating
 single-call batch size unless wall-clock throughput improves under the same
 production shape. The next structural wins belong at the native hot-path
 boundary (`state.apply`, `_init_node`, evaluator materialization), not in
-cosmetic GPU utilization.
+cosmetic GPU utilization. **(Pre-oracle framing, 2026-05-21.** In the current
+oracle-veto era the dominant lever is instead the VCT oracle veto — see the
+2026-07 sections of [mcts-perf-ceiling.md](mcts-perf-ceiling.md).)

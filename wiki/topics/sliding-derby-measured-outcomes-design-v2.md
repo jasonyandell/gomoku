@@ -1,6 +1,6 @@
 # Design RFC v2 — Measured-Outcome Sliding Derby (composite workflow)
 
-**Status:** v2, 2026-06-16. Supersedes the v1 draft (`sliding-derby-measured-outcomes-design.md`)
+**Status:** v2, 2026-06-16. Supersedes the v1 draft (`sliding-derby-design.md`)
 after: an adversarial red-pen (`redpen-sliding-derby-design`), a harness-capabilities probe
 (`workflow-harness-capabilities.md`), and a friction-log-coordination simplification (Jason).
 Written as a **DIFF against what already runs** — not a greenfield design.

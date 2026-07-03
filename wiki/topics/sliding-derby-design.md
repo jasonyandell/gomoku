@@ -1,5 +1,10 @@
 # Sliding Derby — design (issue #38, 2026-06-16)
 
+> **SUPERSEDED (v1 → v2):** the built methodology is
+> [sliding-derby-measured-outcomes-design-v2.md](sliding-derby-measured-outcomes-design-v2.md).
+> Keep this page as the **reuse-ledger of the v1 mechanics** (the grep-verified
+> infra reuse map and the frozen-reference gate DNA), not as the live design.
+
 > Async/pipelined, best-hypothesis-first, frozen-reference-gated. Grounded design from the sliding-derby-design workflow; ~80% reuse of existing infra. Status: DESIGN (not built). See #38.
 
 # The Sliding Derby — concrete buildable design (issue #38)

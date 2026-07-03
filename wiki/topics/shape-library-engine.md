@@ -48,7 +48,7 @@ Date: 2026-06-26. Hardware: M5 Max, 48 GB, MPS/MLX-Metal. Game: **freestyle** 9�
 | Layer | State | Where |
 |---|---|---|
 | **L0 — exact GPU VCT solver** | ✅ DONE | [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8 |
-| **Stage-1 games + backward enabling-shape miner** | ✅ DONE — 63k shapes banked | [vct-backward-mining.md](vct-backward-mining.md) |
+| **Stage-1 games + backward enabling-shape miner** | ✅ DONE — 200,242 shapes banked | [vct-backward-mining.md](vct-backward-mining.md) |
 | **First-VCT forward miner** (the §3 mining input) | ✅ DONE (2026-06-26) — `mine_first_vct.py`, append-only | §3 / §8 |
 | **md-extraction** (the §3 ablation prerequisite) | ✅ DONE (2026-06-28, #91) — `max_depth`/`solve_md_min`, GPU-only, order-independent | [mega-vct-solver.md](mega-vct-solver.md) `max_depth` |
 | **L1 — md-invariant stencil minimizer** | 🟡 BUILT + measured (2026-06-28, §3/§8) — `md_minimize.py` | this page |
@@ -62,12 +62,13 @@ What's already in hand is the *enabling tech and the raw material*:
   **0 FP / 0 FN** over 320 VCT + 360 VCF real positions. This is what makes million-position
   VCT *and per-cell ablation* tractable — the engine that was "previously impossible."
 - **The enabling-shape miner** already walks every won game back to its **first true VCT
-  move** (the *setup*, not the line-bound kill) and has banked **63k full-board enabling
-  shapes** (`scratchpad/vct_gpu_flat/`), run-lengths to 15. Open bottleneck there:
+  move** (the *setup*, not the line-bound kill) and has banked **200,242 full-board enabling
+  shapes** (`~/data/vct_shapes/`; `scratchpad/vct_gpu_flat/` is a working copy), run-lengths to
+  17. Open bottleneck there:
   **catalyst-move extraction** (verdict-only kernel ⇒ shapes carry `move=-1`; see
   [vct-backward-mining.md](vct-backward-mining.md) §5).
 
-**The new work starts at: take those 63k enabling shapes and reduce each to its minimal
+**The new work starts at: take those 200,242 enabling shapes and reduce each to its minimal
 sufficient form.** That is L1.
 
 ## 2. The architecture — three layers, failing safe
@@ -437,7 +438,7 @@ We'll know which one bites when it bites — and diagnose it with the whole syst
 ## 8. Status / next
 
 - **DONE:** L0 ([gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8); backward Stage-1+2 miner,
-  63k enabling shapes ([vct-backward-mining.md](vct-backward-mining.md)).
+  200,242 enabling shapes at `~/data/vct_shapes/` ([vct-backward-mining.md](vct-backward-mining.md)).
 - **DONE (2026-06-27, #88):** solver **`return_carriers`** (the load-bearing-stone `B` channel;
   [mega-vct-solver.md](mega-vct-solver.md)) ⇒ `support ∪ carriers` is a complete, replayable
   stencil **now**, *without* the md blocker. And the **certificate property is measured** (§3,

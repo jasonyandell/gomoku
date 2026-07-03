@@ -41,7 +41,8 @@ python scripts/lab_log.py view --session <id>      # everything one session logg
 - The worktree→session registry ([branch-and-worktree-workflow.md](branch-and-worktree-workflow.md))
   is a sibling event stream; reclaim runs, derby verdicts, and promote/reject
   decisions are natural entries here.
-- Next steps (not yet wired): instrument `reclaim_worktrees.py` and
-  `worktree_session.py` to auto-emit their events, and add a `lab_log.py event`
-  line to the skill's receipt checklist so logging is structural, not a
-  remembered procedure ([[feedback-janitor-not-procedure]]).
+- Next steps (not yet wired): instrument `worktree_session.py` to auto-emit its
+  events, and add a `lab_log.py event` line to the skill's receipt checklist so
+  logging is structural, not a remembered procedure ([[feedback-janitor-not-procedure]]).
+  (The old `reclaim_worktrees.py` auto-emit idea is **moot** — the reclaimer is
+  **retired** as of 2026-07-01; worktree cleanup is manual now.)

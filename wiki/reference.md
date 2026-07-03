@@ -52,13 +52,16 @@ evals** (including forgotten ones), the **tools**, and cross-cutting conventions
 
 ## Full page index — every page in this hub
 
-*Complete map (19 pages); the sections above surface the headline ones.*
+*Complete map (23 pages); the sections above surface the headline ones.*
 
 | Page | Note |
 |---|---|
 | [capabilities.md](capabilities.md) | capability map |
 | [conventions.md](topics/conventions.md) |  |
 | [wiki-operating-model.md](topics/wiki-operating-model.md) |  |
+| [training-run-reference.md](topics/training-run-reference.md) | every knob & switch |
+| [loss-floor-bouncing.md](topics/loss-floor-bouncing.md) | training-dynamics ref |
+| [az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md) | training-dynamics ref |
 | [branch-and-worktree-workflow.md](topics/branch-and-worktree-workflow.md) | canonical lifecycle |
 | [worktree-hygiene.md](topics/worktree-hygiene.md) | cleanup half + uv gotcha |
 | [eval-suite.md](topics/eval-suite.md) | also workflow-eval |
@@ -69,6 +72,7 @@ evals** (including forgotten ones), the **tools**, and cross-cutting conventions
 | [probe-100pct.md](topics/probe-100pct.md) | eval probe driver |
 | [mining-validation-archives.md](topics/mining-validation-archives.md) |  |
 | [rapfi-pool.md](topics/rapfi-pool.md) | tool: Rapfi HF pool |
+| [eval-teacher-sensei.md](topics/eval-teacher-sensei.md) | tool: sensei/teacher |
 | [playing-the-model.md](topics/playing-the-model.md) | also workflow-publish |
 | [containerize-training-runs.md](topics/containerize-training-runs.md) | backlog |
 | [karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) |  |

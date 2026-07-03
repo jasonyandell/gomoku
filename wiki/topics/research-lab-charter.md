@@ -327,9 +327,13 @@ the production reference.
 ## Operating loop (autonomous)
 
 ```
-# Session start: reclaim what crashed prior sessions leaked, before anything else.
-run("python scripts/reclaim_worktrees.py --apply")   # liveness-aware; safe while others live
-narrate(run("python scripts/reclaim_worktrees.py --gauge"))  # repo-hygiene metric
+# Session start: clean up what crashed prior sessions leaked — MANUALLY.
+# reclaim_worktrees.py is RETIRED (2026-07-01): its "liveness-aware, safe while
+# others live" claim FAILED — it removed a worktree a LIVE training run was
+# executing from. Now: ps-check each stale worktree path first, then remove by hand.
+for wt in stale_worktrees():
+    if not run(f"ps aux | grep {wt.path}"):   # no live process on the path
+        run(f"git worktree remove {wt.path}")  # only then, by hand
 
 while queue:
     lane = pick_top_unblocked(queue)

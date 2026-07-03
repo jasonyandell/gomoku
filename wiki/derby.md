@@ -1,8 +1,13 @@
 # The Derby — the Δelo/Δt engine
 
-The autonomous research lab: race training recipes in **time-capped ~1-hour
-slices**, score by **Δelo per Δt**, promote on receipts. Three roles keep it
-honest; a Reviewer gate audits every lane.
+The autonomous research lab: race training recipes in **time-capped slices**,
+score by **Δelo per Δt**, promote on receipts. Three roles keep it honest; a
+Reviewer gate audits every lane.
+
+> **Two eras (don't conflate the slice size).** The CLASSIC `delo_derby` v9 ran
+> **~300s chunks** (stopped 2026-05-27; see [derby-registration.md](topics/derby-registration.md)).
+> The later **autolab** ran **~1-hour slices**. Both are now historical — the
+> autonomous derby is **stopped** (status below).
 
 > **← Hubs:** [index](index.md) · sibling hubs: [AlphaZero](alphazero.md) ·
 > [Experiments](experiments.md) · [M5-as-Mainframe](m5-mainframe.md) ·
@@ -26,7 +31,8 @@ honest; a Reviewer gate audits every lane.
   levers were a matured champion + `--fpu-reduction-c 0.45` sweeping the
   lookahead-ladder. Work then moved off the 9×9 perf derby to **15×15 training**
   (June `G15-*` runs) and **VCT-science** (June 30 `vctsci-*`), which the board
-  hasn't caught up to. The `derby_champ` state file is frozen at 2026-05-28.
+  hasn't caught up to. The `derby_champ` state file's **final write is 2026-05-28** —
+  the last champion snapshot recorded the day after the v9 racing concluded (05-27).
   *(research-board needs a June/15×15 refresh — see the [Ops hub](ops.md).)*
 
 ## The pages

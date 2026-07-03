@@ -24,8 +24,9 @@ This is **the same division of labor Rapfi already ships**: its quantized shape 
 cheap approximate recognition and **never** confirms a win — VCF/VCT is pure search
 ([rapfi-mix9svq-architecture.md](rapfi-mix9svq-architecture.md) §6, "Division of labor"). The
 seek-VCT bet is to move *more* of the game onto that clean side of the line: learn the
-steering, solve the finish. (The task brief calls this page `net-architecture-and-representation.md`;
-that file does not exist — the division-of-labor argument lives in the Rapfi teardown above.)
+steering, solve the finish. (Our own net + line-planes representation is written up in
+[net-architecture-and-representation.md](net-architecture-and-representation.md); the division-of-labor
+argument itself lives in the Rapfi teardown above.)
 
 ---
 
@@ -99,8 +100,8 @@ a stencil/label factory without extra search.
 - **[vct-backward-mining.md](vct-backward-mining.md)** — walk each *won* game BACKWARD to the
   earliest still-forced winner-to-move position = the **first true VCT move**, the *setup* not the
   line-bound kill. The flat-batch GPU miner ("just be sloppy, solve everything from the back" — the
-  tail-bound kernel makes exhaustive cheaper than clever early-stopping) banked **200k** move-labeled
-  enabling shapes, run-lengths to 17, **0 FP/FN/extra over 258 clean GPU-vs-CPU** checks. *Superseded
+  tail-bound kernel makes exhaustive cheaper than clever early-stopping) banked **200k** *unlabeled*
+  enabling shapes (relabelable in one batched pass), run-lengths to 17, **0 FP/FN/extra over 258 clean GPU-vs-CPU** checks. *Superseded
   as the canonical target* by the forward first-VCT miner (existence isn't monotone across plies), but
   it validated the substrate.
 - **[vct-reachability-mining.md](vct-reachability-mining.md)** — two search-free ways to mine steering

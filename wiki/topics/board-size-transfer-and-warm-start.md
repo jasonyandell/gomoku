@@ -246,5 +246,5 @@ byte-identical trunk, arch-mismatch-fails-loud, scalar→WDL).
   a fresh buffer and a clean timeline. That's intended.
 - **Board size is NOT a Cell field** in `run_sweep.py` — the `...board9`/`...board15` run-dir
   name is just an artifact-collision guard. You select board size with the env var at launch.
-- Native ext is **compiled per board size (only 9 and 15)** by `uv pip install -e ".[dev]"`;
+- Native ext is **compiled per board size (9, 11, 13, 15)** by `uv pip install -e ".[dev]"`;
   both `.so` sets exist in a properly-installed worktree. No recompile needed to switch.

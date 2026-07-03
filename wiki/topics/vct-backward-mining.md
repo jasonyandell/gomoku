@@ -7,14 +7,15 @@ the **SETUP**, not the kill: the forcing line is line-bound by construction, but
 shape that *enables* it need not be. Cheap, deliberately incomplete, a substrate for
 non-line "molecule" discovery.
 
-**Code:** `scripts/threat_shapes/mine_vct_serial.py` (CPU reference/oracle) ·
+**Code:** `scripts/threat_shapes/mine_vct_serial.py` (the historical CPU reference; **cross-check
+retired 2026-06-27** — the kernel's standing 0-FP/0-FN gate is the correctness basis now) ·
 `scripts/threat_shapes/mine_vct_gpu.py` (level-synchronized GPU walk) ·
 `scripts/threat_shapes/mine_vct_gpu_flat.py` (**the flat-batch winner**) ·
 `scripts/threat_shapes/mine_vct_backward.py` (`mine_game`, the validated walk-back) ·
 `scripts/threat_shapes/collect_rapfi.py` (stage-1 RapfiPool game generation).
 **Builds on:** the on-device VCT megakernel `scripts/vct_metal/mega_vct_bb.py`
 (`solve_vct_mega_bb`) — see [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8.
-**Feeds:** [shape-library-engine.md](shape-library-engine.md) — these 63k enabling shapes
+**Feeds:** [shape-library-engine.md](shape-library-engine.md) — these **200,242** enabling shapes
 are the **raw material for L1**: the engine reduces each to its minimal full-board prime
 implicant (the "exact minimum stones that make the VCT inevitable") and builds the library.
 Also feeds [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) /
@@ -65,14 +66,16 @@ white** winners alike. Getting this wrong silently solves the wrong side; it was
 explicitly.
 
 **End-to-end validation: 0 FP / 0 FN / 0 extra** over **258 clean GPU-vs-CPU comparisons**
-(megakernel verdict vs `gomoku.vcf.solve_vct`), consistent with the megakernel's own
-0-FP/0-FN gate in [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8. Validation log:
+(megakernel verdict vs `gomoku.vcf.solve_vct`) — *historical: the CPU cross-check was retired
+2026-06-27; the kernel's standing 0-FP/0-FN gate is the correctness basis now* — consistent with
+the megakernel's own 0-FP/0-FN gate in [gpu-vct-feasibility.md](gpu-vct-feasibility.md) §8. Validation log:
 `~/.claude/jobs/9aac67d6/tmp/vct_final.txt`.
 
 ## 3. CPU serial miner — what it taught us (`mine_vct_serial.py`, depth-10 / max_nodes=100k)
 
-The serial miner (committed `806151e`) is the correctness oracle and the source of the
-counterintuitive cost findings:
+The serial miner (committed `806151e`) was the historical correctness oracle (**cross-check
+retired 2026-06-27** — the kernel's standing 0-FP/0-FN gate is the correctness basis now) and the
+source of the counterintuitive cost findings:
 
 - **THE COST SINK IS THE BOUNDARY NEGATIVE PROOF.** Proving "no forced win exists *yet*"
   (the boundary, first non-forced position) **exhausts the tree**; POSITIVE proofs

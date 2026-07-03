@@ -5,6 +5,12 @@ orchestration, where it fits, and — just as important — where it does **not*
 The first real workflow lives at
 [`.claude/workflows/reviewer-gated-fanout.js`](../../.claude/workflows/reviewer-gated-fanout.js).
 
+> **Historical / two explored approaches.** This Claude-workflow composite and the
+> launchd-daemon autolab ([autolab-architecture.md](autolab-architecture.md)) are
+> **two explored design approaches to the same autonomous-derby goal** — neither
+> supersedes the other. The autonomous derby is **stopped** (see
+> [derby.md](../derby.md) for status); both remain as design records.
+
 ## The one thing to remember
 
 > **Workflow is the deterministic encoding of the *everything-else* lane of the
@@ -68,7 +74,9 @@ is that a `pipeline` whose second stage is the Reviewer means **no lane reaches
 autopilot → cockpit move (see [`cockpit-vs-autopilot`](cockpit-vs-autopilot.md)):
 turning skippable judgement into non-skippable structure. Worktree isolation per
 agent structurally prevents the edit-shared-`main` failure mode that the
-[worktree-hygiene](worktree-hygiene.md) janitor exists to clean up after.
+[worktree-hygiene](worktree-hygiene.md) cleanup existed to mop up after (the
+auto-janitor `reclaim_worktrees.py` is **retired** as of 2026-07-01 — cleanup is
+manual, ps-check-then-remove).
 
 ## The orchestrator session's discipline (the workflow-master)
 

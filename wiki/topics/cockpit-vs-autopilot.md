@@ -41,8 +41,9 @@ The **autopilot** is rungs 2–3 (parallel agents, background loops); the
 
 ## The lens, in lab vocabulary
 
-Jason built the autopilot well and early — `gpu_daemon`, the Δelo derby,
-`derby_watchdog.sh`, `run_sweep`'s self-capping slices, the re-invocation crons.
+Jason built the autopilot well and early — `gpu_daemon`, the Δelo derby (now
+**stopped** — see [derby.md](../derby.md)), `derby_watchdog.sh`, `run_sweep`'s
+self-capping slices, the re-invocation crons.
 The persistent *gap* has been the cockpit: the attention layer. Three concrete
 cockpit instruments, and where the lab stands on each:
 

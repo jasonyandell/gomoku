@@ -70,7 +70,7 @@ uv run python scripts/run_sweep.py --cell <CELL> --clean
 |---|---|---|---|
 | `size` | Cell field | `small`(64×4) → `large`(128×10) | Capacity. `tiny`/`small`/`medium`/`96x8`/`large`. Bigger = slower epochs, needs more data + fewer workers (gen-flood). |
 | `GOMOKU_BOARD_SIZE` | env | 9 / 15 | Board. Native ext exists for 9,11,13,15; others fall back to pure-Python. |
-| `n_workers` | Cell field | 3–8 | Generation parallelism. Big nets need FEWER (gen-flood: 8 workers flooded the 3.3M trainer → 313 s/epoch). Watch reuse ≈ 1–1.8. |
+| `n_workers` | Cell field | 3–8 | Generation parallelism. Big nets need FEWER (gen-flood: 8 workers flooded the ~3.05M trainer → 313 s/epoch). Watch reuse ≈ 1–1.8. |
 | `buffer_size` | Cell field | 150k–1.5M | Replay window. 1.5M is the **MPS INT_MAX safe ceiling** at 17-plane 9×9; use `--pack-buffer` for bigger / at 15×15. |
 | `n_simulations` | Cell field | 100 | Self-play MCTS depth. 100 is the standard training-regime point. |
 | `--sgd-steps-per-epoch` | train_arg | 64 | **The runaway-proof learner**: EXACTLY N steps/epoch, decoupled from inflow. The v8+ recipe standard (supersedes `sgd_per_position` scaling). |
@@ -342,7 +342,7 @@ suffix (`-board9/11/13/15`) just isolates artifacts.
 **15×15 capacity ladder (epic #21)**
 - `G15-seed` — the v8 recipe on 15×15 from scratch (64×4 small). The base clone.
 - `G15-96x8` / `-redo` / `-deepgen` / `-cont100` / `-bigbuf` — the 96×8 capacity step + its data (1.5M bigbuf) and search-depth (200-sim deepgen) arms. 96×8 is capacity-bound.
-- `G15-128x10` / `-bigbuf` — the 128×10 step (large, ~3.3M). Data-bound: overfits on 400k, needs the 1.5M packed buffer. `n_workers=4` (gen-flood remedy).
+- `G15-128x10` / `-bigbuf` — the 128×10 step (large, ~3.05M base / ~3.2M with line-planes + global-pool). Data-bound: overfits on 400k, needs the 1.5M packed buffer. `n_workers=4` (gen-flood remedy).
 
 **Swap2 / fair-opening white-defense line (#72/#73)**
 - `G15-swap2` / `-e2` / `-e3`, `G9-swap2-e2` — swap2 opening to delete the doomed white role; e2 adds aggression (value-discount 0.95) + trained choice head.

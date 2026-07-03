@@ -6,6 +6,13 @@ queue) and folds in #19 (nonstop derby daemon) — same pieces, one cleaner spin
 P1 (the ledger spine, #54) is **built + tested** (`gomoku/lab/ledger.py`); the rest
 is the phased plan below.
 
+> **Historical / two explored approaches.** This launchd-daemon autolab and the
+> Claude-workflow composite ([workflow-orchestration.md](workflow-orchestration.md),
+> [sliding-derby-measured-outcomes-design-v2.md](sliding-derby-measured-outcomes-design-v2.md))
+> are **two explored design approaches to the same autonomous-derby goal** — neither
+> supersedes the other. The autonomous derby is **stopped** (see [derby.md](../derby.md)
+> for status); both remain as design records.
+
 ## Thesis (the ~80%-there finding)
 
 The repo already has every load-bearing mechanism:
@@ -45,9 +52,10 @@ Everything autolab lives under **`~/data/autolab/`** (env `AUTOLAB_HOME`):
   daemon-<role>.lock        # the flock singleton + its metadata
 ```
 
-It is **never git-tracked**, so worktree merges, branch switches, and
-`reclaim_worktrees` can never clobber it — Jason's "flatfile so git doesn't stomp
-it", literally. The Mac is the mainframe and 10 MB is nothing, so the reducer
+It is **never git-tracked**, so worktree merges and branch switches can never
+clobber it — Jason's "flatfile so git doesn't stomp it", literally. (`reclaim_worktrees`
+is **retired** as of 2026-07-01 — worktree cleanup is now manual, ps-check-then-remove;
+it never touched `~/data/autolab/` anyway.) The Mac is the mainframe and 10 MB is nothing, so the reducer
 reads the **whole file** every tick: no index, no DB, nothing to get stale.
 
 The **`~/data` convention** is the answer to "we need to handle buffers": big
@@ -317,8 +325,8 @@ dead). The binding constraint remains **white-side defense** on the ~50-elo plat
 |---|---|---|---|
 | **P1** spine | #54 | ledger reducer + corrections + priority pick + tests | **DONE** |
 | **P2** daemon | #56 | flock singleton (no-claim re-pick) + `run_daemon` + `autolab status` | **DONE** |
-| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **LIVE** (ran 6 real 9×9 slices then a full 15×15 lane unattended 2026-06-19; 0 failures — `TRAINING_WIKI.md` 2026-06-19) |
-| **P4** arena | #59 | `ArenaRole`: `run_gate` (dry_run) vs the HF champion + `eval`/`verdict` rows + champion-tag bump + co-tenancy guard | **LIVE** (crowned the first 9×9 **and** first 15×15 champion 2026-06-19; the first live gate exposed the #67 artifact-ref bug — see Arena section) |
+| **P3** trainer | #57 | trainer role + `run_sweep --run-base` + `hf.push_slice` + 1-epoch proof | **RAN (concluded)** — ran 6 real 9×9 slices then a full 15×15 lane unattended 2026-06-19; 0 failures (`TRAINING_WIKI.md` 2026-06-19). Autonomous derby now **stopped** (see [derby.md](../derby.md)) |
+| **P4** arena | #59 | `ArenaRole`: `run_gate` (dry_run) vs the HF champion + `eval`/`verdict` rows + champion-tag bump + co-tenancy guard | **RAN (concluded)** — crowned the first 9×9 **and** first 15×15 champion 2026-06-19; the first live gate exposed the #67 artifact-ref bug (see Arena section). Autonomous derby now **stopped** (see [derby.md](../derby.md)) |
 | **P5** research-lite | #61 (partial) | deterministic `gomoku/lab/research.py` ideate→append-≤2-rows-below-seed→note loop (proxy-ranked; anchored gate still unbuilt) | **SHIPPED in [#64]** (pending live launch) |
 | **P6** cockpit / monitor | #64 | `scripts/autolab_monitor.py` digest + `gomoku/lab/status.py` lane board + notify-on-change | **SHIPPED in [#64]** (pending live launch) |
 | **P7** supervisor | #64 | `gomoku/lab/up.py` (up/down/status/restart) + four launchd plists + ledger seed | **SHIPPED in [#64]** (pending live launch) |

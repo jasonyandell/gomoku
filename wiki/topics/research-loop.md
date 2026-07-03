@@ -1,8 +1,12 @@
 # The continuous research loop
 
-The lab runs a never-ending flywheel: **a researcher proposes ideas → Jason gates →
+> **Historical / paused.** The autonomous flywheel described here has **stopped**
+> (see [derby.md](../derby.md) for status). Kept as the intake + governance design
+> record; the roles and rules below still describe how the loop was wired.
+
+The lab ran a never-ending flywheel: **a researcher proposes ideas → Jason gates →
 the orchestrator implements + races → Δelo/hr allocates compute → verdicts feed back
-into new ideas.** The derby is the engine; this doc is the intake + governance around
+into new ideas.** The derby was the engine; this doc is the intake + governance around
 it. (Set up 2026-05-25.)
 
 ## The four roles
@@ -27,9 +31,11 @@ it. (Set up 2026-05-25.)
    `gh issue edit <N> --add-assignee @me` (→ also add `in-progress`), then closes with
    the verdict (`gh issue close <N>`, or `Closes #N` in the landing merge).
 4. **Δelo/hr (allocates).** The gas pedal — peak-progress + patience (see below). The
-   derby decides which racing lane gets the next chunk. Reviewer gates promotion;
-   round-robin head-to-head (`scripts/round_robin.py`) is the final verdict once the
-   anchored ladder saturates (~1700).
+   derby decides which racing lane gets the next chunk. Reviewer gates promotion.
+   Round-robin head-to-head (`scripts/round_robin.py`) is a **field-ranking /
+   diagnostic** once the anchored ladder saturates (~1700) — it ranks siblings, it is
+   **NOT the promotion gate**. Sibling H2H is non-transitive; the canonical promotion
+   gate is H2H vs a **frozen champion** (`scripts/sliding_gate.py`), never sibling-vs-sibling.
 
 ## Backlog = GitHub issues (prefix `derby-` in titles, label `derby-idea`)
 

@@ -3,6 +3,47 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-07-02] Curation pass: fact-correctness audit + fix (28 pages)
+
+After the hub-of-hubs restructure, ran a **content-correctness curation pass** (the
+higher-level pass Jason deferred until the facts were organized). Deterministic
+link/orphan check first: **live pages are clean** (the 267 "broken" links are all
+inside the frozen `_archive/` snapshot using root-relative paths; the 5 orphans are
+dated `ops/open-notes/` receipts). Then **four read-only auditors** (one per hub:
+Experiments · Derby · M5-mainframe · Reference/Ops) hunted contradictions, stale-as-live
+mechanisms, and cross-page number disagreements against the canonical current-state
+facts. Fixed **~33 real defects across 28 pages** via four in-place editor agents (diffs
+reviewed before commit). Highlights:
+
+- **Retired-mechanism cleanup (highest severity).** `reclaim_worktrees.py` (retired
+  2026-07-01) was still written in as a *session-start* action in
+  [research-lab-charter.md](topics/research-lab-charter.md) with the exact
+  "safe while others live" claim that failed — replaced with the manual ps-check
+  procedure; also de-listed it in autolab-architecture, event-log, cockpit-vs-autopilot,
+  workflow-orchestration. The CPU `gomoku/vcf` solver (retired 2026-06-27 as a
+  cross-check) marked retired wherever it read as a live oracle (vct-backward-mining,
+  vct-reachability-mining).
+- **Era-shift staleness.** Perf pages predating (a) the torch-2.11 **fp16 reversal** and
+  (b) the **oracle-veto era** (veto ≈ 91% of 13×13 gen wall) got regime/era notes
+  (mcts-perf-ceiling, activity-monitor-perf-runbook); the refuted **ANE-as-inference**
+  lever marked superseded (m5-max-as-mainframe, m5-max-cross-engine-coupling).
+- **Stale numbers reconciled.** VCT enabling-shape count 63k → **200,242** (run-len 15→17,
+  at `~/data/vct_shapes/`) across shape-library-engine / vct-backward-mining /
+  vct-mining-research (and "move-labeled" → *unlabeled*); Bruce net **~3.3M → ~3.05M**
+  base; native ext board sizes "9 and 15" → **9,11,13,15**; engine-catalog Elo pool
+  disambiguated vs the internal anchors.
+- **Derby/autolab framing.** The stopped derby was written in present tense in several
+  pages → historical banners; v1 sliding-derby banner-superseded by v2; broken cross-refs
+  fixed (§10 → `sliding_gate.py`; `perf-lab-charter.md` → `research-lab-charter.md`; v2's
+  predecessor filename). The **two competing autolab architectures** (launchd-daemon vs
+  Claude-workflow composite) got a neutral "two explored approaches, neither supersedes"
+  note — deliberately NOT crowning a canonical winner (Jason's design call).
+- **Hub-index completeness.** experiments.md (6→8 pages) and reference.md (19→23) full-page
+  indexes filled in; sound-world-recipe "Known open edges" cross-pointed to the #113 negative.
+
+Method: fan-out audit → triage → fan-out fix → diff review → single commit. Facts only;
+no synthesis/re-ranking (that's a later pass).
+
 ## [2026-07-02] Major restructure: hub-of-hubs index + revived Ops hub + curated timeline
 
 Rebuilt the landing page from a 26,680-token wall (it overflowed a single 25k

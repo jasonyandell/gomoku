@@ -1,4 +1,4 @@
-# GPU/MPS-batched VCT solver — feasibility spike (verdict: correct but CPU-bound v0)
+# GPU/MPS-batched VCT solver — feasibility spike (v0 CPU-bound; §8 overturns → ~1600× on-device)
 
 > ## ⚡ THE CALL-COST LAW — read this before you call `solve_vct_mega_bb`
 >
@@ -27,11 +27,12 @@
 > is ~flat in B*. The on-device megakernel this law describes lands in **§8**; §1–§7 below are
 > the 2026-06-25 v0 spike (concluded CPU-bound, **superseded by §8**).
 
-**One-line verdict.** A GPU-batched VCT (Victory-by-Continuous-Threats) solver is
-**correctness-achievable** (matched CPU `solve_vct` exactly on every cleanly-resolved
-position, zero false positives) but the v0 prototype is **CPU-bound, not worth wiring
-into the labeling pipeline as-is** — only ~2× CPU at small node caps and *slower* than CPU
-at production caps. The win that made GPU-VCF a ~2,500× blowout (flat OR-reachability,
+**One-line verdict** *(v0 only — **§8 overturns this**: the on-device megakernel reaches
+**~1600× CPU**; this §1–§7 conclusion is the superseded 2026-06-25 spike)*. A GPU-batched VCT
+(Victory-by-Continuous-Threats) solver is **correctness-achievable** (matched CPU `solve_vct`
+exactly on every cleanly-resolved position, zero false positives) but the v0 prototype is
+**CPU-bound, not worth wiring into the labeling pipeline as-is** — only ~2× CPU at small node
+caps and *slower* than CPU at production caps. The win that made GPU-VCF a ~2,500× blowout (flat OR-reachability,
 forced unique reply) **does not transfer to VCT**, whose AND/OR branching forces stateful
 tree bookkeeping + per-node irregular threat assembly back onto the Python host. This page
 records why, with the profile, and the concrete MCTS-on-GPU roadmap for a future pass.

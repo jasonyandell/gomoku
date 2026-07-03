@@ -35,13 +35,15 @@ it cleanly. The largest by far is the **seek-VCT program** — it gets its own h
 
 ## Full page index — every page in this hub
 
-*Complete map (6 pages); the sections above surface the headline ones.*
+*Complete map (8 pages); the sections above surface the headline ones.*
 
 | Page | Note |
 |---|---|
 | [the-claw.md](topics/the-claw.md) |  |
 | [rapfi-mix9svq-architecture.md](topics/rapfi-mix9svq-architecture.md) |  |
 | [molecule-discovery-toolkit.md](topics/molecule-discovery-toolkit.md) |  |
+| [swap2-opening-protocol.md](topics/swap2-opening-protocol.md) |  |
+| [rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |  |
 | [allis-threat-theory.md](topics/allis-threat-theory.md) | reference theory |
 | [gomoku-standard-strategy.md](topics/gomoku-standard-strategy.md) | reference theory |
 | [idea-pile.md](topics/idea-pile.md) | the seed pile |

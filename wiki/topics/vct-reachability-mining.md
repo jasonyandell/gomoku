@@ -63,7 +63,7 @@ next turn; that needs the expensive ∀-reply 2-ply search). Integrity check (GP
 fanned nodes are themselves VCT (n≈3k) and **0** parity violations — so we only ever fan true
 non-VCT positions; "one side already had a VCT and we found another" never happens. *(A one-time
 CPU-oracle spot-check also confirmed 120/120 wins / 80/80 clears before we retired the CPU solver as
-a cross-check — see [why we don't cross-check with the CPU solver](#); the kernel's standing
+a cross-check — see [why we don't cross-check with the CPU solver](mega-vct-solver.md#8-cpu-solver-retired-2026-06-27--gate-env-override-fastdeep-test-tiers) (§8); the kernel's standing
 0 FP/0 FN validation is the basis going forward.)*
 
 **Worked example (the whole story in one board).** Ply 32, black to move, correctly non-VCT. White

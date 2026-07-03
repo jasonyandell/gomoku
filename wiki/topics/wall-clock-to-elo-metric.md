@@ -285,8 +285,8 @@ after the R-TRAIN-\* subsection, and updates the existing metric-validity flag
 to point at its supersession.
 
 ````diff
---- a/wiki/topics/perf-lab-charter.md
-+++ b/wiki/topics/perf-lab-charter.md
+--- a/wiki/topics/research-lab-charter.md
++++ b/wiki/topics/research-lab-charter.md
 @@ Success metric
  Two metric families, each with reference points. A win at *either*
  moves the lab toward the mission.

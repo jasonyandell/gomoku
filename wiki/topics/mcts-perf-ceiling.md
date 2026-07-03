@@ -12,6 +12,12 @@ dict iteration happens in the PUCT hot path. **Structurally we are already at
 the "AGZ mcts_v2" layout** that other gomoku/AZ READMEs advertise as a big win
 over their "mcts_v1." That refactor is therefore a no-op for us.
 
+> **Regime note (2026-07):** the constraint below is the pre-oracle reading.
+> Since the VCT oracle-veto era, the oracle veto is ~91% of 13×13 self-play
+> gen wall-clock and is now the dominant perf lever — see the "2026-07
+> oracle-dominated regime" sections far below before acting on the older
+> "native hot-path is the next win" framing.
+
 Real production constraint: the gen path was bounded by `state.apply` (board
 copy + history snapshot, Python), `_init_node` (terminal check + legal mask,
 Python), MCTS tree orchestration, and the MPS forward + sync. None of those is
@@ -48,8 +54,12 @@ evaluator is used.
   that layout. The fact that other codebases advertise a 2-3× speedup from
   "porting v2" is comparing to their previous per-Node-field design, which
   we never had.
-- **fp16 evaluator on MPS.** 17% *slower* in our bench (see
-  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 4).
+- ~~**fp16 evaluator on MPS.** 17% *slower* in our bench (see
+  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 4).~~ **OVERTURNED (torch
+  2.11, ~2026-07-01):** the fp16 evaluator *reversed* — `--fp16-eval` now
+  measures **~1.7× faster per position** (0.075 vs 0.127 ms/pos). Kept here as
+  history; the 17%-slower number is pre-reversal. See the "Side notes" near line
+  297 below (it does change eval numerics → still needs the TQ canary).
 - **Async gen+train in one process on one MPS device.** MPS is single-stream
   per process, so forward (gen) and forward+backward (train) serialize and
   the train step ballooned 7× (Exp 2). Async only helps with multiple GPUs

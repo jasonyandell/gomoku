@@ -372,7 +372,7 @@ The framework is set up to absorb new findings without requiring a structural ov
 
 - **This is interpretation of Apple's design intent based on public materials**, not a privileged statement of Apple's strategy. We have no insider information; we're reading the framework's shape, examples, and where Apple uses it. Apple may use Core ML / ANE for things this page doesn't anticipate, and Apple may extend the framework in directions that change the design center over time.
 - **The chip-level findings are specific to the M5 Max in 2026.** Older Apple silicon (M1/M2/M3/M4) has different ANE characteristics; iPhones and iPads have very different ANE profiles. Numbers don't transfer cleanly.
-- **The "Core ML doesn't pay at our scale" claim is workload-specific.** A different architecture (different layer types, different op mix) might fit ANE's eligibility gates differently. Our small ResNet has standard Conv2d + ReLU + GroupNorm + a small policy/value head; mostly ANE-friendly ops, but not measured with the full residency cap discipline yet.
+- **The "Core ML doesn't pay at our scale" claim is workload-specific.** A different architecture (different layer types, different op mix) might fit ANE's eligibility gates differently. Our small ResNet has standard Conv2d + ReLU + BatchNorm2d (fused via `fuse_conv_bn_eval`) + a small policy/value head; mostly ANE-friendly ops, but not measured with the full residency cap discipline yet.
 - **MLX is an open question for our codebase.** If we ever hit a wall where PyTorch-MPS can't go further and we still want to research on the M5 Max, MLX is a plausible next-framework scout. It would require porting our model + training loop, so it's a larger investment.
 
 ## Cross-refs

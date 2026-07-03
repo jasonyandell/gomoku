@@ -43,7 +43,7 @@ here supersedes those. **NEW** = added in the 2026-06-25 idx-2 distillation run
 | **Δelo engine-panel derby** (calibrated relative-strength ladder across engines/nets) | derby runner | [topics/engine-panel-derby-design.md](topics/engine-panel-derby-design.md) |
 | **White-side (defense) quantification** (per-color split; the "never lose as white" wound) | `scripts/panel_white_elo.py` | [topics/white-side-defense-plan.md](topics/white-side-defense-plan.md) |
 
-> ⚠️ Eval lesson: **gate "did this help?" on H2H vs the preserved champion, not Rapfi**; short evals are noisy (small-n = hint). The Rapfi yardstick was broken once already (#28/#40) — see the index banner.
+> ⚠️ Eval lesson: **gate "did this help?" on H2H vs the preserved champion, not Rapfi**; short evals are noisy (small-n = hint). The Rapfi yardstick was broken once already (#28/#40) — see [external-engine-baselines.md](topics/external-engine-baselines.md) § Rapfi-NNUE NATIVE ANCHOR ONLINE — #28 under-search RESOLVED.
 
 ## Search & solve
 

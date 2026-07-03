@@ -37,9 +37,10 @@ attractor returns (K=24 ablation) — causal, not correlational.
 
 ## Known open edges
 - White-vs-lookahead:4 softness at 9×9 (5/20 white losses @ e1368) — unsettled when the chapter closed.
-- 13×13 graduation prerequisite: cross-worker shared oracle solve (width-is-free ⇒ ÷4 aggregate
-  oracle time; wiki/topics/mcts-perf-ceiling.md). Product shape = net + cap50 finisher (95% vs
-  heuristic on 9×9 where bare-net draws).
+- 13×13 gen **perf** prerequisite (still open): cross-worker shared oracle solve (width-is-free ⇒ ÷4
+  aggregate oracle time; wiki/topics/mcts-perf-ceiling.md). Product shape = net + cap50 finisher (95%
+  vs heuristic on 9×9 where bare-net draws). **NB the 13×13 graduation itself was attempted and is a
+  STRUCTURAL NEGATIVE — see the #113 section below; this bullet is only the perf note, not an untried plan.**
 
 ## 13×13 graduation (#113, 2026-07-02) — the NEGATIVE result: an attack-only specialist
 

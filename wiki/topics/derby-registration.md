@@ -8,6 +8,10 @@ in [research-loop.md](research-loop.md); this page is the **mechanics of intake*
 
 ## The runner model (2026-05-26; issues since 2026-05-28)
 
+> **Historical.** The autonomous derby is **stopped** (see [derby.md](../derby.md)
+> for status). The runner model below describes the CLASSIC `delo_derby` v9 era
+> (~300s chunks, stopped 2026-05-27); kept as the intake-mechanics design record.
+
 The derby is run by a **single GPU executor** — one `delo_derby.py` process that doles
 ~300s chunks by Δelo-rate. New contestants enter as cells in `run_sweep.CELLS`; the
 runner keeps ~4 lanes stocked and swaps plateaued/result-locked lanes for fresh cells by
