@@ -23,7 +23,10 @@ session starts smarter than the last.
   terminus self-play + line planes). **9×9 chapter CLOSED** (0-0-40 H2H vs the old
   champ; finisher-hybrid 95% vs heuristic); **13×13 graduation is a structural
   negative** (#113 — white 0/20, both nets attack-only). *(perf: the VCT oracle
-  veto is ~91% of 13×13 self-play gen wall ⇒ the solver is the lever.)*
+  veto is ~91% of 13×13 self-play gen wall ⇒ the solver is the lever; the 2026-07
+  perf blitz landed the solver levers — cap25 gen budget (#114) + `lanes=K` kernel
+  (#114) + one-worker refill (#112) — closing the gen-loop thread; see
+  [M5-as-Mainframe](m5-mainframe.md).)*
 - **Next (untried)**: role-invariant symmetric **rails** (drop the terminus, cure
   white-starvation on-policy) + attacker-preserve closing; and the pivotal open
   question — **is 13×13 a forced black win?** (15×15 proven / 9×9 drawish / 13×13

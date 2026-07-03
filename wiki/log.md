@@ -3,6 +3,46 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
+## [2026-07-03] Perf-blitz findings integrated into the restructured wiki + cap25 DECISION landed
+
+Folded the 2026-07-01→03 perf blitz (#112 / #109 / #114 / #115) into the
+post-restructure synthesis pages — the findings had lived only as appended log
+entries + one `mcts-perf-ceiling` section written BEFORE the hub-of-hubs
+restructure. Synthesis-only pass: no evidence pages touched (issues / receipts /
+`TRAINING_WIKI.md` stay canonical); dated corrections, never rewrites.
+
+- **cap25 flip DECIDED + LANDED — correction to the "human-gated" fan-out-wrap entry
+  below.** Jason approved: *"cap25 is large savings and minimal cost. I'll happily
+  pay 2% gap on the high end in order to get the speedup."* Shipped as a flat
+  `--vct-terminus-budget` 50→25 on the `sound-world` cell (commit `8e2d9e1`, merge
+  `09c067b`, `Closes #114`); eval-time finisher stays cap50. Recall of cap50-proven
+  vetoes at cap25 = 99.93% (13×13 sound-world net) / 99.39% (13×13 full-game) /
+  98.64% (9×9 champ); ~1.98× solve; poison@25 0/174.
+- **Pages brought current:**
+  [sound-world-recipe.md](topics/sound-world-recipe.md) (terminus-budget lever →
+  cap25 + new § Oracle budget; the 13×13-perf "open edge" marked RESOLVED with the
+  streaming≈lockstep correction; finisher cross-link);
+  [mega-vct-solver.md](topics/mega-vct-solver.md) (§5.3 `lanes=K` verdict COMPLETE —
+  recommend K=16 at 13×13, synthetic-K16 regression, shared-stack rejected, `--synth`
+  self-check, default-OFF; new §5.6 cap25 flip);
+  [mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) (new 2026-07-03 section closing
+  the "measured next levers" list — all three resolved — + the day-2
+  streaming≈lockstep correction to #112's 3.4–4.6×);
+  [batched-eval-arena.md](topics/batched-eval-arena.md) (new § batched VCT finisher
+  #109 — hybrid 15-0-5 in 4.4 s vs the legacy "minutes" 14-0-6; loud-unknown-kwarg
+  guard; MPS final eval 37→14.3 s; `vct_finish` dropped from the "not supported"
+  list); [training-run-reference.md](topics/training-run-reference.md)
+  (`--shape-stats-every` row; the `--vct-terminus-budget` flag row + `sound-world`
+  cell → cap25; #115 trainer-step perf note); hub touches on
+  [index.md](index.md) + [m5-mainframe.md](m5-mainframe.md).
+- **Receipt-verified corrections applied** (a subagent cross-checked the
+  #112/#109/#114/#115 receipts + commits before integration): lanes=K recommended
+  value is **K=16** at 13×13 (not the 1.34× K8 headline — K16=1.36×≥K8 on real
+  batches); the flip is a **flat cap25 + manual per-run override**, NOT
+  board-size-conditional logic; lanes=K stays **default-OFF** (only cap25 is live in
+  the cell); dropped the unreceipted "`_foreach_norm` benched-and-lost" claim (the
+  merged #115 code documents only `_foreach_pow` vs the old Python loop).
+
 ## [2026-07-03] reference.md touch-up: three cosmetic nits
 
 Fixed a malformed Evals row (dropped a duplicate `reliable-eval-set.md` link

@@ -165,7 +165,7 @@ its own in-process gen only when `--worker-input-dir` is unset.
 | Flag | Default | Notes |
 |---|---|---|
 | `--vct-terminus` | OFF | Issue #98: end each game at the FIRST position with a forced VCT (batched GPU oracle), taking the exact win+move instead of playing to five. Cuts trajectory ~2×. Native / Python-non-Gumbel only. Byte-identical-off. (`:218`) |
-| `--vct-terminus-budget` | 50 | Per-board node cap for the terminus test (cap50 sweet spot: 98.8% of VCTs, 40–850× cheaper than deep search). |
+| `--vct-terminus-budget` | 50 | Per-board oracle node cap — governs BOTH the terminus test AND (with `--oracle-veto`) the per-ply veto escape-solves, so it is the sound-world gen-throughput dial. Flag default cap50 (sweet spot: 98.8% of VCTs, 40–850× cheaper than deep search); **the `sound-world` cell overrides to 25** (#114, Jason-approved 2026-07-03: ~1.98× solve, ≥98.64% veto recall — see [[sound-world-recipe]] § Oracle budget). Eval-time finisher stays cap50. |
 | `--oracle-veto` | OFF | Sound-world #107: every ply, bulk escape-solve and MASK proven-losing moves out of BOTH the played move and the recorded policy target (on-policy). All-moves-lose ⇒ defender terminus (z=−1). Composes with `--vct-terminus` for fully oracle-sound games. Native-non-Gumbel only. Byte-identical-off. (`:232`) |
 | `--oracle-veto-max-cands` | 0 (full breadth) | Staged-escalation breadth cap (big-board lever). K>0 solves only the K empty cells nearest stones first, escalates to full breadth before the defender-terminus check (stays sound). **Note: capping this resurrects the 9-ply attractor — the veto IS the mechanism.** (`:245`) |
 | `--oracle-precheck` | OFF | Null-board precheck (byte-identical results); measured SLOWER at 9×9 live, a big-board experiment only. (`:255`) |
@@ -237,6 +237,7 @@ byte-identical-off). Worker records the target, trainer weights the head:
 | Flag | Default | Notes |
 |---|---|---|
 | `--replay-buffer-size` (Cell `buffer_size`) | 1.5M | Ring capacity. **MPS INT_MAX**: `capacity × planes × board²` > 2.147e9 crashes on first `shape_stats()` — ~1.56M at 17×81, so **1.5M is the safe ceiling**; bigger needs `--pack-buffer` or a CPU buffer. (`:813`) |
+| `--shape-stats-every` (train_arg) | 10 | #115: run the O(buffer) `shape_stats()` diagnostic scan every N epochs instead of every epoch. The scan is ~25.6 ms @ 150k rows → linear ~250 ms @ a full 1.5M buffer, so at scale this saves **~230 ms/epoch amortized**. `1` restores the old every-epoch cadence; logged stats are unchanged on the epochs it runs. |
 | `--pack-buffer` (train_arg) | OFF | Issue #25: bit-pack binary planes (uint8, ~32× smaller) on CPU, unpack per-batch. Byte-identical to float32. **Prerequisite at 15×15** (a 3M-pos float32 buffer is ~45 GB; packed ~3 GB). Existing float32 checkpoints still load. (`:826`) |
 | `--buffer-recency-frac` (train_arg) | 0.0 (uniform) | Derby v7 buffer-composition curator: draw this fraction of each batch from the most-recent `--buffer-recency-window` positions (rest uniform). The +90-elo v8 buffer-comp winner. Byte-identical-off. (`:818`) |
 | `--buffer-recency-window` | 200k | Size of the "recent" slice. |
@@ -257,6 +258,21 @@ byte-identical-off). Worker records the target, trainer weights the head:
 | `--grad-accum-steps` (train_arg / Cell) | 1 | WL2 #4: accumulate over N minibatches before `.step()`. Recommended live 4. (`:1093`) |
 | `--worker-min-games` / `--worker-min-positions` | 0 | Ingest barrier per cycle (games vs positions). Positions keep turnover constant across game-length swings. (`:1219`) |
 | `--batch-size` / `--lr` / `--l2` | 256 / 1e-3 / 1e-4 | Standard SGD. |
+
+**Trainer step perf — the quick wins (#115, 2026-07-03), and the honest profile.**
+Two internal (no-flag) micro-optimizations, both verified value-preserving: (1)
+**fused L2** — the `--l2` penalty computed via `torch._foreach_pow(params, 2)`
+instead of a ~41-tensor `sum((p**2).sum())` dispatch storm = **−9.7%/step**
+(23.4→21.2 ms), **gradient bitwise-identical** (`2·p` per param; the loss *value*
+shifts ~7e-8 rel, below the 8th decimal); NOT folded into AdamW `weight_decay`, so
+the intended double-regularization is preserved. (2) **Packed host-sync** — up to
+~15 `float()`/`bool()` per-microbatch host syncs collapsed into **one** packed
+`.cpu()` transfer (on-device masked means + counts); logged values byte-matched.
+**But the honest profile: at fixed `--sgd-steps-per-epoch 64` the epoch is
+GEN-dominated** — 13×13 gen 10–34 s vs train 1.4–1.9 s/epoch — so the trainer was
+never the wall; the per-step win is real but the epoch-scale effect (~0.15 s/epoch)
+is swamped by gen variance. It scales linearly with the step count. (Same-seed
+3-epoch trajectory identical before/after; 1129 tests green.)
 
 ### Weight-publish smoothing + opponent mix (WL2 scale-emulation stack)
 
@@ -357,7 +373,7 @@ suffix (`-board9/11/13/15`) just isolates artifacts.
 **VCT-terminus / sound-world (#98–#107)** — see [[sound-world-recipe]]
 - `vctsci-control` / `vctsci-terminus` — the matched A/B for VCT-terminus self-play (#100: throughput win, robustness loss).
 - `moonshot` — vct-terminus + `--record-vct` + `--aux-vct-weight 0.1` (VCT-defense aux head; #103: a sensor with no actuator).
-- `sound-world` — **the validated recipe**: `--oracle-veto --oracle-overlap --vct-terminus --line-planes`, ONE streaming continuous-refill worker (`--stream --concurrent-games 256`), fixed `--sgd-steps-per-epoch 64`. The 9-ply attractor is GONE.
+- `sound-world` — **the validated recipe**: `--oracle-veto --oracle-overlap --vct-terminus --vct-terminus-budget 25` (cap25 as of 2026-07-03, #114) `--line-planes`, ONE streaming continuous-refill worker (`--stream --concurrent-games 256`), fixed `--sgd-steps-per-epoch 64`. The 9-ply attractor is GONE.
 - `moonshot-bruce-idx2` — warm-start the 128×10 champion + layer the VCT-defense head + restrict self-play to the idx-2 wound (`GOMOKU_DROP_OPENERS`).
 
 **Derby lineage** (the recipe-search cells that produced "v8") — `derby-v4/v5/v6/v7`

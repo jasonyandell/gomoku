@@ -56,9 +56,10 @@ Short weak-net games; the gap **widens** with longer games and bigger fields
   slightly-stale-W search self-play uses; `wave=1` recovers exact
   `run_batched_mcts`. Eval numbers therefore shift slightly vs the batch-1
   path — **switch harnesses between derby rounds, not mid-field.**
-- Not yet supported: `reuse_tree`, `eval_vcf_nodes`, `proven_prop`,
-  `vct_finish` (the mcts_picker levers). Fall back to the legacy path for
-  those, or extend `NetAgent`.
+- Not yet supported: `reuse_tree`, `eval_vcf_nodes`, `proven_prop` (the
+  mcts_picker levers). Fall back to the legacy path for those, or extend
+  `NetAgent`. *(`vct_finish` **is** now supported — #109 added a batched arena
+  finisher; see § The batched VCT finisher below.)*
 - The arena uses the device you give it — a live MPS trainer is a tenant;
   pass `--device cpu` or wait (standard GPU-tenancy rule).
 - Naming: `gomoku.lab.arena` (`gomoku-lab-arena`) is the autolab *promotion
@@ -94,6 +95,34 @@ Reminder: the switch changes eval *numbers* slightly (statistically
 equivalent, not byte-identical) — verdicts recorded pre/post switch are not
 directly comparable; the derby runner should note the changeover on the
 research board.
+
+## The batched VCT finisher (#109, 2026-07-01)
+
+The sound-world product is **net + cap50 VCT finisher** (the bare net attacks but
+draws on conversion at 9×9; the finisher cashes the forced win). The arena couldn't
+run it — a `vct_finish` kwarg was silently ignored, so a "finisher-armed" spec in
+the arena played as the **bare net**, and bare-net-vs-heuristic scored only
+**5W-3L-32D** (draws it should have won). #109 gave the arena a real batched
+finisher: **one bulk `solve_vct_mega_bb` per round over all to-move boards; a
+proven-VCT board plays the oracle move, the rest fall through to the batched MCTS
+wave.** Same machinery, wave-wide.
+
+**Measured (107b champion, hybrid = net + cap50 finisher):** hybrid vs heuristic
+**15W-0L-5D (87.5%) in 4.4 s** through the arena — matches the legacy-path receipt
+(**14W-0L-6D**) that took *minutes*. (Both W-L-D are real: 15-0-5 is the arena,
+14-0-6 the legacy path; the arena is not byte-identical, per § Semantics.)
+
+**Loud-unknown-kwarg guard (the bug's root cause).** Model specs now FAIL LOUD on
+any kwarg the arena doesn't implement (`gomoku/arena.py` — `unknown =
+set(spec.kwargs) - known`), so a silently-dropped lever can never again masquerade
+as a real result. This is why the § Semantics "not yet supported" list above is now
+load-bearing: an unsupported lever *errors*, it doesn't no-op.
+
+**Post-run final eval on MPS.** `run_sweep`'s post-run final eval moved to MPS (the
+training run is torn down → the GPU is free; the *live* in-trainer eval sidecar
+stays CPU, still a tenant). The standard 4-baseline battery (80 games incl.
+`lookahead:4`) went **37 s CPU → 14.3 s MPS wall, identical results**. Commit
+`a9e6fbf` / merge `c4c0e98`.
 
 ## CPU-side parallelism + native lookahead (#110, 2026-07-01)
 

@@ -413,3 +413,39 @@ honest scoresheet vs the 2–4× prediction. Optimal K shrinks past B×K ≈ 25 
 Full contract + numbers: [mega-vct-solver.md](mega-vct-solver.md)
 § Multi-thread-per-board. Remaining #114 items: cap50→cap25 recall study;
 veto-breadth staging (last resort).
+
+## 2026-07-03 — The day-1 leverage list is CLOSED: lever (3) cap25 lands + the streaming≈lockstep correction
+The 2026-07-01 round-2 "measured next levers" list (cross-worker batching / kernel
+tail / cap50→cap25) is now fully resolved — this closes the perf-blitz gen-loop
+thread. All three, with dated corrections rather than rewrites:
+
+- **Lever (1) cross-worker batching → LANDED as #112** (continuous-refill
+  fleet-consolidation, the 2026-07-01 section above). **Day-2 correction to its
+  "3.4–4.6×" / "2.8× per process" numbers:** an equal-width single-process
+  isolation (`bench_gen_refill`, 13×13, oracle ON) measures **streaming ≈ lockstep
+  — 216 vs 216 games/min** ([mega-vct-solver.md](mega-vct-solver.md) §5.5). So
+  #112's 3.4–4.6× is a *fleet → one-wide-process* comparison (width-amortization +
+  thinning-tail erasure), and the day-1 "2.8× refill over lockstep per process"
+  (539 vs 192 aug-pos/s) was a narrow-lockstep-vs-wide-refill *width* delta, not the
+  refill mechanism at fixed width. Refill's real value is running the merged solve +
+  MPS search at full width W in one process; at equal width the mechanism is ~free.
+- **Lever (2) kernel tail → LANDED as `lanes=K`** (2026-07-02 section above),
+  verdict now **COMPLETE**: K-sweep saturated, recommend `GOMOKU_VCT_LANES=16` at
+  13×13 (**1.36×**, ≥ the 1.34× K8 headline); synthetic K16 regresses past the
+  B×K≈25k thread-inflation ceiling; shared-stack rewrite rejected; `bench_lanes13
+  --synth` self-check shipped; **default-OFF** in production. Full verdict:
+  [mega-vct-solver.md](mega-vct-solver.md) §5.3.
+- **Lever (3) cap50→cap25 → DECIDED + LANDED (#114, Jason-approved 2026-07-03).**
+  Recall of cap50-proven vetoes at cap25 = **99.93%** (13×13 sound-world net) /
+  **99.39%** (13×13 full-game) / **98.64%** (9×9 champ); solve **~1.98×**; poison@25
+  0/174; monotonicity + leak-capped invariants clean. Shipped as a flat
+  `--vct-terminus-budget 25` on the `sound-world` cell (commit `8e2d9e1`, merge
+  `09c067b`); **eval-time finisher stays cap50**. Detail:
+  [mega-vct-solver.md](mega-vct-solver.md) §5.6,
+  [sound-world-recipe.md](sound-world-recipe.md) § Oracle budget.
+
+**Composed 13×13 solver stack** (the ~90%-of-wall veto component): cap25 (~1.98×) ×
+`lanes=16` (~1.36×) ≈ **2.7×**, on top of #112's fleet-consolidation. Veto-breadth
+staging (`--oracle-veto-max-cands`) stays the semantics-gated last resort (the 9×9
+K-cap collapse, §2026-07-01). **The gen-loop perf thread is closed; the remaining
+13×13 wall is the intrinsic per-node solve cost the `lanes=K` kernel already attacks.**
