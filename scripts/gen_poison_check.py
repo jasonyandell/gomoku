@@ -22,7 +22,12 @@ concurrent = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 model, _ = load_checkpoint(sys.argv[1], device="mps")
 model.eval()
 evaluator = make_torch_evaluator(model, "mps")
-sp.configure_vct_terminus(enabled=True, budget=50)
+# budget is the per-board VCT node cap the gen vetoes at AND the same cap the
+# post-hoc re-check uses (_vct_defense_solve reads _VCT_TERMINUS_BUDGET) -- so
+# the invariant is self-consistent at whatever budget is set here. Default 50
+# (byte-identical to before); GOMOKU_POISON_BUDGET=25 for the #114 cap25 study.
+budget = int(os.environ.get("GOMOKU_POISON_BUDGET", "50"))
+sp.configure_vct_terminus(enabled=True, budget=budget)
 sp.configure_oracle_veto(enabled=True)
 if hasattr(sp, 'configure_oracle_overlap'):
     sp.configure_oracle_overlap(enabled=overlap)
@@ -33,7 +38,7 @@ records = sp.generate_games(n_games, evaluator, n_simulations=100, wave_size=32,
                             rng=rng, temperature_moves=30,
                             augment_symmetries=False,
                             concurrent_games=concurrent)
-print(f"overlap={overlap} seed={seed} concurrent={concurrent} "
+print(f"budget={budget} overlap={overlap} seed={seed} concurrent={concurrent} "
       f"games={len(records)} "
       f"plies={[r.plies for r in records]} outcomes={[r.outcome for r in records]}")
 
