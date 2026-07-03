@@ -194,15 +194,26 @@ unfairness). Idea 3's oracle probe tells us whether the openings piece is REQUIR
 is the candidate recipe that could carry the sound world from a 9×9 proof-of-concept to a genuinely
 strong, defends-and-closes net at 13×13 and beyond.
 
-**Status — rails-v0 LAUNCHED (2026-07-03, #116, wandb `vraf0b6e`, 15×15 idx-2).** Ideas 1+2 are live:
-terminus DROPPED (play-on to a natural five), `--oracle-veto` + `--attacker-preserve` keep both sides
-sound. Earliest read (8 min / e235 — NOT an overnight run; see the TRAINING_WIKI framing-correction
-entry) is **encouraging on the core hypothesis**: white takes a real **37% share of decisive self-play
-games** (vs #113's structural 0/20), plies play out at ~32 (p90 50, well above the #113 ~9–14 floor),
-and both colors carry value/policy gradient — the white-starvation mechanism is not firing. Bets P1/P2
-provisional-PASS from self-play; throughput bet CONFIRMED-down (~3.3 s/ep). P3 (bare-net conversion)
-and the Rapfi arena verdict await a matured net (trigger ~`loss/policy < 1.6`). One live watch item:
-`sample_reuse_ratio ≈ 8.5` (n_workers=1 gen-starved, §12) — add a worker if it persists past ring-fill.
+**Status — rails-v0 (2026-07-03, #116, wandb `vraf0b6e`, 15×15 idx-2): partial — the terminus cure worked but a NEW failure mode emerged.** Ideas 1+2 went live: terminus DROPPED (play-on),
+`--oracle-veto` + `--attacker-preserve` keep both sides sound. Trajectory over ~1900 epochs (pl
+4.99→1.6, ~3 s/ep): white-share started healthy (~37% @ e100), fell, briefly recovered (0.05→0.26
+@ e1096), then **RE-COLLAPSED to ~0.015 @ e1880** while plies slid 49→~17 (toward the #113 ~14 floor)
+and `loss/value` fell to **0.052 (<0.08 value-poisoning death-tell TRIPPED)**, white per-side pl rising
+(2.64→2.83). **The watch-flip condition is MET.** (Throughput bet CONFIRMED-down ~3 s/ep; #117 eval:
+white 2/20 vs heuristic = off the #113 0/20 floor but competence unconfirmed, 0/40 vs Rapfi = net too
+weak to probe.)
+
+**The key learning — same OUTCOME as #113 via a DIFFERENT pathway.** #113 starved white by *terminus
+ejection* (lost positions recorded no example). rails-v0 fixed that — white positions ARE recorded now
+— but idx-2 is **black-tilted**, so as black sharpened it forced wins by ply ~17 and the recorded white
+positions are all *losses from hopeless states*: white learns "all lost" (pl rises), and the long
+low-entropy forced-win tails poison value (vl→0.05). **Removing the terminus (idea #1) is necessary but
+NOT sufficient on a side-favored opening.** Two levers, in order: **(1) tail subsampling** — drop a
+fraction of the post-proven-VCT tail so the buffer isn't dominated by certain-outcome black-win tails
+(attacks both the value-poisoning and the starvation-of-learnable-white-positions; being staged behind
+a flag, byte-identical off, Jason-gated); **(2) fairer opening** — swap2 / a less black-favored opener
+than idx-2 (a sound white can only learn to hold a game that is actually holdable; recipe open-dir
+#3/#4). Full dynamics + the different-pathway nuance: TRAINING_WIKI 2026-07-03 flip-correction entry.
 
 ## See also
 - [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) — the #98 attacker terminus this recipe composes with.
