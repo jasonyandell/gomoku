@@ -6,6 +6,18 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Chronicle-itis check adjudicated: all 13 >25 KB topics KEEP-AS-IS
+
+The lint's 13 size notices were formally reviewed (Opus, conservative rules).
+**Every page passed** — the length is legitimate in each case (reference
+dictionaries, API contracts/perf atlases, design specs, verdict-first synthesis
+whose length is evidence density), and the earlier 2026-07-04 passes already
+compressed the actual chronicle bulk (visible as in-page tombstones). Zero
+inbound-anchor conflicts exist on any of the 13. Four borderline micro-trims
+(~1 KB total) were recorded and deliberately declined. Future lint runs showing
+these same 13 notices can treat them as adjudicated as of this date; re-review
+only pages that GROW past their reviewed size.
+
 ## [2026-07-04] `_archive/` audited and DELETED — git history is the archive now
 
 `wiki/_archive/` (528 KB, 17 files) was a safe side-by-side for the curation
