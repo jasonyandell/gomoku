@@ -159,77 +159,42 @@ not *how code lands on disk* — so a substrate swap (e.g. worktree → `uv`, §
 execution) is cheap to try: make the swap behind the `run_chunk` seam, run the
 sim, watch it stay green.
 
-## 5b. Lean all the way into uv (trainer BUILT + validated; mainline dev still direction)
+## 7. Lean all the way into uv (the execution leg of §2)
 
-`uv` is the execution leg of §2. For the autolab it *focuses* the trainer down to
-"translate a ledger row into a `uv run` against a ref, record what came back" —
-deleting the bespoke checkout / teardown / reclaim subsystem and the
-shared-editable-install gotcha (a worktree slice today runs the commit's
-`scripts/` against **main's** `gomoku` package — the per-commit checkout is partly
-fiction; `uv` makes "a commit" actually mean a commit).
+`uv` is the execution leg of §2: it *focuses* the trainer down to "translate a
+ledger row into a `uv run` against a ref, record what came back" — deleting the
+bespoke checkout / teardown / reclaim subsystem and the shared-editable-install
+gotcha (a worktree slice otherwise runs the commit's `scripts/` against **main's**
+`gomoku` package, so "a commit" isn't really a commit). Going uv-native for
+*mainline dev too* is **negative scope creep**: each tree gets its own `uv sync`'d
+locked env, so the [editable-install worktree gotcha](../../README.md) becomes
+*structurally impossible* and **dev env ≡ lab env ≡ CI env** collapse to one
+lockfile — one mechanism for "run code here."
 
-**The scope-creep that simplifies more:** go uv-native for *mainline dev too*.
-Each worktree/clone gets its own `uv sync`'d locked env; `uv run` runs that tree's
-code against that tree's deps, so the
-[editable-install worktree gotcha](../../README.md) (PEP-660 finder pointing
-`gomoku` at the wrong checkout; PYTHONPATH can't shadow it) becomes
-*structurally impossible*. This is **negative scope creep** — it deletes the
-repoint recipe, a memory note, and per-session venv confusion, and unifies **dev
-env ≡ lab env ≡ CI env** from one lockfile: one mechanism for "run code here."
-
-The one open question — **how the native `.so` are produced** — was scouted
-(2026-06-19) and the answer says **clean afternoon, not fiddly.** `setup.py`
-declares **4 C extensions** (`gomoku/_state_ops_native{,15}.c`,
-`gomoku/_mcts_native{,15}.c`) built by `setuptools.build_meta` at install time; the
-`.c` sources are **committed**, the `.so` are not. So it's neither "committed
-binaries to copy" nor "a manual build step" — it's the standard PEP 517 path `uv`
-already drives: `uv sync` runs the build backend → compiles the `.c` → `.so`, **no
-custom build hook needed.** Because the `.c` are pinned per-SHA, a `uv run` against
-a ref builds the *exact* native code for that commit (reproducible-per-SHA, the
-property we wanted — better than committing platform binaries), and uv's build
-cache compiles each (SHA, platform) once. The only cost is a few seconds of C
-compilation on a cold env. Verdict: **the uv swap is unblocked.**
-
-**Built + validated (2026-06-19).** The trainer's execution leg now *is* uv:
+**Built + validated (2026-06-19):** the trainer's execution leg now *is* uv —
 `_checkout` does `git archive <commit> | tar -x` (a standalone snapshot, no shared
-`.git`), and `_run_slice` runs `uv run python scripts/run_sweep.py …` *inside* that
-tree — so the slice builds and runs the commit's own `gomoku` (deps + C extensions
-reconstructed from the ref), never main's editable install. The `git worktree
-add/remove/prune` subsystem is deleted; teardown is a plain `rmtree`. Proven by a
-real 1-epoch SMOKE slice end-to-end (`git archive HEAD` → fresh `uv` env + C build
-→ trained, self-capped at 90 s, final-eval `model_elo≈389`, `DONE` + flywheel
-follow-ups), GPU-tenancy checked free first. **Remaining:** commit a `uv.lock`
-(deps currently resolve from `pyproject` per run — reproducible *source* per SHA,
-not yet reproducible *deps*); optionally cache the per-SHA env instead of
-re-syncing each slice; and the bigger swing — go uv-native for mainline dev too.
+`.git`) and `_run_slice` runs `uv run python scripts/run_sweep.py …` inside that
+tree, building the commit's own `gomoku` (deps + C extensions reconstructed from the
+ref), never main's editable install. The `git worktree` subsystem is deleted;
+teardown is a plain `rmtree`. Proven by a real 1-epoch smoke slice (fresh uv env + C
+build → trained, self-capped 90 s, `model_elo≈389`, flywheel follow-ups). The
+native-`.so` question was scouted clean — the 4 pinned per-SHA `.c` sources compile
+via the standard PEP 517 path `uv sync` already drives (reproducible native code
+per commit, no custom build hook). **Direction, not built:** a committed `uv.lock`
+(reproducible *deps* per SHA), per-SHA env caching, and uv-native mainline dev.
 
-## Status
+## Status — doctrine realized (2026-07-04)
 
-- **Built (in `feat/autolab-sim`, unmerged):** the loop simulator
-  (`tests/test_lab_sim.py`) + the shared detector (`gomoku/lab/health.py`), plus
-  the hardening fixes the sim found (HF-push decouple, 1h-cap enforcement,
-  first-promotion gate, era-namespaced champion tag, worktree self-prune,
-  era-cross retire). **`gomoku/lab/actionable.py`** — the unified `actionable()`
-  read-surface (the molecule over `state.pick` + research threads + `scan`),
-  consumed by the monitor. **Research as resume-on-evidence** —
-  `research.{research_threads,resume,default_decide}` with the pluggable `decide`
-  seam, wired into the research tick (resume-then-propose). New sim invariants
-  (`actionable`-vs-`pick` consistency, decide-once-per-arrival) + scenarios
-  (`research_resume_on_evidence`, `research_park_takes_effect`), every fix
-  falsified RED-when-off.
-- **Doctrine, partially realized:** the stateless-reducer shape now covers all
-  three lanes (trainer/arena via `daemon.run_daemon`; research via `resume`). What
-  remains is the *cadence/trigger* wiring — `resume` runs inside the research tick
-  today; promoting it to a first-class trigger (cron ≡ event ≡ manual over
-  `actionable`, §5) is unbuilt. And `actionable.worker` (open GitHub issues as a
-  lane) is not yet a field.
-- **Built (uv execution leg, §5b):** the trainer runs slices via `git archive` +
-  `uv run` against the ref — the worktree subsystem deleted, the editable-install
-  gotcha gone, validated by a real 1-epoch slice. `test_lab_trainer` asserts the
-  new mechanism (archive, not worktree; `uv run`, not the daemon's interpreter).
-- **Direction, not built:** a committed `uv.lock` (reproducible deps per SHA);
-  per-SHA env caching; uv-native mainline dev (the editable-install gotcha gone for
-  *every* worktree/clone, one mechanism for "run code here").
+The stateless-reducer shape now covers all three lanes (trainer/arena via
+`daemon.run_daemon`; research via `research.resume`), and the loop **simulator**
+(`tests/test_lab_sim.py` + `gomoku/lab/health.py`) certifies the walls — every
+hardening fix falsified RED-when-off. `gomoku/lab/actionable.py` is the unified
+`actionable()` read-surface (§3); research resume-on-evidence (§4) ships with the
+pluggable `decide` seam; the uv execution leg (§7) is built. **Not yet:** promoting
+`resume` to a first-class trigger (cron ≡ event ≡ manual over `actionable`, §5),
+`actionable.worker` as a lane, and the uv-native follow-ups of §7. Per-phase build
+state lives on [autolab-architecture.md](autolab-architecture.md); this list is
+only what bears on the doctrine.
 
 ## Cross-refs
 
