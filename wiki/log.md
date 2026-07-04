@@ -5,6 +5,16 @@ consistent heading so future sessions can scan recent changes with simple tools.
 
 Older eras: [2026-05 archive](_archive/log-2026-05.md) (rotated out 2026-07-04).
 
+## [2026-07-04] Rotation hygiene: reconcile counts + bytes before/after
+
+Hardened the [curation.md](curation.md) rotation rule with the "how" learned the
+hard way: rotate an append-only journal by splitting on the date-prefix with a
+script, then reconcile — entries and byte totals across (live + archive) must
+equal the pre-rotation totals. A freehand log.md rotation earlier today silently
+dropped 21 entries and had to be redone from git; a two-line count/byte check
+catches it. Same class of hazard as the retired-janitor re-summon: the fix is a
+verification step baked into the rule, not vigilance.
+
 ## [2026-07-04] The great curation: story layer + curation playbook + settled-verdicts-first sweep
 
 Whole-wiki curation pass (worktree `feat/wiki-curation`, 14-agent inventory +

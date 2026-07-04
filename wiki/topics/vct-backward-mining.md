@@ -1,5 +1,9 @@
 # VCT-backward enabling-shape mining — walk won games back to the "first true VCT move"
 
+> **Status: SUPERSEDED-BY the forward first-VCT miner** *(2026-06-26; see the
+> banner below and [shape-library-engine.md](shape-library-engine.md) §3)* —
+> kept as the backward miner's record + the 200k-shape validated substrate.
+
 **One-line idea.** Generate strong games fast (Rapfi-vs-Rapfi), then walk each won
 game **BACKWARD** to its **enabling shape** — the *earliest* winner-to-move position
 from which a forced VCT win already exists, i.e. the **first true VCT move**. We mine

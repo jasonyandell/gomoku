@@ -65,7 +65,11 @@ a habit disagree, this page wins.
 ## Rotation thresholds (the giants stay caged)
 
 - **log.md / any ops journal** > ~60 KB or an era old → rotate closed months
-  to `_archive/log-YYYY-MM.md`, leave the pointer.
+  to `_archive/log-YYYY-MM.md`, leave the pointer. **Split by date-prefix with a
+  script, not by hand, and reconcile before/after** — count entries and sum bytes
+  across (live + archive) and confirm both equal the pre-rotation totals. A
+  freehand rotation on 2026-07-04 silently dropped 21 entries and had to be redone
+  from git; a two-line count/byte check would have caught it.
 - **Queue/board files**: when a race/era concludes, move its closed verdicts
   to `_archive/`, keep durable synthesis + open intake live.
 - **Topic pages** > ~25 KB: check for chronicle-itis — hoist verdict, compress
