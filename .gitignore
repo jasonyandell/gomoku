@@ -67,3 +67,6 @@ engines/rapfi/model210901.bin
 # comment on its own line. Keep the orchestration *.sh tooling tracked.
 mined/
 !mined/*.sh
+
+# Obsidian vault config (Jason reviews the wiki in Obsidian)
+wiki/.obsidian/
