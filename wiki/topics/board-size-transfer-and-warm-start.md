@@ -15,7 +15,7 @@ Don't lose it again.
 [[rapfi-idx2-distillation-mine]] (the "Bruce Lee one-position" idx-2 champion — a same-size
 warm-start / aux-head splice target, distinct from cross-board).
 
-**On this page:** [what it is](#what-it-is) · [the board-size guard](#the-board-size-guard-and-head-splices)
+**On this page:** [what it is](#what-it-is) · [the board-size guard](#the-board-size-guard-and-the-head-splices)
 · [why warm-start](#why-it-matters--warm-start-is-the-remedy-for-the-15x15-cold-start-collapse)
 · [the curriculum recipe](#the-curriculum-recipe-era-2--path-a-the-2026-06-20-overnight)
 · [the auto-graduating LADDER](#the-auto-graduating-ladder-911315) · [how to run](#how-to-run-the-transfer-entrypoint)
