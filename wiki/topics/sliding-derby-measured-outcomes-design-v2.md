@@ -1,6 +1,19 @@
 # Design RFC v2 — Measured-Outcome Sliding Derby (composite workflow)
 
-**Status:** v2, 2026-06-16. Supersedes the v1 draft (`sliding-derby-measured-outcomes-design.md`)
+> **Status (2026-07-04): DORMANT — design of record / Derby STOPPED — never fully shipped.**
+> This is the canonical sliding-derby design, but the **autonomous Derby it targets
+> has stopped** (see [../derby.md](../derby.md)) and the composite workflow described
+> in CHANGE 4 was **never stood up end-to-end**. What *was* built: the gate primitive
+> (`sliding_gate.py`) and the mechanical runner/watchdog shell loop. Reconciling the
+> "Next actions" against GitHub (2026-07-04):
+> - **#43** (defense-teacher: stamp the saving move on the policy head) — **CLOSED.**
+> - **#45** (white-defense eval suite + white_loss metric with CI) — **CLOSED**
+>   (the instrument CHANGE 2/CHANGE 6 depend on).
+> - **#46** (plateau-escape via a stronger-opponent teacher / curriculum) — **OPEN**;
+>   the "#43 vs #46 race" this RFC ends on was never run.
+> Read as the design record + the settled gate/discriminator lessons, not a live plan.
+
+**Status:** v2, 2026-06-16. Supersedes the v1 draft (`sliding-derby-design.md`)
 after: an adversarial red-pen (`redpen-sliding-derby-design`), a harness-capabilities probe
 (`workflow-harness-capabilities.md`), and a friction-log-coordination simplification (Jason).
 Written as a **DIFF against what already runs** — not a greenfield design.

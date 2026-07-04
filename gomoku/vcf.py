@@ -1,5 +1,63 @@
 """Exact VCF (Victory-by-Continuous-Fours) solver for 9x9 freestyle gomoku.
 
+=============================================================================
+OBSOLETE — REFERENCE / HISTORY ONLY. Superseded by the GPU megakernel.
+=============================================================================
+This pure-CPU recursive AND/OR solver (``solve_vcf`` / ``solve_vct`` and their
+``*_from_planes`` wrappers) is SUPERSEDED for corpus VCT/VCF labeling and
+shape-mining by the fully on-device GPU megakernel
+``scripts/vct_metal/mega_vct_bb.py :: solve_vct_mega_bb`` (VCF twin:
+``scripts/vct_metal/mega_vcf_bb.py :: solve_vcf_mega_bb``). See
+``wiki/topics/gpu-vct-feasibility.md`` §8 and ``wiki/topics/vct-backward-mining.md``.
+
+WHY IT IS RETIRED (not merely slower):
+  * Soundness was proven EQUIVALENT, so the kernel no longer needs this oracle.
+    Validation (wiki §8): the bitboard megakernel matched this solver with
+    **0 false-positive / 0 false-negative** verdicts over **320 real VCT
+    positions** (258 clean, non-cap agreements, 8 seeds), and its VCF twin over
+    **360 real VCF positions** — never a phantom win in either direction. The
+    only divergences are cap-boundary positions (excluded from the "clean"
+    count), always the SAFE direction: the GPU's full expansion can PROVE a few
+    roots this DFS abandons at its node cap, never the reverse, never a false
+    positive. (One real over-generation bug in the kernel — far pre-existing
+    fours spawning spurious threes — was caught and fixed against this solver
+    during that bring-up; the equivalence above is the post-fix result.)
+  * Performance black-hole: single-thread ``solve_vct`` is **~0.64 solves/s
+    aggregate** and sharply BIMODAL — median ~30 ms (~33 solves/s typical) but
+    ~14% of positions hit a **~90 s tail** at the production cap
+    (``max_nodes=20000``); at the deeper depth-10 / ``max_nodes=100k`` mining
+    config that tail stretches to **4–16+ min ("~20-min") "monster" boards**.
+    The megakernel does ~850–1020 solves/s at B≈16k–32k (**~1600× aggregate**)
+    precisely because its flat-in-batch wall hides that single-deep-board tail.
+    This is the slow oracle Jason does NOT want to keep hand-syncing to an
+    actively-evolving kernel.
+
+RULES for this file going forward:
+  * Kept ONLY for reference / history / readable-spec value — the megakernel and
+    its ``scripts/vct_metal/*_ref.py`` validation scaffolding were derived from
+    these exact helpers and soundness rules.
+  * It will NOT be kept in sync as the megakernel evolves — expect it to DRIFT.
+  * Do NOT use it to verify or cross-check the GPU solver. That equivalence is
+    already established and archived (above); re-pinning the kernel to this
+    frozen reference would only hold it back.
+
+MIGRATION of the remaining callers (the eventual path):
+  * Offline VCT mining / labeling — ``scripts/threat_shapes/mine_first_vct.py``,
+    ``mine_vct_backward.py``, ``mine_vct_gpu.py``, ``mine_vct_gpu_flat.py``,
+    ``mine_parallel.py``, ``build_corpus.py``, ``threats.py`` (and the v0
+    ``scripts/gpu_vct_prototype.py``) — move to
+    ``solve_vct_mega_bb(..., return_move=True)`` (its passive GPU root-move
+    output, wiki §5). NB: that returns a *valid* (sound) first VCT move, not
+    necessarily the *shortest* one ``solve_vct`` reports — a benign behavioral
+    difference for move-extraction consumers.
+  * Still-LIVE in-loop callers use the cheaper VCF path (``solve_vcf`` /
+    ``has_four_threat``), NOT VCT: the self-play / MCTS / eval teachers
+    (``gomoku/self_play.py``, ``gomoku/mcts.py``, ``gomoku/eval.py``,
+    ``gomoku/white_defense.py``). They do single-position checks inside the
+    training loop where a per-process batch GPU call does not yet fit — the last
+    reason this module still imports, and the harder migration.
+=============================================================================
+
 Freestyle rules: first to >=5-in-a-row wins; no overline restriction; no
 opening restrictions. Under these rules a *four* (a line of attacker stones
 with at least one empty cell that would complete five) is an absolutely
@@ -39,11 +97,43 @@ depth (in attacker moves) and a global node cap so it can never hang.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
 
 from gomoku import state_ops
+
+
+class CpuSolverRetired(RuntimeError):
+    """Raised when a RETIRED CPU vcf solver entry point is reached at runtime.
+
+    The CPU solver (``solve_vcf`` / ``solve_vct`` and their ``*_from_planes``
+    wrappers) is retired as a *runtime* dependency. Set the env var
+    ``GOMOKU_ALLOW_CPU_SOLVER=1`` to deliberately use it as a bootstrap/oracle
+    (fixture regen / deep validation). See ``wiki/topics/mega-vct-solver.md``.
+    """
+
+
+_CPU_SOLVER_RETIRED_MSG = (
+    "The CPU vcf solver is RETIRED as a runtime dependency (slow: ~0.65 ms/node, "
+    "~90s tail on hard 15x15 boards). Use "
+    "scripts.vct_metal.mega_vct_bb.solve_vct_mega_bb — the on-device GPU solver "
+    "(~1600x, 0 FP/FN). The CPU solver is kept only as a bootstrap/oracle; to use "
+    "it deliberately (fixture regen / deep validation) set env "
+    "GOMOKU_ALLOW_CPU_SOLVER=1. See wiki/topics/mega-vct-solver.md."
+)
+
+
+def _check_cpu_solver_gate() -> None:
+    """Throw unless the deliberate-use override is set.
+
+    Bypassed iff ``GOMOKU_ALLOW_CPU_SOLVER == "1"``. Gates only the PUBLIC entry
+    points; every internal helper stays fully intact (the kernel/ref scaffolding
+    and the sanctioned fixture-gen / deep-validation paths import them directly).
+    """
+    if os.environ.get("GOMOKU_ALLOW_CPU_SOLVER") != "1":
+        raise CpuSolverRetired(_CPU_SOLVER_RETIRED_MSG)
 
 BOARD_SIZE = state_ops.BOARD_SIZE
 WIN_LEN = state_ops.WIN_LEN
@@ -211,12 +301,18 @@ def solve_vcf(
 ) -> VCFResult:
     """Solve VCF for the side to move (plane 0 = attacker, plane 1 = defender).
 
+    OBSOLETE (see module banner): superseded for batch labeling by the GPU
+    megakernel ``scripts/vct_metal/mega_vcf_bb.py :: solve_vcf_mega_bb`` (0 FP/0 FN
+    vs this over 360 real positions). Still imported by the in-loop VCF teachers
+    (self_play / mcts / eval); NOT to be used as a GPU cross-check oracle.
+
     Returns a :class:`VCFResult`. ``has_forced_win`` is True only if an explicit
     continuous-four line to five was found. Never mutates ``board``.
 
     The position is assumed non-terminal (no side already has five). If the
     attacker already has an immediate five it is reported as a depth-1 win.
     """
+    _check_cpu_solver_gate()
     board = np.ascontiguousarray(board, dtype=bool)
     attacker = board[0].copy()
     defender = board[1].copy()
@@ -508,6 +604,7 @@ def solve_vcf_from_planes(
     ``history_ply``. We reconstruct the ``(2, 9, 9)`` board from those two planes
     (mirrors ``self_play._gamestate_from_archive``) and solve.
     """
+    _check_cpu_solver_gate()
     planes = np.asarray(planes)
     attacker = planes[0].astype(bool)
     defender = planes[history_ply].astype(bool)
@@ -712,6 +809,12 @@ def solve_vct(
 ) -> VCFResult:
     """Solve VCT for the side to move (plane 0 = attacker, plane 1 = defender).
 
+    OBSOLETE (see module banner): superseded by the GPU megakernel
+    ``scripts/vct_metal/mega_vct_bb.py :: solve_vct_mega_bb`` (0 FP/0 FN vs this
+    over 320 real positions; ~1600× throughput). Use ``return_move=True`` there
+    for the winning-move extraction the mining scripts need. Reference/history
+    only — will drift; do NOT cross-check the kernel against it.
+
     Returns the same :class:`VCFResult` shape as :func:`solve_vcf`.
     ``has_forced_win`` is True only when an explicit forcing line (of fours
     and/or forcing threes) to five was constructed; otherwise False. On cap
@@ -721,6 +824,7 @@ def solve_vct(
     Every VCF win is a VCT win (the four-only subset), so VCT is a strict
     superset of VCF: it solves all VCF positions plus continuous-threes mates.
     """
+    _check_cpu_solver_gate()
     board = np.ascontiguousarray(board, dtype=bool)
     attacker = board[0].copy()
     defender = board[1].copy()
@@ -1002,6 +1106,7 @@ def solve_vct_from_planes(
 ) -> VCFResult:
     """Convenience: solve VCT from a network input-plane stack (mirrors
     :func:`solve_vcf_from_planes`)."""
+    _check_cpu_solver_gate()
     planes = np.asarray(planes)
     attacker = planes[0].astype(bool)
     defender = planes[history_ply].astype(bool)

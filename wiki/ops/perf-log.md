@@ -1,5 +1,7 @@
 # ML Perf Lab Log
 
+> ⚠️ **ARCHIVED-IN-PLACE 2026-07-04 — append-only narrative journal of the May 2026 perf era (last entry 2026-05-26), correctly frozen.** The formal receipts live in [experiment-ledger.md](experiment-ledger.md); the durable syntheses live in the M5-as-Mainframe hub topics ([m5-max-fp16-and-throughput-regimes.md](../topics/m5-max-fp16-and-throughput-regimes.md), [m5-max-cross-engine-coupling.md](../topics/m5-max-cross-engine-coupling.md), [mcts-perf-ceiling.md](../topics/mcts-perf-ceiling.md)). Read as history, not status.
+
 Narrative timeline for the M5 Max perf era. Sibling to
 [experiment-ledger.md](experiment-ledger.md) (formal receipts) and
 [status.md](status.md) (control-room summary). This page is for the
@@ -33,7 +35,7 @@ H2H ranking: **mate-discount > adjudicate > control > sgd256 > sgd128**. Pairwis
 
 **Caveats (honest):** H2H CIs ~±62 with ~60–70% draws, so the bookends are clean (sgd lanes clearly below the three winners; mate-discount clearly beats both sgd + adjudicate) but the top margins (control↔mate-discount −20, control↔adjudicate −44) are near one CI half-width — directionally mate-discount > adjudicate > control, not airtight. The load-bearing reads (mate-discount #1, both sgd lanes lose to control) survive.
 
-**Carry-forward = mate-discount (`--value-discount 0.98`)** — cleanest single win, one flag, composes with vcf. **adjudicate is the second carry candidate** (orthogonal generation lever → mate-discount + adjudicate is the natural v7 compounding test). sgd128/sgd256 are dead; 64 stays. Open: does mate-discount stack on the v5 global-pool champion? And the adjudicate confidence-resign follow-on (derby-24a) vs the blunt cap. Beads derby-24a/derby-2yn/derby-g2j closed. Full verdict + standings in research-board.md § "v6 FINAL". Peaks at `sweep_runs/derby_v6/_peaks/<lane>/peak.pt`; H2H at `sweep_runs/derby_v6/round_robin.json`.
+**Carry-forward = mate-discount (`--value-discount 0.98`)** — cleanest single win, one flag, composes with vcf. **adjudicate is the second carry candidate** (orthogonal generation lever → mate-discount + adjudicate is the natural v7 compounding test). sgd128/sgd256 are dead; 64 stays. Open: does mate-discount stack on the v5 global-pool champion? And the adjudicate confidence-resign follow-on (derby-24a) vs the blunt cap. Beads derby-24a/derby-2yn/derby-g2j closed. Full verdict + standings in research-board-v1-v6-verdicts.md § "v6 FINAL" *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/research-board-v1-v6-verdicts.md`)*. Peaks at `sweep_runs/derby_v6/_peaks/<lane>/peak.pt`; H2H at `sweep_runs/derby_v6/round_robin.json`.
 
 ## [2026-05-26] Δelo Derby v5 | "Stack the winners": the other levers DO compound on vcf — bare vcf is the floor, not the bar; global-pool wins H2H
 
@@ -52,7 +54,18 @@ Pairwise (row beats column, +Δelo): control loses all three (−95 vs signal, �
 
 **Honest framing — v5 was BOTH a science round AND an infra round.** v5 was restarted several times mid-race to ship infrastructure (board cap 3h→24h, slice 600s→300s, **pipelined eval**, and the new **peak-progress + patience priority metric**), so within-v5 wall-clock / Δelo-rate comparisons are confounded — lean on the H2H + peaks, not the rates. The anchored peaks are only ~38 chunks (vs v4's 67), so the **middle H2H order (deep > signal, +44 vs +7) is inside the wide CIs (±62–69, ~65% draws)** and not airtight; only the bookends are clean (wholeboard #1, control #4). What's robust: **every lever beats bare vcf, and global-pool is the strongest.** Two durable infra wins landed this round: **pipelined eval** (eval overlaps the next training slice instead of blocking the GPU queue) and the **peak-progress+patience scheduler metric** (ranks lanes by recent peak-progress with a patience window, not raw last-chunk Δelo/hr — keeps feeding lanes still gaining, the v4 laggard lesson baked in).
 
-**Next = v6.** vcf-wholeboard (vcf + global-pool) is the new base to beat. Open: does a *fourth* lever (vcf + global-pool + aux) stack cleanly or do the two KataGo levers overlap? A longer, restart-free rerun would settle the muddy middle order; the vcf-wholeboard champion is the natural Rapfi-yardstick + promotion-ESCALATE candidate (Jason's call). Full verdict + standings in research-board.md § "v5 FINAL". Peaks at `sweep_runs/derby_v5/_peaks/<lane>/peak.pt`; H2H at `sweep_runs/derby_v5/round_robin.json`.
+**Next = v6.** vcf-wholeboard (vcf + global-pool) is the new base to beat. Open: does a *fourth* lever (vcf + global-pool + aux) stack cleanly or do the two KataGo levers overlap? A longer, restart-free rerun would settle the muddy middle order; the vcf-wholeboard champion is the natural Rapfi-yardstick + promotion-ESCALATE candidate (Jason's call). Full verdict + standings in research-board-v1-v6-verdicts.md § "v5 FINAL" *(removed; see note above)*. Peaks at `sweep_runs/derby_v5/_peaks/<lane>/peak.pt`; H2H at `sweep_runs/derby_v5/round_robin.json`.
+
+## [2026-05-25] Δelo Derby v4 | exact-VCF mate-teacher wins; anchored elo ≠ H2H elo *(restored 2026-07-04 from the rotated v1–v6 verdicts before archive deletion — this journal's only gap)*
+
+Anchored peaks: vcf 1784 / control 1760 / signal 1738 / wholeboard 1718 — but the
+**H2H round-robin inverted the middle**: vcf +31, control LAST (−29 vs +6/−8 for the
+others); control's #2 anchored peak was **overtrain inflation**. Durable method
+lesson: **don't trust an early anchored lead before lanes have equal compute** —
+the verdict is always the post-race H2H. Side datapoint: Rapfi at 9×9 freestyle
+played to ~draw-parity (100ms 50% / 500ms 55% / 1000ms 45%; caveat — Rapfi's ~2625
+is a 15×15 rating), later superseded by the stronger yardsticks (43W-3L-74D,
+20-straight). Carry-forward: the exact VCF mate-teacher, base for v5.
 
 ## [2026-05-24] Δelo Derby v3 | Gumbel cheap-sims generator dominates; fixed-step trainer co-equal with wave (structural wins); called as-is for new contenders
 
@@ -64,7 +77,7 @@ The biggest correction: **"generation-bound" was a myth in the current regime.**
 
 Built this round (all merged + tested): native Gumbel C port (wall-fair), the fixed-step trainer mode (+ sample_reuse_ratio / cumulative_sgd_steps metrics), the wave-mode SIGTERM deadlock fix, the Δelo/hr hill-climb scheduler (peak tiebreak), the live `watch_derby.py` viewer + the wandb `derby_dashboard.py` + `derby_sync_elo.py`, and the discovery that eval was in wandb history all along.
 
-Called as-is at Jason's word once fixed-step proved itself, to clear the board. **Next contenders:** the parked aux-head (opponent-reply, Class-C), an N-sweep on `--sgd-steps-per-epoch` (the reuse knob), reanalyze/curator (own flywheel board), and `gumbel-fast5s` as the new baseline to beat. Full verdict + standings in research-board.md § "v3 FINAL". Promotion of fixed-step+Gumbel to a production lineage is a deferred ESCALATE.
+Called as-is at Jason's word once fixed-step proved itself, to clear the board. **Next contenders:** the parked aux-head (opponent-reply, Class-C), an N-sweep on `--sgd-steps-per-epoch` (the reuse knob), reanalyze/curator (own flywheel board), and `gumbel-fast5s` as the new baseline to beat. Full verdict + standings in research-board-v1-v6-verdicts.md § "v3 FINAL" *(removed; see note above)*. Promotion of fixed-step+Gumbel to a production lineage is a deferred ESCALATE.
 
 ## [2026-05-24] Δelo Derby v1 | Exploration beats compute for the ceiling — and we measured the whole thing at 1/3 throttle
 

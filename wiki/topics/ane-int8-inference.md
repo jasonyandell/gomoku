@@ -1,5 +1,10 @@
 # ANE INT8 Inference (Post-WL5 Task) — HISTORICAL SCOPING DOC
 
+> **Status: HISTORICAL (captured 2026-05-21, status-noted 2026-05-23).** Original
+> WL5-era scoping doc — canonical ANE entry point is now
+> [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md).
+> INT8 specifically never shipped (FP16 path landed instead).
+
 > **Status note (2026-05-23):** This is the original (WL5-era) scoping doc for the ANE work. Parts have shipped, parts have been superseded, parts are still relevant. **For the current state of ANE research in this project, read [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md) — that page is now the canonical entry point** with the measured envelope, the live research lanes, and the inbound-research landing zone. This page is preserved as the historical record of how the ANE strand started.
 >
 > What's shipped from this doc's plan: `gomoku/coreml_evaluator.py`, `scripts/aggressive_engine_scout.py`, `selfplay_worker --evaluator coreml --coreml-compute-units …` flags, `scripts/coreml_ane_residency_scout.py` (companion). What's superseded: the "When to do this — not during WL5" gating (we are past WL5). What hasn't shipped: INT8 quantization specifically (FP16 path is what landed and what we measured against in L09c/L09d/L09e/etc.).
@@ -171,6 +176,13 @@ Working correction:
 
 ## Implementation plan
 
+> **SUPERSEDED PLAN (2026-05-23) — preserved for provenance, not a to-do list.**
+> Most of this executed with the FP16 (not INT8) path; for what actually shipped
+> vs didn't, jump to [§ What shipped from this doc's plan](#what-shipped-from-this-docs-plan-2026-05-23-reality-check)
+> below. The detail here (script names, the `|elo delta| > 30` abort criterion,
+> calibration specifics) is retained because it isn't captured in the shipped-status
+> table.
+
 0. **Boundary scouting microbench** before any launch wiring:
    - Convert one fixed checkpoint to Core ML FP16 and INT8.
    - Measure batch latencies at 8/32/64/128/256 planes for:
@@ -319,7 +331,7 @@ The INT8 path remains a future-research lane: it would only become load-bearing 
   throughput ceiling table; INT8 path is the next addition.
 - [activity-monitor-perf-runbook.md](activity-monitor-perf-runbook.md)
   — practical perf experiment knobs.
-- [wl5-diagnostics-archive-start-design.md](wl5-diagnostics-archive-start-design.md)
+- wl5-diagnostics-archive-start-design.md *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`)*
   — where the calibration archive came from.
 - `scripts/export_onnx.py` — existing PyTorch → ONNX path for the live
   SPA; calibration data path will look similar.

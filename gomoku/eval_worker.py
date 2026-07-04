@@ -33,6 +33,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from gomoku.arena import (
+    NetAgent,
+    picker_agent_from_spec,
+    play_matches_batched_multi,
+)
 from gomoku.eval import mcts_picker, play_match_parallel, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
@@ -83,6 +88,14 @@ def parse_args() -> argparse.Namespace:
                         "spawn-start pool overhead ~0.5-1s per cycle, worth it for "
                         "n_games >= ~8 or when adding higher lookahead depths.")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--no-arena", action="store_true",
+                   help="Disable the batched arena (#106) and use the legacy "
+                        "sequential / process-pool paths. The arena (default) "
+                        "plays all games of a matchup concurrently with leaf "
+                        "evals batched across games — statistically equivalent, "
+                        "not byte-identical. The arena is auto-disabled when any "
+                        "eval lever below is set (they are not ported to the "
+                        "wave-batched search yet).")
     p.add_argument("--eval-vcf-nodes", type=int, default=0,
                    help="Eval-time root VCF overlay node budget. Default 0 = OFF "
                         "(byte-identical to the pre-lever path: no solver call, "
@@ -137,6 +150,17 @@ def parse_args() -> argparse.Namespace:
                         "True the leaf's proven_value is set to +1 and "
                         "propagates upward via --proven-prop. Requires "
                         "--proven-prop to have any effect.")
+    p.add_argument("--vct-finish-nodes", type=int, default=0,
+                   help="Eval-time GPU-VCT FINISHER node budget (issue #99). "
+                        "Default 0 = OFF (byte-identical; no MLX import). When >0, "
+                        "before MCTS picks the eval picker runs a batched "
+                        "solve_vct_mega_bb from the root; if the side to move has a "
+                        "forced VCT it plays the oracle's winning move, driving a "
+                        "detected VCT to a REAL five-in-a-row rote — so a VCT-terminus "
+                        "net wins genuine games vs any baseline. cap50 (=50) matches "
+                        "the trained detection threshold. EVAL-ONLY; SEQUENTIAL-ONLY "
+                        "for now (requires --n-workers 1: the MLX oracle under "
+                        "multiprocessing fork is unvalidated).")
     return p.parse_args()
 
 
@@ -169,6 +193,31 @@ def main() -> None:
     if not specs:
         raise SystemExit("no baselines configured")
     baseline_pickers = [(raw, s, build_player(s)) for raw, s in zip(raw_specs, specs)]
+    # Batched arena (#106): default ON when every eval lever is at its OFF
+    # default (the levers live in mcts_picker's per-game search, which the
+    # wave-batched arena search doesn't implement yet).
+    # vct_finish_nodes is NOT in this gate: the arena implements the batched
+    # finisher natively (issue #109 — one bulk mega-solve per round).
+    levers_off = (
+        args.eval_vcf_nodes == 0
+        and args.fpu_reduction_c == 0.0
+        and not args.reuse_tree
+        and not args.proven_prop
+        and args.proven_vcf_leaf_nodes == 0
+    )
+    use_arena = not args.no_arena and levers_off
+    # Arena-side baseline agents are built ONCE and reused across epochs —
+    # pooled pickers (lookahead) keep their worker pool warm for the whole
+    # daemon lifetime (issue #110).
+    arena_baseline_agents = (
+        {raw: picker_agent_from_spec(s) for raw, s in zip(raw_specs, specs)}
+        if use_arena else {}
+    )
+    if not args.no_arena and not levers_off:
+        print("[eval] arena disabled: an eval lever (--eval-vcf-nodes / "
+              "--fpu-reduction-c / --reuse-tree / --proven-prop / "
+              "--proven-vcf-leaf-nodes) is set; "
+              "falling back to the legacy path", flush=True)
     out_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint_path).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = out_dir / "eval_results.jsonl"
@@ -192,6 +241,7 @@ def main() -> None:
             reuse_tree=args.reuse_tree,
             proven_prop=args.proven_prop,
             proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes,
+            vct_finish_nodes=args.vct_finish_nodes,
         )
 
         log: dict = {"eval_worker/epoch_evaluated": epoch_tag}
@@ -200,10 +250,46 @@ def main() -> None:
         # the baselines we have anchor Elos for. Fed to implied_elo at the end
         # of the cycle.
         elo_matches: list[tuple[float, float, int]] = []
+        arena_net = (
+            NetAgent(evaluator, sims=args.sims, c_puct=args.c_puct,
+                     vct_finish=args.vct_finish_nodes, label="model")
+            if use_arena else None
+        )
+        # Multi-opponent field (#110): ALL baselines' games live in one arena
+        # field — one net pick_batch per round across every matchup, every
+        # baseline's CPU/pool picks running concurrently, cheap baselines
+        # finishing early instead of waiting their turn. Per-opponent seeds
+        # match what the sequential per-baseline calls used.
+        arena_results: dict[str, "MatchResult"] = {}
+        if use_arena:
+            multi = play_matches_batched_multi(
+                arena_net,
+                [
+                    (
+                        arena_baseline_agents[raw],
+                        args.n_games,
+                        args.seed + epoch_tag * 1000 + spec_idx,
+                    )
+                    for spec_idx, (raw, _s, _p) in enumerate(baseline_pickers)
+                ],
+            )
+            arena_results = {
+                raw: res
+                for (raw, _s, _p), res in zip(baseline_pickers, multi)
+            }
         for spec_idx, (raw_spec, spec, baseline_picker) in enumerate(baseline_pickers):
             t0 = time.perf_counter()
             match_seed = args.seed + epoch_tag * 1000 + spec_idx
-            if args.n_workers > 1:
+            if use_arena:
+                # Whole-field wall time is time/eval_pass_s; the per-spec
+                # timing below only measures result bookkeeping.
+                res = arena_results[raw_spec]
+            elif args.n_workers > 1:
+                if args.vct_finish_nodes > 0:
+                    raise SystemExit(
+                        "--vct-finish-nodes is sequential-only for now: the MLX "
+                        "oracle under multiprocessing fork is unvalidated (Metal "
+                        "compiler wedge risk). Re-run with --n-workers 1.")
                 # Parallel: spawn pool, each worker reloads model from disk
                 # and reconstructs the opponent picker from `raw_spec`.
                 res = play_match_parallel(

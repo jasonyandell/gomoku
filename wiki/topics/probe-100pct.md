@@ -1,5 +1,9 @@
 # `probe_100pct.py` — eval-config sweep driver
 
+> **Status:** HISTORICAL derby-era tooling doc (derby-v8 "100% target" line, 2026-05).
+> Not part of the seek-VCT program despite the "probe" name; kept as a record of the
+> eval-config sweep driver.
+
 Filed **2026-05-28** (derby-5xs). Extended **2026-05-28** (derby-u8d) to cover
 the three additional MCTS search seams (FPU reduction, tree reuse, proven-
 win/loss propagation + leaf-VCF) on top of the original sims × eval-VCF grid.

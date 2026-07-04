@@ -1,4 +1,5 @@
 # Branch & worktree workflow (canonical)
+> **Status: LIVE** *(2026-07-04)* — canonical worktree lifecycle.
 
 **This is the canonical workflow for every change to this repo.** All other
 mentions — [conventions.md](conventions.md) § Branch integration,
@@ -93,25 +94,15 @@ open `~/.claude/projects/*/<session-id>.jsonl` directly. The id comes from
 | Agent scratch branch | `worktree-agent-<hex>` (never meant to persist) | the harness |
 | External-tool worktree | `~/.codex/worktrees/*` | the `codex` CLI — leave it alone |
 
-## Cleanup is a janitor, not a procedure
+## Cleanup is manual (the janitor is retired)
 
-Step 4 above is the happy path. But it runs at session *end*, so it fails
-exactly when a session crashes / is killed (the overnight regime) — leaking a
-worktree + dead-PID lock + branch every time. The backstop is the
-liveness-aware janitor, run at session **start**:
-
-```bash
-python scripts/reclaim_worktrees.py            # dry-run preview
-python scripts/reclaim_worktrees.py --apply     # reclaim dead-PID worktrees + merged/empty branches
-python scripts/reclaim_worktrees.py --gauge      # one-line repo-hygiene metric for the narrator
-```
-
-It is safe to run while other sessions / the derby are live (it skips
-live-PID worktrees, external worktrees, and unmerged `feat/*`). Full mechanics
-and forensics: [worktree-hygiene.md](worktree-hygiene.md). The general rule
-this instantiates — *for every artifact-creator, a janitor + a gauge, not a
-remembered procedure* — is in [conventions.md](conventions.md) and memory
-[[feedback-janitor-not-procedure]].
+Step 4 above is the happy path; leaked worktrees/branches from crashed
+sessions are cleaned **by hand**. The auto-janitor (`reclaim_worktrees.py`)
+is retired — 2026-07-01 it reclaimed a "clean + merged" sibling worktree that
+a live training run was executing from
+([worktree-hygiene.md](worktree-hygiene.md) has the incident). Before any
+`git worktree remove`: `ps aux | grep <path>` — a clean, fully-merged tree
+can still be somebody's cwd/venv.
 
 ## Variations (all are the lifecycle above, specialized)
 

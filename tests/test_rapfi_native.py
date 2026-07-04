@@ -24,20 +24,30 @@ import pytest
 
 from gomoku.external_engine import ExternalEnginePlayer, ExternalEngineConfig
 from gomoku.game import BOARD_SIZE, GameState
+from gomoku.rapfi_pool import rapfi_artifacts, rapfi_available
 
-_REPO = os.environ.get("GOMOKU_REPO", os.path.expanduser("~/code/gomoku"))
-_RAPFI_DIR = os.path.join(_REPO, "engines", "rapfi")
-_BIN = os.path.join(_RAPFI_DIR, "pbrain-rapfi")
-_CFG = os.path.join(_RAPFI_DIR, "config.toml")
-_FREESTYLE_W = os.path.join(_RAPFI_DIR, "mix9svqfreestyle_bsmix.bin.lz4")
+# Resolve Rapfi via the friction-free resolver, but gate CACHE-ONLY: this is a
+# smoke test, not a fetcher. rapfi_available() is True iff a local build OR an
+# already-cached HF snapshot resolves WITHOUT touching the network; allow_fetch
+# =False makes rapfi_artifacts() reuse that same cache and never download. So the
+# test runs on a box with the local build OR the cached snapshot, and skips (never
+# fetches) on a fresh box.
+_have_rapfi = rapfi_available() and BOARD_SIZE == 15
+if _have_rapfi:
+    _RAPFI_DIR = rapfi_artifacts(allow_fetch=False)
+    _BIN = os.path.join(_RAPFI_DIR, "pbrain-rapfi")
+    _CFG = os.path.join(_RAPFI_DIR, "config.toml")
+    _CMD = f"{_BIN} --config {_CFG} gomocup"
+else:
+    _RAPFI_DIR = _BIN = _CFG = _CMD = ""
 
-_have_rapfi = os.path.isfile(_BIN) and os.path.isfile(_CFG) and os.path.isfile(_FREESTYLE_W)
 pytestmark = [
-    pytest.mark.skipif(not _have_rapfi, reason="native Rapfi-NNUE artifact absent (build_rapfi.sh)"),
+    pytest.mark.skipif(
+        not rapfi_available(),
+        reason="native Rapfi-NNUE artifact not resolvable cache-only (build_rapfi.sh / HF cache)",
+    ),
     pytest.mark.skipif(BOARD_SIZE != 15, reason="NNUE weights are 15x15; set GOMOKU_BOARD_SIZE=15"),
 ]
-
-_CMD = f"{_BIN} --config {_CFG} gomocup"
 
 
 def _player(timeout_ms: int = 800) -> ExternalEnginePlayer:

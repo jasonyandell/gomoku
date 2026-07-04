@@ -1,5 +1,17 @@
 # Engine-Panel-Anchored Derby — Calibrated Strength Yardstick
 
+> **Status (2026-07-04): DEAD-END (lesson kept) — chapter closed; calibration never
+> achieved; the failure is the durable finding.** Tooling was built and a first run happened, but the
+> calibrated yardstick this design aimed at was **never delivered**: calibration
+> stayed BLOCKED on engine reliability + anchor validity (#35), and the Derby has
+> since stopped (see [../derby.md](../derby.md)). What survives as load-bearing
+> knowledge: **published Gomocup Elos are invalid anchors under our
+> wine/single-thread/10s harness** (negative-slope fit; yixin18 ~2310-published went
+> 0–30), so a calibrated absolute scale was unsupportable — and the run surfaced the
+> **white-side defense gap** (champion 94% black / 50% white) that became the driver
+> of the Bruce era ([bruce-lee-model.md](bruce-lee-model.md)). Read as design +
+> lesson, not an active build.
+
 **Issue:** [#30](https://github.com/jasonyandell/gomoku/issues/30).
 **Status:** Design → tooling BUILT → **first run DONE (2026-06-15); calibration
 BLOCKED on engine reliability + anchor validity ([#35](https://github.com/jasonyandell/gomoku/issues/35)).**
@@ -125,7 +137,7 @@ finally given a job:
 | Component | How it plugs in |
 |---|---|
 | **Δelo Derby** (`delo_derby.py`) | Panel Elo replaces broken Rapfi/saturated-anchor metric; recipes race by calibrated Δelo-rate |
-| **Head-to-head gate** (§10) | Champion-promotion still requires color-alternated win vs preserved ref *before* panel eval |
+| **Head-to-head gate** (frozen-reference [`sliding_gate.py`](../../scripts/sliding_gate.py), v2 methodology) | Champion-promotion still requires color-alternated win vs preserved ref *before* panel eval |
 | **Training slices** (`--max-wall-secs N --final-eval`) | Panel eval runs as the `--final-eval` bundle |
 | **North-star Δelo/Δt** | Panel calibrated Elo finally gives Δelo a real absolute number |
 
@@ -133,7 +145,7 @@ finally given a job:
 
 ## Lessons Baked In
 
-- **Head-to-head gate** (§10): gate champion-promotion on match vs preserved reference; never trust plies/vl/internal-ladder alone.
+- **Head-to-head gate** (frozen-reference [`sliding_gate.py`](../../scripts/sliding_gate.py)): gate champion-promotion on match vs preserved reference; never trust plies/vl/internal-ladder alone.
 - **Balanced openings** (#22): `--random-opening-moves 4`; first-mover advantage distorted black 85% / white 40%.
 - **Single-thread**: pin Rapfi to 1 core; label multi-core runs as non-competition-fair.
 - **Robust harness** (§12C–F): RESTART before BOARD, bare `X,Y` only, skips DATABASE/banner chatter; validated against ≥3 engines.

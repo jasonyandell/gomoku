@@ -1,5 +1,15 @@
 # Curated buffer + lazy generation + curriculum seeding — design
 
+**Status: DESIGN-NEVER-BUILT (partially) — 2026-05-24; era closed.** Only **Layer 1
++ the delta-e harness shipped** (see the STATUS box below); the meaningful delta-e
+run, the external curricula (Gomocup parser etc.), and lazy/pull-based live
+generation were **never built**. The core motivation — "make fast generation an
+asset by decoupling consumption from it, and get a curriculum surface for free" —
+was **superseded in spirit** by the sound-world recipe's on-policy oracle veto
+([sound-world-recipe.md](sound-world-recipe.md)), which improved data *quality* by
+editing the games rather than curating a slice. Kept as a design record; the
+decouple + curator mechanics remain a valid unbuilt lever.
+
 *Captured 2026-05-24 from the post-LF1 conversation. Companion to
 [[project-buffer-curation]] (the research framing) and
 [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md)
@@ -125,4 +135,4 @@ separate and smaller; with curation, its *width* is secondary to its
 - [[project-buffer-undersized]] — buffer *width* (the old axis; orthogonal to this).
 - [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md) — the runaway this fixes.
 - [[feedback-self-play-eta]] — why throughput proxies mislead training ETA.
-- WL5 archive-start lever (`wiki/topics/wl5-diagnostics-archive-start-design.md`) — the seed-from-curated-positions precedent this generalizes.
+- WL5 archive-start lever (wl5-diagnostics-archive-start-design.md, *removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`*) — the seed-from-curated-positions precedent this generalizes.

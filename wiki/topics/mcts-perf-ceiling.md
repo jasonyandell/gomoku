@@ -1,5 +1,10 @@
 # MCTS Perf Ceiling
 
+> **Status: LIVE (2026-05-20 → 2026-07-03).** Canonical gen-time perf synthesis.
+> Read settled-verdict-first: the current regime is the "2026-07
+> oracle-dominated regime" sections below; the earlier sections are accurate
+> pre-oracle history (flagged where superseded).
+
 Synthesis page on where gen-time wins are and aren't in `gomoku/mcts.py`. The
 goal is to stop re-discovering, every few sessions, that "porting v2 storage
 from some upstream AZ codebase" is a no-op for us.
@@ -11,6 +16,12 @@ Our `Node` already owns per-action arrays (`N`, `W`, `P`) of size `N_ACTIONS`,
 dict iteration happens in the PUCT hot path. **Structurally we are already at
 the "AGZ mcts_v2" layout** that other gomoku/AZ READMEs advertise as a big win
 over their "mcts_v1." That refactor is therefore a no-op for us.
+
+> **Regime note (2026-07):** the constraint below is the pre-oracle reading.
+> Since the VCT oracle-veto era, the oracle veto is ~91% of 13×13 self-play
+> gen wall-clock and is now the dominant perf lever — see the "2026-07
+> oracle-dominated regime" sections far below before acting on the older
+> "native hot-path is the next win" framing.
 
 Real production constraint: the gen path was bounded by `state.apply` (board
 copy + history snapshot, Python), `_init_node` (terminal check + legal mask,
@@ -48,8 +59,12 @@ evaluator is used.
   that layout. The fact that other codebases advertise a 2-3× speedup from
   "porting v2" is comparing to their previous per-Node-field design, which
   we never had.
-- **fp16 evaluator on MPS.** 17% *slower* in our bench (see
-  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 4).
+- ~~**fp16 evaluator on MPS.** 17% *slower* in our bench (see
+  [TRAINING_WIKI.md](../../TRAINING_WIKI.md) Exp 4).~~ **OVERTURNED (torch
+  2.11, ~2026-07-01):** the fp16 evaluator *reversed* — `--fp16-eval` now
+  measures **~1.7× faster per position** (0.075 vs 0.127 ms/pos). Kept here as
+  history; the 17%-slower number is pre-reversal. See the "Side notes" near line
+  297 below (it does change eval numerics → still needs the TQ canary).
 - **Async gen+train in one process on one MPS device.** MPS is single-stream
   per process, so forward (gen) and forward+backward (train) serialize and
   the train step ballooned 7× (Exp 2). Async only helps with multiple GPUs
@@ -76,6 +91,16 @@ it's ~20%. Verified byte-for-byte against the sequential reference, see
 `tests/test_mcts.py::test_wave_bfs_matches_sequential_byte_for_byte`.
 
 ## Where the next 2× lived (and what remains)
+
+> **SUPERSEDED for the current regime (2026-07):** this whole "next 2× lived"
+> roadmap (batched `state.apply`, C `_init_node`, further native-search passes,
+> heavier evaluator) is the *pre-oracle* leverage order. In the 2026-07
+> oracle-dominated regime the MCTS engine is ~0.6% of gen wall at sims=100 and
+> the VCT solver is ~90%+ of 13×13 gen wall — so none of the items below are the
+> live next win. They are preserved as the accurate pre-oracle analysis; act on
+> the "2026-07 oracle-dominated regime" sections far below instead. (Item #2,
+> engine-isolation across Apple Silicon, was separately refuted — see the ANE
+> pages.)
 
 Before the native engine pass, the rough leverage order was:
 
@@ -242,3 +267,200 @@ When estimating production speedup from an isolated bench:
   dispatching.
 
 Saved as memory `project_perf_bench_lesson` for cross-session recall.
+
+## 2026-07-01 — The oracle-dominated regime (sound-world #107) and its levers
+
+The #107 gen recipe (`--vct-terminus --oracle-veto`, cap50) moved the gen
+bottleneck OFF the net/search entirely: at the live config (8 games/batch,
+sims=100, wave=32, GPU-quiet, weights=v1239), one batch profiled as **oracle
+75% / evaluator 23% / native tree work 0.6% / python ~1%** (wall 5.11 s =
+terminus solve 1.45 + defense escape-solve 2.40 + search 1.19 [evaluator 1.16
+of it] + 0.06). Games desync, so the per-ply solver batch is ~150 boards
+(~8 games × ~legal-cells children + terminus boards).
+
+**Correction to the call-cost-law intuition at this operating point:** the
+"one call = one tail, flat in B" law holds for big `max_nodes` on hard boards;
+at **cap50 with ~10–1000 board batches the call is WIDTH/WORK-bound, not
+tail-bound** (measured: empty boards ~0.3–1 ms at any B — dispatch+sync is
+negligible; realistic boards scale ~2–3× when B goes 8→800). Consequences:
+merging calls saves only the dispatch (~1 ms), and skipping whole waves early
+saves ~nothing — the trivial call is its own cheap precondition. The real
+lever is **reducing solver board-work**.
+
+Levers landed 2026-07-01 (branch `worktree-agent-abc3efd96c269e71e`,
+`gomoku/self_play.py`; A/B receipts in the session log / final report):
+
+1. **Merged per-ply solve** (`_oracle_ply_solve`, default-on): terminus +
+   defense children in ONE dispatch. Bit-identical (per-thread node budget =>
+   batch-composition-independent verdicts; `return_move` selects the same
+   kernel). Worth ~1.07× alone.
+2. **Null-board precheck** (`--no-oracle-precheck` to disable; default ON,
+   byte-identical BY PROOF): solve the "I pass" board per position in phase 1;
+   a CLEAN no-win (win=False AND hit_cap=False) proves every escape child is
+   no-win (freestyle monotonicity + solver 0-FP), so children are never built
+   or solved. A **capped** null is NOT skippable (the child's extra defender
+   stone can prune the attacker's tree into the node budget). Measured on live
+   gen positions: 67.9% of plies clean → **63.9% of children solver-work
+   skipped**; the veto-stretched endgame (plies 40+) is ~all clean, early-mid
+   plies 10–29 are the hot band (~52–55%).
+3. **Oracle/search overlap** (`--oracle-overlap`, default OFF, flag-gated):
+   the merged solve runs in a background thread while the MPS wave searches;
+   partitions apply post-search. MLX releases the GIL, but **MLX and MPS
+   contend for the same GPU** (evaluator ~2× slower while a solve runs), so
+   the overlap gain is partial, not min(solve, search). Deterministic per
+   seed; not guaranteed byte-identical to serial order (terminated games are
+   searched-and-discarded on their firing ply → evaluator batch shapes shift —
+   the wave-size-change numeric class).
+4. **Staged veto breadth** (`--oracle-veto-max-cands K`, default 0 = full):
+   K-nearest stage 1 + full-breadth escalation only for all-tested-blunder
+   positions (defender terminus stays exactly sound). **WARNING (measured):**
+   at 9×9/K=24 games collapse from ~25 to ~11 plies — missed vetoes are played
+   blunders, gutting exactly the anti-attractor effect #107 wants. This is a
+   BIG-BOARD lever (N² children growth), to be tuned there with a leak-rate
+   measurement, not a 9×9 speed knob.
+
+Side notes: `--fp16-eval` measured **1.7× faster per position** here
+(0.075 vs 0.127 ms/pos) but changes eval numerics (different games) — still
+needs the TQ canary per the L06/L11b' entries above. The MCTS engine itself
+(hypothesis "the impl has headroom") is 0.6% of gen wall at sims=100 — no
+meaningful headroom left there; after the oracle levers the next wall is the
+evaluator's ~2 ms/call MPS dispatch floor (see the sections above).
+
+### 2026-07-01 CORRECTION (same session, round-2 A/B): the cost model is
+### CALL-COUNT x TAIL-GRIND; the null-board precheck is REFUTED at 9x9
+
+Round-2 measurement (same protocol, GPU-quiet) overturns the "width/work-
+bound" reading above and refutes lever #2 as a 9×9 speedup:
+
+- **Per-call solver cost is ~CONSTANT at this operating point:** merged
+  single-call = 81 calls / 12,218 boards / 3.545 s = **43.8 ms/call**;
+  precheck two-phase = 98 calls / 4,727 boards / 4.345 s = **44.3 ms/call**.
+  Cutting boards 2.6× changed nothing per call — the call pays the hardest
+  board's full cap50 grind (~0.9 ms/node on ONE GPU thread), width rides
+  free. The round-1 "width scaling" probe read was a difficulty-sampling
+  artifact of random boards (more random boards ⇒ harder max).
+- **Precheck verdict: byte-identical but SLOWER** (oracle 3.55 → 4.35 s,
+  wall 4.80 → 5.57 s/batch): the 61% board reduction saved nothing and the
+  phase-2 split added ~17 calls/batch. Default flipped to OFF; the flag
+  remains a big-board experiment (children build cost and widths differ
+  there). The monotonicity-skip PROOF and its receipts remain valid.
+- **What actually shipped as the win:** merged solve (1.06–1.07×, byte-
+  identical, default-on) + `--oracle-overlap` (**1.18× end-to-end** at live
+  config, identical games at the test seeds, deterministic; MLX/MPS GPU
+  contention — evaluator 1.16→2.3 s while a solve runs — caps the overlap
+  gain well below min(solve, search)).
+- **The measured next levers, in leverage order:** (1) **cross-worker solver
+  batching** — width is free, so ONE shared solve for all 4 workers costs the
+  same ~44 ms as each worker's own call ⇒ aggregate oracle GPU time ÷4
+  (architectural: a solver service or worker consolidation); (2) **kernel
+  tail** — ~0.9 ms/node/thread is the grind; a multi-thread-per-board or
+  memory-layout pass on `mega_vct_bb` attacks the floor directly; (3) lower
+  cap (cap50→cap25) = semantics change, needs a recall measurement first
+  (cascade data says cap50 ≈ 98.8% of VCTs; cap25 recall unknown).
+
+## 2026-07-01 — Lever (1) LANDED as continuous-refill consolidation (#112); the law gains a divergence bump; 13×13 census says the next wall is the kernel (#114)
+
+**What shipped (merged to main, `Closes #112`):** the cross-worker shared solve
+landed as the *worker-consolidation* option, plus a lever the filing didn't
+anticipate: **continuous game refill** (`--concurrent-games W`, `--stream`).
+`_generate_games_native` now tracks per-game plies (legacy lockstep is
+byte-identical: values coincide) and seeds a replacement game the moment one
+completes, so every merged per-ply solve and every MPS search wave runs at
+full width W instead of paying the lockstep batch's thinning tail (baseline:
+81 solve calls to finish an 8-game batch of mean ~26 plies — 10.1 calls/game;
+at W=256 it's ~0.5 calls/game). `--stream` makes production continuous:
+chunks of finished games flush to the trainer as they complete and
+`worker_weights.pt` hot-reloads between rounds (in-flight games finish under
+the new net). The `sound-world` cell is rewired: ONE streaming worker at
+W=256 replaces the 4×8 fleet.
+
+**Measured (bench_gen_refill.py, 107b champion weights, live semantics):**
+one process = 4,080 aug-pos/s at W=256 / 5,579 at W=512 vs the whole 4-worker
+fleet's ~1,000–1,300 → **~3.4–4.6×**, with the solve fully hidden under
+search (join stall 0.3 s) and evaluator cost down 186→14–20 µs/pos from batch
+fattening alone. `gen_poison_check`: 0/174 legacy, 0/1790 refill.
+
+**Law amendment — width is free only up to a divergence bump:** per-call cost
+at cap50, GPU-quiet: 44 ms @ ~150 boards → 108 ms @ 862 → 116 ms @ 1,708 →
+148 ms @ 7,276. Intra-simdgroup divergence loads the call ~2.5× as hard lanes
+appear in every simdgroup, then SATURATES — so beyond ~1k boards width rides
+~free again, which is exactly what refill exploits.
+
+**13×13 (the #113 prerequisite) — measured, and the story inverts:** the
+solve is 100% of the binding constraint (oracle 87–89 s of a 92–94 s wall at
+W=64; search idles 45 s at the join; fp16-eval frees the evaluator 70.6→44.2 s
+— the bandwidth-bound prediction holds at bigger boards — and buys ~nothing).
+Refill still gives 2.8× over lockstep per process (539 vs 192 aug-pos/s), but
+the resolve census on 22 captured real veto batches kills the "tail" mental
+model at 13×13: **48.0% of boards solve @budget 10, 9.5% @11–50, 42.5% CAP at
+50** — half the batch grinds to cap, every simdgroup is saturated. Measured
+consequences (verdict-equality asserted): budget ladder 10→50 = **0.83×
+(loss)**; oracle-sort resolve-class clustering (upper bound of any hardness
+sort) = 0.98×; tg 64/128 = 1.00×; **null-board precheck refuted AGAIN at
+13×13 (0.59×)** by a new mechanism — the null boards are themselves cap-bound
+mid-game (opp-has-VCT at 13×13 IS the bottomless search), so phase 1 costs
+more than the skip saves (at 9×9 it was refuted because width was free).
+Receipts + attack list in issue #114: (1) multi-thread-per-board kernel
+rewrite (the per-node cost every capped lane pays), (2) cap50→cap25 recall
+study (the 9.5% census bucket bounds the 13×13 miss rate), (3) veto-breadth
+staging with a leak-rate measurement (last resort, semantics-gated).
+
+## 2026-07-02 — Lever (2) LANDED: lanes=K multi-thread-per-board kernel (#114) = 1.34× solve / 1.29× gen at 13×13, bit-identical
+
+The day-1 census said the only remaining lever was the kernel itself; day 2
+built it. `solve_vct_mega_bb(..., lanes=K)`: K simd lanes cooperate on one
+board — replicated-state lockstep DFS, the two per-node candidate scans
+(fours / forcing-threes, the per-node hot cost) lane-partitioned and merged
+with simd cluster reductions (OR masks, MIN winning cell == lowbit order), so
+the verdict is **bit-identical** to base (invariant #11; regression-tested to
+sub-threadgroup and B=1; default `lanes=1` source byte-identical).
+
+**Measured** (`scripts/vct_metal/bench_lanes13.py` — the committed version of
+day-1's evaporated scratchpad: capture real gen batches, replay per variant,
+verdict-equality asserted every batch). 132 real 13×13 merged-veto batches
+(360,925 boards, cap50, fresh small net): K=2/4/8/16 →
+**1.09/1.23/1.34/1.36×**. End-to-end gen (48@32): wall 67.7→52.6 s
+(**1.29×**), aug-pos/s 297.5→383.2, join stall 25.8→12.5 s, game stream
+identical. 15×15 narrow batches show the mechanism's ceiling (K=8 = 1.72×
+@B=150); at real widths the K× thread inflation eats half the win — the
+honest scoresheet vs the 2–4× prediction. Optimal K shrinks past B×K ≈ 25 k.
+`GOMOKU_VCT_LANES=8` (env, default off) enables it for the gen oracle path.
+Full contract + numbers: [mega-vct-solver.md](mega-vct-solver.md)
+§ Multi-thread-per-board. Remaining #114 items: cap50→cap25 recall study;
+veto-breadth staging (last resort).
+
+## 2026-07-03 — The day-1 leverage list is CLOSED: lever (3) cap25 lands + the streaming≈lockstep correction
+The 2026-07-01 round-2 "measured next levers" list (cross-worker batching / kernel
+tail / cap50→cap25) is now fully resolved — this closes the perf-blitz gen-loop
+thread. All three, with dated corrections rather than rewrites:
+
+- **Lever (1) cross-worker batching → LANDED as #112** (continuous-refill
+  fleet-consolidation, the 2026-07-01 section above). **Day-2 correction to its
+  "3.4–4.6×" / "2.8× per process" numbers:** an equal-width single-process
+  isolation (`bench_gen_refill`, 13×13, oracle ON) measures **streaming ≈ lockstep
+  — 216 vs 216 games/min** ([mega-vct-solver.md](mega-vct-solver.md) §5.5). So
+  #112's 3.4–4.6× is a *fleet → one-wide-process* comparison (width-amortization +
+  thinning-tail erasure), and the day-1 "2.8× refill over lockstep per process"
+  (539 vs 192 aug-pos/s) was a narrow-lockstep-vs-wide-refill *width* delta, not the
+  refill mechanism at fixed width. Refill's real value is running the merged solve +
+  MPS search at full width W in one process; at equal width the mechanism is ~free.
+- **Lever (2) kernel tail → LANDED as `lanes=K`** (2026-07-02 section above),
+  verdict now **COMPLETE**: K-sweep saturated, recommend `GOMOKU_VCT_LANES=16` at
+  13×13 (**1.36×**, ≥ the 1.34× K8 headline); synthetic K16 regresses past the
+  B×K≈25k thread-inflation ceiling; shared-stack rewrite rejected; `bench_lanes13
+  --synth` self-check shipped; **default-OFF** in production. Full verdict:
+  [mega-vct-solver.md](mega-vct-solver.md) §5.3.
+- **Lever (3) cap50→cap25 → DECIDED + LANDED (#114, Jason-approved 2026-07-03).**
+  Recall of cap50-proven vetoes at cap25 = **99.93%** (13×13 sound-world net) /
+  **99.39%** (13×13 full-game) / **98.64%** (9×9 champ); solve **~1.98×**; poison@25
+  0/174; monotonicity + leak-capped invariants clean. Shipped as a flat
+  `--vct-terminus-budget 25` on the `sound-world` cell (commit `8e2d9e1`, merge
+  `09c067b`); **eval-time finisher stays cap50**. Detail:
+  [mega-vct-solver.md](mega-vct-solver.md) §5.6,
+  [sound-world-recipe.md](sound-world-recipe.md) § Oracle budget.
+
+**Composed 13×13 solver stack** (the ~90%-of-wall veto component): cap25 (~1.98×) ×
+`lanes=16` (~1.36×) ≈ **2.7×**, on top of #112's fleet-consolidation. Veto-breadth
+staging (`--oracle-veto-max-cands`) stays the semantics-gated last resort (the 9×9
+K-cap collapse, §2026-07-01). **The gen-loop perf thread is closed; the remaining
+13×13 wall is the intrinsic per-node solve cost the `lanes=K` kernel already attacks.**

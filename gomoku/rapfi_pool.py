@@ -366,6 +366,57 @@ class RapfiPool:
         assert last is not None
         raise last
 
+    def analyze_state(
+        self, state, *, max_node: int = 20000, retries: int = 1,
+        max_pv: int | None = None,
+    ) -> dict:
+        """Return Rapfi's whole-board ``{action: winrate}`` map for ``state``.
+
+        The SOFT-teacher signal: Rapfi scores every candidate root move with a
+        side-to-move winrate in [0, 1] (pruned-away cells correctly absent ->
+        ~0 mass). Self-heals one engine death, exactly like :meth:`pick`. The
+        stateless BOARD drive (``incremental=False``, forced by the pool) makes
+        an analysis carry no state between calls — safe to reuse the instance.
+        """
+        last: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                with self.lease() as eng:
+                    return eng.analyze(state, max_node=max_node, max_pv=max_pv)
+            except ExternalEngineError as e:
+                last = e
+                if attempt >= retries:
+                    break
+        assert last is not None
+        raise last
+
+    def analyze_states(
+        self, states, *, max_node: int = 20000, max_workers: int | None = None,
+        max_pv: int | None = None,
+    ) -> list[dict]:
+        """Analyze many positions with the whole pool in parallel.
+
+        Returns one ``{action: winrate}`` map per input state, in input order.
+        Concurrency is capped at the pool size (more threads just block on the
+        lease queue). ``max_pv`` caps the scored support per position (see
+        :meth:`ExternalEnginePlayer.analyze`).
+        """
+        states = list(states)
+        if not states:
+            return []
+        workers = min(self.size, len(states)) if max_workers is None else max_workers
+        if workers <= 1:
+            return [self.analyze_state(s, max_node=max_node, max_pv=max_pv) for s in states]
+        out: list[dict | None] = [None] * len(states)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {
+                ex.submit(self.analyze_state, s, max_node=max_node, max_pv=max_pv): i
+                for i, s in enumerate(states)
+            }
+            for fut, i in futs.items():
+                out[i] = fut.result()
+        return [m if m is not None else {} for m in out]
+
     def label_states(
         self, states, *, max_workers: int | None = None
     ) -> list[int]:

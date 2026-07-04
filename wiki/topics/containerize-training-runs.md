@@ -1,8 +1,10 @@
 # Containerize the training run (backlog — "for soon")
 
-Status: **icebox / seeded.** Captured 2026-05-24 during the research-lab ↔
-training integration design. Not started; this page exists so the idea and
-its one real open question survive to the session that picks it up.
+> 🧊 **DESIGN-NEVER-BUILT / DORMANT (icebox, seeded 2026-05-24).** Captured during
+> the research-lab ↔ training integration design; **not started**. This page
+> exists so the idea and its one real open question (Docker-on-macOS has no MPS
+> passthrough) survive to the session that picks it up. Resolve reading (1) vs (2)
+> below before building.
 
 ## The idea
 
@@ -59,4 +61,4 @@ stack. If (2), it's a `gomoku-train` skill refactor: lockfile + warm venv +
 `run` verb + weight cache, measured by cold-start seconds saved per slice.
 
 Cross-refs: [[az-at-scale-vs-laptop]], [[m5-max-as-mainframe]],
-the research-lab/training integration thread (research-lab-charter, when renamed).
+the research-lab/training integration thread ([research-lab-charter.md](research-lab-charter.md)).

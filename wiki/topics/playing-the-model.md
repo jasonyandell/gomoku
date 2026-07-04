@@ -1,8 +1,14 @@
 # Playing the model
 
+> ✅ **LIVE — procedure current.** Invocation is the canonical `uv run gomoku-web`
+> (per CLAUDE.md; the `gomoku-web` console script *is* `web.server:main`, same
+> `--checkpoints-dir`/`--port` flags). The "strongest checkpoint" example below
+> (WL4 e4024) is **era-1 (9×9, 2026-05-21)** — for the current strongest snapshot
+> see [training-run-lineage.md](training-run-lineage.md).
+
 How to actually sit down at a board and play a trained checkpoint. Two surfaces:
 
-1. **Local web UI** (`python -m web.server`) — picks any checkpoint on disk, runs full MCTS via the trained model. This is the strong-play surface.
+1. **Local web UI** (`uv run gomoku-web`) — picks any checkpoint on disk, runs full MCTS via the trained model. This is the strong-play surface.
 2. **Live SPA** (https://gomoku.jasonyandell.workers.dev) — static site that bakes one snapshot in as `app/public/model.onnx`. Convenient anywhere; usually behind whatever's local.
 
 The terminal CLI (`gomoku-play --checkpoint …`) also exists but the web UI is strictly nicer; skip it unless you want a no-deps shell session.
@@ -17,8 +23,8 @@ ls -dt sweep_runs/*/checkpoints | head -3
 
 # Pick one (example: WL4 plateau end) and point the UI there.
 # Use MPS if no training is running; CPU if it is, to avoid contention.
-pkill -f "web.server" 2>/dev/null
-PYTORCH_ENABLE_MPS_FALLBACK=1 nohup .venv/bin/python -m web.server \
+pkill -f "gomoku-web" 2>/dev/null
+PYTORCH_ENABLE_MPS_FALLBACK=1 nohup uv run gomoku-web \
   --port 8766 \
   --checkpoints-dir sweep_runs/WL4-no-random-openings.plateau-e4024/checkpoints \
   > scratch/web.log 2>&1 &
@@ -31,7 +37,7 @@ If training IS running, prepend `GOMOKU_DEVICE=cpu` so the UI doesn't fight the
 trainer for MPS:
 
 ```bash
-PYTORCH_ENABLE_MPS_FALLBACK=1 GOMOKU_DEVICE=cpu nohup .venv/bin/python -m web.server \
+PYTORCH_ENABLE_MPS_FALLBACK=1 GOMOKU_DEVICE=cpu nohup uv run gomoku-web \
   --port 8766 \
   --checkpoints-dir sweep_runs/<active-cell>/checkpoints \
   > scratch/web.log 2>&1 &
@@ -129,7 +135,6 @@ at `app/src/__tests__/planes17.test.ts`. The Python source of truth is
 - **"the UI feels weak even at 800 sims"**: confirm you're not on the
   `epoch0136.pt` smoke checkpoint in `./checkpoints/`. The dropdown shows the
   epoch — if it's three digits you're playing an early training snapshot.
-- **Port 8766 already in use**: another `web.server` is running. `pkill -f
-  web.server` then relaunch, or pick a different `--port`.
+- **Port 8766 already in use**: another `web.server` is running. `pkill -f gomoku-web` then relaunch, or pick a different `--port`.
 - **MPS contention with active training**: if training is up, use
   `GOMOKU_DEVICE=cpu` for the UI — see the launch runbook for why.

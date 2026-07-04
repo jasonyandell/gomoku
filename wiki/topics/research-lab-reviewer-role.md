@@ -1,4 +1,5 @@
 # Research Lab Reviewer Role
+> **Status: LIVE doctrine** *(2026-07-04)* — worked prompts target perf-era artifacts.
 
 Codified per the [research-lab-charter](research-lab-charter.md) Reviewer Gate.
 The Reviewer is a process role, executed by spawning a fresh agent with

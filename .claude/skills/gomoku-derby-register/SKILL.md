@@ -54,8 +54,8 @@ cd ~/code/gomoku
 # 1. clone a sibling derby- cell in scripts/run_sweep.CELLS; change EXACTLY ONE existing
 #    flag (e.g. --value-discount 0.98 -> 0.97). Name it derby-x-<slug>.
 # 2. validate:
-python -m py_compile scripts/run_sweep.py
-python -c "import sys;sys.path.insert(0,'scripts');import run_sweep;print('derby-x-<slug>' in run_sweep.CELLS)"
+uv run python -m py_compile scripts/run_sweep.py
+uv run python -c "import sys;sys.path.insert(0,'scripts');import run_sweep;print('derby-x-<slug>' in run_sweep.CELLS)"
 # 3. (optional) note it in the board JSON _doc "swap-pool candidates" list so the runner sees it.
 # 4. commit + push (clean main fast-forward, NOT confirm-gated):
 git add scripts/run_sweep.py && git commit -m "derby: register derby-x-<slug> (<one-lever>)" && git push

@@ -12,6 +12,7 @@ pre-board-size checkpoints (which were all 9x9) load as board_size=9.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass
 
 import torch
@@ -20,6 +21,7 @@ import torch.nn.functional as F
 from torch.nn.utils.fusion import fuse_conv_bn_eval
 
 from gomoku.game import BOARD_SIZE, N_ACTIONS, N_INPUT_PLANES
+from gomoku.swap2 import N_CHOICES
 
 
 @dataclass
@@ -58,6 +60,26 @@ class ModelConfig:
     # dropped at inference, untouched by fuse_model_for_inference. Gated on by the
     # trainer flag --aux-ownership-weight > 0.
     aux_ownership: bool = False
+    # Moonshot auxiliary VCT-defense head ("VCT-blunder map"). When False
+    # (default), NOT constructed -> byte-identical state_dict / param count /
+    # inference graph. When True, a dense head off the SAME shared tower predicts,
+    # per board cell, whether the side to move playing there walks into a forced
+    # VCT for the opponent (81-way, one 0/1-ish logit per cell). TRAINING-ONLY,
+    # dropped at inference, untouched by fuse_model_for_inference. Structural twin
+    # of the ownership head; gated on by the trainer flag --aux-vct-weight > 0.
+    aux_vct: bool = False
+    # Sound-world line-potential input planes (issue #107). When False
+    # (default), the stem takes exactly n_input_planes channels and the model
+    # is byte-identical to one predating this field. When True, forward()
+    # derives 8 extra channels (gomoku.features.line_potential_planes: per-cell
+    # x 4-direction x {me, opp} max live-5-window stone count / 4) from the two
+    # CURRENT stone planes and feeds n_input_planes + 8 channels to the stem.
+    # Computed INSIDE the model so the external 17-plane contract (records,
+    # replay buffer, D4 augmentation, native paths, evaluators) is untouched,
+    # and augmentation consistency is automatic. This is an INPUT-representation
+    # lever, not a head: it changes the stem conv's in_channels, so it cannot be
+    # toggled on an existing checkpoint without a splice (cf. force_aux_vct).
+    line_planes: bool = False
     # KataGo-style global pooling (Derby v4 "Whole-board" lever). When False
     # (default), the residual tower is the exact current arch and the
     # state_dict is byte-identical. When True, the LATTER HALF of residual
@@ -118,6 +140,21 @@ class ModelConfig:
     # The value/policy HEAD nonlinearities are deliberately untouched (they stay
     # F.relu) so this lever is exactly "the tower activation" — one axis.
     activation: str = "relu"
+    # Swap2 choice head (the swap2 opening protocol's only non-spatial decisions:
+    # the responder's STAY/SWAP/PLACE2 and the opener's pick-color). A width-3
+    # head (gomoku.swap2.N_CHOICES) emits a prior over those choice slots, used
+    # ONLY at choice nodes; the board policy head and value head are unchanged.
+    # The head ALWAYS exists (default True) because swap2 is the protocol this
+    # net is for; it is small and shares the trunk via the value head's
+    # penultimate hidden layer. It is reached only through forward_with_choice()
+    # — never through forward() — so the (policy, value) hot path is byte-
+    # identical and every existing `policy, value = model(x)` caller is unchanged.
+    # When False (e.g. an ablation), the head module is NOT constructed, so the
+    # state_dict / param count / inference graph match a model predating it. The
+    # warm-start load path tolerates an OLD checkpoint that lacks the choice-head
+    # weights (the champion predates this head): the core loads strict and the
+    # fresh choice head is left at its init (see load_checkpoint).
+    choice_head: bool = True
 
 
 SIZE_PRESETS: dict[str, ModelConfig] = {
@@ -241,8 +278,13 @@ class GomokuNet(nn.Module):
         kernel = 3
         spatial = cfg.board_size + 2 * cfg.stem_padding - kernel + 1
 
+        # Sound-world lever (issue #107): with cfg.line_planes the stem widens
+        # by the 8 in-forward-derived line-potential channels; off (default) is
+        # byte-identical to a model predating the field.
+        from gomoku.features import N_LINE_PLANES
+        stem_in = cfg.n_input_planes + (N_LINE_PLANES if cfg.line_planes else 0)
         self.stem = nn.Sequential(
-            nn.Conv2d(cfg.n_input_planes, c, kernel, padding=cfg.stem_padding, bias=False),
+            nn.Conv2d(stem_in, c, kernel, padding=cfg.stem_padding, bias=False),
             nn.BatchNorm2d(c),
             make_activation(cfg.activation),
         )
@@ -315,12 +357,53 @@ class GomokuNet(nn.Module):
             self.ownership_bn = nn.BatchNorm2d(cfg.value_filters)
             self.ownership_fc = nn.Linear(cfg.value_filters * spatial * spatial, n_actions)
 
+        # Moonshot auxiliary VCT-defense head — a dense head off the SAME shared
+        # tower output `h`. Predicts per-cell (81-way) whether the side to move
+        # playing there walks into a forced VCT for the opponent (a 0/1 "blunder
+        # map"; raw per-cell logits, the loss is a masked BCE-with-logits against
+        # the 0/1 target). Structural twin of the ownership head (1x1 conv -> bn ->
+        # relu -> flatten -> linear to N_ACTIONS). Constructed ONLY when
+        # cfg.aux_vct is set, so the off-case state_dict / param count / inference
+        # graph are byte-identical to a model without it. TRAINING-ONLY: never run
+        # by forward() unless return_vct=True, never touched by
+        # fuse_model_for_inference. Independent of the other aux heads.
+        if cfg.aux_vct:
+            self.vct_conv = nn.Conv2d(c, cfg.value_filters, 1, bias=False)
+            self.vct_bn = nn.BatchNorm2d(cfg.value_filters)
+            self.vct_fc = nn.Linear(cfg.value_filters * spatial * spatial, n_actions)
+
+        # Swap2 choice head — a single Linear off the value head's penultimate
+        # hidden activation (value_fc1's `value_hidden`-wide output), emitting
+        # N_CHOICES (=3) logits over the choice slots. It taps the SAME shared
+        # trunk as every other head and reuses the value-head's already-computed
+        # `value_hidden` features, so it is tiny (value_hidden*3 + 3 params).
+        # Constructed ONLY when cfg.choice_head is set (default True); when False
+        # the state_dict / param count / inference graph are byte-identical to a
+        # model predating this head. Reached only via forward_with_choice(), never
+        # forward(), so the (policy, value) hot path is untouched.
+        if cfg.choice_head:
+            self.choice_fc = nn.Linear(cfg.value_hidden, N_CHOICES)
+
+    def _expand_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Append the derived line-potential planes when cfg.line_planes is on.
+
+        Every trunk entry point (forward, forward_with_choice) goes through
+        here so the stem always sees the channel count it was built with. Off
+        (default) returns x untouched — the byte-identical hot path.
+        """
+        if not self.cfg.line_planes:
+            return x
+        from gomoku.features import expand_input_planes
+        history_ply = (self.cfg.n_input_planes - 1) // 2
+        return expand_input_planes(x, history_ply)
+
     def forward(
         self,
         x: torch.Tensor,
         *,
         return_aux: bool = False,
         return_ownership: bool = False,
+        return_vct: bool = False,
         return_value_logits: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         """Forward pass. Returns (policy, value) by default.
@@ -338,18 +421,20 @@ class GomokuNet(nn.Module):
             opponent-reply logits;
           * return_ownership=True (requires cfg.aux_ownership) appends the
             per-cell ownership logits;
+          * return_vct=True (requires cfg.aux_vct) appends the per-cell
+            VCT-defense (blunder-map) logits;
           * return_value_logits=True (requires cfg.value_head in {"wdl","hlgauss"})
             appends the raw (B, 3) {win,draw,loss} OR (B, N) HL-Gauss bin logits
             for the value cross-entropy loss.
         The output tuple is ordered (policy, value, [aux_policy], [ownership],
-        [value_logits]) with each optional tensor present iff its flag is set:
+        [vct], [value_logits]) with each optional tensor present iff its flag is set:
           none -> (p, v)                          [byte-identical default]
           aux only -> (p, v, aux_policy)          [unchanged 3-tuple contract]
         Only the trainer passes these flags; self-play and eval call forward(x)
         and never run either aux head or request WDL logits (zero extra FLOPs in
         the generation-bound path). Requesting a head/logits that were not
         constructed raises."""
-        h = self.tower(self.stem(x))
+        h = self.tower(self.stem(self._expand_input(x)))
 
         p = F.relu(self.policy_bn(self.policy_conv(h)))
         p = self.policy_fc(p.flatten(1))
@@ -390,6 +475,15 @@ class GomokuNet(nn.Module):
             o = F.relu(self.ownership_bn(self.ownership_conv(h)))
             o = self.ownership_fc(o.flatten(1))
             out = out + (o,)
+        if return_vct:
+            if not self.cfg.aux_vct:
+                raise RuntimeError(
+                    "forward(return_vct=True) requires cfg.aux_vct=True "
+                    "(VCT-defense head was not constructed)"
+                )
+            vlog = F.relu(self.vct_bn(self.vct_conv(h)))
+            vlog = self.vct_fc(vlog.flatten(1))
+            out = out + (vlog,)
         if return_value_logits:
             if self.cfg.value_head not in ("wdl", "hlgauss"):
                 raise RuntimeError(
@@ -399,6 +493,48 @@ class GomokuNet(nn.Module):
             out = out + (value_logits,)
         return out
 
+    def forward_with_choice(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass for swap2 CHOICE nodes: (policy, value, choice_logits).
+
+        Returns the same (policy, value) as ``forward(x)`` PLUS the choice head's
+        ``choice_logits`` of shape ``(B, N_CHOICES)`` — a prior over the swap2
+        choice slots (responder STAY/SWAP/PLACE2 or opener pick-color), masked to
+        the legal slots by the caller (see OpeningState.legal_choice_mask). This
+        is the ONLY entry point that runs the choice head; ``forward`` and every
+        ``policy, value = model(x)`` caller are byte-identical and never touch it.
+
+        Choice nodes are ≤2 per game, so recomputing the trunk here (rather than
+        threading a third return through the hot path) costs nothing meaningful.
+        The choice head taps the value head's penultimate hidden activation, so
+        the shared value-trunk compute is reused inline.
+        """
+        if not self.cfg.choice_head:
+            raise RuntimeError(
+                "forward_with_choice requires cfg.choice_head=True "
+                "(the choice head was not constructed)"
+            )
+        h = self.tower(self.stem(self._expand_input(x)))
+
+        p = F.relu(self.policy_bn(self.policy_conv(h)))
+        p = self.policy_fc(p.flatten(1))
+
+        vh = F.relu(self.value_bn(self.value_conv(h)))
+        vh = F.relu(self.value_fc1(vh.flatten(1)))   # penultimate value hidden
+        choice_logits = self.choice_fc(vh)           # (B, N_CHOICES)
+
+        if self.cfg.value_head == "wdl":
+            wdl = F.softmax(self.value_wdl_fc(vh), dim=-1)
+            v = wdl[:, 0] - wdl[:, 2]
+        elif self.cfg.value_head == "hlgauss":
+            probs = F.softmax(self.value_hlgauss_fc(vh), dim=-1)
+            v = (probs * self.value_hlgauss_bin_centers).sum(dim=-1)
+        else:
+            v = torch.tanh(self.value_fc2(vh)).squeeze(-1)
+
+        return p, v, choice_logits
+
 
 def build_model(
     size: str = "small",
@@ -406,6 +542,8 @@ def build_model(
     stem_padding: int | None = None,
     aux_opponent_reply: bool = False,
     aux_ownership: bool = False,
+    aux_vct: bool = False,
+    line_planes: bool = False,
     global_pool: bool | int | None = None,
     value_head: str | None = None,
     value_hlgauss_bins: int | None = None,
@@ -424,6 +562,10 @@ def build_model(
         overrides["aux_opponent_reply"] = True
     if aux_ownership:
         overrides["aux_ownership"] = True
+    if aux_vct:
+        overrides["aux_vct"] = True
+    if line_planes:
+        overrides["line_planes"] = True
     if global_pool is not None:
         overrides["global_pool"] = global_pool
     # Only override value_head when an explicit non-default is requested, so the
@@ -506,7 +648,16 @@ def save_checkpoint(
         payload["wandb_run_id"] = wandb_run_id
     if extra:
         payload.update(extra)
-    torch.save(payload, path)
+    # Atomic write (closes #76): a concurrent reader watching `path` (e.g. the
+    # eval daemon polling latest.pt) must never observe a half-written file.
+    # torch.save streams bytes into `path` in place, so a reader can catch it
+    # mid-write (a torn checkpoint). Write to a sibling `.tmp` first, then
+    # os.replace it onto `path`: os.replace is atomic on the same filesystem, so
+    # a reader sees either the old file or the fully-written new one, never a
+    # partial. The `.tmp` is a sibling (same dir/FS) so the rename stays atomic.
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
 
 
 def load_checkpoint(
@@ -514,6 +665,7 @@ def load_checkpoint(
     device: torch.device | str = "cpu",
     *,
     expect_board_size: int | None = BOARD_SIZE,
+    force_aux_vct: bool = False,
 ) -> tuple[GomokuNet, dict]:
     """Load a checkpoint into a freshly built model.
 
@@ -524,6 +676,14 @@ def load_checkpoint(
     a mismatch raises ValueError instead of producing a model whose heads
     disagree with every other shape in the process. Pass
     ``expect_board_size=None`` to skip the check (offline inspection only).
+
+    Warm-start head layering: ``force_aux_vct=True`` builds the model WITH the
+    aux VCT-defense head even when the checkpoint predates it (aux_vct absent /
+    False in the saved config), so the moonshot head can be layered onto an
+    older champion (e.g. Bruce, 15x15) on a same-size ``--resume``. The core
+    loads strict; the freshly-initialized ``vct_*`` params splice in via the
+    same path as the swap2 choice head. A checkpoint that already carries the
+    head loads it exactly (no fallback). Off (default) => byte-identical.
     """
     payload = torch.load(path, map_location=device, weights_only=False)
     saved_cfg = dict(payload["model_config"])
@@ -535,6 +695,19 @@ def load_checkpoint(
     saved_cfg.setdefault("value_hlgauss_sigma", ModelConfig.value_hlgauss_sigma)
     # Pre-15x15-era checkpoints predate board_size; they were all 9x9.
     saved_cfg.setdefault("board_size", 9)
+    # Pre-sound-world checkpoints predate line_planes (issue #107); they were
+    # all built with the bare 17-plane stem.
+    saved_cfg.setdefault("line_planes", False)
+    # Pre-swap2 checkpoints predate choice_head. The champion's state_dict has no
+    # choice-head weights, but the swap2 net WANTS the head, so we build it (the
+    # config default is True) and warm-start the core strict + fall back the
+    # choice head to its fresh init below — rather than disabling the head.
+    saved_cfg.setdefault("choice_head", ModelConfig.choice_head)
+    # Warm-start head layering: force the aux VCT-defense head on for a resume
+    # onto a champion that predates it (its saved config has aux_vct absent /
+    # False). The `vct_*` splice below then fires and fills the fresh head.
+    if force_aux_vct:
+        saved_cfg["aux_vct"] = True
     if expect_board_size is not None and saved_cfg["board_size"] != expect_board_size:
         raise ValueError(
             f"checkpoint {path!r} was trained at board size "
@@ -545,5 +718,24 @@ def load_checkpoint(
         )
     cfg = ModelConfig(**saved_cfg)
     model = GomokuNet(cfg).to(device)
-    model.load_state_dict(payload["model_state_dict"])
+
+    # Warm-start tolerance for the swap2 choice head ONLY. The champion predates
+    # this head, so its state_dict lacks `choice_*` keys. We still want a STRICT
+    # load for the core (a genuinely-missing core weight must error, not be
+    # silently skipped), so we splice the freshly-initialized choice-head params
+    # into the saved dict for any choice key the checkpoint is missing, then load
+    # strict. A checkpoint that already carries the choice head loads it exactly
+    # (no fallback triggered) and round-trips bit-for-bit.
+    state = dict(payload["model_state_dict"])
+    # Splice freshly-initialized CHOICE-head and VCT-defense-head params into the
+    # saved dict for any such key the checkpoint is missing, then load strict. The
+    # choice head predates most champions; the moonshot vct head can be layered on
+    # an OLDER checkpoint (warm-start the core strict, fall the fresh vct head back
+    # to its init). A checkpoint that already carries either head loads it exactly.
+    if cfg.choice_head or cfg.aux_vct:
+        model_sd = model.state_dict()
+        for key, tensor in model_sd.items():
+            if (key.startswith("choice_") or key.startswith("vct_")) and key not in state:
+                state[key] = tensor
+    model.load_state_dict(state)
     return model, payload

@@ -26,10 +26,10 @@ timestamp + resolved checkpoint + per-tier win-rate + config provenance.
 
 EVAL-ONLY. Rapfi never touches self-play / training.
 
-Campaign-loop usage (one eval tick):
+Campaign-loop usage (one eval tick). Rapfi auto-resolves via gomoku.rapfi_pool
+(local build or pinned HF snapshot); pass --rapfi <path> to override:
     GOMOKU_BOARD_SIZE=15 python scripts/ladder_eval_15x15.py \
         --checkpoint sweep_runs/G15-seed-v8recipe-board15/checkpoints/latest.pt \
-        --rapfi engines/rapfi/pbrain-rapfi \
         --n-games 10 --timeouts 200 1000 \
         --out sweep_runs/G15-seed-v8recipe-board15/rapfi_ladder_15x15.jsonl
 """
@@ -83,7 +83,10 @@ def _pin_cpu_default() -> None:
 DEFAULT_CHECKPOINT = (
     "sweep_runs/G15-seed-v8recipe-board15/checkpoints/latest.pt"
 )
-DEFAULT_RAPFI = "engines/rapfi/pbrain-rapfi"
+# None -> run_rapfi_eval auto-resolves via gomoku.rapfi_pool (local engines/rapfi
+# build, else the pinned HF snapshot). A relative literal would break in a
+# worktree / fresh box that has no local build.
+DEFAULT_RAPFI: str | None = None
 WARMSTART_SEED = "sweep_runs/g15_warmstart_seed.pt"
 
 _EPOCH_RE = re.compile(r"epoch0*?(\d+)\.pt$")
@@ -136,7 +139,9 @@ def main(argv: list[str] | None = None) -> None:
                          "latest.pt; a missing path resolves to the newest "
                          "epoch*.pt / worker_weights.pt in its directory).")
     ap.add_argument("--rapfi", default=DEFAULT_RAPFI,
-                    help="Path to the pbrain-rapfi binary (CPU engine).")
+                    help="Rapfi launch spec (path or full command). Omit to "
+                         "auto-resolve via gomoku.rapfi_pool (local build or "
+                         "pinned HF snapshot).")
     ap.add_argument("--n-games", type=int, default=10,
                     help="Games per tier, color-alternated (keep small/cheap; "
                          "the GPU is owned by the live run). small-n = noisy hint.")

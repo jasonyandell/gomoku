@@ -99,6 +99,71 @@ def vcf_overlay_picker(
     return pick
 
 
+def _load_vct_solver():
+    """Import the GPU VCT oracle (lazy; behind an indirection so tests can
+    monkeypatch it without paying the MLX/Metal import + compile)."""
+    try:
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+    except ModuleNotFoundError:
+        # Console entry points (gomoku-arena etc.) don't put the repo root on
+        # sys.path the way `python -m gomoku.X` from the checkout does; the
+        # editable install means gomoku/'s parent IS the repo root.
+        import sys
+        from pathlib import Path
+
+        repo_root = str(Path(__file__).resolve().parents[1])
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+    return solve_vct_mega_bb
+
+
+def vct_finish_picker(base: Picker, *, budget: int = 0) -> Picker:
+    """Wrap a picker with an eval-time GPU-VCT FINISHER (issue #99).
+
+    Before delegating to ``base``, run a bounded batched ``solve_vct_mega_bb`` (the
+    validated GPU oracle) from the current root. If the side to move has a forced
+    VCT (Victory by Continuous Threats), play the oracle's winning move; else fall
+    through to ``base`` unchanged. Applied every turn, this drives a detected VCT
+    to a REAL five-in-a-row rote — so a VCT-terminus net (issue #98) wins genuine
+    games against ANY opponent through the standard match harness, with no special
+    "VCT counts as a win" harness (the game still ends on an actual five, so wins
+    are real). This is the deployable hybrid player: policy to the VCT, solver to
+    the win.
+
+    ``budget`` (default 0 = OFF → returns ``base`` UNCHANGED, byte-identical, and
+    never imports MLX) is the per-board node cap; cap50 (=50) matches the first-VCT
+    detection threshold the net is trained toward. A cap50 VCT's continuations are
+    sub-proofs of the original <=50-node proof, so cap50 also CONVERTS turn by turn.
+    ``hit_cap`` is treated as no-win (fall through — a tight cap never wedges the
+    picker). VCT is a strict superset of the VCF overlay
+    (:func:`vcf_overlay_picker`), so with both on this is checked first.
+
+    EVAL / PLAY-ONLY. The self-play generation path terminates AT the VCT instead
+    (``--vct-terminus``); the two seams never collide.
+    """
+    if budget <= 0:
+        return base
+
+    # Lazy import — only a VCT-finisher build pays the MLX/Metal compile; a
+    # zero-torch `random vs heuristic` match never imports it.
+    solve_vct_mega_bb = _load_vct_solver()
+
+    def pick(state: GameState, rng: np.random.Generator) -> int:
+        # state.board is already (2,N,N) side-to-move-relative: plane 0 attacker,
+        # plane 1 defender — exactly the oracle's input (the layout the VCF overlay
+        # above also relies on). Batch of 1 (eval is per-move single-board).
+        boards = np.asarray(state.board, dtype=bool)[None]      # (1,2,N,N)
+        win, _hit, move = solve_vct_mega_bb(
+            boards, max_nodes=budget, return_move=True)
+        m = int(move[0])
+        if bool(win[0]) and 0 <= m and bool(np.asarray(state.legal_mask()).reshape(-1)[m]):
+            return m
+        return base(state, rng)
+
+    return pick
+
+
 def _infer_moves_from_diff(
     rs: GameState, state: GameState
 ) -> tuple[int, ...] | None:
@@ -162,6 +227,7 @@ def mcts_picker(
     reuse_tree: bool = False,
     proven_prop: bool = False,
     proven_vcf_leaf_nodes: int = 0,
+    vct_finish_nodes: int = 0,
 ) -> Picker:
     """Wrap a leaf evaluator into a one-shot picker for use in matches.
 
@@ -254,8 +320,11 @@ def mcts_picker(
             pi = policy_from_visits(g.root, temperature=0.0)
             return int(np.argmax(pi))
 
-        return vcf_overlay_picker(
-            pick, max_nodes=eval_vcf_nodes, max_depth=eval_vcf_depth
+        return vct_finish_picker(
+            vcf_overlay_picker(
+                pick, max_nodes=eval_vcf_nodes, max_depth=eval_vcf_depth
+            ),
+            budget=vct_finish_nodes,
         )
 
     # Stateful reuse-tree picker. Holds one MCTSGame across the match.
@@ -329,6 +398,7 @@ def mcts_picker(
     wrapped = vcf_overlay_picker(
         pick, max_nodes=eval_vcf_nodes, max_depth=eval_vcf_depth
     )
+    wrapped = vct_finish_picker(wrapped, budget=vct_finish_nodes)
     # Propagate the holder onto whichever picker we hand back (the wrapper at
     # eval_vcf_nodes>0, or `pick` itself when the overlay is OFF and the wrapper
     # is `pick` unchanged) so callers always see ._reuse_state.
@@ -392,6 +462,7 @@ def play_match_pickers(
     n_games: int,
     seed: int = 0,
     random_opening_moves: int = 0,
+    start_state: GameState | None = None,
 ) -> MatchResult:
     """Play A vs B, alternating colors. Returns result from A's perspective.
 
@@ -405,6 +476,13 @@ def play_match_pickers(
     black vs white.  This mirrors the swap-2 convention's goal of neutralising
     first-mover advantage: neither player benefits from the opening stone
     placement because each side plays both colors from the same starting board.
+
+    When ``start_state`` is given EVERY game starts from that exact position
+    (with the same color-swap-per-pair seat alternation). This is the fixed-
+    opening eval path — e.g. the swap2 idx-2 board the rulers use, where both
+    players take the side-to-move seat across a pair so neither benefits from
+    the (fixed) opening. ``start_state`` takes precedence over
+    ``random_opening_moves``; a fixed opening does not compose with a random one.
 
     If ``n_games`` is odd the final game gets its own opening (no partner for
     the color swap), so keep ``n_games`` even for balanced evaluation.
@@ -424,8 +502,16 @@ def play_match_pickers(
     for g_idx in range(n_games):
         a_is_black = (g_idx % 2 == 0)
         a_to_move = a_is_black
+        # A fixed start position (e.g. the swap2 idx-2 board) wins over a random
+        # opening: same seat-swap per pair, but the board is identical every game.
+        if start_state is not None:
+            state = start_state
+            ply = state.move_count
+            if ply % 2 == 1:
+                # Odd-ply opening → white to move; flip from the base assignment.
+                a_to_move = not a_is_black
         # Use the shared opening for both games in each color-swap pair.
-        if random_opening_moves > 0:
+        elif random_opening_moves > 0:
             pair_idx = g_idx // 2
             state = opening_states[pair_idx]
             # After a random opening, side-to-move is encoded in state.board[0].

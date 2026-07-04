@@ -1,5 +1,7 @@
 # Gomocup Engines Catalog — what's open source, what we can run
 
+> **Status: LIVE reference** *(2026-07-04)* — snapshot 2026-06-15/16 (wine shelved; Rapfi the usable one).
+
 Catalog of competitor engines from the **Gomocup** gomoku/renju AI tournament
 ([gomocup.org](https://gomocup.org/)), focused on the one question that matters
 for us: **which engines have PUBLIC SOURCE CODE** so they could be studied,
@@ -61,6 +63,14 @@ repo but precompiled executables only; **CLOSED** = no public source at all.
 "ARM build?" assesses *from the repo* (build system, deps, SIMD) — **not** an
 actual build attempt — for whether it could plausibly compile/run on M-series
 macOS.
+
+> **Rating-pool note:** the Elo figures in this table (Rapfi ~3073, KataGomo
+> ~2879, AlphaGomoku ~2781, …) come from a **different rating pool/year** than our
+> internal-anchor numbers in [external-engine-baselines.md](external-engine-baselines.md)
+> and [rapfi-pool.md](rapfi-pool.md) (Rapfi ~2625, AlphaGomoku ~2256, KataGomo
+> ~2254). They are not directly comparable — Rapfi's strength is **not**
+> single-valued-canonical across pools; use the internal-anchor numbers for our
+> calibration.
 
 | Engine | Best Gomocup (rank/yr) | Source | Repo URL | License | Lang | ARM build? | Approach |
 |---|---|---|---|---|---|---|---|

@@ -19,7 +19,7 @@ from gomoku.eval import mcts_picker, play_match_pickers
 from gomoku.match import build_player, parse_spec
 from gomoku.mcts import make_torch_evaluator
 from gomoku.model import build_model, load_checkpoint, n_params, save_checkpoint
-from gomoku.replay_buffer import ReplayBuffer
+from gomoku.replay_buffer import ChoiceBuffer, ReplayBuffer
 from gomoku.self_play import configure_draw_value, generate_games, generate_games_vs_baseline
 from gomoku.util import load_wandb_key_from_keychain, pick_device
 
@@ -196,6 +196,24 @@ def wdl_target_from_z(z: torch.Tensor) -> torch.Tensor:
     return torch.stack([w, d, l], dim=-1)
 
 
+def _l2_sum_of_squares(model) -> torch.Tensor:
+    """Sum of squares of all trainable params — the explicit L2 penalty term.
+
+    Fused replacement for ``sum((p ** 2).sum() for p in params)`` (#115): one
+    ``torch._foreach_pow`` collapses the ~41 per-parameter square kernels into a
+    single launch, killing the per-microbatch dispatch storm. The GRADIENT this
+    feeds ``backward()`` (2*p per param — the only thing the optimizer consumes,
+    i.e. the actual training semantics) is BITWISE-IDENTICAL to the old Python
+    loop; the scalar VALUE matches to fp32 reduction rounding (~7e-8 relative,
+    from stack-reduce vs Python left-fold add order). This is deliberately NOT
+    folded into AdamW's ``weight_decay`` — that would change the update rule; it
+    stays an explicit additive penalty layered on top of weight_decay (the
+    double-regularization is preserved exactly).
+    """
+    params = [p for p in model.parameters() if p.requires_grad]
+    return torch.stack([t.sum() for t in torch._foreach_pow(params, 2)]).sum()
+
+
 def train_step(
     model,
     optimizer,
@@ -216,7 +234,13 @@ def train_step(
     ownership: torch.Tensor | None = None,
     ownership_mask: torch.Tensor | None = None,
     ownership_weight: float = 0.0,
+    vct: torch.Tensor | None = None,
+    vct_mask: torch.Tensor | None = None,
+    vct_weight: float = 0.0,
     soft_policy_weight: float = 0.0,
+    teacher_planes: torch.Tensor | None = None,
+    teacher_pi: torch.Tensor | None = None,
+    teacher_weight: float = 0.0,
 ) -> dict[str, float]:
     """One forward + backward. By default does optimizer.step() + zero_grad
     (legacy behavior). For WL2 gradient accumulation, the caller controls
@@ -252,6 +276,7 @@ def train_step(
     use_ownership = (
         ownership_weight > 0.0 and ownership is not None and ownership_mask is not None
     )
+    use_vct = vct_weight > 0.0 and vct is not None and vct_mask is not None
     # WDL value-representation lever (bead derby-cgf): when the model carries a
     # WDL value head, request the (B, 3) {win,draw,loss} logits and train them
     # with cross-entropy against the WDL target derived from the scalar z. The
@@ -268,16 +293,18 @@ def train_step(
     use_value_logits = use_wdl or use_hlgauss
     aux_logits = None
     own_logits = None
+    vct_logits = None
     value_logits = None
-    if use_aux or use_ownership or use_value_logits:
+    if use_aux or use_ownership or use_vct or use_value_logits:
         outputs = model(
             planes,
             return_aux=use_aux,
             return_ownership=use_ownership,
+            return_vct=use_vct,
             return_value_logits=use_value_logits,
         )
-        # forward() returns (p, v, [aux], [ownership], [value_logits]) in that
-        # fixed order; unpack positionally per the flags requested above.
+        # forward() returns (p, v, [aux], [ownership], [vct], [value_logits]) in
+        # that fixed order; unpack positionally per the flags requested above.
         logits, v = outputs[0], outputs[1]
         idx_extra = 2
         if use_aux:
@@ -285,6 +312,9 @@ def train_step(
             idx_extra += 1
         if use_ownership:
             own_logits = outputs[idx_extra]
+            idx_extra += 1
+        if use_vct:
+            vct_logits = outputs[idx_extra]
             idx_extra += 1
         if use_value_logits:
             value_logits = outputs[idx_extra]
@@ -362,8 +392,63 @@ def train_step(
             own_l = per_own_se.sum() * 0.0  # keep head connected, zero grad
         loss = loss + ownership_weight * own_l
         own_l_val = float(own_l.detach())
+    vct_l_val = float("nan")
+    if use_vct:
+        # Masked BCE-with-logits: the vct head emits raw per-cell logits, the
+        # target is a per-cell 0/1 "blunder map". Per-cell BCE, mean over cells
+        # then mean over the valid (labeled) rows. Illegal/occupied cells carry a
+        # 0 target (never a blunder) so training them toward 0 is harmless.
+        per_vct = F.binary_cross_entropy_with_logits(
+            vct_logits, vct, reduction="none").mean(dim=-1)  # (B,)
+        vmask = vct_mask.bool()
+        if bool(vmask.any()):
+            vct_l = per_vct[vmask].mean()
+        else:
+            vct_l = per_vct.sum() * 0.0  # keep head connected, zero grad
+        loss = loss + vct_weight * vct_l
+        vct_l_val = float(vct_l.detach())
+    # Teacher distillation (eval/teacher build): a SEPARATE forward over a batch
+    # of expert-labelled positions adds a policy cross-entropy / KL toward the
+    # teacher's policy target — a one-hot best move (v1 HARD) OR a soft per-move
+    # winrate distribution (v2 SOFT, #86). The cross-entropy below is the SAME
+    # `-(teacher_pi * log p)` for both: a one-hot teacher_pi makes it plain CE, a
+    # soft teacher_pi makes it a (constant-entropy-shifted) KL distillation. The
+    # one-hot best-move target collapsed the student (policy -> uniform, #77/#86);
+    # the SOFT winrate target is the gentle fix. POLICY ONLY — the value head is
+    # never touched here: per issues #18/#44 the policy must carry the load and
+    # value-only teaching is structurally wrong. With teacher_weight == 0.0
+    # (default) the block never runs and the graph is byte-identical to the
+    # pre-teacher path (no extra forward).
+    teacher_l_val = float("nan")
+    use_teacher = (
+        teacher_weight > 0.0 and teacher_planes is not None and teacher_pi is not None
+    )
+    if use_teacher:
+        # Freeze BatchNorm running-stat updates for the teacher forward. The main
+        # forward above already tracks the training (self-play) distribution into
+        # BN's running_mean/var; a SECOND train-mode forward over teacher_planes
+        # would double-update those stats (and double the effective BN momentum),
+        # silently shifting the inference-time normalization. Eval-mode BN still
+        # backprops to the conv/BN weights — only the running-stat tracking is
+        # paused — so the distillation gradient is unaffected.
+        _bn = [m for m in model.modules()
+               if isinstance(m, torch.nn.modules.batchnorm._BatchNorm)]
+        _bn_was_training = [m.training for m in _bn]
+        for m in _bn:
+            m.eval()
+        try:
+            t_out = model(teacher_planes)
+        finally:
+            for m, was in zip(_bn, _bn_was_training):
+                m.train(was)
+        t_logits = t_out[0] if isinstance(t_out, tuple) else t_out
+        t_logp = F.log_softmax(t_logits, dim=-1)
+        per_teacher_ce = -(teacher_pi * t_logp).sum(dim=-1)
+        teacher_ce = per_teacher_ce.mean()
+        loss = loss + teacher_weight * teacher_ce
+        teacher_l_val = float(teacher_ce.detach())
     if l2_weight > 0:
-        l2 = sum((p ** 2).sum() for p in model.parameters() if p.requires_grad)
+        l2 = _l2_sum_of_squares(model)
         loss = loss + l2_weight * l2
     # Scale loss BEFORE backward when accumulating, so the summed gradient
     # over N microbatches equals the gradient of the mean loss over N*B
@@ -396,23 +481,102 @@ def train_step(
     if use_ownership:
         out["loss/aux_ownership"] = own_l_val
         out["train/ownership_mask_frac"] = float(ownership_mask.bool().float().mean())
+    if use_vct:
+        out["train/vct_loss"] = vct_l_val
+        out["train/vct_mask_frac"] = float(vct_mask.bool().float().mean())
+    if use_teacher:
+        out["loss/teacher"] = teacher_l_val
     if side is not None and ply is not None:
         with torch.no_grad():
             ce_cpu = per_policy_ce.detach()
             ve_cpu = per_value_se.detach()
             side_long = side.long()
-            for s in (0, 1):
-                mask = (side_long == s)
-                if bool(mask.any()):
-                    out[f"train/policy_ce/side_{s}"] = float(ce_cpu[mask].mean())
-                    out[f"train/value_mse/side_{s}"] = float(ve_cpu[mask].mean())
             ply_long = ply.long()
-            for lo, hi, label in ((0, 10, "ply_00_10"), (10, 25, "ply_10_25"), (25, 60, "ply_25_60")):
-                mask = (ply_long >= lo) & (ply_long < hi)
-                if bool(mask.any()):
-                    out[f"train/policy_ce/{label}"] = float(ce_cpu[mask].mean())
-                    out[f"train/value_mse/{label}"] = float(ve_cpu[mask].mean())
+            # Per-bucket CE/MSE diagnostics. The old code did up to 15
+            # float()/bool() host syncs per microbatch here (a .any() + two
+            # .mean() per bucket, 5 buckets). Instead compute every bucket's
+            # masked means AND counts on-device, then do ONE packed .cpu()
+            # transfer (#115) — same one-transfer pattern make_torch_evaluator
+            # uses. `ce_cpu[m].mean()` is the SAME masked_select+mean reduction
+            # as before, so the logged values are bitwise-identical; empty
+            # buckets produce nan means and are dropped via the count guard
+            # (count == 0 <=> the old `mask.any()` was False), so the exact same
+            # keys are emitted on the exact same batches.
+            buckets = [
+                ("side_0", side_long == 0),
+                ("side_1", side_long == 1),
+                ("ply_00_10", (ply_long >= 0) & (ply_long < 10)),
+                ("ply_10_25", (ply_long >= 10) & (ply_long < 25)),
+                ("ply_25_60", (ply_long >= 25) & (ply_long < 60)),
+            ]
+            ce_means = torch.stack([ce_cpu[m].mean() for _, m in buckets])
+            ve_means = torch.stack([ve_cpu[m].mean() for _, m in buckets])
+            counts = torch.stack([m.sum() for _, m in buckets]).to(ce_means.dtype)
+            ce_vals, ve_vals, cnt_vals = torch.stack(
+                [ce_means, ve_means, counts], dim=0
+            ).cpu().tolist()
+        for i, (label, _) in enumerate(buckets):
+            if cnt_vals[i] > 0:
+                out[f"train/policy_ce/{label}"] = ce_vals[i]
+                out[f"train/value_mse/{label}"] = ve_vals[i]
     return out
+
+
+def choice_step(
+    model,
+    optimizer,
+    planes: torch.Tensor,
+    legal_mask: torch.Tensor,
+    chosen: torch.Tensor,
+    chooser_z: torch.Tensor,
+    *,
+    choice_weight: float = 1.0,
+    l2_weight: float = 0.0,
+) -> dict[str, float]:
+    """One swap2 choice-head optimizer step (v2a).
+
+    OUTCOME-driven soft target per row: with ``w = (chooser_z + 1) / 2`` (the
+    chooser's outcome mapped to [0, 1] — 1 = won, 0 = lost, 0.5 = draw), the
+    target is ``w * onehot(chosen) + (1 - w) * uniform-over-legal``. So a WON
+    choice pulls the head toward the slot actually played; a LOST choice pushes
+    it toward the legal alternatives; a draw is a flat legal prior. The choice
+    logits come from ``forward_with_choice`` and are masked to the legal slots
+    before the log-softmax. This TRAINS the head only — the negotiator's
+    SELECTION is unchanged (v2b). The choice head taps the value trunk, so a
+    `choice_weight * choice_ce` backward also flows gradient into the shared
+    trunk (intended: it is a real auxiliary objective). `l2_weight` defaults to
+    0 here (the main train_step already applies L2 over all params each step)."""
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+    legal = legal_mask.bool()
+    n_choices = legal.shape[-1]
+    # Outcome-driven soft target over the legal slots.
+    w = ((chooser_z + 1.0) / 2.0).clamp(0.0, 1.0).unsqueeze(-1)        # (B, 1)
+    onehot = F.one_hot(chosen.long(), num_classes=n_choices).to(planes.dtype)  # (B, C)
+    onehot = onehot * legal.to(planes.dtype)  # defensive: chosen is always legal
+    legal_f = legal.to(planes.dtype)
+    uniform = legal_f / legal_f.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    target = w * onehot + (1.0 - w) * uniform                          # (B, C)
+
+    _, _, choice_logits = model.forward_with_choice(planes)
+    neg_inf = torch.finfo(choice_logits.dtype).min
+    masked = choice_logits.masked_fill(~legal, neg_inf)
+    logp = F.log_softmax(masked, dim=-1)
+    choice_ce = -(target * logp).sum(dim=-1).mean()
+    loss = choice_weight * choice_ce
+    if l2_weight > 0:
+        l2 = _l2_sum_of_squares(model)
+        loss = loss + l2_weight * l2
+    loss.backward()
+    optimizer.step()
+    with torch.no_grad():
+        # Accuracy: does the (masked) head argmax match the slot actually played?
+        pred = masked.argmax(dim=-1)
+        acc = (pred == chosen.long()).float().mean()
+    return {
+        "loss/choice": float(choice_ce.detach()),
+        "train/choice_acc": float(acc),
+    }
 
 
 def ema_update(ema_model, model, tau: float) -> None:
@@ -652,6 +816,19 @@ def parse_args() -> argparse.Namespace:
                         "MCTS only takes over after that, and no training examples are "
                         "recorded for the random opening. Breaks the 'always-same-opening' "
                         "collapse by forcing the model to learn from diverse positions.")
+    p.add_argument("--swap2", action="store_true", default=False,
+                   help="Start each self-play game from a swap2-negotiated opening "
+                        "(the net plays both opener and responder) instead of an "
+                        "empty/random board. Mutually exclusive with "
+                        "--random-opening-moves (swap2 owns the opening). v1 seeds "
+                        "the opening only; no choice head is trained. Default OFF == "
+                        "byte-identical to today.")
+    p.add_argument("--fixed-openings", action="store_true", default=False,
+                   help="Start each self-play game from one of Rapfi's 9 BALANCED "
+                        "(known-fair) swap2 openings, placed directly -- no "
+                        "negotiation, no net, no choice head; the net plays only "
+                        "post-opening. 15x15 only. Mutually exclusive with --swap2 "
+                        "and --random-opening-moves. Default OFF.")
     p.add_argument("--c-puct", type=float, default=1.25,
                    help="c_puct_init in the AGZ log-schedule PUCT formula. Effective "
                         "exploration constant at N_parent=0. Default 1.25 = AGZ value.")
@@ -840,6 +1017,30 @@ def parse_args() -> argparse.Namespace:
                         "Independent of --aux-opponent-reply-weight: either, "
                         "both, or neither head may be enabled. Suggested starting "
                         "value 0.15.")
+    p.add_argument("--aux-vct-weight", type=float, default=0.0,
+                   help="Moonshot auxiliary VCT-defense head (per-cell "
+                        "'VCT-blunder map'). 0.0 (default) = OFF = byte-identical "
+                        "to today (head not constructed, no vct forward, buffer "
+                        "vct tensors not allocated, SGD graph unchanged). When "
+                        "> 0, a dense 81-way head predicts, per cell, whether the "
+                        "side to move playing there walks into a forced VCT for "
+                        "the opponent; its masked BCE-with-logits against the 0/1 "
+                        "target (from the worker's --record-vct labeler) is added "
+                        "to the loss scaled by this weight, and train/vct_loss is "
+                        "logged. The head is DROPPED at inference (self-play/eval "
+                        "pay nothing). Must be paired with the worker's "
+                        "--record-vct. Suggested starting value 0.1.")
+    p.add_argument("--line-planes", action="store_true", default=False,
+                   help="Sound-world line-potential input planes (issue #107): "
+                        "the model derives 8 extra input channels in forward() "
+                        "(per-cell x 4-direction x {me,opp} max live-5-window "
+                        "stone count / 4) from the two current stone planes, so "
+                        "double threats read as two channels hot at one cell. "
+                        "FRESH models only — the stem conv's in_channels widens, "
+                        "so a resume takes line_planes from the checkpoint config "
+                        "and this flag must agree. External 17-plane contract "
+                        "(records/buffer/workers) is untouched. Default OFF = "
+                        "byte-identical.")
     p.add_argument("--soft-policy-weight", type=float, default=0.0,
                    help="KataGo-style soft-policy auxiliary target (bead "
                         "derby-79l). 0.0 (default) = OFF = byte-identical to "
@@ -855,6 +1056,46 @@ def parse_args() -> argparse.Namespace:
                         "structure the sharp completed-Q target drops under our "
                         "60-70%% draw regime. Suggested starting value 0.15; keep "
                         "the 0.25 exponent fixed (one lever).")
+    p.add_argument("--teacher-data-path", type=str, default=None,
+                   help="Teacher distillation (eval/teacher build): path to an "
+                        "npz of expert-labelled positions produced by "
+                        "`python -m gomoku.teacher generate ...`. A v1 npz holds a "
+                        "one-hot teacher move per position; a v2 npz (--soft) holds "
+                        "a dense per-move WINRATE map distilled as a SOFT policy "
+                        "target via --teacher-temp. When set together with "
+                        "--teacher-weight > 0, a batch is mixed into every SGD step "
+                        "as a POLICY-ONLY cross-entropy / KL toward that target "
+                        "(value head untouched — per #18/#44 the policy carries the "
+                        "load). Default None = OFF.")
+    p.add_argument("--teacher-weight", type=float, default=0.0,
+                   help="Weight of the teacher policy-distillation term. 0.0 "
+                        "(default) = OFF = byte-identical to the pre-teacher path "
+                        "(no extra forward). Suggested starting value ~0.3; "
+                        "loss/teacher is logged when ON.")
+    p.add_argument("--teacher-batch-size", type=int, default=0,
+                   help="Batch size for the teacher mix-in (0 = use --batch-size).")
+    p.add_argument("--teacher-temp", type=float, default=0.10,
+                   help="SOFT teacher (v2 npz with a dense soft_policy): softmax "
+                        "temperature applied to Rapfi's per-move winrate map to "
+                        "build the distillation target (masked to the scored "
+                        "support). Lower = sharper toward the best move; temp->0 "
+                        "recovers the v1 one-hot CE. Ignored for a v1 (hard) npz. "
+                        "Default 0.10.")
+    p.add_argument("--no-teacher-augment", action="store_true",
+                   help="Disable D4 symmetry augmentation of teacher positions "
+                        "(default: augment, turning N labels into 8x diversity).")
+    p.add_argument("--choice-head-weight", type=float, default=0.0,
+                   help="swap2 v2a: TRAIN the choice head into the loss. 0.0 "
+                        "(default) = OFF = byte-identical to today (no ChoiceBuffer "
+                        "is allocated, no choice examples are ingested, no choice "
+                        "forward/loss runs). When > 0, the swap2 negotiation choice "
+                        "records threaded out of self-play feed a separate "
+                        "ChoiceBuffer; each SGD step also samples a choice batch and "
+                        "adds choice_weight * masked-CE against an OUTCOME-driven soft "
+                        "target (the played slot re-signed by the game outcome from "
+                        "the chooser's frame), logged as loss/choice. This v2a step "
+                        "TRAINS the head only; the negotiator still SELECTS with the "
+                        "one-ply heuristic (v2b wires selection later). Suggested 0.3.")
     p.add_argument("--l2", type=float, default=1e-4)
     p.add_argument("--ema-tau", type=float, default=0.0,
                    help="WL2 lever #1: EMA self-play weights. When > 0, the "
@@ -903,6 +1144,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--eval-sims", type=int, default=50,
                    help="MCTS sims used by the model during eval matches")
+    p.add_argument("--no-eval-arena", action="store_true",
+                   help="Disable the batched eval arena (#106) for the in-trainer "
+                        "eval and use the legacy one-game-at-a-time path. The "
+                        "arena (default) plays each matchup's games concurrently "
+                        "with leaf evals batched across games — statistically "
+                        "equivalent winrates, not byte-identical. Auto-disabled "
+                        "when any eval lever (--eval-vcf-nodes, --fpu-reduction-c, "
+                        "--reuse-tree, --proven-prop, --proven-vcf-leaf-nodes) "
+                        "is set, since those live in the per-game search the "
+                        "wave-batched arena doesn't implement.")
     p.add_argument("--eval-baselines", type=str,
                    default="random,heuristic",
                    help="comma-separated player specs played every eval cycle. "
@@ -964,6 +1215,14 @@ def parse_args() -> argparse.Namespace:
                         "buffer) every N epochs. Set higher than --save-every "
                         "to throttle disk IO; older latest.pt is still valid "
                         "for resume, just slightly stale.")
+    p.add_argument("--shape-stats-every", type=int, default=10,
+                   help="Compute the buffer-shape snapshot (buffer/* wandb keys) "
+                        "every N epochs. shape_stats() is an O(buffer) full-plane "
+                        "scan (~25ms/150k rows at 13x13); running it every epoch "
+                        "(the pre-#115 default) is wasted work on a slowly-evolving "
+                        "buffer. On the epochs it runs, the SAME keys are logged; "
+                        "on the others they're omitted (W&B renders a gap). Set to "
+                        "1 for the pre-#115 every-epoch behavior.")
     p.add_argument("--keep-last-n", type=int, default=3,
                    help="Auto-prune older epoch checkpoints, keeping only this many "
                         "of the most recent ones (plus whatever `latest.pt` points to). "
@@ -1095,6 +1354,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     board_config.require_board_size(args.board_size)
+    # --swap2 owns the opening; mutually exclusive with --random-opening-moves.
+    if args.swap2 and args.random_opening_moves > 0:
+        raise SystemExit(
+            "--swap2 and --random-opening-moves are mutually exclusive "
+            "(swap2 negotiates the opening; drop --random-opening-moves)"
+        )
+    if args.fixed_openings and (args.swap2 or args.random_opening_moves > 0):
+        raise SystemExit(
+            "--fixed-openings is mutually exclusive with --swap2 and "
+            "--random-opening-moves (the opening book owns the opening)"
+        )
     device = pick_device(args.device)
     print(f"device = {device}")
     print(f"board_size = {board_config.BOARD_SIZE}")
@@ -1130,6 +1400,26 @@ def main() -> None:
     ownership_on = ownership_weight > 0.0
     if ownership_on:
         print(f"aux ownership head ENABLED (weight={ownership_weight})")
+
+    # Moonshot aux VCT-defense lever. The single weight flag gates the vct head
+    # (constructed iff weight > 0), the buffer vct tensors, and the masked-BCE vct
+    # loss term. The per-position target is produced by the worker's --record-vct
+    # labeler. 0.0 (default) => everything off and byte-identical to the pre-vct
+    # path. Independent of aux_on / ownership_on.
+    vct_weight = float(args.aux_vct_weight)
+    vct_on = vct_weight > 0.0
+    if vct_on:
+        print(f"aux VCT-defense head ENABLED (weight={vct_weight})")
+
+    # swap2 v2a choice-head lever. The single weight flag gates the ChoiceBuffer,
+    # the per-game choice-example ingest, and the choice loss term. 0.0 (default)
+    # => everything off and byte-identical to the pre-v2a path. The choice head
+    # itself is always present on the model (ModelConfig.choice_head defaults to
+    # True), so no build flag is needed — only the TRAINING of it is gated here.
+    choice_weight = float(args.choice_head_weight)
+    choice_on = choice_weight > 0.0
+    if choice_on:
+        print(f"swap2 choice head TRAINING ENABLED (weight={choice_weight})")
 
     # Cross-game value sidecar ('position-stats'). The single boolean flag gates
     # the buffer key column, the trainer-owned aggregate store, the ingest
@@ -1188,7 +1478,12 @@ def main() -> None:
     total_games = 0
     wandb_run_id = None
     if args.resume:
-        model, payload = load_checkpoint(args.resume, device=device)
+        # force_aux_vct=vct_on layers the moonshot VCT-defense head onto a
+        # champion that predates it (e.g. Bruce, 15x15) on a same-size resume:
+        # the core loads strict, the fresh vct_* head splices in. Without this
+        # the resumed model would lack the head that --aux-vct-weight > 0 trains.
+        model, payload = load_checkpoint(
+            args.resume, device=device, force_aux_vct=vct_on)
         start_epoch = int(payload.get("epoch", 0))
         total_games = int(payload.get("total_games", 0))
         wandb_run_id = payload.get("wandb_run_id")
@@ -1207,6 +1502,17 @@ def main() -> None:
                 f"checkpoint's activation={loaded_act}; the tower activation comes "
                 f"from the checkpoint. Re-launch with --activation {loaded_act} (or "
                 f"start a FRESH cell for the new activation — see bead derby-sib)."
+            )
+        # Line-planes lever (issue #107): the stem width comes from the
+        # checkpoint config; assert --line-planes agrees so a mis-launched
+        # resume hard-errors rather than silently building the wrong stem.
+        loaded_lp = bool(getattr(getattr(model, "cfg", None), "line_planes", False))
+        if bool(args.line_planes) != loaded_lp:
+            raise SystemExit(
+                f"--line-planes={bool(args.line_planes)} disagrees with the "
+                f"resumed checkpoint's line_planes={loaded_lp}; the stem width "
+                f"comes from the checkpoint. Re-launch to match (or start a "
+                f"FRESH cell for the new input representation — issue #107)."
             )
         # Value-head lever (beads derby-cgf, derby-tn4): the value head module
         # (scalar tanh / WDL 3-bin / HL-Gauss N-bin) comes from the checkpoint
@@ -1247,6 +1553,8 @@ def main() -> None:
             stem_padding=args.stem_padding,
             aux_opponent_reply=aux_on,
             aux_ownership=ownership_on,
+            aux_vct=vct_on,
+            line_planes=args.line_planes,
             global_pool=gp_arg,
             value_head=args.value_head,
             value_hlgauss_bins=args.hlgauss_bins,
@@ -1325,6 +1633,7 @@ def main() -> None:
     buffer = ReplayBuffer(args.replay_buffer_size, device=device,
                           aux_opponent_reply=aux_on,
                           aux_ownership=ownership_on,
+                          aux_vct=vct_on,
                           cross_game_value=cross_game_on,
                           pack_planes=bool(getattr(args, "pack_buffer", False)))
     if buffer.pack_planes:
@@ -1334,6 +1643,40 @@ def main() -> None:
     if args.buffer_recency_frac > 0.0:
         print(f"buffer curator: recency_frac={args.buffer_recency_frac} "
               f"window={args.buffer_recency_window}")
+    # Teacher distillation (eval/teacher build). When --teacher-data-path is set
+    # and --teacher-weight > 0, mix a batch of expert-labelled positions into
+    # every SGD step: a policy-only CE toward the teacher's move. The dataset is
+    # a small npz produced by `python -m gomoku.teacher generate ...`. OFF
+    # (default, weight 0.0) => never loaded, byte-identical to the baseline.
+    teacher_weight = float(getattr(args, "teacher_weight", 0.0))
+    teacher_ds = None
+    teacher_batch_size = int(getattr(args, "teacher_batch_size", 0) or args.batch_size)
+    if teacher_weight > 0.0 and getattr(args, "teacher_data_path", None):
+        from gomoku.teacher import TeacherDataset
+
+        teacher_ds = TeacherDataset.load(
+            args.teacher_data_path,
+            device=device,
+            augment=not args.no_teacher_augment,
+            teacher_temp=float(getattr(args, "teacher_temp", 0.10)),
+        )
+        _soft = teacher_ds.soft_policy is not None
+        print(
+            f"teacher distillation ENABLED: weight={teacher_weight} "
+            f"positions={teacher_ds.n} batch={teacher_batch_size} "
+            f"augment={teacher_ds.augment} "
+            f"mode={'SOFT(temp=%g)' % teacher_ds.teacher_temp if _soft else 'HARD(one-hot)'} "
+            f"src={args.teacher_data_path}"
+        )
+    elif teacher_weight > 0.0:
+        print("WARNING: --teacher-weight > 0 but no --teacher-data-path; teacher OFF")
+        teacher_weight = 0.0
+
+    # swap2 v2a choice buffer. Allocated ONLY when the choice lever is on, so the
+    # off path never touches it (byte-identical). Tiny (~1-2 examples/swap2 game).
+    choice_buffer = ChoiceBuffer(device=device) if choice_on else None
+    if choice_on:
+        print(f"swap2 choice buffer: cap={choice_buffer.capacity}")
     # Build the reanalyze scheduler now that buffer.capacity is known.
     # OFF path never enters this branch — no import, no allocation.
     if reanalyze_on:
@@ -1406,6 +1749,10 @@ def main() -> None:
     # Build baseline pickers once (stateless across calls — RNG is passed in).
     fast_pickers = [(s, build_player(s)) for s in fast_specs]
     slow_pickers = [(s, build_player(s)) for s in slow_specs]
+    # Arena-side agents for the in-trainer eval block, built lazily on first
+    # eval and reused across epochs so a pooled picker (lookahead) keeps its
+    # worker pool warm (issue #110). Keyed by spec label.
+    arena_baseline_agents: dict = {}
     eval_counter = 0
 
     # Pre-build the self-play opponent picker if requested. 'self' = vanilla
@@ -2066,6 +2413,8 @@ def main() -> None:
                 rng=rng,
                 wave_size=args.wave_size,
                 random_opening_moves=args.random_opening_moves,
+                swap2=args.swap2,
+                fixed_openings=args.fixed_openings,
                 record_aux=aux_on,
                 record_ownership=ownership_on,
             )
@@ -2099,6 +2448,12 @@ def main() -> None:
         else:
             for r in records:
                 buffer.add(r.examples)
+
+        # swap2 v2a: ingest this cycle's negotiation-choice examples into the
+        # separate ChoiceBuffer. OFF (choice_buffer is None) => never runs.
+        if choice_on and choice_buffer is not None:
+            for r in records:
+                choice_buffer.add(getattr(r, "choice_examples", []))
 
         # Cross-game value: aggregate THIS cycle's examples into the trainer-owned
         # store. Recency-decay the whole store once per cycle (fades old/weak-net
@@ -2256,11 +2611,13 @@ def main() -> None:
             for i in range(steps_this_cycle):
                 microbatch_steps_this_cycle += 1
                 aux_pi = aux_mask = ownership = ownership_mask = None
-                if aux_on or ownership_on or cross_game_on:
+                vct = vct_mask = None
+                if aux_on or ownership_on or vct_on or cross_game_on:
                     sampled = buffer.sample(
                         args.batch_size,
                         return_aux=aux_on,
                         return_ownership=ownership_on,
+                        return_vct=vct_on,
                         return_keys=cross_game_on,
                     )
                     planes, pi, z, side, ply = sampled[:5]
@@ -2269,6 +2626,8 @@ def main() -> None:
                         aux_pi, aux_mask = extra.pop(0), extra.pop(0)
                     if ownership_on:
                         ownership, ownership_mask = extra.pop(0), extra.pop(0)
+                    if vct_on:
+                        vct, vct_mask = extra.pop(0), extra.pop(0)
                     if cross_game_on and position_stats is not None:
                         pos_keys = extra.pop(0)
                         if pos_keys is not None:
@@ -2288,6 +2647,9 @@ def main() -> None:
                     planes, pi, z, side, ply = buffer.sample(args.batch_size)
                 is_first_in_window = (i % accum_n == 0)
                 is_last_in_window = ((i + 1) % accum_n == 0) or (i + 1 == steps_this_cycle)
+                teacher_planes = teacher_pi = None
+                if teacher_ds is not None and teacher_weight > 0.0:
+                    teacher_planes, teacher_pi = teacher_ds.sample(teacher_batch_size)
                 m = train_step(
                     model, optimizer, planes, pi, z,
                     value_weight=args.value_weight,
@@ -2303,10 +2665,32 @@ def main() -> None:
                     ownership=ownership,
                     ownership_mask=ownership_mask,
                     ownership_weight=ownership_weight,
+                    vct=vct,
+                    vct_mask=vct_mask,
+                    vct_weight=vct_weight,
                     soft_policy_weight=args.soft_policy_weight,
+                    teacher_planes=teacher_planes,
+                    teacher_pi=teacher_pi,
+                    teacher_weight=teacher_weight,
                 )
                 for k, v in m.items():
                     train_metrics_acc.setdefault(k, []).append(v)
+                # swap2 v2a choice-head step. OFF (choice_on False / buffer empty)
+                # => never runs (no sample, no forward, no loss). When on, it is a
+                # SEPARATE optimizer step on a choice batch (its own zero_grad +
+                # step), gated to `is_last_in_window` so it fires ONCE PER MAIN
+                # OPTIMIZER STEP (1:1 cadence) — NOT once per microbatch, which would
+                # over-update the shared value trunk by `grad_accum_steps`× and risk
+                # destabilizing value learning at cold-start.
+                if (is_last_in_window and choice_on and choice_buffer is not None
+                        and choice_buffer.size >= args.batch_size):
+                    cplanes, clegal, cchosen, ccz = choice_buffer.sample(args.batch_size)
+                    cm = choice_step(
+                        model, optimizer, cplanes, clegal, cchosen, ccz,
+                        choice_weight=choice_weight,
+                    )
+                    for k, v in cm.items():
+                        train_metrics_acc.setdefault(k, []).append(v)
                 if is_last_in_window:
                     optimizer_steps_this_cycle += 1
                     # WL2 lever #1: EMA tracks the trained model per optimizer
@@ -2376,10 +2760,16 @@ def main() -> None:
             "train/positions_this_cycle": n_positions_this_cycle,
             **wave_metrics,
             **train_metrics,
-            # Buffer-shape snapshot: distribution over n_stones buckets + z mix.
-            # Computed every cycle so wandb shows shape evolution over time.
-            **buffer.shape_stats(),
         }
+        # Buffer-shape snapshot: distribution over n_stones buckets + z mix.
+        # shape_stats() is an O(buffer) full-plane scan (#115); gate it to every
+        # --shape-stats-every epochs (default 10) instead of every cycle — the
+        # buffer's shape evolves slowly, so the every-epoch scan was wasted work.
+        # On the epochs it runs the SAME buffer/* keys are logged; on the others
+        # they're omitted (W&B renders a gap, exactly like the conditional
+        # plies_log keys above). --shape-stats-every 1 restores the old cadence.
+        if (epoch + 1) % args.shape_stats_every == 0:
+            log.update(buffer.shape_stats())
         # Reanalyze metrics (bead derby-fm9). Only emit when the lever is on
         # AND a cycle actually ran this epoch — keeps OFF-path log keys
         # byte-identical to the pre-lever baseline.
@@ -2445,15 +2835,40 @@ def main() -> None:
             eval_counter += 1
             eval_start = time.time()
             eval_evaluator = make_torch_evaluator(model, device)
-            model_picker = mcts_picker(eval_evaluator,
-                                       n_simulations=args.eval_sims,
-                                       c_puct=args.c_puct,
-                                       eval_vcf_nodes=args.eval_vcf_nodes,
-                                       eval_vcf_depth=args.eval_vcf_depth,
-                                       fpu_reduction_c=args.fpu_reduction_c,
-                                       reuse_tree=args.reuse_tree,
-                                       proven_prop=args.proven_prop,
-                                       proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes)
+            # Batched arena (#106): all of a matchup's games live at once,
+            # leaf evals batched across games (the self-play regime) instead
+            # of one game at a time at batch 1. Only when every eval lever is
+            # at its OFF default — the levers live in mcts_picker's per-game
+            # search, which the wave-batched arena search doesn't implement.
+            eval_levers_off = (
+                args.eval_vcf_nodes == 0
+                and args.fpu_reduction_c == 0.0
+                and not args.reuse_tree
+                and not args.proven_prop
+                and args.proven_vcf_leaf_nodes == 0
+            )
+            use_eval_arena = not args.no_eval_arena and eval_levers_off
+            if use_eval_arena:
+                from gomoku.arena import (
+                    NetAgent,
+                    picker_agent_from_spec,
+                    play_matches_batched_multi,
+                )
+                arena_net = NetAgent(eval_evaluator,
+                                     sims=args.eval_sims,
+                                     c_puct=args.c_puct,
+                                     label="model")
+                model_picker = None
+            else:
+                model_picker = mcts_picker(eval_evaluator,
+                                           n_simulations=args.eval_sims,
+                                           c_puct=args.c_puct,
+                                           eval_vcf_nodes=args.eval_vcf_nodes,
+                                           eval_vcf_depth=args.eval_vcf_depth,
+                                           fpu_reduction_c=args.fpu_reduction_c,
+                                           reuse_tree=args.reuse_tree,
+                                           proven_prop=args.proven_prop,
+                                           proven_vcf_leaf_nodes=args.proven_vcf_leaf_nodes)
 
             run_slow = bool(slow_pickers) and (eval_counter % args.eval_slow_every == 0)
             batches = [("fast", fast_pickers, args.eval_baseline_games)]
@@ -2461,6 +2876,38 @@ def main() -> None:
                 batches.append(("slow", slow_pickers, args.eval_slow_games))
 
             for batch_label, pickers, n_games in batches:
+                if use_eval_arena:
+                    # Multi-opponent field (#110): the whole batch's games
+                    # live at once — one net pick_batch per round across all
+                    # matchups, baseline picks fanned concurrently. Seeds per
+                    # spec match the old sequential per-baseline calls.
+                    m_start = time.time()
+                    for spec, _p in pickers:
+                        if spec.label() not in arena_baseline_agents:
+                            arena_baseline_agents[spec.label()] = (
+                                picker_agent_from_spec(spec)
+                            )
+                    multi_res = play_matches_batched_multi(
+                        arena_net,
+                        [
+                            (
+                                arena_baseline_agents[spec.label()],
+                                n_games,
+                                args.seed + epoch * 1000 + spec_idx,
+                            )
+                            for spec_idx, (spec, _p) in enumerate(pickers)
+                        ],
+                    )
+                    batch_dt = time.time() - m_start
+                    for (spec, _p), res in zip(pickers, multi_res):
+                        key = _baseline_log_key(spec)
+                        log[f"eval/{key}_winrate"] = res.win_rate
+                        log[f"eval/{key}_wins"] = res.wins
+                        log[f"eval/{key}_losses"] = res.losses
+                        log[f"eval/{key}_draws"] = res.draws
+                        # Whole-field time — matchups ran concurrently.
+                        log[f"time/eval_{key}_s"] = batch_dt
+                    continue
                 for spec_idx, (spec, baseline_picker) in enumerate(pickers):
                     m_start = time.time()
                     res = play_match_pickers(

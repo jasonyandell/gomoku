@@ -3,1454 +3,418 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
-## [2026-06-19] autolab WENT LIVE → 15×15 era → first 15×15 champion (#64/#65/#67, epic #53)
-
-The night the self-driving lab proved itself, then pivoted to 15×15 — synthesized
-across `TRAINING_WIKI.md` (evidence, two new dated entries) and three synthesis pages.
-**Arc:** autolab launched (#64) → ran **6 real 9×9 slices** unattended (crowned the
-first champion `9x9-champ-recipe@0`, 0 failures) → **pivoted to 15×15** (#65: board
-size is a process-start `GOMOKU_BOARD_SIZE` constant; trainer threads it into the
-`run_sweep` env + `autolab up --board-size` bakes it into both the train **and**
-arena plists; HF `champion` tag reset for the new era) → ran the whole loop again from
-scratch (lane `15x15-wdl`, cell `G15-wdl` = v8 + WDL head, no warm-start, no teacher)
-→ **crowned the first 15×15 champion `15x15-wdl@0` at internal elo 1918** (not
-comparable to the 9×9 scale). Updates: (1) `TRAINING_WIKI.md` — new 2026-06-19 entry
-"15×15 era: first self-driving 15×15 run" (the #67 arena artifact-ref bug + ledger-
-correction recovery, the #65 pivot, the science, the first champion). (2)
-[topics/15x15-training-campaign.md](topics/15x15-training-campaign.md) — **DATED
-CORRECTION**: the from-scratch run went **through** the cold-start fast-attack collapse
-(plies 69.5→9.2) and **self-recovered** to ~35-40 plies with **no teacher / no
-warm-start** (WDL value-loss held ~0.81-0.89 = healthy maturation, not the death-tell)
-→ cold-start collapse is a **survivable transient** for v8+WDL, the warm-start
-"remedy" may not be strictly required; preserves the original 2026-06-13 conclusion,
-annotates it. Decisive open probe: this net's **white W-L-D vs Rapfi** (recipe-deep
-deficit vs warm-start attacker-bias). (3)
-[topics/autolab-architecture.md](topics/autolab-architecture.md) — 15×15-capability
-section, P3/P4 phases marked **LIVE**, the **#67 lesson** (artifact-contract scheme
-mismatch survived per-side unit tests; needs an end-to-end trainer→arena smoke), and a
-new **Arena-yardstick gap** section (the arena gates only *relatively*; wire
-`ExternalAnchor.play()` from `eval_vs_rapfi`, pin a *measured* rapfi-100ms point not a
-published Gomocup Elo, add a non-gating absolute W-L-D readout, surface Δwhite-elo/Δt).
-(4) `index.md` — autolab doorway + Page Catalog row marked LIVE/15×15. Issues:
-#64/#65/#67/#68, epic #53.
-
-## [2026-06-19] autolab P5–P7 operating contract — new page: supervisor + monitor + research-lite (unattended overnight)
-
-New canonical page [topics/autolab-supervisor-and-monitor.md](topics/autolab-supervisor-and-monitor.md):
-the contract that turns the tested autolab library into a running overnight lab.
-Synthesizes four P-reports into one buildable spec — (a) `~/data/autolab/` home
-layout with the monitor↔research path-ownership rule (research owns `research/`,
-monitor owns `monitor/`); (b) the process tree + literal launchd plist XML for
-**four** jobs — `train`/`arena` (`KeepAlive{SuccessfulExit:false}`, run the
-daemons directly; the flock singleton + ledger re-pick is the whole recovery
-story, no parent respawn) and `monitor`/`research` (`StartInterval` 600/1800) —
-with the full env table (`HOME` for HF token, `PATH` for homebrew git,
-`WANDB_MODE=offline`); (c) the one-row seed — **base=scratch, cell=derby-v9-small
-(fresh 9×9 v8-champion recipe), max_wall_secs=3600**, p10 seed band, ~6–7 slices
-by morning, with the `GOMOKU_BOARD_SIZE`-only-9×9 rationale; (d) the monitor
-digest spec (latest.md template + notify-on-change + empty-state degradation);
-(e) the research-lite deterministic tick + the `priority < P_seed` starvation
-guard; (f) the `autolab up`/`down` runbook incl. the attended `--no-hf`→real-push
-PROD-slice proof to run BEFORE unattended launch; + a ranked risk list. Index
-gets a doorway row under the autolab/ops route. Did NOT touch
-`autolab-architecture.md` (the build step de-stales it).
-
-## [2026-06-19] autolab P4 arena built (#59) — architecture page: arena section + phases
-
-`gomoku/lab/arena.py` `ArenaRole` shipped: gates a candidate vs the HF `champion`
-tag via `sliding_gate.run_gate(dry_run=True)` (PROMOTE/REVERT/AMBIGUOUS), appends
-`eval`+`verdict` rows, moves the `champion` tag on PROMOTE, shrinks `n_games` when a
-trainer slice is live (co-tenancy). First candidate (no champion) auto-promotes.
-8 mocked tests (gate/HF/eval_fn injected — GPU-free). `gomoku-lab-arena` entry point.
-Updated the Arena section (built; dry_run + HF-tag champion; Rapfi panel a logged
-follow-up) + phases table (P4 DONE; P5 research next). Live gate proof deferred
-(needs real models + a free box). P1–P4 of epic #53 now shipped.
-
-## [2026-06-19] autolab-architecture.md — de-stale to the SHIPPED P2/P3 design (no-claim flock, ~/data home, run-base)
-
-Reconciled the design page with what's built (P1 #54, P2 #56, P3 #57 all merged).
-Dropped the `claim`/lease path from the shared-loop pseudocode + code-shape items
-6–7 (singleton is now an OS flock that auto-frees on death — `FD_CLOEXEC` so
-subprocesses can't pin it — and recovery is plain re-pick; nothing to reclaim). New
-**`~/data/autolab/` home** section (ledger + `runs/<lane>/` + `worktrees/<row>` +
-`daemon-<role>.lock`) with the **`~/data` buffer convention** (big artifacts local;
-HF gets slimmed weights only) and the **data↔code decoupling** via
-`run_sweep --run-base`/`GOMOKU_RUN_DIR` (default REPO_ROOT) + per-commit ephemeral
-code worktree. Updated Locked decisions + the phases table (P1–P3 DONE). Built this
-session: `gomoku/lab/{daemon,status,trainer}.py`, `hf.push_slice`, `run_sweep`
-run-base, entry points `gomoku-lab-{train,status}`.
-
-## [2026-06-18] NEW topic/autolab-architecture.md — formalize the autolab (epic #53, P1 spine #54 built)
-
-New canonical design page for Jason's self-driving-lab spec: one external, out-of-git,
-append-only ledger (`gomoku/lab/ledger.py`, financial-journal corrections, reducer +
-priority-pick — built + 21 tests green this session) read by four same-shape loops
-(trainer 1h-singleton-slices→HF · mac-native arena · ideate-and-wait research · GitHub
-worker). Captures the ~80%-there finding (every load-bearing mechanism already exists; the
-spine was the gap), the 8-point code-shape contract, the **measured** M5 co-tenancy envelope
-(one heavy SGD trainer max; arena concurrent under a guard), the per-loop cockpit overlay, the
-locked decisions (ledger in `~/code`; buffer local + HF slimmed; per-slice HF revision +
-champion tag; 1h cap, MVP at 1-epoch), and the P1–P6 plan. **Supersedes the framing of #2**
-(three-tier queue) and folds in #19. Added an index doorway row + Page Catalog entry.
-
-## [2026-06-18] white-side-defense-plan — #43 (I2) LEVER BUILT: stamp the saving move on the policy head
-
-Recorded that the #43 defense-teacher I2 arm is code-complete + merged (`Closes #43`). New
-`vcf.vcf_refutations` primitive (the defender moves that break the opponent's forced VCF, since
-the recorded side moves first — sound, re-solve-confirmed); `self_play._apply_defense_teacher_policy`
-stamps a soft saving-move policy target and leaves value untouched (pure policy lever, no value
-crush on truly-lost positions); `--defense-teacher-policy` worker flag; full test file incl. a
-300-position soundness fuzz. Added a "#43 (I2) LEVER IS BUILT" subsection to §1B.2 with the why
-(vs the failed value-only #36/#42) and the gate (re-run the Rapfi TC-tier white-column calibration
-after a training slice). Remaining = the live GPU race (`needs-live-validation`).
-
-## [2026-06-18] white-side-defense-plan + reliable-eval-set — SYNTHESIZE the TC-tier calibration + the parallel --jobs eval (#52)
-
-Promoted the champion-vs-Rapfi TC-tier calibration (TRAINING_WIKI evidence) into synthesis.
-`white-side-defense-plan.md` §1B.2: added the tier table + the two readings — **cliff** (10ms
-below Rapfi's search threshold, swept 40-0) then a **white-defense plateau** (~27% flat from
-100ms-1s; black competitive 40-65%, white pinned 0-15%). The deficit vs the #1 engine is 100%
-white-side, now 5× confirmed → strongest mandate for #43 (Rapfi = the before/after gate).
-`reliable-eval-set.md`: documented the parallel `--jobs` eval path (#52, spawn-pool, pass the
-run-rapfi WRAPPER so NNUE loads; 200 games in 7.6 min).
-
-## [2026-06-18] index + white-side-defense-plan + external-engine-baselines — SYNTHESIZE first real-Rapfi result; de-stale the "broken yardstick" reckoning
-
-The first champion-vs-real-Rapfi result (eval502 20.8% @5s, n=24; **black 42% / white
-0/12**) was recorded only in `TRAINING_WIKI.md` (evidence) — promoted it into the synthesis
-layer. (1) `white-side-defense-plan.md`: new §1B.2 (2026-06-18) "STRONG-ATTACKER
-MEASUREMENT ARRIVED" — real Rapfi is the harder attacker #45/#49 was reaching for; 0/12 is
-the opposite of the #45-v1 floor, the cleanest #37 evidence, and validates #43 as the
-target. (2) `index.md`: added a ✅ 2026-06-18 UPDATE to the 2026-06-15 RECKONING banner (the
-"broken Rapfi" was the weightless build; native NNUE Rapfi is fixed + online, #40) and
-de-staled the reliable-eval / panel-derby / white-defense table rows. (3)
-`external-engine-baselines.md`: first-contact result line under the anchor-online section.
-Cross-refs wired: white-defense ↔ external-engine-baselines ↔ #37/#43/#49 ↔ TRAINING_WIKI.
-
-## [2026-06-18] topics | external-engine-baselines + reliable-eval-set + gomocup-engines-catalog — native Rapfi-NNUE anchor ONLINE (#40, resolves #28 under-search)
-
-Brought the first hard EXTERNAL eval online natively (no wine, per Jason's nix
-directive). Native arm64 **Rapfi-NNUE** is now a default reliable anchor in
-`panel_tournament.py::_NATIVE_ENGINES`. Key finding: the #28 "Rapfi ignores its
-time budget / illusory TC tiers" wound was the **weightless classical build**
-(no `--config`); with the committed `engines/rapfi/config.toml` + mix9svq NNUE
-weights it searches to its full budget (verified: depth 32 / 2.0M nodes / 4105ms
-of a 4970ms budget / forced mate), single-threaded (Gomocup-legal). Added
-`scripts/run-rapfi` wrapper (hard-errors if binary/config missing), extended
-`build_rapfi.sh` to fetch the `Networks` submodule weights (sha256-verified
-byte-identical; weights gitignored, config committed), and `tests/test_rapfi_native.py`
-(skips when artifact absent; pins handshake + unmirrored coords via a forced-block
-tactic). Still open before trusting an ABSOLUTE number: balanced openings (#22) +
-measuring effective single-thread strength under our harness (#35).
-
-## [2026-06-16] topics | workflow-orchestration § Resilience — workflows degrade, don't crash (#50)
-
-Added a Resilience section to
-[topics/workflow-orchestration.md](topics/workflow-orchestration.md): an
-API-overload window (529s) crashed `implement-backlog` dereferencing `triage.picks`
-on a `null` (a dead subagent). The synthesis: a workflow's resilience lives in its
-deterministic JS, not its agents — bounded re-spawn (`agentTry`) for idempotent
-chokepoints, graceful degradation everywhere else, and **never retry a
-side-effectful agent** (the composite's train-launch — double-launch risk). Gauge:
-`scripts/check_workflow_resilience.mjs` (verified red on the un-hardened code, green
-after). All four `.claude/workflows/*.js` hardened.
-
-## [2026-06-16] wiki | Memory-vs-wiki reckoning — pruned agent memory to machine+user only, promoted 37 memories into the wiki
-
-Jason: "memories compete with the wiki." Pruned the agent's persistent memory
-to **machine-only + working-with-Jason-only** (8 of 45 kept); promoted the
-remaining 37 project/process/roadmap memories into the wiki, the source of
-truth.
-
-New/updated synthesis:
-- **CREATED** [topics/fleet-management.md](topics/fleet-management.md).
-- Appended sections to [topics/research-lab-charter.md](topics/research-lab-charter.md)
-  (clean-milestone-not-stop, run-cap fast-filter, the three-tier redesign #2,
-  the training-slice resume-mechanism),
-  [topics/alphazero-lessons.md](topics/alphazero-lessons.md) (threat-semantics +
-  founding decisions),
-  [topics/perf-bench-vs-real-training-cost.md](topics/perf-bench-vs-real-training-cost.md)
-  (plies-ETA), [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) (3M
-  turnover), [topics/white-side-defense-plan.md](topics/white-side-defense-plan.md)
-  (#42-failed / I2-fired update),
-  [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md)
-  (overnight workhorse + narrator), [ops/gpu-queue.md](ops/gpu-queue.md)
-  (gpu_daemon historical + fixed the dangling gpu-daemon.md link).
-- Rewrote [topics/conventions.md](topics/conventions.md) § "Memories also go to
-  the wiki" → "What belongs in memory vs the wiki": memory = machine + user
-  only; project/process/roadmap knowledge is **wiki-only, not mirrored**. Same
-  rule tightened in [../CLAUDE.md](../CLAUDE.md) and [../AGENTS.md](../AGENTS.md).
-- Cleaned dangling "Mirrored in memory" footers for the deleted slugs.
-
-## [2026-06-12] topics | Added 15x15-era-feasibility-and-plan: the perf ceiling was the small model, not the Mac
-
-Filed [topics/15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md)
-plus the evidence cell `scripts/bench_board_scaling.py`. Measured on the idle
-M5 Max (torch 2.12.0, fp16, MPS): at the production wave=64 the champion arch
-runs 15×15 for **free** (0.98×), a 96×8/1.45M-param 15×15 net costs only
-**2.32×**, 128×10 costs 4.62× — direct confirmation of the dispatch-bound
-regime from [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
-Envelope: a WL5-scale 1M-game 15×15 run ≈ a week of wall-clock (to be
-validated by a live smoke slice per
-[topics/perf-bench-vs-real-training-cost.md](topics/perf-bench-vs-real-training-cost.md)).
-Plan: Phase 0 certify the v8 champion vs Rapfi at 9×9 → Phase 1 rules-variant
-decision (human-gated; swap2-freestyle recommended first) → Phase 2 port →
-Phase 3 smoke + sweeps + warm-start check → Phase 4 first 15×15 run (WDL head
-as first new contestant, bit-packed buffer prerequisite) → Phase 5 derby +
-perf-lab reopen (ANE `L09i-fix-load` first). Indexed as a new Start Here row
-and under Performance And Hardware.
-
-## [2026-06-01] topics | Added workflow-orchestration: Claude Code Workflows mapped onto the lab
-
-Filed [topics/workflow-orchestration.md](topics/workflow-orchestration.md) and the
-lab's first real workflow at `.claude/workflows/reviewer-gated-fanout.js`. The
-synthesis: the Claude Code *Workflow* feature is **deterministic agent-chaining**
-(distinct from the `/loop` looper) and maps exactly onto the *everything-else*
-lane of the two-queue scheduler — the half that is prose today (fan-out, Reviewer
-gate, worktree lifecycle). It does **not** fit the GPU lane (agents can't hold the
-MPS lock; `delo_derby`/`run_sweep`/watchdog stay as-is) or cross-session crons.
-Page carries the fit/misfit table and the cockpit framing: a `pipeline` whose
-second stage is the Reviewer makes the verify-gate non-skippable structure rather
-than skippable discipline. Indexed under Performance And Hardware (next to
-conventions). Next candidate noted: an issue-runner workflow for the bead-runner
-loop. Pairs with [topics/cockpit-vs-autopilot.md](topics/cockpit-vs-autopilot.md)
-(still unwritten — referenced from MEMORY.md but absent from the repo).
-
-## [2026-05-25] sources | Added Sid Bidasaria "Stop babysitting your agents" talk transcript
-
-Filed [sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md](sources/sid-bidasaria-stop-babysitting-agents-2026-05-20.md)
-— the *correct* Sid talk (`wI0ptqCSL0I`, Claude channel, 2026-05-20), not the
-SDK/GitHub-Action talk (`dRsjO-88nBs`). The video has no YouTube caption track,
-so the gemini MCP couldn't transcribe it; audio was pulled with `yt-dlp` and run
-through **Whisper locally on the M5 Max** (raw output at
-`~/.claude/jobs/60c8a964/out/`). Light ASR cleanup: Whisper heard "Claude" as
-"Cloud" throughout (corrected), misspelled the name, and looped on a few phrases
-during silent demo stretches (collapsed). Talk arc: verification (teach Claude to
-check its own work) → multi-Claude (run several once they're reliable) →
-background loops (`/loop`, routines) to take the keyboard out of the hot path.
-Indexed under the Source Records table.
-
-## [2026-05-24] wiki | Lab identity rename: perf lab → research lab; perf-queue → gpu-queue
-
-Four files renamed via `git mv`; no content added or deleted elsewhere:
-
-- `wiki/topics/perf-lab-charter.md` → `wiki/topics/research-lab-charter.md`
-- `wiki/topics/perf-lab-session-runbook.md` → `wiki/topics/research-lab-session-runbook.md`
-- `wiki/topics/perf-lab-reviewer-role.md` → `wiki/topics/research-lab-reviewer-role.md`
-- `wiki/ops/perf-queue.md` → `wiki/ops/gpu-queue.md`
-
-Content reframed in the renamed files:
-
-- **research-lab-charter.md**: retitled "Research Lab Charter — Make the Mac Sing." Mission expanded to two research areas: perf research (original scope) and training-recipe research (new). Two-queue scheduler renamed from "GPU queue / CPU queue" (hardware) to "GPU-required (serial) / everything-else (parallel)" (hardware requirement). Added "Training runs as GPU-required items" subsection: a training slice is a `run_sweep --max-wall-secs --final-eval` dispatch; the lab reads `eval/model_elo` from `<cell>/checkpoints/eval_results.jsonl`; eval stays inside the bundle. All existing perf machinery (R-S*/R-TRAIN-*, tiers, smoke-first, Reviewer gate, 12-row stop-gate triage) preserved as the perf research area's rules.
-- **gpu-queue.md**: retitled "GPU-required queue — the serial lane for anything needing MPS." Notes training slices now sit alongside perf cells. RESUME STATE block and all queue content preserved verbatim except title/framing.
-- **research-lab-reviewer-role.md**: updated title, embedded audit prompts, and cross-refs.
-- **research-lab-session-runbook.md**: updated title and section headers; added training slice to "When to use this page."
-
-All navigable cross-refs in wiki/ updated to new names. Skill referred to as `gomoku-research-lab` (renamed separately). No touches to scripts/, gomoku/, or ~/.claude/skills/.
-
-## [2026-05-24] topics | Backlog idea filed — containerize the training run
-
-- Added [topics/containerize-training-runs.md](topics/containerize-training-runs.md) — "for soon" backlog capture of Jason's idea: containerize a training run, run one container at a time, refine the `gomoku-train` skill for lower startup friction/time (proper caching). Captured during the research-lab ↔ training integration design discussion.
-- Recorded the one real open question rather than filing a plan that hits a wall: **Docker on macOS has no Metal/MPS passthrough** (Linux-VM containers can't reach the Apple GPU → CPU fallback). So the idea targets either the off-Mac/at-scale path ([[az-at-scale-vs-laptop]]) or a non-Docker reproducible run unit on the Mac (lockfile + warm venv + `run` verb + weight cache). Decide that fork first.
-- Linked from the index Page Catalog (Operations And Use). Not started; no memory entry yet (design still in flux).
-
-## [2026-05-23] topics | Core ML design-envelope page published + L09c-L09h research lanes queued
-
-- Added [topics/coreml-design-envelope-and-our-fit.md](topics/coreml-design-envelope-and-our-fit.md) — characterizes Core ML / ANE's design center (the iOS/macOS app ML stack: Vision, Siri, AR, FaceID), maps our research-compute gomoku workload against that envelope (20-100× above design call rate, 3-30× below design model size — worst corner), and proposes six concrete research lanes (L09c tiny on ANE, L09d medium on ANE, L09e routing-units sweep, L09f larger-V amortization, L09g model-size sweep at V=512, L09h .mlpackage re-export cost). Frame: "M5 Max as mainframe is learning where it breaks; even if we don't directly leverage it in the end, we'll know."
-- Cross-linked from [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) (parent philosophy), [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) (sister control-plane page; now points at the design-context page as recommended first-read), and the gpu-queue Background section (six new lane yamls).
-- Memory `project-coreml-reality` updated with the 2026-05-23 framing: design envelope vs our workload, the MPS-relief mechanism is real but the production lever was elsewhere (L11b' sgd_per_position cap), where Core ML is the right tool for us (deployment, possible match-eval sidecar).
-
-## [2026-05-23] topics | M5 Max fp16 + throughput regimes findings page published
-
-- Added [topics/m5-max-fp16-and-throughput-regimes.md](topics/m5-max-fp16-and-throughput-regimes.md) — public-facing writeup of three surprising chip findings from the 2026-05-23 perf cycle: (1) fp16 on MPS is no longer slow at torch 2.11.0 + fused conv+bn (small/V=512 +97.2%); (2) same chip has bandwidth-bound and dispatch-bound regimes depending on model size (small bandwidth-bound, tiny dispatch-bound; same V=512); (3) independent perf levers compose multiplicatively (predicted 2.530, measured 2.529 — to four decimals).
-- Goal: searchable from "PyTorch MPS fp16 slow", "Apple silicon fp16 benchmark", "M5 Max throughput", etc. Open-source the corrections to the folk wisdom we ran into in the forum-thread archaeology.
-- Cross-linked from [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md) and [topics/research-lab-charter.md](topics/research-lab-charter.md). All numbers backed by yaml receipts in [ops/experiment-ledger.md](ops/experiment-ledger.md) with Reviewer-APPROVE audits.
-
-## [2026-05-22] ops | frontier run 20260522T061713Z curated
-
-- Integrated `outer-loop-python-profile` receipt from run `20260522T061713Z` after worker merge (`5e20aaa`, integrated as `411ed75`). Marked the lane completed/rejected in `.frontier/lanes.json` and the ops board.
-- Curated the profile result into [ops/status.md](ops/status.md), [ops/frontier.md](ops/frontier.md), [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), and [ops/test-ledger.md](ops/test-ledger.md): bounded wave-mode worker profile wall 1.064s, evaluator 84.3%, native search excluding evaluator 11.0%, measured post-search Python 4.7%.
-- Preserved worker detail in [ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md](ops/open-notes/20260522T061713Z-01-outer-loop-python-profile.md). Added the artifact caveat: raw JSON/log paths named by the worker were not present in main after worktree cleanup, so rerun the bounded profile command if exact JSON is needed.
-- Promoted no unblocked post-search Python lane; next perf attention should be evaluator/engine overlap after ANE rail proof, or a narrowly scoped native-search/evaluator-boundary profile if the manager wants another CPU pass.
-
-## [2026-05-22] ops | frontier run 20260522T054739Z manually recovered
-
-- Frontier workers all exited successfully, but the manager failed during integration with a stale UI context (`Extension ctx is stale after session replacement or reload`). Manually merged all five worker branches, resolved curation conflicts, removed the run worktrees/branches, and patched `.pi/extensions/frontier-lab/index.ts` so stale background UI handles no longer mark completed runs failed.
-- Marked completed lanes in `.frontier/lanes.json`: baseline receipts, production contour, quality gates, and curation. Marked ANE residency and production engine-overlap blocked until `powermetrics` can run with cached/passwordless sudo.
-- Updated [ops/status.md](ops/status.md) and [ops/frontier.md](ops/frontier.md): the next actionable lane is now `outer-loop-python-profile`.
-
-## [2026-05-22] perf | Core ML / ANE residency lab integrated
-
-- Integrated the detached 934b Core ML / ANE residency harness into the lane
-  worktree: `scripts/coreml_ane_residency_scout.py`,
-  `tests/test_coreml_ane_residency_scout.py`, and
-  [topics/coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md).
-- Ran the harness tests and short Core ML scheduled smoke; the smoke can only
-  claim `coreml-scheduled` because powermetrics was skipped.
-- Attempted the required `conv,resnet,gomoku` powermetrics scout, but it was
-  blocked by unavailable cached/passwordless sudo (`sudo -n true` failed).
-  Exports succeeded, but no same-window rail logs were produced.
-- Updated [topics/ane-int8-inference.md](topics/ane-int8-inference.md),
-  [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md), and the
-  wiki index with the corrected rule: trust nonzero ANE rail evidence, not the
-  `CPU_AND_NE` label.
-
-## [2026-05-22] ops | control-room curation for frontier run 20260522T054739Z
-
-- Synced ops status/frontier pages with active frontier worktrees and receipt state: five lanes claimed under `.frontier/worktrees/20260522T054739Z-*`; before this lane wrote its own receipt, no sibling worker receipt files existed yet when checked.
-- Curated perf10 production-shaped evidence from `/Users/jason/code/gomoku-perf-extension/sweep_logs/perf10-summary.tsv` as the active production-contour seed, with exact-command capture still marked as the repeat blocker.
-- Curated detached 934b Core ML / ANE residency evidence into ops baselines, test ledger, and experiment ledger: Gomoku FP16 fixed fused Core ML b32/b128 cells show nonzero ANE rail by powermetrics, but remain `needs_repeat` because the harness is uncommitted/detached and not yet production-overlap tested.
-- Wrote the lane open note at `wiki/ops/open-notes/20260522T054739Z-05-control-room-curation.md` and manager receipt under `.frontier/runs/20260522T054739Z/workers/05-control-room-curation/receipt.md`.
-
-
-## [2026-05-22] ops | frontier-lab ML perf control room seeded
-
-- Added project-local pi frontier-lab setup under `.pi/` plus machine-readable
-  `.frontier/config.json` and `.frontier/lanes.json`.
-- Seeded `wiki/ops/` control-room pages for status, frontier, baselines,
-  experiment receipts, test ledger, and open notes.
-- Indexed the frontier-lab ops pages so future performance fanout starts from
-  maintained baseline/receipt surfaces instead of raw chat state.
-
-## [2026-05-22] ops | perf frontier lanes rewritten from current worktree evidence
-
-- Rewrote `.frontier/lanes.json` around the current perf frontier: baseline receipts, M5 Max production contour, Core ML / ANE rail proof, quality promotion gates, control-room curation, outer-loop Python profiling, blocked production engine-overlap, and replay-buffer width cheap test.
-- Updated [ops/status.md](ops/status.md) and [ops/frontier.md](ops/frontier.md) to reflect the current worktree inventory: perf10 artifacts in `/Users/jason/code/gomoku-perf-extension` and uncommitted Core ML / ANE residency work in `/Users/jason/.codex/worktrees/934b/gomoku`.
-- Filed the perf10 production-shaped sweep into [ops/baselines.md](ops/baselines.md), [ops/experiment-ledger.md](ops/experiment-ledger.md), and [ops/test-ledger.md](ops/test-ledger.md) as seed evidence for the production-contour lane; the ledger marks it `needs_repeat` because exact launcher commands were not captured in ops.
-- Tightened the promotion gate language: behavior-touching perf changes need fixed baseline/archive quality checks, plies/game-shape checks, noise caveats, checkpoint/run IDs for strength claims, and an explicit decision.
-
-## [2026-05-21] run | WL5 phase-1 closed at e5051 (un-fused-workers era)
-
-- Closed the pre-fusion era of WL5 as a discrete chapter. WL5 phase 1
-  ran from launch (`o6cbjfnr`, 19:05:28) through e5051, then continued
-  as phase 2 from e5052 once 8 workers were hot-restarted with
-  Conv+BN-fused inference. Same wandb run, same trainer, same buffer,
-  same design — but gen-side throughput at e5052+ is **1.53× higher**,
-  which makes per-epoch absolute numbers (games/epoch, steps/epoch) not
-  directly comparable across the boundary. That regime shift justifies
-  framing phase 1 as its own closed-out chapter.
-- Phase 1 = 1051 epochs, ~2.5h wall, 123,453 games, ~414 epochs/hr,
-  zero NaN/crashes/worker deaths. Validated the archive-start lever
-  doesn't destabilize the pipeline; validated the diagnostic streams
-  populate cleanly; phase shape matched the [[feedback-absorption-phase]]
-  prediction (200-1000 epochs of absorption shock, plies stayed healthy).
-- Phase 1 elo peak of 1784 at e4035 was residual WL4 strength (34
-  epochs after resume); the rest of phase 1 was absorption with elo
-  oscillating 1159-1738 (mean 1498), pl mean 0.673 (up from WL4
-  plateau-end's 0.604), plies mean 38.6 (vs WL4's 40.0).
-- Phase 2 monitoring continues: stop when run hits e9000, or on
-  collapse / NaN / new ATH > 1841 / canonical-opening regression.
-  Full close-out entry in [TRAINING_WIKI.md](../TRAINING_WIKI.md).
-
-## [2026-05-22] perf | aggressive Apple Silicon engine scout
-
-- Added `gomoku/coreml_evaluator.py` with lazy Core ML loading/export helpers
-  and `scripts/aggressive_engine_scout.py`, a bounded JSON-emitting harness
-  for PyTorch MPS vs Core ML CPU_ONLY/CPU_AND_NE latency plus MPS trainer
-  overlap pressure.
-- Ran the scout once on the small fused model. Receipt:
-  `sweep_logs/aggressive-engine-scout-2026-05-22.json`.
-- First verdict: raw Core ML eval is slower than fused PyTorch/MPS at batch
-  128 (Core ML ~8.5-9.1 ms vs PyTorch/MPS ~2.9 ms), and INT8 weight
-  quantization did not help raw latency in this conversion path.
-- The engine-isolation thesis still has teeth: PyTorch/MPS eval pressure
-  slowed MPS trainer steps by ~2.65x, while Core ML pressure lanes slowed
-  trainer steps by ~1.13-1.32x. Next scout should be production-shaped
-  self-play throughput with trainer overlap, not just naked eval latency.
-- Filed the receipt and interpretation in
-  [topics/ane-int8-inference.md](topics/ane-int8-inference.md).
-
-## [2026-05-21] perf | Conv+BN fusion validated in production via WL5 worker hot-restart
-
-- Microbench (`perf_microbench --no-fuse-eval` vs default): **1.47×**
-  throughput speedup (710 → 1047 aug pos/s, median of 5 trials each,
-  both contending with live WL5 for MPS).
-- Hot-restarted 8 self-play workers in-place while WL5 trainer kept
-  running. Canary w0 first (verified healthy on a fresh model version),
-  then the remaining 7 in parallel. Total wave-mode stall: ~30s across
-  two restart blips (epochs 5046 and 5051).
-- Production gen-side measurement (n=26/n=25 epochs): **1.53× games/sec**
-  on gen (21.6 → 33.0), slightly above microbench because workers no
-  longer compete with the bench. Per-batch wave times in worker logs
-  confirmed: pre-fusion 8-game wave 3.3s, post-fusion 2.4s.
-- Per-batch worker log evidence (`w0.log`): pre-fusion v5044 batch 8011
-  = 3.3s, post-fusion v5046 batch 20 = 2.4s (same 8-game shape).
-- Caveat: post-restart window overlaps the WL5 archive-start
-  absorption rough patch (pl jumped 0.59→0.73, plies 41.9→32.8). That
-  ate the games/sec gain on a positions/sec basis (aug-pos/hour ~flat).
-  Re-measure after WL5 reports out for a stable-plies cycle-time
-  ratio.
-- Full numbers + reusable hot-restart procedure landed in
-  [TRAINING_WIKI.md](../TRAINING_WIKI.md) under the 2026-05-21
-  fusion entry "Production verification" subsection.
-
-## [2026-05-21] philosophy | M5 Max as mainframe, 9×9 as perf proving ground
-
-- Added [topics/m5-max-as-mainframe.md](topics/m5-max-as-mainframe.md)
-  capturing the guiding philosophy for the post-WL5 perf era. Treats
-  the M5 Max as a single, knowable mainframe — invest in chip-specific
-  tuning (parameter sweeps, unified-memory pipelining, MPS-fallback
-  elimination, custom Metal kernels) rather than generic ML recipes.
-- 9×9 gomoku is explicitly the perf proving ground, not the endpoint.
-  Deliverable is a calibrated chart of the M5 Max's gomoku-AZ behavior
-  (the contour plot), used to confidently pick knobs for 15×15.
-- Compounded chip-specific levers (ANE INT8 × pipelined ANE+GPU+AMX ×
-  custom Metal kernels) plausibly buy 10-25× throughput, which is
-  what makes a month-long 15×15 + Gomocup submission realistic on
-  one machine.
-- Sequenced after WL5 → buffer cheap-test → ANE INT8 → canonical
-  sweep → 15×15 renju port → Gomocup protocol → calibrated ELO.
-- Indexed in [index.md](index.md). Short-form lives in memory as
-  `feedback-know-the-machine`.
-
-## [2026-05-21] plan | bit-packed replay buffer as post-WL5 task
-
-- Added [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md)
-  scoping a refactor that shrinks per-position storage 17× by bit-packing
-  the binary stones (currently float32) and using FP16 for pi.
-- Current buffer: 1.5M positions = 6,250 games at 8.2 GB on MPS. Packed
-  encoding at the same RAM footprint: 100k games (16× wider). At a 10 GB
-  CPU footprint: 1M games (Jason's target).
-- Motivated by WL5's archive-start absorption phase showing a real
-  loss bump — wider buffer smooths target-distribution shifts and
-  reduces need for EMA + past-mix kludges.
-- Cheap-test first: train 1.5M vs 750k buffer ablation for 500 epochs;
-  only do the refactor if halving meaningfully worsens stability.
-- ~3 days work. Do AFTER WL5 reports out, ideally after
-  [ANE INT8 inference](topics/ane-int8-inference.md) (the two don't
-  conflict but ANE pays off in cycle time immediately).
-- Indexed in [index.md](index.md).
-
-## [2026-05-21] plan | ANE INT8 inference as post-WL5 task
-
-- Added [topics/ane-int8-inference.md](topics/ane-int8-inference.md)
-  scoping the port of self-play + eval inference to Apple Neural Engine
-  at INT8 precision via Core ML.
-- Captured during WL5 monitoring. Estimated ~50-60% faster self-play
-  cycle if it lands; ~2 days of work. Calibration data is the WL5
-  validation archive (1400 positions, already mined). KataGo INT8
-  precedent says board games tolerate INT8 with proper calibration.
-- Gate: validate INT8 model elo within 30 points of FP32 over 200+
-  games before deploying to workers. Trainer stays FP32.
-- DO this AFTER WL5 reports out — mid-run backend changes invalidate
-  comparisons.
-- Indexed in [index.md](index.md).
-
-## [2026-05-21] run | WL5 launched (diagnostics + Go-Exploit archive-start)
-
-- WL5 cell running as wandb run `o6cbjfnr`, resumed from WL4 e4024 with a
-  fresh wandb timeline (stripped wandb_run_id from a copy of the
-  checkpoint). 5000-epoch target. ~11s/cycle, ~320 epochs/h.
-- Added the launch entry to [`../TRAINING_WIKI.md`](../TRAINING_WIKI.md)
-  including the 3-bug triage that gated launch (high_kl positions had
-  ply=0 from buffer backward-compat, causing C MCTS to play action 0 on
-  a full board). Fixes in commit `dc8c38b`: derive-ply at mine time,
-  C-level "no legal action = terminal" safety net, C-level select_action
-  default to first legal action, Python evaluator nan_to_num.
-- Workspace regenerated with WL5 + section 7 (validation archive +
-  H/KL decomposition + per-color/per-ply): https://wandb.ai/jasonyandell-forge42/gomoku?nw=sm5st7cmye2
-
-## [2026-05-21] docs | mining-validation-archives recipe
-
-- Added [topics/mining-validation-archives.md](topics/mining-validation-archives.md):
-  command, bucket cost drivers, throughput numbers (40-90 min wall for 6
-  buckets × 200 positions on MPS), and the anti-patterns we learned the
-  hard way during WL5 setup (don't `torch.load` the full 8 GB checkpoint
-  N times in parallel; don't run without `-u`; don't run on CPU; don't
-  co-run with training).
-- Indexed in [index.md](index.md) Start-Here table.
-
-## [2026-05-21] docs | how-to-play page
-
-- Added [topics/playing-the-model.md](topics/playing-the-model.md) covering the
-  local web UI surface (strong play), the live SPA, checkpoint selection (incl.
-  the "latest.pt is huge, prefer epochNNNN.pt" trap), play/replay-tab knobs,
-  and common annoyances (MPS contention, stale `epoch0136.pt` smoke checkpoint
-  in `./checkpoints/`).
-- Indexed in [index.md](index.md) Start-Here table.
-
-## [2026-05-19] setup | LLM wiki operating model
-
-- Added [index.md](index.md) as the wiki entry point and content catalog.
-- Added [topics/wiki-operating-model.md](topics/wiki-operating-model.md) to adapt
-  the Karpathy LLM wiki pattern to this repo.
-- Added [sources/karpathy-llm-wiki.md](sources/karpathy-llm-wiki.md) as the
-  source record for the organizing charter.
-- Updated [../AGENTS.md](../AGENTS.md) and [../TRAINING_WIKI.md](../TRAINING_WIKI.md)
-  so future sessions treat the wiki as a compounding synthesis layer, not just a
-  large experiment transcript.
-
-## [2026-05-19] synthesis | MCTS perf ceiling topic page
-
-- Added [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) capturing
-  the finding that our `gomoku/mcts.py` is already at the AGZ "mcts_v2"
-  storage layout that other AZ codebases advertise as a big upgrade. Ports
-  of that design are a no-op for us.
-- The cross-game BFS-vectorized descent (Exp 9 in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md)) is real but small: 1.26× at
-  G=32 / wave=16, ~1.05–1.10× at our dist G=8 / wave=32 config. The next
-  2× requires batched `state.apply` on tensor, C-extension `_init_node`,
-  or multi-device gen-vs-train split — not numpy reshuffling.
-- Updated [index.md](index.md) Start Here table to surface the new topic.
-
-## [2026-05-19] notebook | az-recipe-160k launched, first sustained heuristic crossing
-
-- Live run `9x9-sweep-az-recipe-160k` (wandb `sppjo3z5`) is at e1285 with
-  heuristic 50-70% sustained across e1119/1179/1227 — never seen in dist
-  mode before. Prior best dist crossing was fresh-dist plateauing at ~35%
-  by e552; all other dist cells stayed at 0% heuristic for the entire 100
-  epochs they ran.
-- Launched config differs from the documented recipe: small model +
-  stem_padding=1 + sims=400 (instead of medium / 3 / 800) to keep wall-
-  clock inside one day on the M5 Max. The recipe defaults benched at
-  ~30 s/cycle = ~46h for 5000 cycles; trimmed config is ~2 s/cycle when
-  games are short.
-- Captured Jason's calibration that cycle-time scales super-linearly
-  with mean plies, so the current ~2 s/cycle is a *floor* — real defense
-  learning would blow out the ETA. Filed as a feedback memory so future
-  sessions don't quote naive ETAs.
-- Added live SUMMARY to [../TRAINING_WIKI.md](../TRAINING_WIKI.md) with
-  the eval table, plies puzzle, and open questions to resolve as the run
-  continues (does heuristic hold, does lookahead2 climb, do plies
-  regrow, head-to-head vs kze-e176).
-
-## [2026-05-19] notebook | az-recipe-160k diagnostics resolved: real defense
-
-- ~280 epochs after the SUMMARY was written, every "open question"
-  diagnostic resolved in favor of real defense being learned, not
-  offense-only. lookahead:depth=2 climbed from 12% (e1119) to 55%
-  (e1507). selfplay/plies_p90 spikes to 60-80 at e1.5k+, eval times
-  doubled-to-tripled as games got longer.
-- Jason flagged the **selfplay/plies_p90** chart as the leading
-  indicator before it showed up in the mean. Filed as a tactical note
-  in the wiki: when the model is in transition between offense-only
-  and real-play, p90 is more sensitive than mean because the
-  distribution is bimodal (short attack wins + long defense games).
-- This recipe + cutback combo is the first in the wiki to break the
-  fast-attack collapse: no prior dist run crossed lookahead2 above 25%.
-- Speculation on what made the difference: most likely τ_final=0.1
-  (soft policy targets instead of degenerate one-hot), then AGZ
-  log-PUCT, then 1.5M replay. A τ_final=0 ablation would resolve it.
-
-## [2026-05-19] notebook | az-recipe-160k e2179 checkpoint — full regime change
-
-- At e2179 (43% complete, 2:47h wall-clock), the self-play plies have
-  fully regrown to 27-32 mean — the same range as the e1 untrained
-  baseline, but for the opposite reason: defense, not random play.
-- Loss/policy down to 0.76 from 4.22 at e1. Loss/value at 0.08 — model
-  is very confident. No sign of value-head collapse to z=0/-1 (the
-  classic failure mode from earlier runs).
-- Elo eval shipped at e1854 (commit fa656b9); model_elo bouncing
-  1085-1183 across e1854/2148/2159/2167. Stable around 1100-1150,
-  between heuristic (anchor 800) and lookahead2 (anchor 1200).
-- ETA blowout exactly as Jason's calibration predicted: cycle time
-  grew 2s → 15s as plies regrew. Total projected ~14.6h vs original
-  10h estimate. The interesting outcome (real defense) was always the
-  one that costs wall-clock.
-- Anchor Elo calibration script running in background to replace the
-  seeded ANCHOR_ELOS with measured values from a round-robin between
-  random + heuristic + lookahead{2,3,4,5}. Will update rating.py when
-  calibration finishes.
-
-## [2026-05-20] notebook | lookahead-depth-3 bug diagnosed + partial fix
-
-- Calibration finished. The Elo spread among baselines is much tighter
-  than seeded: heuristic=591, depth=2=604 (≡heuristic, all-draws), depth=4=629,
-  depth=5=711. Anchored at random=0.
-- Per Jason's call, **NOT re-anchoring** ANCHOR_ELOS in code: heuristic and
-  depth=2 being equal-Elo is a style coincidence, not a meaningful collapse.
-- depth=3 came in at **Elo=249** (weaker than heuristic). Subagent investigated;
-  it's a horizon-effect bug in the static `evaluate_position` — credits "live
-  4" patterns without distinguishing open-fours (unblockable) from half-open
-  fours (trivially blocked). At odd depths the searcher builds a hallucinated
-  threat the opponent never gets to refute before the leaf.
-- Shipped **partial fix** in `gomoku/baselines.py:_negamax` adding depth=0
-  1-ply quiescence for immediate-win threats. Effect: depth=3 vs heuristic
-  goes from 0% (all losses) to 83% (d=3 wins majority). depth=3 vs depth=2
-  unchanged (still 0%) — remaining bug likely in open-3 pattern credit, not
-  just live-fours. Regression test in `tests/test_lookahead_quiescence.py`
-  pins the corrected leaf value.
-- The bug doesn't affect model training (uses network value head, not
-  `evaluate_position`) or the live eval pipeline (we use depth=2, which is
-  even and unaffected). Filed the remaining open-3 issue as a known
-  limitation, not blocking the current run.
-
-## [2026-05-20] notebook | perf detour, GPU reality, white_wins → 0 (e3500+)
-
-- Tried a subagent-proposed perf change: 1 worker × 32 games × wave=64 +
-  torch.compile, expected 2-3× speedup. **Regression** — cycle time grew
-  from 33s (4-worker baseline) to 36→63s on the 1-worker path. Rolled
-  back to 4 workers, kept wave=64 (the real win from the bench), dropped
-  torch.compile. Net: ~22s/cycle, +50% vs the original baseline.
-- Jason flagged the 1-worker setup as "kinda crazy" and predicted GPU
-  underutilization — right on both counts. Bumped to 8 workers per his
-  call: ~17s/cycle, ~94% over baseline. GPU still at 30-40% though —
-  the structural ceiling is small kernels (2ms regardless of batch) on
-  a tiny 324k-param model, not parallelism.
-- Updated [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) with a
-  2026-05-20 section: lessons on per-process bench vs production parallelism,
-  compile-vs-reload-cadence, why more workers > bigger batches at this
-  model size. Memory `project_perf_bench_lesson` mirrors this for cross-
-  session recall.
-- Observed `selfplay/white_wins → 0` once buffer/age_p50 rolled from 250
-  to ~75. This is the first-mover-advantage signal in freestyle 9×9:
-  asymptotic state of perfect self-play has black always winning. Value
-  head signal degrades for white-side positions (always z=-1, trivially
-  fittable), which probably explains some of the ongoing pl/vl uptick.
-  Recorded in TRAINING_WIKI.md as a strength-signal observation, not a
-  bug. `--random-opening-moves` would break the asymmetry if desired.
-- Also pushed: `--worker-min-positions` + `--sgd-per-position` ingest mode
-  (commit 85eeccc, not yet deployed live), eval-side `play_match_parallel`
-  via mp.Pool (commit d913447, lets lookahead:depth=4 fit in eval budget).
-
-## [2026-05-20] notebook | lockstep vs continuous orchestration analysis
-
-- Jason raised the lockstep question — would `--gen-once-per-publish` mode
-  help, possibly in a "2 waves of 4" staggered design?
-- Filed full trade-off analysis in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "Lockstep vs continuous"
-  section. Key findings: (1) at our 30s-batch / 10s-cycle ratio, workers
-  are already the bottleneck so lockstep adds zero idle cost; (2) the
-  "2 waves of 4" staggered overlap collapses to serial because publish
-  K+1 has a hard dependency on K being consumed first; (3) the "model
-  does better with lockstep" intuition cites one heuristic flicker at
-  e65 in `nox388ow` — slightly-less-bad, not a documented training win;
-  (4) lockstep is a training-side lever, not a perf lever (GPU
-  utilization is bound by per-call kernel size, not worker alignment).
-- Decision: not deploying today. Realistic deployment recipe documented
-  as the natural next intervention if training-stability problems
-  emerge (pl > 0.6 sustained, value collapse).
-
-## [2026-05-20] notebook | next-run config sketches collected
-
-- Jason flagged buffer/age_mean as an under-utilized knob: "for the next
-  run, I really want a full buffer and this flat AND a bunch of games-
-  per-model, rather than some-games-across-a-spread-of-models."
-- Captured the math (`median_age ≈ buffer_size / (2 × positions/cycle)`)
-  + the chart interpretation (buffer age climbed to 250 e1-1000, fell to
-  steady-state 50-60 as games lengthened, restart-induced transients
-  visible at e3000-3700).
-- Drafted cell Zlock as a candidate next-run config: 4 workers in
-  lockstep (--gen-once-per-publish), 5M buffer, positions-based ingest.
-  Gives age ~195 — close to Jason's 200-250 target.
-- Also listed 8 decisions to re-assess when the current run finishes
-  (stem_padding 1 vs 3, model size, sims 400 vs 800, K, random-opening
-  moves, past-checkpoint opponent mix, lookahead bug structural fix,
-  the structural perf "real next 2×").
-- Decision: NOT pre-registering the cell. Hold the collection in
-  TRAINING_WIKI.md until the current run finishes; re-assess with the
-  current run's full data in hand. Next-run config should be picked
-  with a specific question in mind, not "improve everything."
-
-## [2026-05-20] synthesis | az-at-scale-vs-laptop topic page
-
-- Added [topics/az-at-scale-vs-laptop.md](topics/az-at-scale-vs-laptop.md)
-  capturing Jason's framing observation that "steady progress is what
-  makes [AZ] learn, and this one has been learning despite the chaos."
-- The page documents three structural reasons our laptop setup wrinkles
-  (exploration arcs, plies swings, age oscillations) don't exist at
-  Google scale: (1) per-version concentration because 8 workers can't
-  smooth across thousands of parallel games, (2) short freestyle gomoku
-  games give 10-40× less signal per game than Go's 200-250 move games,
-  (3) restart artifacts that thousand-machine continuous runs don't have.
-- Key framing argument: when reading our wandb metrics, the *default
-  interpretation* of swings should be "laptop-scale transient, model is
-  doing something interesting," not "training is broken." Failure
-  diagnosis requires extra evidence (NaN, dying processes, OR sustained
-  multi-arc degradation).
-- This argues *against* twitchy interventions (each restart costs 100+
-  epochs of buffer re-equilibration) and *for* big-buffer + lockstep +
-  many-games-per-version next-run config (the Next-run sketches in
-  TRAINING_WIKI.md address exactly these scale-effect items).
-- Updated [index.md](index.md) Start Here to surface the new topic.
-
-## [2026-05-20] notebook | Jason's buffer-composition-feedback prediction
-
-- After observing three arcs and the constant-age math, Jason articulated
-  a deeper failure mode than the surface-metric swings: each exploration
-  arc *changes the shape of the buffer's history* by ingesting short-game
-  positions, so the consolidation phase is fighting against the very
-  data it's training on. Eventually one consolidation will fail.
-- Prediction (e4252): pl/vl will climb again over the next half hour, then
-  drop again — same plateau-learn-plateau-learn cycle until eventually
-  it doesn't recover.
-- Filed in [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "Buffer-composition
-  feedback hypothesis" section. Notes that the constant-age fix shipped
-  earlier (85eeccc) keeps turnover stable but does NOT change buffer
-  composition during exploration — the genuine mitigations are random
-  opening moves and past-checkpoint opponent mix (deferred decisions #5
-  and #6 in the Next-run sketches).
-- Cron check-ins continue tracking. The prediction is falsifiable in two
-  ways: (a) bounces as predicted, eventually fails to recover → validates
-  the theory and argues strongly for items #5-#6; (b) tightens
-  asymptotically with smaller arcs → theory over-stated at this scale.
-
-## [2026-05-20] notebook | az-recipe-160k run ended at e5000
-
-- Run stopped by user-requested kill at exactly e5000 (early from natural
-  e8560 endpoint — data was already conclusive). Final state: pl=0.293,
-  vl=0.035, plies=59.2, model_elo bouncing 1290-1519 in the last 5 evals.
-- 5 explore-then-consolidate arcs across e3041-e4924. Peak model_elo
-  1718 at e3881 (perfect sweep of random + heuristic + lookahead2).
-- Jason's "buffer-composition feedback causes arcs" hypothesis partially
-  validated: arcs DID happen, DID broaden over time (5th arc the
-  broadest weakness, heuristic-specific lineage drift visible), but the
-  "eventually doesn't recover" branch did NOT materialize — every arc
-  recovered, even the broadest one.
-- Filed full run-end SUMMARY in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) with arc table, validated/
-  refuted/partially-supported hypotheses, and the case for the next run's
-  design choices. Most informative single next-run experiment: lockstep
-  + 5M buffer + random opening moves (the three changes most directly
-  aimed at the failure mechanisms we observed).
-- Deleted the 15-min check-in cron (job 43ad02e9). Next session that
-  spawns a check-in cron should start fresh.
-
-## [2026-05-20] design | wave-of-lockstep design page added
-
-- Jason and I talked through the next-run design. Locked-in choices:
-  8 workers × 8 games per worker per wave, greedy-fill barrier with
-  finish-on-old-model semantics, K=1 SGD step per wave, 5M buffer,
-  natural openings (no randomization), temperature unchanged from
-  `az-recipe-160k`.
-- Filed full design at
-  [topics/wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md):
-  hypothesis, architecture diagram, property invariants, implementation
-  plan (trainer barrier, worker greedy-fill state machine, new Cell
-  WL1, W&B metrics), throughput expectations, held-back levers.
-- Indexed from [index.md](index.md) under "Start Here".
-- Next session picks this up to implement. Sanity test on 50 epochs / 4
-  workers before launching full WL1 run.
-
-## [2026-05-20] implementation | WL1 wave-lockstep landed and smoked
-
-- Implemented the trainer wave barrier (`--wave-mode --wave-workers
-  --wave-games-per-worker`) and worker greedy-fill state machine
-  (`--wave-mode`) in worktree `codex/wl1-lockstep`.
-- Added `WL1` to [../scripts/run_sweep.py](../scripts/run_sweep.py):
-  small model, 400 sims, stem padding 3, 8 workers x 8 games, 5M buffer,
-  AGZ PUCT/Dirichlet defaults, temperature drop at move 30, and
-  `sgd_per_position=0.0025`.
-- Smoke-tested 50 epochs / 4 workers with `G=8` and a 1.3M replay buffer.
-  Parsed 50 wave tiles for versions `0..49`; each wave met worker minimum
-  >= 8, tile sizes ranged 38-54 games, and final replay-buffer
-  `weight_version` tags contained all versions `0..49`.
-- Filed the detailed receipt in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) under "2026-05-20 — WL1
-  implementation smoke".
-
-## [2026-05-20] benchmark | WL1 matched-throughput read
-
-- Ran a short apples-to-apples throughput check with the previous
-  `az-recipe-160k` generation config: small model, stem padding 1, 400
-  sims, wave size 64, MPS, 8 workers.
-- The 3-epoch wave-mode check ingested 250 games in 31.9s of generation
-  time: 7.84 games/s, 1,817 approximate training positions/s, average
-  visible tile 72.7 games with greedy extras.
-- Compared against `az-recipe-160k`, this is comparable by positions/s
-  to the early continuous run (1,773 positions/s over first 100 epochs)
-  and stronger than the first-3-epoch and late-run slices. The barrier
-  itself did not show a meaningful throughput tax.
-- Filed the interpretation in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) under "2026-05-20 — WL1
-  matched-throughput read".
-
-## [2026-05-20] runbook | Activity Monitor perf integration lane
-
-- Added [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md)
-  as the maintained run/config surface for Mac Activity Monitor-oriented perf
-  checks. It routes future sessions toward wall-clock/games/sec/positions/sec
-  and away from GPU-percent chasing.
-- Added `scripts/perf_microbench.py` as a bounded production-shaped MCTS
-  generation bench. It exercises the existing evaluator + `generate_games`
-  path without touching core game or MCTS code.
-- Updated [../README.md](../README.md) with the bench command and the
-  `--save-buffer-every` / `--keep-last-n` checkpoint-throttling recipe for
-  long 5M-buffer runs.
-- Changed WL1 in `scripts/run_sweep.py` to write full replay-buffer
-  `latest.pt` checkpoints every 100 epochs instead of every 20. Intermediate
-  epoch snapshots remain cheap weights+optimizer files.
-
-## [2026-05-20] config | WL1 buffer downshift
-
-- Updated `scripts/run_sweep.py` WL1 from a 5M replay buffer to 1.5M after the
-  hardware/readiness decision that 5M is too much to justify right now.
-- Preserved WL1's main experimental axis: wave-lockstep / per-version uniformity.
-  The next run now avoids changing buffer size at the same time.
-- Kept `save_buffer_every=100` as a low-risk disk-pressure guardrail. It is less
-  critical at 1.5M than 5M, but still prevents full replay-buffer rewrites from
-  becoming a hidden Activity Monitor problem.
-
-## [2026-05-21] implementation | native MCTS engine landed
-
-- Added optional `gomoku._mcts_native` in worktree `codex/gomoku-perf-extension`.
-  It moves the self-play MCTS arena, bitboard state/history, PUCT selection,
-  child creation, virtual loss, backup, and leaf plane materialization into C.
-- Wired `generate_games` to use native MCTS automatically when the evaluator
-  exposes `evaluate_planes`; `GOMOKU_DISABLE_NATIVE_MCTS=1` keeps the old Python
-  MCTS path available for A/B checks.
-- Updated [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md),
-  [topics/activity-monitor-perf-runbook.md](topics/activity-monitor-perf-runbook.md),
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md), and [../README.md](../README.md)
-  with the new boundary and benchmark receipts.
-- Reference MPS microbench: `8 games / 400 sims / wave 64 / max_plies 16`
-  improved from 701 to 2,200 augmented positions/sec; `max_plies 32` improved
-  from 728 to 2,007 augmented positions/sec.
-
-## [2026-05-21] benchmark | WL1 10-epoch native production read
-
-- Ran three fresh 10-epoch wave-lockstep throughput trials under the next-run
-  WL1 recipe (`small`, stem padding 1, 400 sims, wave 64, 1.5M buffer).
-- Results saved in `sweep_logs/perf10-summary.tsv`.
-- Best launch shape remains 8 workers x 8 games with native MCTS: 2,379 wall
-  augmented positions/sec and 3,303 generation augmented positions/sec.
-- Same 64-game tile with 4 workers x 16 games was slower (1,918 wall pos/s).
-- Python-MCTS fallback at 8 workers x 8 games was 1,863 wall pos/s, so native
-  is a 1.28x production-shaped wall-throughput win even though the single-process
-  microbench showed a larger 2.8-3.1x jump.
-
-## [2026-05-20] notebook | WL1 live run — buffer-mix hypothesis showing positive early signal
-
-- WL1 launched 20:53 as wandb `l8mbntcm` (commit `0d2c106`). First-attempt
-  worker race + 5M-buffer MPS crash both diagnosed and fixed pre-launch;
-  see [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL1 first launch + worker
-  race fix" for the receipts.
-- At e605 (~35 min wall), the run is well ahead of Z's e605 by every
-  fixed-baseline measure: first heuristic crossing happened at e146 (Z:
-  e1119), elo hit 1271 at e360 (Z: ~e1854 reaches similar), la4 sustained
-  52% at e499 (Z barely reached this even at e3881 peak).
-- Arc behavior is compressed: WL1's first explore-consolidate arc had a
-  ~80-100 epoch wavelength vs Z's 800-1000 epoch arcs. First consolidation
-  dip in progress at e605, recovering to elo 1041 (the trough is still
-  Z-e1854-class strength).
-- Wall-clock advantage combines native MCTS perf (~1.7×) and per-epoch
-  convergence speedup. To disentangle requires WL1 with
-  `GOMOKU_DISABLE_NATIVE_MCTS=1`; not in scope today.
-- Started a live training log section in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL1 live run log" — milestone
-  table updates as new evals land.
-- Open question still ahead: do plies regrow (defense regime) on a
-  similarly accelerated schedule? At e605 plies still 10-11, value head
-  already at Z-e2179 levels.
-
-## [2026-05-20] tooling | wandb workspace layout script
-
-- Added [../scripts/wandb_workspace.py](../scripts/wandb_workspace.py) — one-shot
-  creator for a 6-section wandb workspace tuned for WL1-vs-Z overlays
-  (strength, learning, game shape, buffer, wave dynamics, wall economy).
-  Requires `wandb-workspaces` (pip install).
-- Live workspace URL (the view this script created on 2026-05-20 20:55):
-  https://wandb.ai/jasonyandell-forge42/gomoku?nw=ul0vliphj6x
-  Open it, click both `l8mbntcm` (WL1) and `sppjo3z5` (Z) in the run
-  picker. Switch the x-axis to `_runtime` (per-panel) to see wall-clock
-  savings instead of per-epoch convergence.
-- The workspaces API does not update views in place — re-running the
-  script creates a new URL. Treat the bookmarked URL as canonical until
-  it's superseded; delete stale views via the UI if they accumulate.
-- Cross-ref: training notebook "WL1 live run log" section in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) names the metrics each
-  section is meant to surface.
-
-## [2026-05-20] notebook | WL1 stopped at e1600; WL2 scale-emulation design landed
-
-- WL1 ran 1h 18min wall, peaked elo 1281 at e360-499, then dropped into
-  a regression band (elo 620-1140, **la4 regressed from 52% to ~5%**).
-  Stopped by user when it was clear the new failure mode wasn't
-  self-correcting. Final state + arc breakdown in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL1 run end — stopped at
-  e1600" entry.
-- Reframe: per-version uniformity is *necessary but not sufficient*. WL1
-  replaced Z's slow consolidation arcs with high-frequency oscillation
-  because removing per-version bias also removed the *in-flight version
-  diversity* that AZ-at-scale has by default (async publish lag, ~125k
-  concurrent games, batch 4096).
-- Filed next-run design at
-  [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md).
-  Four levers, each emulating one AZ-scale property:
-  EMA self-play weights (biggest single intervention), past-checkpoint
-  opponent mix, worker poll jitter, gradient accumulation 4×.
-  Implementation cost ~120 LoC, throughput hit ~5-15%.
-- Indexed from [index.md](index.md) Start Here.
-
-## [2026-05-20] notebook | WL2 launched — four scale-emulation levers stacked
-
-- Wave 2 of the wave-lockstep series. Cell `WL2` adds all four levers from
-  [topics/wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md)
-  on top of the WL1 recipe: EMA self-play (tau=0.99), past-checkpoint
-  opponent mix (recent=0.4 / history=0.1 / window=100), worker poll jitter
-  (Uniform 2-8s), gradient accumulation 4x.
-- Two background implementation agents in parallel landed cleanly:
-  `b582d37` (train.py: EMA + grad accum) and `ded7728` (selfplay_worker.py:
-  past-mix + poll jitter). Cell wiring + new Cell fields at `02c5fc3`.
-  All 88 tests pass.
-- Pre-launch 30-epoch smoke validated all four lever signals; mix distribution
-  reached 12/43/45% (history/recent/self) against designed 10/40/50.
-  Cycle ~5s vs WL1's 3.4s — ~50% slowdown from grad-accum + past-ckpt loads.
-- Live run: wandb `9wng4yu9`, launched 2026-05-20 ~23:00, 5000 epochs.
-  Tracked in [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL2 live run log"
-  section. Add `9wng4yu9` to the wandb workspace run picker for three-way
-  overlays with WL1 (`l8mbntcm`) and Z (`sppjo3z5`).
-
-## [2026-05-20] tooling | launch sequence runbook + skill update + 3-way workspace
-
-- Added [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md)
-  capturing the WL1+WL2 launch pattern as a reusable playbook: pre-launch
-  state check + the two known gotchas (MPS INT_MAX, worker race fix), title
-  card protocol, smoke test pattern, real launch + spin-up verify, wiki +
-  workspace updates, /loop monitoring cadence, and the fan-out-implementation
-  pattern that landed WL2 cleanly via two parallel agents in ~10min wall.
-- Updated `scripts/wandb_workspace.py` to include WL2 (`9wng4yu9`) alongside
-  WL1 (`l8mbntcm`) and Z (`sppjo3z5`). Fresh 3-way overlay view:
-  https://wandb.ai/jasonyandell-forge42/gomoku?nw=cz8thj3cbh5
-- Updated the `gomoku-train` user skill at
-  `/Users/jason/.claude/skills/gomoku-train/SKILL.md` to surface the production
-  cell-based launch path, the cell map (A-F / Z / Zc / WL1 / WL2 with wandb
-  ids), the two gotchas as Don'ts, and a pointer to the runbook for every
-  "start a run" type request. Single-process `gomoku.train` path stays
-  documented for ad-hoc smoke work.
-
-## [2026-05-20] notebook | eval-time-vs-heuristic as a hidden plies-regrowth indicator (WL2)
-
-- Jason flagged at WL2 e420 that `time/eval_vs_heuristic_s` climbed from ~6s
-  at e1 to ~17s by e420 — roughly 3x more wall-clock per eval. Since the
-  eval plays 16 fixed games vs heuristic per cycle, the per-move cost is
-  constant; the wall-clock growth maps directly to more plies per game.
-- This is the **plies-regrowth signal hiding outside of `selfplay/plies_mean`**:
-  in WL2 the self-play tile still shows plies ~11-12 (model beats its own
-  EMA-smoothed brain fast via attacks), but vs heuristic — a different
-  style — the model has learned to fight back to 30+ plies. Eval-time
-  surfaces real defensive capability that selfplay metrics don't expose.
-- WL2's eval-time climb roughly coincides with the first heuristic
-  crossing at e370 (15%), suggesting the time-climb leads the win-rate
-  signal: defensive ability shows up in game length before it shows up
-  in actual wins.
-- Watch for: does WL2's eval-time *stay* climbing as the model approaches
-  sustained crossing, or does it plateau then drop? Z plateaued; WL1's
-  late-run collapse coincided with eval times dropping.
-- Filing in the runbook "Leading indicators" section as a hidden but
-  high-value signal.
-
-## [2026-05-21] notebook | WL2 ended at e1200, WL3 launched with K=2 random openings
-
-- WL2 (wandb `9wng4yu9`) stopped at e1200 / 1h 11min wall. Final state:
-  pl=1.89, vl=0.012, plies=10.5 (selfplay), elo bouncing 788-1071 in
-  the last 6 evals, **la4 regressed from peak 62% at e900 to 18% at
-  e1101**. The four scale-emulation levers raised the ceiling (peak la4
-  62% > WL1's 52%) and smoothed early trajectory (heuristic 0→15→5→8
-  vs WL1's 30→0→15→0) — but the late-run failure mode matched WL1's
-  (~44pp la4 drop vs WL1's ~47pp). Full close-out in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL2 run end" section.
-- Reframe: even with EMA + past-checkpoint mix + jitter + grad-accum,
-  all model versions share the same opening lineage. Worker diversity
-  doesn't help if the "diversity" is "different brains thinking about
-  the same opening."
-- WL3 = WL2 + K=2 uniform-random opening plies. Per train.py:165-170,
-  training examples are NOT recorded for the random plies, so the
-  model sees more diverse mid-game starting positions without learning
-  broken-move signal. K=2 is conservative; 30-epoch smoke showed plies
-  bumped +20% (22-26 vs WL2 smoke's 16-20), confirming random openings
-  produce slightly longer games as expected.
-- Live run: wandb `0o75gws5`, launched 2026-05-21 ~00:10. Anchored by
-  commit `91f7408`. Tracked in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL3 live run log" section.
-- Workspace regenerated via `scripts/wandb_workspace.py` to include
-  WL3. New URL printed by the script (workspaces API doesn't update in
-  place — each run produces a new view).
-
-## [2026-05-21] notebook | WL3 e515 sustained crossing + eval-distribution test result
-
-- WL3 (wandb `0o75gws5`) reached its **first sustained heuristic crossing
-  at e487-e515** with h=50% held across two consecutive evals and all
-  three baselines climbing together (h50/la2:25/la4:38, elo 1031 at e515).
-  Slower to first crossing than WL2 (e487 vs WL2's e370) but the
-  *strength profile* is fundamentally different — WL2's first 200
-  epochs after crossing showed single-baseline spikes (heuristic 88%
-  while la4 collapsed to 5%); WL3's first 30 epochs after crossing show
-  balanced wins across all three baselines.
-- Tentative plies regrowth signal: `selfplay/plies_mean` bumped
-  13.2 → 15.0 over the last 250 epochs. WL2 stayed pinned at 11.x for
-  its entire run. Too small to call decisive, but it's in the right
-  direction for the first time in the WL series.
-- Retention test still in progress. WL2 lost la4 from peak 62% (e900)
-  to 18% (e1101) over 200 epochs. WL3 is in the equivalent window now.
-- **Eval-distribution test (Jason's hypothesis about K-mismatch hiding
-  signal):** ad-hoc CPU match on WL3 epoch0361 vs heuristic at K=0/2/4
-  random openings. Result: **K=0 and K=2 win rates within noise (0.350
-  vs 0.338 over 40 games)** — the matched-distribution eval does NOT
-  reveal hidden strength. K=4 was much worse (0.200), showing the
-  model is fragile far OOD. Conclusion: WL3's slow first-crossing is
-  a real training-side phenomenon, not an eval-distribution artifact.
-  Decision: skip the "plumb random-opening eval everywhere" lever;
-  lean into the queued opening-curriculum experiments (Q1-Q4 in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md)) instead.
-- **Important caveat surfaced by this test**: trainer's e361 eval
-  reported h=5% (≤1 win on 16 games); 40-game test reported h=35%.
-  Possibly sample-size variance, possibly native-MCTS-vs-python-MCTS
-  path difference. Filed in the runbook + user skill so future
-  sessions don't over-interpret single-eval bouncing.
-- Updated `gomoku-train` user skill at
-  `/Users/jason/.claude/skills/gomoku-train/SKILL.md` with WL3 cell
-  entry, eval interpretation gotchas, and an "ad-hoc match" recipe
-  for `$CLAUDE_JOB_DIR`-style forensic tests.
-
-## [2026-05-21] notebook | WL3 crashed at e825 (NaN), WL3.1 launched with NaN guards
-
-- WL3 (wandb `0o75gws5`) crashed at e825 from native MCTS emitting NaN
-  visit-policies. All 8 workers died in sequence over ~15 min. Trainer
-  barrier-stalled forever. Full diagnosis at `$CLAUDE_JOB_DIR/wl3_nan_diagnosis.md`.
-  Run-end summary in [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL3 run end".
-- **Pre-crash WL3 was the strongest run in the WL series**: peak la4=68%
-  at e714 (>WL2's 62%), all three baselines climbing balanced together,
-  plies regrew 13→18. Crash was infrastructure failure, not training-
-  quality failure.
-- Two NaN fixes landed (`c5049be` + `0557671`): `_sample_action` guard
-  for the play path, plus pi sanitization at the trajectory-recording
-  path. The first fix alone was insufficient — NaN pi was being stored
-  into the buffer before `_sample_action` ran, poisoning the trainer's
-  cross-entropy targets. Found this during recovery attempt #1.
-- WL3.1 (wandb `i34ihwj9`) launched as fresh restart with both guards
-  in place. Identical cell config to WL3 (proven trajectory). Skipped
-  smoke since the only changes are NaN-fallback paths covered by pytest.
-- Old WL3 artifacts preserved as
-  `sweep_runs/WL3-random-openings.dead-e825/` and parallel sweep_logs/
-  for forensics.
-- Workspace refreshed to include WL3.1:
-  https://wandb.ai/jasonyandell-forge42/gomoku?nw=q5fg9ei2ash
-- Native MCTS NaN root cause is under parallel investigation (background
-  agent in worktree). The band-aids keep the run going while the C-level
-  fix lands.
-- **Skill update**: added "Unattended-run policy" section to
-  `~/.claude/skills/gomoku-train/SKILL.md` defining what kinds of
-  infrastructure fixes future sessions can apply autonomously during
-  monitoring (single-file <50 line process-death prevention + hot
-  resume), what requires human (training hyperparameter changes,
-  re-architecture). Also need to think about poisoning paths, not
-  just process-death paths — the WL3 recovery missed this and
-  burned the buffer for 9 epochs.
-
-## [2026-05-21] notebook | WL3.1 relaunched with native MCTS C fix — root cause closed
-
-- Background investigator agent landed the root cause of the WL3 NaN
-  crash (commit `7c3e405`): `NativeMCTSGame.policy(tau)` was casting
-  `pow(N, 1/tau)` to float32 before normalizing. At τ=0.1 with
-  concentrated visits N≥~7100, the cast overflowed FLT_MAX (~3.4e38) →
-  `Inf/Inf` → NaN. Long concentrated games (which only appeared at
-  e825+ in WL3 as plies regrew past ~18) reliably triggered it.
-- Fix: do the τ-normalization in `double[]`, cast only final
-  probabilities to float32. Plus +Inf-sum argmax-tie fallback.
-  Regression test in `tests/test_native_mcts.py::test_native_policy_
-  finite_at_low_temperature_with_concentrated_visits` — fails on
-  pre-fix, passes on post-fix. 89 tests passing.
-- WL3.1 first try (wandb `i34ihwj9`) ran 92 epochs with only the
-  Python band-aids; relaunched as `44cxzc9d` after rebuilding the C
-  extension. Same cell config. Old artifacts preserved at
-  `sweep_runs/WL3.1-random-openings-nanfix.preCfix-e92/`.
-- The C fix + the two Python band-aids (`c5049be` + `0557671`) close
-  the failure mode at both levels: C-side overflow prevented, and
-  Python-side NaN-in-pi still falls back gracefully if anything similar
-  ever emerges.
-- Workspace refreshed: https://wandb.ai/jasonyandell-forge42/gomoku?nw=tfzwgv1hwbp
-
-## [2026-05-21] notebook | WL3.1 paused at e1536, WL4 (no random openings) launched
-
-- WL3.1 (wandb `44cxzc9d`) paused after reaching "established" trigger
-  Jason proposed: eval/vs_heuristic 100% sustained, la4 60-95%
-  sustained across many evals, plies 20-27 (defense regime forming),
-  elo 1400-1700. Strongest WL-series state by every measure.
-- e1536 snapshotted aside: `$CLAUDE_JOB_DIR/wl3.1_e1536_latest.pt`
-  (8.2G, includes model + EMA + buffer). WL3.1 artifacts preserved at
-  `sweep_runs/WL3.1-random-openings-nanfix.paused-e1536/`.
-- WL4 cell (`a88749d`): WL3.1 config with `random_opening_moves=0`.
-  Resumes from the snapshot. Wandb run id continues (`44cxzc9d`) — the
-  chart is a single trajectory with the K=2→0 transition at step 1537,
-  cleaner than two separate runs to overlay.
-- Hypothesis: WL3.1 baked in opening-diverse representations; removing
-  random plies should either (a) unlock canonical-depth compounding
-  that the random plies were rate-limiting, OR (b) trigger rapid
-  regression — testing whether diversity is permanent training
-  infrastructure at this model size.
-- Either outcome informative. Recovery path: restart from the snapshot
-  with K=2 if it collapses badly.
-
-## [2026-05-21] runbook | handoff-friction section added to launch runbook
-
-- Filed everything that bit us today as a "Handoff friction" section
-  in [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md).
-  Eight gotchas covered:
-  1. `latest.pt` vs `epochNNNN.pt` (the buffer-resume distinction —
-     WL4's "resume at e1500 not e1536" surprise)
-  2. `keep_last_n=3` brutally short — snapshot aside immediately
-  3. `--resume` always continues the old wandb run id (feature for
-     WL4 curriculum continuation, but surprising)
-  4. Cell rename pattern for branching experiments from a paused run
-  5. Workspaces API doesn't update in place (each script run = new URL)
-  6. macOS `pgrep` quirks (`\b` doesn't work; transient self-PIDs)
-  7. Old `/loop` chains keep firing once after you change cells
-  8. `$CLAUDE_JOB_DIR/` is ephemeral — don't park anything important
-     there for a future session
-- Also noted: WL3.1 e1500 buffer-checkpoint is preserved at
-  `sweep_runs/WL3.1-random-openings-nanfix.paused-e1536/checkpoints/latest.pt`
-  (8.8G). That's the canonical resume point if WL3.1 needs to come
-  back online. The `$CLAUDE_JOB_DIR` copy is redundant and will be
-  cleaned up automatically.
-
-## [2026-05-21] synthesis | loss-floor bouncing interpretation
-
-- Added [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) after
-  Jason asked whether WL4's low-floor loss bounce is a documented AlphaZero
-  phenomenon or a bug.
-- W&B pull for live run `44cxzc9d` shows the K=2→K=0 transition at e1537:
-  loss/total bumped from ~1.2-1.4 to ~1.5, then fell to a new floor near
-  0.4-0.8 while plies regrew and fixed external baselines stayed broadly
-  strong/noisy. That shape is not the WL3 NaN bug signature.
-- Filed the working interpretation: policy loss is cross-entropy against a
-  moving MCTS visit distribution, so small-scale AZ can show "bump, absorb,
-  lower floor" cycles when self-play discovers new lines. Treat the bounce as
-  healthy unless paired with NaN/Inf, worker death, replay-buffer poisoning,
-  short-game collapse, or sustained multi-window external regression.
-- Updated [index.md](index.md) and appended the WL4 evidence note to
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md).
-
-## [2026-05-21] synthesis | source-backed next-run lessons
-
-- Extended [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md) with
-  the web/literature takeaways from AlphaZero, AlphaGo Zero, KataGo,
-  Go-Exploit, small-game hyperparameter work, MCTS-policy-imitation work, and
-  the Tablut AlphaZero reproduction.
-- Main next-run lesson: do not optimize for a pretty loss curve; instrument the
-  moving teacher. Add a frozen validation archive and split policy loss into
-  target entropy plus KL so we can distinguish true regression from MCTS target
-  distribution movement.
-- Behavioral recommendation if WL4 needs another lever: prefer 10-25%
-  archive-start self-play from curated trouble/long-defense/high-KL states over
-  reintroducing permanent random openings. Keep most games canonical K=0.
-- Appended the action-oriented summary to
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) under the WL4 loss-floor section.
-
-## [2026-05-21] notebook | WL4 plateau-end at e4024 — best WL series outcome to date
-
-- WL4 (wandb `44cxzc9d`, K=0 from e1537) stopped cleanly at e4024 after
-  ~5h 39min wall. Reached the "healthy lower-floor-bouncing" plateau
-  described in [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md).
-- **Best WL-series outcome by every measure**: elo ATH=1841 at e2401
-  (123 above Z's lifetime peak), la4=100% at e3148, la2 sustained 100%,
-  plies past Z's e5000 endpoint (peak 63.8 at e2960), 0 NaN/crashes in
-  5h 39min.
-- Validated: random opening diversity is necessary but not permanent
-  training infrastructure. K=2 (WL3.1) built diverse representations;
-  K=0 (WL4) confirmed they persist AND unlocked canonical-line depth
-  that K=2 was rate-limiting.
-- Refuted: "diversity is permanent training infrastructure" hypothesis.
-  WL4 with K=0 didn't regress toward attack-only.
-- Full run-end summary in
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) "WL4 plateau-end" entry.
-- Run artifacts preserved at
-  `sweep_runs/WL4-no-random-openings.plateau-e4024/` (incl. latest.pt
-  with full buffer for any future resume).
-- Next-run shape (WL5) NOT auto-launched. Per the article's
-  "Candidate Next-Run Shape" section, the next experiment is
-  diagnostics-first (fixed validation archive, H/KL split, per-color
-  metrics) then archive-start diversity (10-25% from curated trouble
-  states). Needs design conversation + code work — not a one-shot
-  parameter tweak.
-
-## [2026-05-21] design | WL5 design landed — diagnostics + Go-Exploit archive-start
-
-- Filed [topics/wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md)
-  capturing the next-run shape from
-  [topics/loss-floor-bouncing.md](topics/loss-floor-bouncing.md)
-  "Candidate Next-Run Shape" section.
-- Design choices (post-Jason ACK 2026-05-21):
-  - **Single run** with both diagnostics + archive-start lever (not
-    two sequential runs).
-  - **Static archive** mined from WL4 artifacts (heuristic-loss /
-    lookahead-loss / high-KL / long-defense / canonical-opening
-    positions, target ~1000-2000 total).
-  - **Resume from WL4 e4024** (continues the WL series; new wandb run id
-    for clean charts).
-- Three diagnostic streams:
-  1. Fixed validation archive, scored every eval cycle, per-provenance
-     breakdown (val/policy_ce/heuristic_loss etc.)
-  2. Policy CE decomposition into H(pi_mcts) + KL(pi_mcts || p_net)
-  3. Per-color and per-ply-bucket loss metrics
-- One behavioral lever: archive-start (15% of self-play games begin
-  from a random archive position; 85% canonical empty board).
-- Implementation surface: ~640 LoC + tests. Worth parallelizing
-  across 2-3 agents per the wave-of-lockstep / WL2 launch pattern.
-- Indexed from [index.md](index.md) Start Here.
-- Next session: implementation (archive-mining script, trainer
-  instrumentation, buffer side+ply tagging, worker archive-start,
-  WL5 cell wiring, smoke).
-
-## [2026-05-21] perf | eval-only Conv+BatchNorm fusion
-
-- Sampled a live WL5 worker on the M5 Max and found the post-native hot stack
-  now flows mostly through `_mcts_native.c:call_evaluator` into PyTorch/MPS
-  BatchNorm / graph execution rather than C tree traversal.
-- Added `fuse_model_for_inference(model)` and routed eval-only checkpoint
-  loads through it for self-play workers, eval workers, match/CLI/web play,
-  and the perf microbench. Trainer models remain unfused.
-- Direct small-model MPS forward timing under live WL5 load roughly halved for
-  batch sizes 8-128; full generator benches were contention-noisy because WL5
-  was actively running.
-- Appended the evidence and verification receipt to
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md) and updated
-  [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md).
-
-## [2026-05-22] design | three-engine Apple Silicon perf split
-
-- Expanded [topics/ane-int8-inference.md](topics/ane-int8-inference.md) from
-  a narrow ANE INT8 conversion task into a three-engine pipeline design:
-  self-play leaf eval on ANE/Core ML, trainer forward/backward on MPS GPU,
-  eval sidecar/match probes on CPU via Core ML CPU-only or Accelerate/BNNS,
-  and native MCTS tree work in the C extension.
-- Captured the key correction to the "unified memory" intuition: the likely
-  win is accelerator isolation, not assuming one PyTorch tensor object can
-  pass zero-copy through PyTorch MPS, Core ML, and BNNS without runtime/layout
-  boundaries.
-- Added a boundary-scouting microbench before launch wiring: fixed-checkpoint
-  FP16/INT8 conversion, batch latency at 8/32/64/128/256, conversion/compile/
-  load timing, and an overlap test while MPS trainer work is active.
-- Updated [index.md](index.md) so future perf sessions route to the engine
-  partitioning idea directly, and corrected the buffer-bit-packing index
-  summary to match the 48 GB M5 Max math.
-
-## [2026-05-22] organization | task routes + WL-series lineage map
-
-- Full wiki pass found the main organization issue was routing, not raw
-  content quality: [index.md](index.md) had become a flat catalog mixing
-  current state, run designs, perf pages, operations, and wiki schema.
-- Reshaped [index.md](index.md) into task-oriented start routes plus grouped
-  catalog sections: core, training dynamics, run designs, performance/hardware,
-  and operations/use.
-- Added [topics/training-run-lineage.md](topics/training-run-lineage.md) as a
-  compact maintained synthesis map for Z -> WL1 -> WL5. It keeps run IDs,
-  conclusions, and next links in one place without flattening
-  [../TRAINING_WIKI.md](../TRAINING_WIKI.md).
-- Added status notes to the WL1, WL2, and WL5 design pages so future sessions
-  read them as preserved design records, then jump to the lineage map and
-  notebook for results.
-- Updated [topics/wiki-operating-model.md](topics/wiki-operating-model.md) to
-  name route maps and lineage maps as first-class synthesis when the index
-  starts carrying too much navigation load.
-
-## [2026-05-22] research | external rated engine baselines
-
-- Added [topics/external-engine-baselines.md](topics/external-engine-baselines.md)
-  to preserve the decision path for OSS/source-available external Gomoku
-  engines that can become fixed eval anchors.
-- Added [sources/gomocup-external-engines-2026-05-22.md](sources/gomocup-external-engines-2026-05-22.md)
-  as the source snapshot for Gomocup ratings, downloads, protocol docs, and
-  candidate repos.
-- Current recommendation: start with Rapfi because it combines the strongest
-  external signal, explicit GPL-3.0 source, Piskvork protocol support, and
-  vectorized build paths including ARM64 NEON. Treat Gomocup Elo as provenance,
-  then calibrate local 9x9 strength by time control inside our harness.
-- Indexed the route under "Add or interpret external engine baselines" so
-  future sessions do not need to rediscover the Gomocup ecosystem from scratch.
-
-## [2026-05-22] run | WL5 phase-2 reached cap e10200, run end
-
-- WL5 hit its `--epochs 5000` cap on the overnight-resume segment B,
-  ending the wandb run `o6cbjfnr` cleanly with `epoch10200.pt` written
-  to disk and wandb finalized. All 10 processes terminated, GPU/MPS free.
-- Added the **WL5 phase-2 close** retrospective to
-  [TRAINING_WIKI.md](../TRAINING_WIKI.md), mirroring the phase-1 close
-  format: phase-2 final state, segment-B stats table, eval scoreboard,
-  run shape, what got validated, what limits got exposed, run artifacts.
-- Headline numbers (segment B, n=5000 epochs, ~13.3h wall):
-  pl mean 0.621 (-10% vs phase-2 reference), vl mean 0.073, plies mean
-  41.5, best elo 1738 at e5477 (la4=100%, la2=100%, h=75%) — WL4 ATH
-  1841 was not broken. 0 NaN, 0 worker deaths, 0 tracebacks.
-- Noted two new limits-of-this-cell findings for the next cell:
-  buffer undersized vs generation rate (cycled ~28× by 1M games), and
-  20-game-per-baseline eval-cycle sample size is too small to read the
-  1500-1700 elo band cleanly.
-
-## [2026-05-22] runbook | formalize WL5-era launch → monitor → close recipe
-
-- The WL5 overnight cycle (launch from cell, cron-based monitor, run-end
-  cleanup, phase-N close-out, commit + push) ran smoothly enough that
-  Jason called it "the recipe." Folded it into the durable docs so the
-  next run doesn't reinvent it.
-- **`wiki/topics/launch-sequence-runbook.md`** (this file's main
-  procedure) updated:
-  - Phase 5 split into 5a (active `/loop` cadence) and 5b
-    (overnight `CronCreate` at `7,22,37,52 * * * *` with a
-    self-contained check prompt template + cell-name-filtered proc
-    counts + tight push-trigger list).
-  - Phase 6 rewritten around the three "end" flavors
-    (cap-reached / user-stopped / crash) and the discovery that
-    cap-reach leaves 8 workers + 1 eval polling; added the **phase-N
-    close-out template** that WL5 phase-1 and phase-2 closes use, and
-    a commit + push checklist with the `app/**` deploy-trigger
-    pre-check.
-  - Handoff friction section extended with WL5-overnight findings:
-    concurrent worktree procs inflating `pgrep`, macOS `awk` lacking
-    3-arg `match()`, zsh `==`/`===` errors, and the buffer-snapshot
-    lag tradeoff (`save_buffer_every` means resume rolls back up to
-    100 epochs of weights — usually the right call).
-- **gomoku-train skill (`~/.claude/skills/gomoku-train/SKILL.md`)**
-  updated:
-  - Cell map extended with WL4 (`44cxzc9d`, plateau ATH 1841) and
-    WL5 (`o6cbjfnr`, two-phase 6199-epoch run, peak 1738).
-  - Production launch summary updated to reference both monitor
-    cadences and the run-end's mandatory worker cleanup.
-  - "Resume from latest" common-asks row corrected — `run_sweep.py`
-    does support `--resume`, used successfully in WL5 phase-2.
-  - New "Friction workarounds learned during WL5 overnight" subsection
-    consolidating the macOS/zsh/proc-filter/cap-reach/buffer-lag/
-    cron-expiry/multi-session-commits/deploy-trigger gotchas in one
-    place.
-
-## [2026-05-27] research | gomocup-AZ technique survey source page
-
-- New source page [sources/gomocup-az-techniques-2026-05-27.md](sources/gomocup-az-techniques-2026-05-27.md)
-  filed during the post-v7 gomocup-AZ implementation arc: a frozen survey of
-  AlphaGomoku/KataGo training and search techniques considered for the lab
-  (WDL value head, LCB / variance-PUCT, moves-left, in-search-VCF, SE blocks,
-  ConvNext, threat-block defense, etc.) with red-team verdicts for each.
-- The synthesis-and-running-verdict layer lives in
-  [ops/research-board.md](ops/research-board.md) — the "Open candidates"
-  section + the v8 RR3/RR4/RR5 H2H verdicts confirmed WDL as the lone net-
-  positive lever (+35/+56) but never beating the value-discount champion.
-- Catalog row added under Core → Sources in [index.md](index.md).
-
-## [2026-06-13] topics | Added alphazero-lessons-15x15-gomoku: the learning artifact
-
-Filed [topics/alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md)
-— the distilled UNDERSTANDING from the 15×15 campaign, written as the primary
-artifact (Jason: "the learning is the artifact"; Gomocup is not a goal). Seven
-sections: representation transfer (warm-start skips the cold fast-attack
-collapse), net×search multiplicative (capacity pays at deep TC), read structure
-not loss (plies/vl), eval discipline (small-n noise, both-tiers, FPU negative),
-systems shape learning (dispatch-bound regime, gen-flood runaway, smoke-first),
-the methodology meta-lesson (warm-start→smoke→external-gate→net2net-grow→preserve),
-and honest bounds (short-TC caveat). Indexed as the top "understand what we
-learned" doorway. See [[feedback-learning-is-the-artifact]] memory.
-
-## 2026-06-19 — autolab doctrine page (the *why*)
-
-Added [topics/autolab-doctrine.md](topics/autolab-doctrine.md) capturing the
-vision-session synthesis: "hard walls around a sandbox"; no state in a process
-(reducers over a durable log; delegate the generic-hard part to flock/flatfile/
-HF/uv); deterministic WHEN (`actionable(ledger)`, a generalization of the built
-`health.scan`) vs intelligent WHAT (Claude); "waits" deleted → resume-on-evidence;
-triggers pluggable because not load-bearing; uv as the execution leg + uv-native
-mainline dev (direction). Notes the simulator's real job: certify the walls are
-LLM-proof. New index doorway ("understand the autolab's *why* / decide if a change
-fits"). Companion to autolab-architecture.md (the *what*). See
-[[feedback-stateless-delegate-design]] memory.
-
-## 2026-06-20 — researcher-Claude contract + agentic-research literature pass (#61)
-
-Banked a serious-researcher literature pass (ChatGPT 5.5 Pro, ~1h, read our branch
-+ the 2025–26 agentic-research/AutoML-agent/self-driving-lab corpus; Jason: "mine it,
-not gospel"). Two new pages + a doctrine refinement:
-
-- **`sources/autolab-agentic-research-lessons-2026-06-20.md`** — curated source record
-  (named papers by weight, the seven cross-project failure clusters) + the **raw
-  verbatim** preserved alongside (`…-raw.md`; Downloads is ephemeral). Credibility
-  caveat recorded: citations unverified by me, but the pass *did* read our code (its 3
-  corrections match an independent Explore agent), so its specifics earn weight.
-- **`topics/autolab-researcher-contract.md`** — the #61 design note. Re-orders the
-  frontier: the load-bearing next step is **not a richer Claude conversation** but the
-  **evidence contract** (fix the *epistemic* WHEN), the **typed-intent wall** (model
-  proposes meaning; only the substrate writes rows), and the **continuation policy**
-  (flywheel stops out-spending researcher judgment) — each with a sim invariant. Plus
-  the pure `dossier_plan`/`hydrate` split + immutable identities (pin the champion
-  *digest*, not the moving tag), three-zone governance, the claim-maturity ladder, the
-  "executable lessons → ledger, prose → wiki" resolution, and an upgraded one-sentence
-  doctrine ("event-sourced experimental control plane …"). Marks the schema-zoo /
-  scouts / auditor / reviewer-as-role as **deferred until decision traces justify**.
-- **`topics/autolab-doctrine.md`** — dated correction in §4 (mechanical vs. *epistemic*
-  WHEN) + cross-refs to the new note and source.
-
-New index doorway ("Design the autolab's research lane"). See
-[[feedback-stateless-delegate-design]] and [[feedback-learning-is-the-artifact]].
-
-## 2026-06-21 — researcher contract BUILT (epistemic WHEN + typed-intent wall + continuation policy)
-
-Implemented the load-bearing core of the [researcher contract](topics/autolab-researcher-contract.md)
-in `feat/autolab-sim` (code, not just design): `decision_due` (evidence contracts —
-the epistemic WHEN), the `DecisionIntent → validate_intent → compile_intent` wall (the
-model proposes meaning; only the substrate writes rows; an LLM can't forge a
-verdict/eval or cite evidence it never got), and the continuation policy (a fork's
-continuation is `BLOCKED_FOR_DECISION` until the researcher releases/parks it — GPU
-judgment upstream of spend). Plus the anti-spin guarantees: a seq watermark
-(`ledger.fold` now records evidence *landing* seq) so a cutoff is never re-decided;
-`resume` always advances the watermark; a refused intent escalates to `needs_jason`
-instead of looping; the dumb decider parks at budget. Three new sim invariants + three
-scenarios, **all falsified RED-when-off**. Lab suite 53→67 passing; full repo 898/0.
-Page status updated to BUILT; the live Claude `decide=` trigger is the remaining #61
-agent-lane work (the wall makes it safe to plug in). See
-[[feedback-stateless-delegate-design]].
-
-## 2026-06-24 — arena eval lane DESIGN (register a model → run the gamut → relative Elo)
-
-Wrote [topics/autolab-arena-eval-lane.md](topics/autolab-arena-eval-lane.md) — the
-arena's own design note, the missing third leg of the trainer/researcher/**arena**
-triad (the researcher lane already had `autolab-researcher-contract.md`; the arena only
-had a passing mention + the *Arena-yardstick gap* stub in the architecture page). Scopes
-the model-agnostic arena Jason asked for: **add a model, run the gamut of evals, get a
-relative Elo — cleanly, deterministically, performantly, organized like the rest of the
-autolab.** Design only; nothing built. Key decisions:
-
-- **Two job kinds, not one:** the fast `gate` (H2H vs champion → verdict, unchanged) and
-  a new non-gating `panel` (vs a fixed reference panel → `eval` row with relative Elo +
-  CI + per-color split). Distinguished by `config.eval_kind`; same daemon shape.
-- **Contestant contract = gomocup protocol, two on-ramps** (bring a checkpoint → we wrap
-  it with `gomocup_brain`; or bring your own engine → implement the protocol). The
-  implementer owns inference speed; we own the harness. `incremental=1` mandatory for
-  history-conditioned nets.
-- **Relative, anchor-pinned Elo, not absolute** (#35 killed the published-Elo path).
-  Pin the scale to `heuristic ≡ 0` (one post-step over `fit_bradley_terry`, which
-  mean-centers — wrong for a stable scale). Anchors (heuristic/lookahead/rapfi@measured-TC)
-  are a **protected instrument**; the champion is a reference, not an anchor.
-- **Honest two-layer determinism:** harness (seeded fold) is exact; our nets + pure-python
-  baselines are bit-reproducible (sims-budgeted, no eval Dirichlet); time-budgeted engines
-  (Rapfi) are wall-clock → pinned operating point + Wilson CI, run uncontended. The fold
-  over results is always deterministic.
-- **Performance:** cached content-addressed `panel-baseline-<panel_id>.jsonl` → adding a
-  model is O(panel) not O(panel²); CPU-parallel engine pairs while the GPU trains.
-- **Closes the triad:** a `panel` eval *is* the `arena-verdict` evidence the
-  [researcher contract](topics/autolab-researcher-contract.md) already declares — so the
-  arena becomes the deterministic producer for a research thread's epistemic WHEN.
-
-Five new sim invariants proposed (arena-only eval authority, panel-complete-or-blocked,
-anchor-pinned-Elo, baseline-immutable, eval-fold-deterministic), each falsifiable
-RED-when-off per house practice. New index doorway added. See
-[[feedback-stateless-delegate-design]].
-
-## 2026-06-24 — arena eval lane DESIGN + DR tabletop (+ torn-line fix, triad sim scenario)
-
-Two new sibling pages + a hardening pass, all on `feat/autolab-sim`:
-
-- **`topics/autolab-arena-eval-lane.md`** — the arena's own design note (the missing
-  third leg of the trainer/researcher/**arena** triad): register a model → run the gamut
-  → relative Elo. The gomocup-protocol contestant contract (two on-ramps), the fixed
-  anchor-pinned panel (relative not absolute — #35), honest two-layer determinism
-  (bit-reproducible nets/baselines + pinned-CI'd time-budgeted engines), the cached
-  O(panel) baseline, the `gate`-vs-`panel` split, and five proposed sim invariants. See
-  the earlier 2026-06-24 log entry above for the full decision list.
-- **`topics/autolab-dr-tabletop.md`** — a disaster-recovery tabletop for weeks-unattended
-  operation: pull the power at each table of the triad ring, rank the kinks by "can the
-  lab restart itself or does it need a human?". Backbone (crash→flock-frees→re-pick→
-  resume) is solid; the real threats are external-effect-before-commit and a torn ledger
-  line. 6 kinks ranked (2 were RED).
-
-**Hardened this session (RED-when-off):**
-- `ledger.read_all` is now **tail-tolerant** — drops only a truncated *trailing* line (the
-  power-pull signature), still raises on an *interior* corrupt line (corruption ≠ a torn
-  tail; never silently drop a committed row). Falsified: the old naive reader crashes.
-- New sim scenarios: **`triad_resume_under_crash`** (the first end-to-end propose→train→
-  eval→decide chain, with a power-pull at the train AND arena tables, each recovered by
-  re-pick) and **`torn_ledger_line_tolerated`**. Lab suite green; standalone sim 15/15.
-
-**Filed for the design-y kinks:** #83 (arena tag-move-before-commit idempotency), #84
-(`eval_kind` so a contract can require a *panel* score, not just any gate verdict), #85
-(W&B run-id poisoning on SIGKILL). #2-equivalent (atomic `save_checkpoint`) is closed by
-merging `main` (`f661fd4`). See [[feedback-stateless-delegate-design]].
-
-Also: pulled the Rapfi HF resolver (`rapfi_pool.py` + `publish_rapfi.py` + `eval_vs_rapfi`
-wiring) up from `main` to the branch as the arena's anchor cornerstone (commit 18eff62).
+Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
+recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
+
+## [2026-07-04] New topic: wiki-curation-lessons — the portable meta
+
+Closing synthesis of the whole curation effort, written for export to Jason's
+other projects: [wiki-curation-lessons.md](topics/wiki-curation-lessons.md).
+Nine lessons with local evidence — chronicle-itis lives at the leaves,
+staleness flows upward, query-is-a-write-operation, mechanism-over-vigilance
+(the day's four vigilance failures + their tool fixes), git-is-the-archive,
+test-with-cold-agents-and-count-fetches, the load-bearing separations,
+self-hosted schema + the minimal-instruction bar, curation-is-a-pass /
+maintenance-is-a-loop. Linked from reference.md (conventions table) and
+curation.md. Includes a bootstrap recipe for starting a new project's wiki
+from these parts.
+
+## [2026-07-04] Chronicle-itis check adjudicated: all 13 >25 KB topics KEEP-AS-IS
+
+The lint's 13 size notices were formally reviewed (Opus, conservative rules).
+**Every page passed** — the length is legitimate in each case (reference
+dictionaries, API contracts/perf atlases, design specs, verdict-first synthesis
+whose length is evidence density), and the earlier 2026-07-04 passes already
+compressed the actual chronicle bulk (visible as in-page tombstones). Zero
+inbound-anchor conflicts exist on any of the 13. Four borderline micro-trims
+(~1 KB total) were recorded and deliberately declined. Future lint runs showing
+these same 13 notices can treat them as adjudicated as of this date; re-review
+only pages that GROW past their reviewed size.
+
+## [2026-07-04] `_archive/` audited and DELETED — git history is the archive now
+
+`wiki/_archive/` (528 KB, 17 files) was a safe side-by-side for the curation
+pass, never long-term storage. An Opus audit (4 adversarial sub-auditors,
+spot-checks incl. random mid-file entries) confirmed **every file
+SAFE-TO-DELETE — zero lost knowledge**; three low-severity archive-only details
+were hoisted to live pages first (v4 derby verdict → perf-log's v3→v5 gap;
+claw-rediscovery v0 numbers + mod-5 probe nuance → idea-pile #10; raw 15×15
+scaling-bench table → 15x15-training-campaign). Doctrine updated in
+[curation.md](curation.md): rule 5 is now **"Cut, never lose — git is the
+archive"** (no parallel archive tree; live pages carry dated tombstones naming
+the recovery commit), and rotation is a three-step ritual (rotate with
+reconcile → commit → drop staging). All ~70 inbound `_archive` references
+across ~23 pages converted to tombstones. **Recovery commit for everything
+deleted: `ca76350`** (`git show ca76350:wiki/_archive/<path>`).
+
+## [2026-07-04] Extracted the TQ Promotion Gate out of the experiment-ledger into its own live page
+
+Per the standing curation verdict (live doctrine trapped inside frozen
+evidence): the **Training-Quality Promotion Gate** — the rule a behavior-changing
+perf receipt must satisfy to `promote`, cited by 10+ pages — is now its own page
+[ops/promotion-gate.md](ops/promotion-gate.md), banner **LIVE**, gate text moved
+verbatim (~1.4 KB, five criteria unchanged) with a dated provenance line. The
+[experiment-ledger.md](ops/experiment-ledger.md) gate section is now a 3-line
+pointer; its head was restructured to lead with a LIVE-intake preamble ("new
+receipts append at the bottom under dated era headers", per curation.md routing
+table) then a `## May 2026 campaign … ARCHIVED-IN-PLACE, frozen evidence` marker
+above the 44 receipts. "ARCHIVED-IN-PLACE" now sits in the first 10 lines
+(exempts the file from the lint's >60 KB rotation-smell warning) while staying
+honest — worded "campaign section archived-in-place; intake live", because the
+file *is* still the live receipt intake. Retargeted 8 gate-specific links across
+6 pages (ops.md ×2, ops/frontier.md ×2, ops/status.md, and the three
+`#training-quality-promotion-gate` anchor links in perf-bench-vs-real-training-cost,
+m5-max-fp16-and-throughput-regimes, wall-clock-to-elo-metric) from the ledger to
+the new page; left ~30 evidence/receipt links to the ledger untouched. Lint:
+**0 errors, 0 warnings** (rotation warning cleared).
+
+## [2026-07-04] First Query-loop filing: white-VCT rail redux → idea-pile addendum
+
+First real use of the new [curation.md](curation.md) § Query rule. Jason
+proposed a 15×15 Bruce-Lee-opener run with a white "lookahead-2 VCT" rail; two
+independent Opus agents (one wiki-guided, one flat-footed) answered from the
+wiki and converged on the same verdict with the same run IDs — the proposal ≡
+rails-v0 (`vraf0b6e`, #116), already run, failed by value-poisoning on
+black-tilted idx-2. The synthesis (the lookahead-2-vs-oracle-solve ambiguity,
+the idx-2 holdability probe as cheap falsifier, the untried inference-time
+actuator seed) is filed as a dated addendum in
+[idea-pile.md](topics/idea-pile.md) rather than left in chat. Side-note for
+the operating model: the flat-footed agent self-routed via CLAUDE.md → wiki
+and matched the guided one's conclusions — the knowledge base, not the prompt
+scaffolding, carried the answer.
+
+## [2026-07-04] Hardened tooling: wiki_rotate.py + wiki_lint.py; June rotated; 9 banners canonicalized
+
+The two curation mechanisms are now scripts, not vigilance
+([curation.md](curation.md) updated to point at both):
+
+- **`scripts/wiki_rotate.py`** — journal rotation with the reconcile check
+  built in (refuses to write unless entry counts + bytes across live+archive
+  equal pre-rotation totals; atomic writes; post-write re-verify; dry-run).
+  8 pytest cases. First real use: **June rotated out of log.md** (27 entries,
+  46,777 bytes → `_archive/log-2026-06.md` *(since removed; recover via `ca76350`)*,
+  reconciled 40 = 13 + 27; live log 70 KB → 23 KB).
+- **`scripts/wiki_lint.py`** — the mechanized lint: banner presence+date on
+  every topics/ page, broken relative links (live pages), topic orphans,
+  rotation smells (>60 KB, ARCHIVED/FROZEN-exempt), chronicle-itis triggers
+  (>25 KB, notice-tier), index-vs-log staleness. 18 pytest cases; `--json`.
+- First real lint run found **9 topic pages with non-canonical status prose**
+  (BANKED, CHAPTER CLOSED, bare RESULT, etc.) — all now lead with a canonical
+  marker, prose preserved: board-size-transfer → LIVE; legomoku → LIVE (seed);
+  engine-panel-derby → DEAD-END (lesson kept); rapfi-idx2-mine, shape-library,
+  sliding-derby-v2 → DORMANT; both vct result pages + wave-of-lockstep →
+  HISTORICAL. Post-fix: **0 errors, 1 warning** (experiment-ledger >60 KB —
+  known, quarterly rotation planned), 13 chronicle-itis notices (trigger tier).
+- CLAUDE.md + AGENTS.md (twin edit) now point "remember/curate anything" at
+  [curation.md](curation.md).
+
+## [2026-07-04] Curation playbook: routing table + the Query write path
+
+Two gap-closes in [curation.md](curation.md), from re-reading the
+[Karpathy source](sources/karpathy-llm-wiki.md) against our adaptation:
+(1) the ingest classify step is now a **routing table** — every input class
+(run, perf receipt, eval, idea, external material, decision, machine fact) has
+an explicit evidence home + synthesis home; perf receipts route to
+[experiment-ledger](ops/experiment-ledger.md) under new era headers now that
+perf-log is archived-in-place. (2) A new **Query section**: answering a
+question that took 2+ pages or raw evidence is itself curation input — file
+the answer back (verdict update, hub row, or the missing topic). This was the
+source's subtle self-reinforcing loop we hadn't adopted structurally: the wiki
+compounds from *use*, not only deliberate ingestion. Recurring >1-fetch
+questions added to the lint list as structural-gap findings. Source page's
+Local Mapping updated to record the adoption.
+
+## [2026-07-04] Rotation hygiene: reconcile counts + bytes before/after
+
+Hardened the [curation.md](curation.md) rotation rule with the "how" learned the
+hard way: rotate an append-only journal by splitting on the date-prefix with a
+script, then reconcile — entries and byte totals across (live + archive) must
+equal the pre-rotation totals. A freehand log.md rotation earlier today silently
+dropped 21 entries and had to be redone from git; a two-line count/byte check
+catches it. Same class of hazard as the retired-janitor re-summon: the fix is a
+verification step baked into the rule, not vigilance.
+
+## [2026-07-04] The great curation: story layer + curation playbook + settled-verdicts-first sweep
+
+Whole-wiki curation pass (worktree `feat/wiki-curation`, 14-agent inventory +
+10 execution work-packages). What changed structurally:
+
+- **New layer: [story.md](story.md)** — the narrative arc (prologue → 9 chapters
+  → epilogue), above the timeline, below the index. Update at era boundaries.
+- **New playbook: [curation.md](curation.md)** — THE curation instructions
+  (layer map, status-banner vocabulary, settled-verdict-first, tell-once,
+  rotation thresholds, lint). "Curate this into the wiki" = follow that page.
+- **Settled-verdicts-first restructures** of the big chronicles:
+  alphazero-lessons (1256→741 lines, verbatim yardstick saga → archive),
+  white-side-defense-plan (695→83, full chronicle → archive), swap2 (durable
+  syntheses hoisted, superseded §6.x → archive), coreml-design-envelope
+  (DORMANT, lane catalog → archive), idea-pile (graduated ideas → verdict+link).
+  The white-defense theorem is now told ONCE (lessons §15) + two pointers.
+- **Status banners everywhere**: every touched topic page now opens with
+  LIVE / HISTORICAL / SUPERSEDED-BY / DORMANT / DESIGN-NEVER-BUILT /
+  DEAD-END(lesson kept), dated. Missing stopped-derby banners added (charter,
+  session-runbook, sliding-v2, engine-panel, autolab pages).
+- **Rotations**: log.md May era → `_archive/log-2026-05.md` *(since removed; recover via `ca76350`)*;
+  research-board v1–v6 verdicts → _archive; gpu-queue completed ledger →
+  _archive; perf-log ARCHIVED-IN-PLACE banner; open-notes linked from
+  experiment-ledger (orphan fix).
+- **Merges/archives**: 15x15-era-feasibility → merged into
+  15x15-training-campaign; wl2/wl5 designs → _archive with new
+  [wl-era.md](topics/wl-era.md) index; sliding-derby v1 → reuse-ledger only.
+- **Safety fix**: worktree-hygiene no longer documents the retired janitor in
+  present tense (re-summon hazard closed; full design archived).
+- **Link/integration fixes**: batched-eval-arena wired in (was zero-linked),
+  m5/capabilities/experiments hub rows, broken links fixed, lineage extended to
+  the sound-world era, playing-the-model → `uv run gomoku-web`.
+
+Nothing was deleted: every cut moved verbatim to `_archive/` with pointers both
+ways. Live wiki (ex-archive) ~1.99 MB; archive ~480 KB.
+
+## [2026-07-03] Perf-blitz findings integrated into the restructured wiki + cap25 DECISION landed
+
+Folded the 2026-07-01→03 perf blitz (#112 / #109 / #114 / #115) into the
+post-restructure synthesis pages — the findings had lived only as appended log
+entries + one `mcts-perf-ceiling` section written BEFORE the hub-of-hubs
+restructure. Synthesis-only pass: no evidence pages touched (issues / receipts /
+`TRAINING_WIKI.md` stay canonical); dated corrections, never rewrites.
+
+- **cap25 flip DECIDED + LANDED — correction to the "human-gated" fan-out-wrap entry
+  below.** Jason approved: *"cap25 is large savings and minimal cost. I'll happily
+  pay 2% gap on the high end in order to get the speedup."* Shipped as a flat
+  `--vct-terminus-budget` 50→25 on the `sound-world` cell (commit `8e2d9e1`, merge
+  `09c067b`, `Closes #114`); eval-time finisher stays cap50. Recall of cap50-proven
+  vetoes at cap25 = 99.93% (13×13 sound-world net) / 99.39% (13×13 full-game) /
+  98.64% (9×9 champ); ~1.98× solve; poison@25 0/174.
+- **Pages brought current:**
+  [sound-world-recipe.md](topics/sound-world-recipe.md) (terminus-budget lever →
+  cap25 + new § Oracle budget; the 13×13-perf "open edge" marked RESOLVED with the
+  streaming≈lockstep correction; finisher cross-link);
+  [mega-vct-solver.md](topics/mega-vct-solver.md) (§5.3 `lanes=K` verdict COMPLETE —
+  recommend K=16 at 13×13, synthetic-K16 regression, shared-stack rejected, `--synth`
+  self-check, default-OFF; new §5.6 cap25 flip);
+  [mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) (new 2026-07-03 section closing
+  the "measured next levers" list — all three resolved — + the day-2
+  streaming≈lockstep correction to #112's 3.4–4.6×);
+  [batched-eval-arena.md](topics/batched-eval-arena.md) (new § batched VCT finisher
+  #109 — hybrid 15-0-5 in 4.4 s vs the legacy "minutes" 14-0-6; loud-unknown-kwarg
+  guard; MPS final eval 37→14.3 s; `vct_finish` dropped from the "not supported"
+  list); [training-run-reference.md](topics/training-run-reference.md)
+  (`--shape-stats-every` row; the `--vct-terminus-budget` flag row + `sound-world`
+  cell → cap25; #115 trainer-step perf note); hub touches on
+  [index.md](index.md) + [m5-mainframe.md](m5-mainframe.md).
+- **Receipt-verified corrections applied** (a subagent cross-checked the
+  #112/#109/#114/#115 receipts + commits before integration): lanes=K recommended
+  value is **K=16** at 13×13 (not the 1.34× K8 headline — K16=1.36×≥K8 on real
+  batches); the flip is a **flat cap25 + manual per-run override**, NOT
+  board-size-conditional logic; lanes=K stays **default-OFF** (only cap25 is live in
+  the cell); dropped the unreceipted "`_foreach_norm` benched-and-lost" claim (the
+  merged #115 code documents only `_foreach_pow` vs the old Python loop).
+
+## [2026-07-03] reference.md touch-up: three cosmetic nits
+
+Fixed a malformed Evals row (dropped a duplicate `reliable-eval-set.md` link
+prefixed onto the `probe-100pct.md` row), surfaced
+[branch-and-worktree-workflow.md](topics/branch-and-worktree-workflow.md) and
+[worktree-hygiene.md](topics/worktree-hygiene.md) into the "Capabilities &
+conventions" table (previously only reachable via the full page index), and
+corrected the backwards "memories-also-go-to-wiki" blurb to
+"memory-narrow-project-knowledge-to-wiki" to match the actual doctrine in
+[conventions.md](topics/conventions.md) § What belongs in memory vs the wiki.
+
+## [2026-07-02] Curation pass: fact-correctness audit + fix (28 pages)
+
+After the hub-of-hubs restructure, ran a **content-correctness curation pass** (the
+higher-level pass Jason deferred until the facts were organized). Deterministic
+link/orphan check first: **live pages are clean** (the 267 "broken" links are all
+inside the frozen `_archive/` snapshot using root-relative paths; the 5 orphans are
+dated `ops/open-notes/` receipts). Then **four read-only auditors** (one per hub:
+Experiments · Derby · M5-mainframe · Reference/Ops) hunted contradictions, stale-as-live
+mechanisms, and cross-page number disagreements against the canonical current-state
+facts. Fixed **~33 real defects across 28 pages** via four in-place editor agents (diffs
+reviewed before commit). Highlights:
+
+- **Retired-mechanism cleanup (highest severity).** `reclaim_worktrees.py` (retired
+  2026-07-01) was still written in as a *session-start* action in
+  [research-lab-charter.md](topics/research-lab-charter.md) with the exact
+  "safe while others live" claim that failed — replaced with the manual ps-check
+  procedure; also de-listed it in autolab-architecture, event-log, cockpit-vs-autopilot,
+  workflow-orchestration. The CPU `gomoku/vcf` solver (retired 2026-06-27 as a
+  cross-check) marked retired wherever it read as a live oracle (vct-backward-mining,
+  vct-reachability-mining).
+- **Era-shift staleness.** Perf pages predating (a) the torch-2.11 **fp16 reversal** and
+  (b) the **oracle-veto era** (veto ≈ 91% of 13×13 gen wall) got regime/era notes
+  (mcts-perf-ceiling, activity-monitor-perf-runbook); the refuted **ANE-as-inference**
+  lever marked superseded (m5-max-as-mainframe, m5-max-cross-engine-coupling).
+- **Stale numbers reconciled.** VCT enabling-shape count 63k → **200,242** (run-len 15→17,
+  at `~/data/vct_shapes/`) across shape-library-engine / vct-backward-mining /
+  vct-mining-research (and "move-labeled" → *unlabeled*); Bruce net **~3.3M → ~3.05M**
+  base; native ext board sizes "9 and 15" → **9,11,13,15**; engine-catalog Elo pool
+  disambiguated vs the internal anchors.
+- **Derby/autolab framing.** The stopped derby was written in present tense in several
+  pages → historical banners; v1 sliding-derby banner-superseded by v2; broken cross-refs
+  fixed (§10 → `sliding_gate.py`; `perf-lab-charter.md` → `research-lab-charter.md`; v2's
+  predecessor filename). The **two competing autolab architectures** (launchd-daemon vs
+  Claude-workflow composite) got a neutral "two explored approaches, neither supersedes"
+  note — deliberately NOT crowning a canonical winner (Jason's design call).
+- **Hub-index completeness.** experiments.md (6→8 pages) and reference.md (19→23) full-page
+  indexes filled in; sound-world-recipe "Known open edges" cross-pointed to the #113 negative.
+
+Method: fan-out audit → triage → fan-out fix → diff review → single commit. Facts only;
+no synthesis/re-ranking (that's a later pass).
+
+## [2026-07-02] Major restructure: hub-of-hubs index + revived Ops hub + curated timeline
+
+Rebuilt the landing page from a 26,680-token wall (it overflowed a single 25k
+fetch) into a **~950-token hub-of-hubs** that fits one fetch with headroom. The
+old index linked ~90 pages inline, with 400–900-word essay-cells; **14 of the 83
+topic pages were orphans** (on disk, never linked). New shape:
+
+- **Pinned top = the [Ops hub](ops.md)** (replaces the "common workflows" header):
+  Train/Eval/Publish workflow pages + the live operating surfaces, each verified
+  live-vs-archived (2026-07-02). Banner-flagged the two dead ops pages
+  ([status.md](ops/status.md) self-superseded, [frontier.md](ops/frontier.md)
+  retired pi-mechanism).
+- **5 knowledge hubs** — [AlphaZero](alphazero.md), [Experiments](experiments.md)
+  (hub-of-hubs; [Seek-VCT](seek-vct.md) nested), [Derby](derby.md),
+  [M5-as-Mainframe](m5-mainframe.md), [Reference](reference.md) — each with a
+  start→now→learned skeleton and a **complete "every page in this hub" index**, so
+  **all 99 pages are reachable from exactly one hub (zero orphans)**.
+- **New [training-timeline.md](training-timeline.md)** — the append-only
+  TRAINING_WIKI (5,799 lines) broken into a ~50-milestone era-grouped index with
+  run ids (curated via a full-notebook extraction pass).
+- Provenance + reducer state preserved in `_archive/` (old index +
+  `manifest.json`, the per-page hub/verdict map that drives future curation passes).
+- New workflow pages: [train-a-model](train-a-model.md), [eval-a-model](eval-a-model.md),
+  [publish-a-model](publish-a-model.md) (the real HuggingFace mechanism from `gomoku/hf.py`).
+
+Built with three ultracode passes (inventory → coverage+manifest → extraction+cutover).
+Fixed a pre-existing broken link in this log (`alphazero-lessons` → `-15x15-gomoku`).
+
+## [2026-07-01] New page: the VCT-defense aux head — a working sensor with no actuator (#103)
+
+Created [topics/vct-defense-aux-head-result.md](topics/vct-defense-aux-head-result.md) — the outcome of #103,
+executing the #102 supervised VCT-defense aux-head design. Ran TWO experiments; **both learn the defensive
+REPRESENTATION but fail to make the POLICY defend.** **A** (from-scratch 9×9, wandb `8mtowemb`, e1152):
+`train/vct_loss` 0.60→0.03, mask_frac ~0.9, but `plies_mean` flat ~9-10 for 1152 epochs = the #101 attractor
+*unchanged even with the representation present*. **B** (Bruce/idx-2 pivot, wandb `zrjfwny2`, e862): warm-start
+the 128×10 champion + layer the head via the new `force_aux_vct` splice + restrict self-play to the idx-2 wound;
+the head learns (0.52→0.026) but the self-play policy drifts (`loss/policy` 1.93→2.62, plies 11.6→9.6). Kept the
+honesty bar high on the **eval-saturation nuance**: the idx-2 gate (n=48, sims=160) reads **0/48 on the pivot AND
+0/48 on frozen Bruce** — saturated, so it does NOT show the pivot degraded Bruce; the real "fell apart" evidence
+is the policy drift, and a clean strength-delta was never measured (abandoned). Verdict: **a working sensor with
+no actuator** ("Frankenstein + aux head is not the recipe" — Jason); next = target the policy directly. Added an
+index ⭐ row (after the #100/#101 terminus row), a TRAINING_WIKI 2026-07-01 (#103) entry, and an idea-pile #11
+aux-head-sequel marker. Documentation only; the head/splice code was already merged to main (6ba92b5).
+
+## [2026-07-01] Long-run coda (#101): VCT-terminus p90 is a stable attractor at ≈14.5, not the 81 gate
+
+Extended [topics/vct-terminus-selfplay-result.md](topics/vct-terminus-selfplay-result.md) with a
+"## Long-run coda (#101)" section — the natural next probe of #100. Trained the VCT-terminus player from
+scratch for **~2,700 epochs with no evals** (wandb `kgajrge4`, `jasonyandell-forge42/gomoku`, run dir
+`~/data/vctsci-101-long/`) and watched `selfplay/plies_p90`: it does **not** climb toward 81 (the retired
+9×9→11×11 gate = a full board), so **Hypothesis B held** (Jason's bet) — a **rising-then-flattening fixed
+point at p90 ≈14.5 / mean ≈9.6**, the net sharpening inside the fast forced-win regime (pl 4.38→2.17, vl
+0.39→0.022, all flat). Verified block-mean trajectory off the run: cold ~28 → trough 11.9 (~e85) → decelerating
+creep 11.9→12.7→13.2→13.4→13.6→14.0→14.4→14.7, flat for the final ~1,000 epochs. Mechanism: the defender (its
+own EMA twin) learns to **postpone** the VCT, never to **prevent** it — the self-play defensive ceiling is
+**structural**, not undertraining. Banked two honesty caveats: `plies` is an unreliable defense proxy (cap50
+loses recall as play sharpens ⇒ part of the creep is the detector, not defense — only `fires>0` vs a real
+opponent settles it, and #100 said no), and "stronger at short games" is inferred from falling pl/vl, not a
+measured strength number (evals were off). The way past the ceiling = opponent-independent defensive signal =
+the supervised VCT aux-head (#102/#103). Updated idea-pile #11 lineage (added the #101 coda), the index row,
+and TRAINING_WIKI 2026-07-01. Closes #101.
+
+## [2026-07-01] Perf blitz day 1 (#112 landed, #109 landed, #114 filed): one streaming worker replaces the gen fleet; standard eval minutes → seconds
+
+Jason's 5-day directive: max out the box — training, gen, VCT, standard eval; knobs may be
+consolidated. **Gen (#112, merged):** converted `_generate_games_native` to per-game plies and added
+**continuous refill** (`--concurrent-games`) + **streaming production mode** (`--stream`: chunk
+flushes + between-round weight hot-reload) — ONE process at width 256–512 = **4,080–5,579 aug-pos/s
+vs the 4-worker fleet's ~1,000–1,300 (~3.4–4.6×)**, oracle fully hidden under search, poison check
+0-violation both paths, `sound-world` cell rewired to the single streaming worker. Law amendment:
+width-is-free has an intra-simdgroup **divergence bump** (44→108 ms/call at 150→862 boards) that
+saturates — past ~1k boards width is ~free again. **Eval (#109, merged):** the batched arena now
+implements the **VCT finisher** (one bulk mega-solve per round; hybrid vs heuristic 15W-0L-5D in
+4.4 s — matches the legacy receipt that took minutes), model specs FAIL LOUD on unimplemented
+kwargs, and the post-run final eval runs on **MPS** (run is torn down, GPU free): standard
+4-baseline battery 37 s CPU → **14.3 s** wall, identical results. **13×13 (#113 prerequisite,
+#114 filed):** the solve is 100% of the wall (fp16-eval frees the evaluator and buys nothing);
+resolve census on real veto batches = 48% @10 / 9.5% @50 / **42.5% capped** — no tail, half the
+batch grinds; ladder 0.83×, oracle-sort 0.98×, tg-variants 1.00×, **precheck refuted again
+(0.59×, new mechanism: null boards are themselves cap-bound)**. Next: multi-thread-per-board
+kernel pass + cap25 recall study (worktree `gomoku-mega-vct-bb` kept, receipts in #114). Full
+receipts: [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) 2026-07-01 refill entry.
+
+## [2026-07-02] Perf blitz day 2 (#114): lanes=K multi-thread-per-board kernel lands — 1.34× solve / 1.29× gen at 13×13, bit-identical
+
+Day-1's census left one lever; built it. K simd lanes cooperate per board in
+`mega_vct_bb` (lockstep replicated-state DFS; the two per-node candidate scans
+lane-partitioned + simd-reduced; MIN commit == lowbit order ⇒ verdict
+**bit-identical**, invariant #11). Receipts on 132 REAL 13×13 merged-veto
+batches (360,925 boards, cap50, `bench_lanes13.py` — committed, unlike day-1's
+scratchpad): K=2/4/8/16 = 1.09/1.23/1.34/1.36×, verdicts identical every
+batch. End-to-end gen 48@32: wall 67.7→52.6 s (1.29×), aug-pos/s 297.5→383.2,
+game stream identical. Honest scoresheet: predicted 2–4×, got 1.34× (K×
+thread inflation at real widths; narrow-batch ceiling 1.72× @B=150 15×15).
+`GOMOKU_VCT_LANES=8` env knob (default off) wires it into gen. FAST tier +
+full pytest green. Left in #114: cap25 recall study, veto-breadth staging.
+Details: [topics/mega-vct-solver.md](topics/mega-vct-solver.md)
+§ Multi-thread-per-board; [topics/mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) 2026-07-02.
+
+## 2026-07-02 — Fan-out wiki refresh + fact-organization pass (pre-curation)
+
+A two-stage subagent fan-out to get the accumulated notes into real, discoverable
+pages *before* a later high-level curation pass. Stage 1 (9 pages): created
+[topics/training-run-reference.md](topics/training-run-reference.md) (every knob/switch
++ quick-start), [topics/eval-suite.md](topics/eval-suite.md) (command-first how-to-eval),
+[topics/rapfi-pool.md](topics/rapfi-pool.md), [topics/vct-mining-research.md](topics/vct-mining-research.md)
+(seek-VCT synthesis hub), [topics/bruce-lee-model.md](topics/bruce-lee-model.md), and
+[topics/net-architecture-and-representation.md](topics/net-architecture-and-representation.md)
+(recovers the 2026-07-01 Fable representation rationale from session logs — line planes /
+global pool / the hybrid-Rapfi north star — with an honest recovered-vs-lost box, since
+Fable's reasoning channel is redacted); curated/extended
+[topics/board-size-transfer-and-warm-start.md](topics/board-size-transfer-and-warm-start.md)
+(+ the auto-graduating 9→11→13→15 ladder), [topics/mega-vct-solver.md](topics/mega-vct-solver.md)
+(+ performance: lanes=K #114, the oracle-veto = 91%-of-gen-wall finding), and
+[topics/sound-world-recipe.md](topics/sound-world-recipe.md) (+ the 13×13 graduation NEGATIVE
+result #113 + the new role-invariant "rails" ideas). Stage 2 (curation): integrated all 9
+into the index task-view table (temp block removed), re-pointed the parallel-write link
+stand-ins to their real siblings, disambiguated the "Bruce" checkpoint provenance (two runs:
+live `gogpmbhw` e2659 w/ choice-head vs the `zrjfwny2` 128×10-bigbuf eval ladder where
+eval502=e500 and e588_best=e605), and reconciled the small-net param count (**345,885 @ 9×9
+vs 395,605 @ 13×13** — the +49,720 is the board-area flatten in `policy_fc`+`value_fc1`; the
+raw 396,774 state_dict also counts BatchNorm buffers). A **high-level curation pass is still
+pending** (this stage was facts-in-place-and-organized, not synthesis).
+
+## [2026-07-03] Perf-blitz fan-out wrap: kernel lane COMPLETE, cap25 gate MET (~2x, human-gated flip), trainer fat trimmed (#114/#115)
+
+Three parallel verified-first agent lanes closed out the day-1 leverage list (GPU benches serialized
+via an atomic mkdir lock). (1) **lanes=K kernel: COMPLETE** — K-sweep saturated (K8=1.34x/K16=1.36x
+real-gen; synthetic 1.60x@K8, K16 regresses past the B×K≈25k thread-inflation ceiling); byte-identity
+green K∈{2..32}; shared-stack rewrite explicitly not pursued; `bench_lanes13 --synth` self-check
+shipped. Prefer GOMOKU_VCT_LANES=16 at 13×13 if enabling. (2) **cap50→cap25 recall study: gate MET** —
+recall of cap50-proven vetoes at cap25 = 98.64% (9×9 champ) / 99.39% (13×13 full-game) / **99.93%
+(13×13 sound-world net)**; solve ~**1.98×** both sizes, composable with lanes=K (composed 13×13 stack
+≈2.7× on the ~90%-of-wall component). All proven wins are defense escape-children (terminus fires 0);
+monotonicity/leak-capped invariants + poison@25 clean. **Flip is HUMAN-GATED** (#114, label swapped):
+recommended board-size-conditional (cap25 @13×13+, keep cap50 @9×9 — marginal recall AND not the
+bottleneck there); caveats = distribution-dependence, leaks-are-played-blunders (K-cap precedent),
+Δelo slice pending. Tooling: `scripts/vct_metal/cap25_recall_study.py`, `GOMOKU_POISON_BUDGET`.
+(3) **Trainer quick wins (#115 closed)**: fused L2 (-9.7%/step, gradient bitwise-identical;
+_foreach_norm SLOWER on MPS, _foreach_pow won), ~15 host syncs/step → one packed transfer
+(byte-matched logs), `--shape-stats-every` (default 10; ~230 ms/epoch amortized at 1.5M rows), plus
+the honest profile: at fixed sgd-steps=64 the epoch is GEN-dominated (train 1.4–1.9 s vs gen 10–34 s
+at 13×13) — the trainer was never the wall. Same-seed 3-epoch trajectory identical before/after;
+1129 tests green. Receipts: #114/#115 comments.
+
+## [2026-07-03] LeGomoku proposed — latent-space world-model experiment enters the Experiments hub
+
+New thread [topics/legomoku.md](topics/legomoku.md) (brainstorm only, no code): can a JEPA-style
+latent world model make a *better search* for a rule-following game? Weak version (learned simulator)
+pre-killed (MuZero precedent — rules are free); strong version = learn the threat-space abstraction
+Allis hand-built, search over macro-moves (forcing exchanges) at fixed node budget. Honest prior from
+Jason's Texas-42 world-model splat: these models wall on the non-geometrical ("well who friggin
+knows"); gomoku's analog is search-fog, not hidden state — "probably goes splat," pre-stated bets on
+record. Unfair advantages logged: VCT oracle as latent-geometry ground truth, 234k rails-v0 games on
+disk, the momentum-swing eval. First spike scoped: k-step latent unroll value-fidelity on contested
+positions. Second stated goal is the learning itself — a written-down splat is a win.

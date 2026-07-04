@@ -64,7 +64,12 @@ from gomoku.self_play import (
     configure_draw_value,
     configure_search_contempt,
     configure_vcf_teacher,
+    configure_attacker_preserve,
+    configure_oracle_overlap,
+    configure_oracle_precheck,
+    configure_oracle_veto,
     configure_vct_teacher,
+    configure_vct_terminus,
     configure_value_discount,
     generate_games,
     generate_games_vs_baseline,
@@ -87,6 +92,21 @@ def parse_args() -> argparse.Namespace:
 
     # Generation knobs (should match the trainer's MCTS config).
     p.add_argument("--games-per-batch", type=int, default=16)
+    p.add_argument("--concurrent-games", type=int, default=0,
+                   help="Continuous refill (issue #112): cap the active set at "
+                        "this width and seed a replacement game the moment one "
+                        "completes, so the per-ply merged oracle solve and the "
+                        "MPS search wave always run at full width. Use with a "
+                        "games-per-batch a few times larger. 0 = legacy "
+                        "lockstep batches (byte-identical). Native path only.")
+    p.add_argument("--stream", action="store_true",
+                   help="Streaming production mode (issue #112): one unbounded "
+                        "continuous-refill generation (requires "
+                        "--concurrent-games > 0) that flushes completed games "
+                        "to the output dir in chunks of --games-per-batch and "
+                        "hot-reloads worker_weights.pt between rounds (games "
+                        "in flight finish under the new net). No lockstep "
+                        "batch ramp/drain, no weight staleness.")
     p.add_argument("--n-simulations", type=int, default=800)
     p.add_argument("--wave-size", type=int, default=32)
     p.add_argument("--c-puct", type=float, default=1.25,
@@ -110,6 +130,19 @@ def parse_args() -> argparse.Namespace:
                         "out (down to where the child's PUCT value would equal the "
                         "best child's) before renormalizing. Recommended 2.0.")
     p.add_argument("--random-opening-moves", type=int, default=0)
+    p.add_argument("--swap2", action="store_true", default=False,
+                   help="Start each self-play game from a swap2-negotiated "
+                        "opening (the net plays both opener and responder roles) "
+                        "instead of an empty/random board. Mutually exclusive "
+                        "with --random-opening-moves; swap2 owns the opening. "
+                        "v1 seeds the opening only (no choice head is trained). "
+                        "Default OFF == byte-identical to today.")
+    p.add_argument("--fixed-openings", action="store_true", default=False,
+                   help="Start each self-play game from one of Rapfi's 9 BALANCED "
+                        "(known-fair) swap2 openings, placed directly (no "
+                        "negotiation, no net, no choice head); the net plays only "
+                        "post-opening. 15x15 only. Mutually exclusive with --swap2 "
+                        "and --random-opening-moves. Default OFF.")
 
     # Playout-Cap Randomization (KataGo, Wu 2019). Opt-in; defaults are inert and
     # preserve the byte-identical production self-play path. When frac < 1.0,
@@ -183,6 +216,80 @@ def parse_args() -> argparse.Namespace:
                         "which starved generation in Derby v8). On cap-hit the "
                         "solver returns no-forced-win quickly so self-play proceeds. "
                         "Raise alongside --vct-max-depth at your own gen-cost risk.")
+    p.add_argument("--vct-terminus", action="store_true", default=False,
+                   help="VCT-TERMINUS self-play (issue #98): end each game at the "
+                        "FIRST position where the side to move has a forced VCT "
+                        "(batched GPU oracle, cap50), taking the oracle's exact "
+                        "win + winning move instead of playing out to five. Cuts "
+                        "trajectory length ~2x (first VCT ~median ply 19) to a "
+                        "labeled winner with an EXACT terminal value. Native / "
+                        "Python (non-Gumbel) paths only. Default OFF = "
+                        "byte-identical five-in-a-row self-play.")
+    p.add_argument("--vct-terminus-budget", type=int, default=50,
+                   help="Per-board node cap for the --vct-terminus oracle test "
+                        "(cap50 = the near-complete first-VCT detector sweet spot: "
+                        "98.8%% of VCTs, 96%%+ of games, 40-850x cheaper than deep "
+                        "search). Only matters with --vct-terminus.")
+    p.add_argument("--oracle-veto", action="store_true", default=False,
+                   help="Sound-world oracle veto (issue #107): every self-play "
+                        "ply, bulk escape-solve the wave (GPU oracle, the "
+                        "--vct-terminus-budget cap) and MASK every move proven "
+                        "to lose to a forced opponent VCT out of the root visit "
+                        "distribution — both the move played AND the recorded "
+                        "policy target (on-policy: the target stays the net's "
+                        "own search, just constrained). A position where EVERY "
+                        "legal move is a proven blunder ends the game as a "
+                        "DEFENDER TERMINUS (side to move loses, z=-1). Composes "
+                        "with --vct-terminus (attacker end) for fully "
+                        "oracle-sound games. Native (non-Gumbel) path only. "
+                        "Default OFF = byte-identical self-play.")
+    p.add_argument("--attacker-preserve", action="store_true", default=False,
+                   help="Attacker-preserve mask (issue #116, sound-world idea "
+                        "#2): every self-play ply, if the side to move has a "
+                        "proven VCT win (GPU oracle complete-mode, the "
+                        "--vct-terminus-budget cap), MASK the root visit "
+                        "distribution — both the move played AND the recorded "
+                        "policy target — to the winmask (ALL winning first "
+                        "moves), dropping any move that lets the forced-win "
+                        "class slip. Teaches the net to CLOSE on-policy (fold "
+                        "the oracle finisher into the net) instead of only "
+                        "attacking. The attacker complement of --oracle-veto; "
+                        "pair with the veto and NO --vct-terminus for the "
+                        "play-on 'rails' recipe. Native (non-Gumbel) path only. "
+                        "Default OFF = byte-identical self-play.")
+    p.add_argument("--oracle-veto-max-cands", type=int, default=0,
+                   help="Staged-escalation breadth cap for the --oracle-veto "
+                        "escape-solve (big-board lever). 0 (default) = FULL "
+                        "breadth every ply (the original #107 semantics). K > 0 "
+                        "= stage 1 solves only the K empty cells nearest "
+                        "existing stones and vetoes proven blunders among them "
+                        "(an untested cell is never vetoed — conservative-"
+                        "safe); a position whose tested cells ALL lose is "
+                        "escalated to full breadth before the defender-"
+                        "terminus check, which stays exactly sound.")
+    p.add_argument("--oracle-precheck", action=argparse.BooleanOptionalAction,
+                   default=False,
+                   help="Null-board precheck for the escape-solve (byte-"
+                        "identical results): a position whose null board ('I "
+                        "pass') is a CLEAN no-win at the cap provably has no "
+                        "blunder cells (freestyle monotonicity + solver 0-FP), "
+                        "so its children are never built or solved. Default "
+                        "OFF — measured SLOWER at the 9x9 live config (per-"
+                        "call solver cost is ~constant: width is free, and "
+                        "the phase-2 split adds calls). A big-board "
+                        "experiment only.")
+    p.add_argument("--oracle-overlap", action="store_true", default=False,
+                   help="Perf: run the per-ply bulk oracle solve (MLX/Metal) in "
+                        "a background thread WHILE the native MCTS wave "
+                        "searches on MPS, applying terminus/veto partitions "
+                        "post-search. Hides the smaller of (solve, search) "
+                        "almost entirely. NOT byte-identical to the serial "
+                        "order: oracle-terminated games are searched-and-"
+                        "discarded on their final ply, which shifts evaluator "
+                        "batch shapes (same numeric class as a wave-size "
+                        "change); targets and records are unchanged in kind, "
+                        "and the flag-on path is deterministic per seed. "
+                        "Default OFF = byte-identical serial order.")
     p.add_argument("--defense-teacher", action="store_true", default=False,
                    help="Enable the exact DEFENSIVE teacher (value-only): mirror "
                         "of --vcf-teacher. When the OPPONENT has a proven forced "
@@ -218,6 +325,33 @@ def parse_args() -> argparse.Namespace:
                         "stamping the loss on dozens of positions; when it binds, the "
                         "budget is spent on the LATEST firing plies (closest to the "
                         "mate). Only matters with --defense-teacher.")
+    p.add_argument("--defense-detect-frac", type=float, default=None,
+                   help="Sparse-bite sampler (#43 follow-on): invoke the EXACT VCF "
+                        "solver on only this FRACTION of opponent-four-threat plies. "
+                        "Default None/1.0 = solve every danger ply (byte-identical). "
+                        "The solver is the gen bottleneck (~7s/game on a 15x15 net); "
+                        "0.1 cuts that ~10x while keeping stamps exact — AlphaZero "
+                        "distills a defensive lesson over epochs from a PRESENT "
+                        "signal, it needs density, not per-ply perfection. Only "
+                        "matters with --defense-teacher / --defense-teacher-policy.")
+    p.add_argument("--defense-teacher-conv", action="store_true", default=False,
+                   help="CONV block-teacher (white-defense dense-shallow arm): a "
+                        "CHEAP vectorized board scan (NO solve_vcf, NO tree search, "
+                        "~microseconds/ply) that fires on EVERY ply and stamps the "
+                        "BLOCK to the opponent's IMMEDIATE threat on the POLICY head, "
+                        "leaving the value at the natural outcome. Tier 1 (sound): a "
+                        "bare opponent four -> one-hot the unique block; double-four "
+                        "or defender-can-win -> no stamp. Tier 2 (heuristic, on by "
+                        "default, disable with --defense-conv-no-tier2): opponent "
+                        "open-three -> stamp the move(s) preventing the open four. The "
+                        "complement of --defense-teacher-policy (sparse+deep); cheap "
+                        "enough to never throttle gen. Implies --defense-teacher. "
+                        "Default OFF = byte-identical self-play (scan never runs).")
+    p.add_argument("--defense-conv-no-tier2", action="store_true", default=False,
+                   help="Disable the conv block-teacher's Tier 2 (open-three -> "
+                        "open-four prevention) heuristic, keeping ONLY the sound "
+                        "forced-four block (Tier 1). Only matters with "
+                        "--defense-teacher-conv.")
     p.add_argument("--vcf-max-depth", type=int, default=None,
                    help="VCF teacher solver depth cap (Derby v5 'vcf-deep' lever). "
                         "Default None = vcf.DEFAULT_MAX_DEPTH (16). Higher proves "
@@ -298,6 +432,21 @@ def parse_args() -> argparse.Namespace:
                         "ownership field recorded. Must match the trainer's "
                         "--aux-ownership-weight > 0 so the buffer/head pick the "
                         "target up.")
+    p.add_argument("--record-vct", action="store_true", default=False,
+                   help="Moonshot aux VCT-defense head: for each recorded "
+                        "position run the per-ply escape-search labeler (one bulk "
+                        "solve/ply over the surviving positions) and record a "
+                        "per-cell 0/1 'blunder map' (1 where playing there walks "
+                        "the side to move into a forced VCT for the opponent). "
+                        "Requires --vct-terminus (the labeler runs at the terminus "
+                        "partition). Default off = no vct field recorded. Must "
+                        "match the trainer's --aux-vct-weight > 0.")
+    p.add_argument("--vct-defense-max-cands", type=int, default=0,
+                   help="Breadth cap for the --record-vct labeler: 0 (default) "
+                        "tests EVERY legal empty cell as a blunder candidate; "
+                        "K > 0 caps to the K empty cells nearest existing stones "
+                        "(a per-ply gen-cost lever). Only matters with "
+                        "--record-vct.")
     p.add_argument("--profile-output", type=str, default=None,
                    help="Write a JSON timing profile for bounded worker runs. "
                         "The profile separates native_search_batch, evaluator, "
@@ -726,7 +875,8 @@ def _draw_poll_interval(
 
 
 def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_games: int,
-                      archive: dict | None = None, profile: dict[str, float] | None = None):
+                      archive: dict | None = None, profile: dict[str, float] | None = None,
+                      flush_records=None, refresh_evaluator=None):
     if opp_picker is None:
         return generate_games(
             n_games, evaluator,
@@ -741,6 +891,8 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             rng=rng,
             wave_size=args.wave_size,
             random_opening_moves=args.random_opening_moves,
+            swap2=args.swap2,
+            fixed_openings=args.fixed_openings,
             archive=archive,
             archive_start_frac=args.archive_start_frac,
             playout_cap_frac=args.playout_cap_frac,
@@ -756,6 +908,11 @@ def _generate_records(args: argparse.Namespace, evaluator, opp_picker, rng, n_ga
             defense_teacher=args.defense_teacher,
             record_aux=getattr(args, "record_aux", False),
             record_ownership=getattr(args, "record_ownership", False),
+            record_vct=getattr(args, "record_vct", False),
+            concurrent_games=getattr(args, "concurrent_games", 0),
+            flush_records=flush_records,
+            flush_games=args.games_per_batch,
+            refresh_evaluator=refresh_evaluator,
         )
     return generate_games_vs_baseline(
         n_games, evaluator, opp_picker,
@@ -871,17 +1028,51 @@ def main() -> None:
     board_config.require_board_size(args.board_size)
     # --defense-teacher-policy (#43) implies the defense teacher is on; it only
     # switches WHICH target gets rewritten (policy saving-move vs value crush).
-    if args.defense_teacher_policy:
+    # --defense-teacher-conv (the dense-shallow arm) likewise implies it on.
+    if args.defense_teacher_policy or args.defense_teacher_conv:
         args.defense_teacher = True
+    # --swap2 owns the opening (it negotiates a balanced one); it is mutually
+    # exclusive with --random-opening-moves. Fail fast with a clear message.
+    if args.swap2 and args.random_opening_moves > 0:
+        raise SystemExit(
+            "--swap2 and --random-opening-moves are mutually exclusive "
+            "(swap2 negotiates the opening; drop --random-opening-moves)"
+        )
     # Per-process VCF teacher budget (Derby v5 'vcf-deep'). No-op unless the
     # flags are set; defaults leave the solver at vcf.DEFAULT_MAX_* (byte-identical).
     configure_vcf_teacher(args.vcf_max_depth, args.vcf_max_nodes)
     configure_vct_teacher(args.vct_max_depth, args.vct_max_nodes)
+    # VCT-terminus (issue #98): no-op unless --vct-terminus is set (gated purely
+    # on the process global; the default-off path never imports MLX).
+    configure_vct_terminus(enabled=args.vct_terminus, budget=args.vct_terminus_budget,
+                           defense_max_cands=getattr(args, "vct_defense_max_cands", 0))
+    # Sound-world oracle veto (issue #107): no-op unless --oracle-veto is set
+    # (gated purely on the process global; default-off never imports MLX).
+    # --oracle-veto-max-cands K > 0 = staged-escalation breadth (big-board
+    # lever); 0 keeps the original full-breadth-every-ply semantics.
+    configure_oracle_veto(enabled=args.oracle_veto,
+                          max_cands=args.oracle_veto_max_cands)
+    # Attacker-preserve mask (issue #116, sound-world idea #2): no-op unless
+    # --attacker-preserve is set (gated purely on the process global; default-
+    # off never imports MLX). When on, restricts the recorded+played policy to
+    # the winmask on positions with a clean proven VCT — the net learns to CLOSE.
+    configure_attacker_preserve(enabled=args.attacker_preserve)
+    # Oracle/search overlap (perf): run the per-ply mega-solve concurrently
+    # with the MPS search wave. Default OFF = byte-identical serial order.
+    configure_oracle_overlap(enabled=args.oracle_overlap)
+    # Null-board precheck (perf): byte-identical results, default OFF
+    # (measured slower at 9x9 — big-board experiment only).
+    configure_oracle_precheck(enabled=args.oracle_precheck)
     # Gentler defense teacher (#42): no-op unless the flags are set; defaults
     # leave soft_value -1.0 / max_fraction 1.0 (byte-identical hard/unbounded).
     # policy_mode (#43): switch to stamping the saving move on the policy head.
+    # conv_mode: the cheap dense block-teacher (no tree search) on the policy head.
     configure_defense_teacher(args.defense_soft_value, args.defense_max_fraction,
-                              policy_mode=args.defense_teacher_policy)
+                              policy_mode=args.defense_teacher_policy,
+                              detect_frac=args.defense_detect_frac,
+                              sample_seed=args.seed,
+                              conv_mode=args.defense_teacher_conv,
+                              conv_tier2=(not args.defense_conv_no_tier2))
     configure_value_discount(args.value_discount)
     # Derby 'x-draw-contempt' (bead derby-9q4): no-op when DELTA == 0.0 (default).
     configure_draw_value(args.draw_value)
@@ -1135,6 +1326,98 @@ def main() -> None:
             if args.max_batches > 0 and batch_n >= args.max_batches:
                 print(f"[{args.worker_id}] hit max-batches={args.max_batches}, exiting", flush=True)
                 return
+
+    if getattr(args, "stream", False):
+        # Streaming production mode (issue #112): one unbounded continuous-
+        # refill generation; chunks flush as games complete; weights hot-reload
+        # between rounds. Replaces the batch loop below entirely.
+        if opp_picker is not None:
+            raise SystemExit("--stream does not support --opponent")
+        if args.concurrent_games <= 0:
+            raise SystemExit("--stream requires --concurrent-games > 0")
+        state = {
+            "weights_mtime": weights_mtime,
+            "model_version": model_version,
+            "last_check": time.monotonic(),
+            "batch_n": 0,
+            "flush_t0": time.perf_counter(),
+        }
+
+        class _StreamDone(Exception):
+            pass
+
+        def _refresh():
+            now = time.monotonic()
+            if now - state["last_check"] < poll_sec:
+                return None
+            state["last_check"] = now
+            try:
+                cur = os.path.getmtime(args.weights_path)
+            except OSError:
+                return None
+            if cur <= state["weights_mtime"]:
+                return None
+            try:
+                m, payload = load_checkpoint(args.weights_path, device=device)
+                m = fuse_model_for_inference(m)
+                m = _maybe_half(m, args.fp16_eval, args.worker_id)
+                m = _maybe_compile(m, args.compile, args.worker_id)
+                ev = _build_evaluator(args, m, device)
+            except Exception as e:
+                # Trainer might be mid-write; try again next round.
+                print(f"[{args.worker_id}] stream reload failed ({e}); retrying",
+                      flush=True)
+                return None
+            state["weights_mtime"] = cur
+            state["model_version"] = int(
+                payload.get("epoch", state["model_version"] + 1))
+            print(
+                f"[{args.worker_id}] stream: reloaded weights "
+                f"version={state['model_version']} mtime={cur:.0f}",
+                flush=True,
+            )
+            return ev
+
+        def _flush(records):
+            n_games = len(records)
+            n_examples = sum(len(r.examples) for r in records)
+            dt = time.perf_counter() - state["flush_t0"]
+            state["flush_t0"] = time.perf_counter()
+            payload = {
+                "records": records,
+                "worker_id": args.worker_id,
+                "weights_mtime": state["weights_mtime"],
+                "model_version": state["model_version"],
+                "version": state["model_version"],
+                "n_games": n_games,
+                "n_examples": n_examples,
+                "gen_s": dt,
+            }
+            path = _atomic_save(out_dir, args.worker_id, payload)
+            state["batch_n"] += 1
+            print(
+                f"[{args.worker_id}] stream chunk {state['batch_n']}: "
+                f"{n_games}g {n_examples}ex {dt:.1f}s "
+                f"({dt / max(n_games, 1) * 1000:.0f} ms/game) -> {path.name}",
+                flush=True,
+            )
+            if args.max_batches > 0 and state["batch_n"] >= args.max_batches:
+                raise _StreamDone
+
+        print(
+            f"[{args.worker_id}] stream mode: concurrent={args.concurrent_games} "
+            f"flush_games={args.games_per_batch} poll={poll_sec:.1f}s",
+            flush=True,
+        )
+        try:
+            _generate_records(
+                args, evaluator, None, rng, 1 << 31, archive=archive,
+                flush_records=_flush, refresh_evaluator=_refresh,
+            )
+        except _StreamDone:
+            print(f"[{args.worker_id}] hit max-batches={args.max_batches}, exiting",
+                  flush=True)
+        return
 
     while True:
         profile = {} if args.profile_output else None

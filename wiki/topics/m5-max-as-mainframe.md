@@ -1,4 +1,5 @@
 # M5 Max as Mainframe: the 9×9 Perf Proving Ground
+> **Status: LIVE philosophy** *(2026-07-04)* — inline-superseded tables bannered where they sit.
 
 Captured 2026-05-21 during WL5 monitoring as guiding philosophy for the
 post-WL5 perf era and the long arc toward 15×15 + Gomocup submission.
@@ -71,6 +72,13 @@ behavior. That goes on the wall.
 
 ## The chip-specific levers worth disproportionate investment
 
+> **Pre-measurement philosophy (2026-05-21):** the ANE-as-inference-engine
+> framing below is aspirational, and later measurement **rejected it** — ANE is
+> NOT the production inference path (throughput reject vs torch and CPU/BNNS;
+> INT8 no ANE compute benefit). See
+> [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md)
+> § "Current state". Read the ANE bullets below as history, not a plan.
+
 Unified-memory pipelining is the most M5-Max-specific lever and has
 almost no published prior art for AZ workloads:
 
@@ -109,6 +117,13 @@ rail, not the requested compute-unit label.
 The 9×9 → 15×15 + Gomocup arc only works if perf claws back the
 ~20-50× scale-up cost. Realistic envelope, all chip-specific levers
 pulled:
+
+> **SUPERSEDED (2026-05-23+):** this envelope rests on the ANE INT8 lever, which
+> measurement has since **refuted** — genuine ANE residency is a throughput
+> reject (−4.2% vs torch, −28.5% vs CPU/BNNS) and INT8 gives no ANE compute
+> benefit. ANE is NOT the production inference path. See
+> [coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md)
+> § "Current state". The compounded multiplier below no longer holds.
 
 | lever | throughput multiplier |
 |---|---|

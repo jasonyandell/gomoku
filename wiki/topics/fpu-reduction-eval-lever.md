@@ -1,7 +1,11 @@
 # FPU reduction at eval (`--fpu-reduction-c`)
 
-Status: landed (derby-3w0, 2026-05-28). Eval-only knob. Default OFF
-(`fpu_reduction_c = 0.0` = byte-identical to legacy).
+**Status: LIVE — landed (derby-3w0, 2026-05-28). Eval-only knob, default OFF**
+(`fpu_reduction_c = 0.0` = byte-identical to legacy). **Scope caveat: the gain is
+9×9-champion-specific.** A clean frozen-checkpoint A/B at 15×15 found **no gain**
+(FPU-off 50/83% vs FPU-on 33/83% vs Rapfi = within noise) — FPU reduction does
+**NOT** transfer to 15×15. See
+[the 15×15 campaign](15x15-training-campaign.md) (2026-06-13 log).
 
 ## What
 

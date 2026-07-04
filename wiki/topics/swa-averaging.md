@@ -1,4 +1,5 @@
 # SWA peak averaging (post-training tool)
+> **Status: HISTORICAL** *(2026-07-04)* — derby-era tool (built 2026-05-28, no recorded win).
 
 `scripts/swa_average.py` — average the last K saved `peak*.pt` checkpoints in a
 lane's `_peaks/<idea>/` directory into a single `peak_swa.pt`. The averaged

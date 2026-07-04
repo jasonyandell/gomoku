@@ -4137,3 +4137,1776 @@ short/cold-window trap again, cf. LF1) and **#60** (refute only budget-kept plie
 fewer `vcf_refutations` solves, equivalence-proven). Next: #60 + a buffer-freshness
 rethink before the next live race. Full synthesis:
 `wiki/topics/white-side-defense-plan.md` § "LIVE RACE RAN, then KILLED (2026-06-19)".
+
+## 2026-06-19 — White-defense reframe: recipe-deep + the gen bottleneck is the PER-PLY SOLVE; SPARSE-BITE lever live
+
+Hobby-day session (Jason + Claude). Three results; full synthesis in
+`wiki/topics/white-side-defense-plan.md` § "ROOT-CAUSE REFRAME + SPARSE-BITE LEVER".
+
+1. **The white hole is RECIPE-DEEP.** The autolab's **from-scratch** `15x15-wdl@0`
+   (0.44M, WDL head, no warm-start, no teacher) reproduces the warm 128×10 champion's
+   white sweep vs native Rapfi-NNUE **to the game**: white **0-20** / black 11-9 @100ms
+   (byte-identical to the champion's row), white 1-19 @1000ms. 7.5× smaller + from-scratch
+   + different value head ⇒ warm-start, capacity, and the WDL head are all exonerated; the
+   deficit lives in the self-play **data distribution**. (Corroborated by the 9×9 champion
+   defending ≤5% white-loss under the same recipe — the hole scales with board size.)
+   Artifact `sweep_logs/probe_wdl0_vs_rapfi_n40.jsonl`.
+2. **The #43 "drowning" ROOT CAUSE = the per-ply VCF solve, not buffer size.** Clean 2×2
+   smokes + a steady-state profiler: the policy teacher costs **~7.1 s/game (94% of wall)** —
+   ~21 detection solves/game @ ~180 ms (incl. the StM-own-win guard's *second* solve) +
+   refutation re-solves — slowing gen **~32× from scratch, ~78× on the mature net** (warm
+   `wdl@0`: 1864 games/180s teacher-OFF → 24 teacher-ON). The 1.5M buffer was the symptom;
+   the slow gen is the root. (8-worker smoke read ~59 s/game vs the profiler's clean
+   7 s/game — cold-window contention inflation; trust the profiler.)
+3. **SPARSE-BITE lever (live).** New flag `--defense-detect-frac F` (self_play
+   `_DEFENSE_DETECT_FRAC`, default 1.0 = byte-identical) samples the EXACT solver to a
+   fraction of four-threat plies — stamps stay exact, cost scales ~1:1. AZ distills a
+   defensive lesson over epochs from a *present* signal; per-ply perfection isn't required.
+   Profiler @ F=0.1: solves 21→2.2/game, teacher 7.08→1.68 s/game (~10×). 10% in a fresh
+   150k buffer ≈ **1000× denser** than the #43 race that drowned in 1.5M. Defense tests pass
+   (43), byte-identity preserved. **LIVE cell `G15-wdl-defense`** = `G15-wdl` (the from-scratch
+   0/20 control) + ONE lever (policy teacher, `--defense-detect-frac 0.1`,
+   `--defense-max-fraction 0.25`, caps 800/7) into a small fresh **150k** buffer,
+   `--resume wdl@0`, 16 workers (board 15, mps, wandb offline). Gate: `eval_vs_rapfi.py
+   --jobs 8`, watch white leave 0/20. Restartable.
+
+Deferred (parked, with rationale in the synthesis page): the off-path relabel-worker (solve
+is ~7 s/game *wherever* it runs → off-path only parallelizes, capping at the same ~2 g/s as
+inline-16-workers; its real value is keeping the trainer fed via a skim — build it only if
+sparse-bite's density is insufficient) and a **GPU-native conv-based threat-block teacher**
+(dense, every-ply, no CPU/GPU bounce; shallow but that's what white lacks; the layered
+endgame = cheap-dense-shallow + rare-deep-exact).
+
+NOTE (machine): this session's code runs from the worktree `gomoku-white-defense-probe` via
+an **editable-MAPPING repoint** of the shared mise venv's PEP-660 finder to the worktree
+(the documented gotcha; PYTHONPATH can't shadow it). Restore to `~/code/gomoku/gomoku` at
+session end. Changes are backward-compatible (new optional flag, default byte-identical), so
+the repoint is benign for any other consumer.
+
+## 2026-06-20 — CONCLUSION: white-defense is the first-player-win THEOREM, not a net flaw → pivot to swap2 (#22)
+
+The day's white-defense investigation closed out decisively. The whole arc, in order:
+
+1. **Recipe-deep** (probe): from-scratch `wdl@0` (0.44M, WDL head) reproduces the warm
+   128×10 champion's white sweep vs Rapfi to the game (white 0-20 @100ms). Warm-start,
+   capacity, value-head all exonerated.
+2. **Sparse-VCF teacher null** (e1726, `--defense-detect-frac 0.1`): white 1-19/0-20 — no move.
+3. **Dense conv block-teacher null** (e1240, `--defense-teacher-conv`, ~13.7 stamps/game,
+   ~37% of plies): white 2-18/2-18 — a faint flicker inside the noise band, and black
+   *softened* 55%→30% (traded attack for caution). Not a fix.
+4. **Diagnostic** (`scripts/diag_white_failuremode.py`, 30 white-vs-Rapfi games on `wdl@0`):
+   white blocks forced fours essentially perfectly (**Tier-1 error 5.6%**, the lone miss
+   on an already-lost final ply); has its OWN immediate win on **1 ply across 30 games**
+   (zero initiative); is forced into an unstoppable **double-four in 28/30 games**; losses
+   run ~23 plies with defensive pressure rising toward the death. ⇒ "competent passive
+   retreat to a forced loss," NOT tactical blunders. The stamp-teachers fix the one error
+   class white doesn't make.
+5. **Clincher** (`/tmp/rapfi_vs_rapfi.py`): **Rapfi(1000ms) vs Rapfi(1000ms)**, same
+   4-stone openings, n=20 → **WHITE 1-9 (~10%), BLACK 9-1 (~90%).** Even the #1 Gomocup
+   engine playing ITSELF gets crushed as the second player.
+
+**Verdict:** 15×15 freestyle is a proven first-player win; from an empty/random opening
+white is a (near-)lost role. No policy/value teacher can make a lost role win — there is no
+error to correct. Every defense lever this project tried (FPU, search budget, value-only
+teacher #42, sparse-VCF policy #43, dense conv) was fighting the theorem. **The fix is to
+DELETE the doomed role: swap2** (Gomocup's balancing protocol — P1 places 3 stones, P2
+chooses stay/swap/place-2-and-let-opponent-pick-color; the player is never *forced* onto the
+lost side). This also makes the Rapfi yardstick honest (Rapfi is a swap2 engine) and is the
+real Gomocup game. **Next build = #22 swap2**: the 3-stone opening placement, the 3-way
+color-choice decision node, the net learning to negotiate the color, and a swap2 eval-vs-Rapfi.
+The `--defense-detect-frac` and `--defense-teacher-conv` levers are sound, tested (60 + 40/40
+VCF cross-check + 1500-fuzz), default-off byte-identical — kept as evidence, not a path forward.
+Artifacts preserved in `sweep_logs/`: `probe_wdl0_vs_rapfi_n40.jsonl` (the wdl@0 control),
+`probe_wdldefense_e1726_vs_rapfi.jsonl` (sparse-VCF), `probe_convguard_e1240_vs_rapfi.jsonl`
+(conv), `diag_white_failuremode_wdl0.jsonl` (the diagnostic). The large intermediate training
+checkpoints (sparse e1726, conv e1240) were discarded with the worktree on merge — a negative
+result we are not resuming; the eval JSONLs above are the cited evidence. The cells
+`G15-wdl-defense` / `G15-wdl-conv` in `run_sweep.py` reproduce the runs from the wdl@0 seed if
+ever needed.
+
+## 2026-06-20 — SWAP2 (#72) BUILT (full Path A) + LIVE warm-started run launched — the real white fix is to DELETE the doomed role (wandb `8nq1a7cm`)
+
+**This is the LIVE arm.** Acting on the same-day conclusion above (15×15 freestyle white
+weakness is the **first-player-win THEOREM**, not a net flaw — Rapfi-vs-Rapfi from 4-stone
+openings = white 1-9; three teachers all flattened: value-only #42, sparse-VCF #43, dense
+conv), the fix shipped: **swap2** (Gomocup's balancing protocol). On `feat/swap2-opening-protocol`
+(6 commits `ba37b92..167e526`, **73 tests green, NOT merged**).
+
+**The ML thesis (the mechanism, not just an honest yardstick).** An imbalanced game **cannot
+bootstrap** because self-play data collapses: every game is a black win → the value head only
+ever sees `white = lost` → the policy gets **no gradient on winnable white positions** (there
+are none in the data). No teacher can fix a role the data never shows winning. **Swap2 rebalances
+the GAME** so self-play generates **~50/50 data** → white positions become *winnable in the
+training set* → the loop can finally learn to defend because there is now a signal to learn from.
+That is the actual unlock; the honest-yardstick property (Rapfi is a swap2 engine, so the real
+Gomocup game) is a bonus, not the point.
+
+**What was BUILT — full Path A (the net learns to negotiate), 6 pieces:**
+1. **`gomoku/swap2.py`** (`ba37b92`) — pure negotiation state machine (`OpeningState`). Opener
+   places 2B+1W; responder STAY (take white + place a white stone) / SWAP (take black) / PLACE2
+   (add 1B+1W, opener then picks color). **Key modeling:** color is fixed by placement ORDER, so
+   every placement stays a spatial move over the existing board policy head — **no action-space
+   growth** for placements; only the two negotiation *moments* are abstract (a width-3 choice
+   space). Value attribution uses explicit OPENER/RESPONDER actor tags + `backup_sign()` (the
+   opener acts **3× in a row**, so "flip perspective every ply" does not hold).
+2. **`gomoku/external_engine.py`** (`2d56314`) — SWAP2BOARD protocol path
+   (`swap2_open`/`swap2_respond`/`swap2_pick` + `Swap2Reply`), eval-only, additive; the existing
+   move path is byte-identical.
+3. **`gomoku/model.py`** (`9e24e45`) — width-3 choice head via `forward_with_choice()` (taps off
+   the value head's penultimate layer); **warm-start-tolerant load** (the champion predates the
+   head → core loads strict, the choice head starts fresh). This is what makes it full Path A.
+4. **`gomoku/swap2_search.py`** (`5860326`) — v1 negotiator: `negotiate(oracle, rng)` drives the
+   opening. PLACE nodes are **sampled** for diversity; CHOICE nodes are selected by a **one-ply
+   VALUE comparison** (no trained head needed in v1) with honest minimax over the nested opener
+   pick; choice records are emitted as **future choice-head targets**. ~30 net forwards/game
+   (~0.2% overhead, no MCTS).
+5. **self-play wiring** (`6b629dc`) — `--swap2` flag threaded into all four generation paths
+   (`self_play` / `selfplay_worker` / `train` / `run_sweep`) at the `_random_opening_state` seam;
+   **mutually exclusive with `--random-opening-moves`**; byte-identical when OFF.
+6. **`gomoku/eval_swap2.py`** (`55f3e4d`) — the honest gate: **both sides negotiate** (our net
+   via `swap2_search.agent_act`, the engine via SWAP2BOARD), roles alternated, normal play from
+   `to_normal()`; result splits by our final color + role. **There is no forced-white side.**
+
+**The live run (cell `G15-swap2`, `167e526`) — LAUNCHED, results pending.** Clone of champion
+`G15-128x10-bigbuf` (128×10 large, scalar value, global_pool, value-discount 0.98, gumbel) +
+**TWO deltas**: (a) buffer **1.5M → 150k FRESH** — the swap2 lesson lives in the new ~50/50
+games and a small fresh buffer turns over fast (the 2026-06-19 small-fresh-buffer finding), and
+(b) **`--swap2`**. `n_workers 4 → 8` (the negotiation has **no VCF solver**, so no
+solver-starves-gen trap). **Warm-started** from a weights-only stripped champion
+(`/Users/jason/data/swap2/g15_champ_warmstart_weightsonly.pt` — no embedded buffer/optimizer/
+wandb → fresh everything; the tolerant loader adds the fresh choice head).
+- Launched **2026-06-20 ~07:40**, wandb run **`8nq1a7cm`**, board 15, MPS, 1h self-capping slices
+  via `--max-wall-secs 3600 --run-base /Users/jason/data/swap2`. Spin-up healthy: ~2 s/game swap2
+  gen, ~3.9 games/s aggregate, 0 errors. Babysit ledger: `/Users/jason/data/swap2/babysit/ledger.md`.
+- **GATE:** `gomoku/eval_swap2.py` vs native Rapfi-NNUE (`run-rapfi` wrapper, `GOMOKU_REPO=main`
+  for the weights) — **overall win% under the real protocol, NO forced-white floor**, re-measured
+  each ~1h. Baseline context: the champion under the OLD forced-opening measure scored ~21-27%
+  overall / white 0/12 swept; under swap2 there is **no forced-white side** — so the gate reads the
+  honest, balanced number for the first time.
+
+**Status: results pending the hourly `eval_swap2`-vs-Rapfi gate.** Next session: read the babysit
+ledger, then the gate output, and watch whether the ~50/50 data lets the loop bootstrap a defending
+white (the theorem says it can't be taught into a *forced* white role; swap2 removes the force).
+Full plan + theorem chronology: `wiki/topics/white-side-defense-plan.md`.
+
+## 2026-06-20 — SWAP2 (#72) LIVE: THE CORE BET IS CONFIRMED AT THE DATA LEVEL — white wins 27% in swap2 self-play (vs ~0% empty-board); white positions are now WINNABLE in the training set (wandb `8nq1a7cm`)
+
+**~2h into the live warm-started swap2 run (cell `G15-swap2`, wandb `8nq1a7cm`, board 15, MPS),
+the central hypothesis behind #72 is confirmed where it matters most — in the self-play DATA.**
+The build + launch are the entry directly above; this entry records the first measured results.
+
+**1. THE CORE BET IS CONFIRMED — white is now winnable in the training data.** Measured color
+balance of the **64 most recent swap2 self-play games** (pulled from the live run's `_records`
+GameRecords): **white wins 27% (black 69%, draw 5%).** In the OLD empty-board self-play regime
+white won **~0%** — the imbalance collapse that made white-defense unlearnable, the entire reason
+#72 exists. Under swap2, white is genuinely WINNABLE in the training data (**27% ≫ 0%**), so the
+value/policy heads finally get gradient on **winnable white positions**. This is the bootstrap an
+imbalanced game *cannot* do, working — exactly the ML thesis ("swap2 rebalances the GAME so
+self-play generates ~50/50 data → white positions become winnable in the training set"). **This is
+the single most important result of the run so far.** The white-defense teachers (#42 value-only,
+#43 sparse-VCF, dense conv) all failed because there was no error to correct in a *forced* lost
+role; swap2 instead supplies the missing signal by making the role winnable.
+
+**2. The negotiation mechanism works.** In net-vs-net swap2 H2H, the **RESPONDER wins ~80%** — it
+exploits its stay/swap/place2 choice to take the better side (`opener_color_dist` shows the
+responder almost always grabs black). Swap2's balancing comes through the responder's choice,
+exactly as designed.
+
+**3. Not yet perfectly balanced — the honest caveat + the identified NEXT LEVER.** Black still
+wins 69% (not 50/50) because **v1 SAMPLES opening placements for diversity rather than TRAINING
+them** — the opener never learns to place a FAIR opening, so the responder retains a swap-to-black
+edge. Pushing toward 50/50 = **train the negotiation.** The machinery is half-built: the width-3
+CHOICE HEAD exists (`model.forward_with_choice`) and the negotiator already emits `choice_records`
+as targets, but **those targets are NOT yet wired into the trainer loss** — v1 negotiates by a
+one-ply value lookup, with no trained choice head. **Next lever: wire `choice_records` into
+training** (+ optionally record/train opening placements so the opener learns fair openings). This
+is the identified next step toward 50/50, not a failure of the run.
+
+**4. The Rapfi gate is noise-dominated near the floor; the progress gate is now H2H-vs-frozen-
+champion.** Vs Rapfi-NNUE @200ms our net sits at single-digit-to-~30% win-rate; at **n=16–48 the
+SAME fixed baseline reads 4%–25% on noise** (variance swamps the ~5–8pt signal). Per the wiki's own
+2026-06-15 rule ("gate did-this-help on H2H vs the preserved champion, not Rapfi"), the progress
+gate is now **net-vs-net swap2 H2H vs the frozen warm champion** (near p≈0.5, resolvable; built in
+`gomoku/eval_swap2.py:eval_swap2_h2h`, jobs-parallel, exact-deterministic). **First reading: trained
+e129 vs frozen warm champ = 51.6% (n=64) — PARITY within noise, EARLY (~2h warm-started). This is
+NOT a strength claim.** Rapfi stays a coarse absolute anchor only.
+
+**5. Run mechanics — healthy throughout.** Cell `G15-swap2` (champion recipe + 150k fresh buffer +
+swap2 lever), warm-started from a weights-only stripped champion, 1h self-capping slices, **~3
+slices so far**. Dynamics healthy: **value loss bounces ~0.16–0.26** (no value-poisoning collapse),
+**plies rose ~30 → 42** (more contested games, the expected swap2 signature), **no fast-attack
+collapse** (the `selfplay/plies_mean` death-tell is absent).
+
+**Net read (~2h in):** the run does the one thing the three teachers could not — it makes white
+**winnable in the data** (27% vs ~0%), supplying the gradient the imbalanced game starved. Strength
+vs the frozen champion is at parity/early (51.6%, n=64), so this is a confirmed *mechanism*, not yet
+a confirmed *strength gain*. The path to 50/50 balance is concrete: train the negotiation (choice
+head into the loss). Branch `feat/swap2-opening-protocol` (latest commit `a29e645` adds the
+net-vs-net swap2 H2H gate); evidence is the live run `8nq1a7cm`. Plan + theorem chronology:
+`wiki/topics/white-side-defense-plan.md`.
+
+## 2026-06-20 — SWAP2 (#72) STRENGTH SIGNAL FIRES: H2H 51.6%→64.1%, WHITE 12%→41% (e129→e181)
+
+The H2H-vs-frozen-champion gate (the resolvable progress gate; net-vs-net swap2, both
+negotiate, n=64 / sims=200 / seed7) now has TWO comparable points and the trend is up —
+specifically on the white side, the metric the project chased for months.
+
+| gate | epoch | overall (trained's W-L) | as WHITE | as black | as opener | as responder |
+|---|---|---|---|---|---|---|
+| slice 2 end | e129 | 51.6% (33-31) | 12% (3-22) | 77% (30-9) | 22% (7-25) | 81% (26-6) |
+| slice 3 end | e181 | 64.1% (41-23) | **41% (12-17)** | 83% (29-6) | 50% (16-16) | 78% (25-7) |
+
+**Read.** Overall 51.6→64.1 (n=64 each, CI ~±12%) is suggestive but partly noisy. The
+robust, thesis-consistent signal is **white: 3/25 → 12/29 white wins (12%→41%, a 4×
+increase)**, plus opener-role 22%→50%. White is becoming viable via *balanced data*, not
+a teacher — exactly the swap2 thesis. This is the first positive STRENGTH signal (prior
+entry had it at parity/51.6%); ~52 epochs of balanced data on top of the warm start moved
+it.
+
+**Epoch context (Jason, 2026-06-20).** General AZ wisdom is "thousands of epochs to
+move," but this lab's lived experience is real movement in **~100 epochs** (laptop-scale,
+small buffer, high SGD/position). So a white shift at e129→e181 is *on-schedule for this
+setup, not anomalous* — credible, not suspicious. "Thousands" is the conservative outer
+bound; ~100 is the empirical inner bound here.
+
+**Discipline.** A single n=64 gate is a data point; the RESULT is the trend across
+INDEPENDENT checkpoints. Next gate (slice 4, e~233) at **n=128** to tighten the CI — if it
+holds ~60%+ with white ~40%, this is a genuine result. Caveat tracked: not yet 50/50
+balance (black still 69% in self-play data) because v1 samples (doesn't train) opening
+placements — the learned-choice-head lever (§6 of the synthesis page) is the path to push
+further, now a "go further" lever rather than a rescue. Synthesis +
+high-res trend table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 — SWAP2 (#72) gate-4 CONFIRMATION (n=128): white 12%→33% holds; overall ~57% (e181's 64% was noise)
+
+Tighter n=128 H2H (trained e235 vs frozen champ, sims=200/seed7): **73-55 = 57.0%** —
+white 20-40 (33%), black 53-15 (78%), opener 26-38 (41%), responder 47-17 (73%).
+
+Trend across INDEPENDENT checkpoints: e129 51.6%/w12% (n64) → e181 64.1%/w41% (n64) →
+e235 57.0%/w33% (n128). The e181 64.1% was upward n=64 noise; the n=128 anchor is ~57%
+overall (CI ~[48,66], grazes 50% → suggestive not conclusive on the overall). The
+**white side is the robust signal: 12% (3/25) → 33% (20/60)** survives the tighter n — a
+real white-defense gain via balanced data, not a teacher. Verdict ~235 epochs: confirmed
+but MODEST, not plateaued — keep training (this lab's ~100-epoch movement window). All
+future gates n=128 (n=64 too noisy). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3.
+
+## 2026-06-20 — SWAP2 (#72) gate-5 (e289, n=128): 66.8%, white-LOSS 88%→67%→51% — at the crowning bar
+
+Trained e289 vs frozen champ, n=128 sims=200 seed7: **85-42-1 = 66.8%**. white 29-30-0
+(LOSS 51%), black 56-12-1 (81%), opener 33-31 (52%), responder 52-11-1 (82%).
+
+Reliable-anchor trend (n=128 + e129 baseline): overall 51.6%(e129) → 57.0%(e235) →
+66.8%(e289); **white LOSS-rate 88% → 67% → 51%** — falling cleanly on the exact metric
+#18/#72 targeted. (The e181 n=64 64.1%/59%-white-loss was an upward overshoot — excluded.)
+At e289 the overall CI ~[58.6,75] clears 50% AND the ~58% relative-crown lower bound
+(§6.6) → "stronger than the champion" is essentially AT the bar; formal crown wants an
+n≥200 gate. Still CLIMBING (e235→e289: 57→66.8), not plateaued — keep training toward
+e1000. White winning ~half its games vs the frozen champ's defense is a RELATIVE signal
+(beats the OLD champ's white play, not a game-theoretic white win). High-res table:
+`wiki/topics/swap2-opening-protocol.md` §5.3.
+
+## 2026-06-20 — SWAP2 (#72) gate-6 (e345, n=128): 76.2%, white-LOSS 88%→67%→51%→42% — slope STEEPENED
+
+Trained e345 vs frozen champ, n=128 sims=200 seed7 jobs=16 (runtime 755.99s): **97-30-1 =
+76.2%**. white 21-16-1 (win 55.3% / LOSS 42.1%), black 76-14-0 (84.4%), opener 43-20-1
+(67.2%), responder 54-10-0 (84.4%). opener_color_dist {black 38, white 90}.
+
+Reliable-anchor trend (n=128): overall 57.0%(e235) → 66.8%(e289) → **76.2%(e345)**;
+**white LOSS-rate 88%(e129) → 67%(e235) → 51%(e289) → 42%(e345)** — monotonic, and at e345
+**below 50% for the first time** (white wins MORE than it loses vs the champ's defense).
+The e289→e345 jump is **+9.4 overall pts — the LARGEST slice-over-slice gain so far**, so
+the slope STEEPENED this slice; this is acceleration, not the onset of a plateau. Overall
+CI ~[68.8, 83.6] sits well clear of 50% AND the ~58% relative-crown lower bound (§6.6).
+Caveat: white sample is small (n=38 white games, CI ~±16% on white-LOSS) → treat the white
+number as directional even though the overall n=128 number is tight. (e129 51.6% and e181
+64.1% were n=64; e181 was upward noise — both excluded from the reliable anchor line.)
+
+Verdict at ~345 epochs: **climbing, slope steepened, NOT plateaued** — keep training. The
+relative-crown lower bound is comfortably cleared; the formal crown still wants an n≥200
+gate, deferred to plateau or e1000. White winning the majority of its games vs the frozen
+champ's defense is a RELATIVE signal (beats the OLD champ's white play, not a game-theoretic
+white win). High-res table: `wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 — SWAP2 (#72) gate-7 (e403, n=128): 67.6%, PULLBACK within noise — corrects the gate-6 "slope steepened" read
+
+Trained e403 vs frozen champ, n=128 sims=200 seed7 jobs=16 (runtime 844.39s): **86-41-1 =
+67.6%**. white 25-33-0 (win 43.1% / LOSS 56.9%), black 61-8-1 (87.1%), opener 32-32-0
+(50.0%), responder 54-9-1 (84.4%). opener_color_dist {black 18, white 110}.
+
+Reliable-anchor trend (n=128): overall 57.0%(e235) → 66.8%(e289) → 76.2%(e345) →
+**67.6%(e403)**, mean **~70%**; white LOSS-rate 67%(e235) → 51%(e289) → 42%(e345) →
+**57%(e403)** — no longer a clean monotonic fall, now BOUNCING 42-57% (~ parity).
+
+**This corrects the gate-6 "slope steepened" read: that was partly upward noise.** e345's
+76.2%/42% was *partly* an upward sample-fluctuation (same flavor as the earlier e181 64.1%
+n=64 spike), not a genuine acceleration. The e403 dip is a **PULLBACK within noise, NOT a
+regression** — the CIs overlap heavily: overall e403 [59.5%, 75.7%] vs e345 [68.8%, 83.6%];
+white-LOSS e403 [44%, 70%] vs e345 [26%, 58%]. The true LEVEL is **~70% overall**, holding
+across the n=128 anchors (66.8 → 76.2 → 67.6), comfortably above the ~58% relative-crown
+lower bound (§6.6).
+
+The honest white-side statement is now: **white LOSS-rate fell from 88% (early) to ~50%
+(now) and is fluctuating around parity, NOT monotonically marching to 0.** The early read
+(88→67→51→42) was real *as a fall from the catastrophic floor*, but at the ~parity level the
+gate-to-gate motion is noise. Black (87%) and responder (84%) sides stay strong; all the
+variance is concentrated on the hard white/opener side, which also carries the smaller
+sample (white n=58 this gate vs n=38 last — the negotiation/seed interaction shifts the
+color mix gate-to-gate).
+
+Verdict at ~403 epochs: **NOT a plateau, NOT a regression, still well above the crown bar —
+keep training.** Recalibrate expectations: progress on the white side is **noisy around
+parity, not a smooth descent**; read the trend across independent checkpoints *and their
+CIs*, not any single gate (a single high gate can be an upward fluctuation, as e345 partly
+was). Formal crown gate stays at n≥200, deferred to plateau or e1000. High-res table:
+`wiki/topics/swap2-opening-protocol.md` §5.3. Run `8nq1a7cm`.
+
+## 2026-06-20 (night) — Era-2 board-size LADDER launched (9→11→13→15)
+
+Pivoted era-2 from "9×9 → warm-start straight to 15×15" to a **board-size ladder**.
+Trigger: 9×9 swap2 **saturated into draw-dominance at e102** (last-3 epochs draws
+56/75/56 vs white ~14, black ~19–31; run `lywhy1ba`) — exactly Jason's graduation
+rule `max(draw, white, black) == draw`. 9×9 is too cramped for white to convert
+defense into a win, so it learns "draw"; a bigger board reclaims room. Native exts
+compiled for 11/13 (native-11 **68.3k** > native-15 **60.7k** sims/s; pure-Python
+~40k flat regardless of size → **never fall back**, it would break Δelo/hour). Each
+rung warm-starts the previous champion (98.9% transfer, only the 3 board-bound FCs
+re-init) and trains until draw-dominant, then steps up. Rung 15 terminal (board too
+big to draw). Cells `G-ladder-11/13/15`; orchestrator `babysit/ladder_autochain.sh`;
+graduation `babysit/ladder_grad.py` (reads `wandb_run_id` from `latest.pt`).
+Synthesis: `wiki/topics/board-size-transfer-and-warm-start.md` § the multi-rung ladder.
+
+Run IDs: 9×9 `lywhy1ba` (graduated e102) → 11×11 `8jsd7qzw` (live). 11×11 at e73:
+white%dec 30–42% (balanced, black slight edge), plies up to ~38–40 (vs 9×9 ~20),
+draws creeping to ~8–11% — **saturation onset beginning, same shape as 9×9**.
+
+**Jason's predictions (logged before the fact, for posterity — check against actual
+cutover epochs in the AM):** (1) happy if white can "fight and learn" at 11 or 13 at
+all; (2) 11×11 will drawmax **~30–50% later than 9×9** (so "pretty soon"); (3) 13×13
+will drawmax **much later**; (4) draws already rising at 11 → 13 cutover maybe sooner
+than expected; (5) success = "still training in the morning."
+
+**Cadence (unattended, NO gates — "just see what happens"):** monitor every 30 min on
+rungs 11/13. On reaching **15×15**, switch to **1-hr cadence with a Rapfi eval each
+lap** (try-vs-Rapfi → record → 1 h train → repeat). If something goes sideways,
+consult the wiki for the fix and keep it TRAINING — do not gate or stop. STOP control:
+`touch babysit/STOP_ladder`. Keep updating wiki/TRAINING_WIKI at each check-in.
+
+### 2026-06-21 02:50 — rung 11 → 13 cutover (graduated on CAP, not drawmax)
+
+Rung 11 (`8jsd7qzw`) ran e0→**e401** and graduated via the **CAP=400 backstop**, NOT
+the drawmax rule. Why: from ~e218 it settled into a **stable black-edge equilibrium** —
+black ~40% / draw ~34% / white ~25%, plies flat ~64 — for ~180 epochs. Draws flickered
+to single-epoch drawmax (e166, e221, e380–381 hit 44–52%) but **never robustly overtook
+black**, so the 3-consecutive-drawmax denoise correctly never fired. Interpretation:
+with **v2a (choice head) OFF**, swap2's color-balancing isn't trained, so black keeps its
+intrinsic first-move edge; white's defense maxes out at "draw-or-lose-narrowly" rather
+than forcing draw-dominance. The CAP backstop is exactly the right mechanism for this
+"strong rung that plateaus short of drawmax" case — it advanced cleanly.
+
+11→13 warm-start at e401 (`ladder_seed_13.pt`); rung 13 = run `2dvcxh0b`. Early 13×13
+(e73–77): **white%dec climbing 40→49%**, draws 0, plies ~20 (fresh-board recovery, many
+decisive games) — a clean transfer, even more balanced than 11 started. "Fight and learn
+at 13" (Jason's happy condition) achieved out of the gate.
+
+**Prediction scoring so far:** Jason guessed "11 drawmaxes ~30–50% later than 9 (e133–153)."
+Reality: **11 never cleanly drawmaxed** — it hit a stable equilibrium and graduated on the
+CAP at e401. So the *drawmax framing* didn't hold for 11 (equilibrium instead); the deeper
+instinct (9×9-style saturation transfers up the ladder) gave way to a black-edge fixed
+point once the board had room. "13 drawmaxes much later" — TBD; 13 has even more room, so
+expect equilibrium-or-CAP again rather than a clean drawmax.
+
+### 2026-06-21 07:40 — FULL LADDER COMPLETE: reached 15×15 (9→11→13→15 overnight)
+
+The whole curriculum climbed unattended in one night. Timeline + how each rung graduated:
+
+| rung | run | epochs | graduated | how |
+|---|---|---|---|---|
+| 9×9  | `lywhy1ba` | →e102 | 2026-06-20 ~22:50 | **drawmax** (draws 56/75/56 vs white ~14) |
+| 11×11 | `8jsd7qzw` | e0→e401 | 02:50 | **CAP** (stable black-edge equilibrium, never drawmaxed) |
+| 13×13 | `2dvcxh0b` | e0→e424 | 07:40 | **CAP** (same equilibrium; black edge *stronger*, draws rarer ~10%) |
+| 15×15 | (live) | e0→ | terminal | runs until `STOP_ladder` |
+
+**Durable lesson: only the smallest board (9×9) cleanly draw-saturates.** With v2a OFF
+the swap2 negotiation doesn't balance colors, so on 11 and 13 black keeps a genuine
+first-move edge (white ~25–35% of decisive games, plies long/healthy ~50–70 — defending,
+NOT the 0% basin) and draws never overtake black. The **CAP backstop is therefore the
+real graduation mechanism for the bigger rungs**, not the drawmax rule — and that's fine,
+it advanced each rung cleanly. White "fights and learns" at every rung (Jason's bar met).
+
+15×15 starts fresh-headed (the 13→15 transfer re-inits `policy_fc`/`value_fc1`); first
+epochs are empty/raced (workers warming on slow ~plies-134 games). **Now on the 1-hr
+Rapfi cadence** (`babysit/ladder_rapfi15.sh`, gentle/concurrent): baseline read first,
+then eval-every-hour while training, recording white-vs-Rapfi off the era-1 0% floor.
+**Baseline (07:45, fresh 15×15 net `epoch0095`, untrained heads): 0.0%** vs Rapfi-NNUE
+(0W-32L-0D @ 200ms/sims200/n32; black 0/21, white 0/11). The floor — the transfer re-inits
+the 15×15 heads so the net can't play coherently yet; loses fast (59s). Now we watch it
+climb off 0% as the heads adapt (the whole bet of the ladder). Hourly reads append to
+`babysit/eval_results.jsonl`; era-1's *trained* e455 was 10.2%/white-0% for comparison.
+
+## 2026-06-21 ~11:07 — era-3 FAIR-OPENING LADDER launched (9→11→13→15)
+
+Jason's "go all in": build the fixed-fair-opening run as a LADDER for cheap epochs.
+Openers = Rapfi's 9 shapes RE-CENTERED per board (not generated — his call; the
+shapes are sub-9×9 so all 9 fit on 9/11/13, zero dropped). A FRESH net climbs
+9→11→13→15, same canned fair openers at every rung, **auto-promoting on p90-plies-max**
+(#74, `babysit/ladder_grad.py`: graduate when plies_p90 plateaus at peak for 5 epochs
+— promote before the net learns to retreat). Minimal gating on 9/11/13 (bank cheap
+epochs, find a fresh killer); real gates at 15, incl. a TODO Rapfi-from-canned-openers
+eval (our net vs Rapfi from the fixed post-opening positions, as black AND white).
+
+Cells `G{9,11,13,15}-fixed-openings` (swap2 OFF, fixed_openings=True; commits 3c6e9d7,
+744849a; tests green at all sizes). Orchestrator `babysit/fairladder.sh` (15-min slices,
+warm-start between rungs). Rung-9 run `eilfnz1e`. Single-15 predecessor run `nbctsiua`
+(stopped; showed white ~46–51% in its first epochs — the early fairness signal). era-2
+swap2-ladder best net preserved: `G-ladder-15-board15/checkpoints/epoch0235.pt` (25% vs Rapfi).
+
+THE METRIC: white-share of decisive self-play → ~50% on fair boards (was ~25–35% rigged).
+
+## 2026-06-22 — Single-opener "Bruce Lee" 15×15 overnight + the worker-count / gen-flood finding ⭐
+
+Run `gogpmbhw` (`G15-fixed-openings-board15`). Context: by 2026-06-21 night the
+ladder had pivoted to a **single fair opener (idx-2** `((3,2),(5,4),(4,5))`, B,W,B →
+white-to-move) after discovering that *re-centering* Rapfi's shapes does NOT preserve
+balance (re-centered openers tested 0–95% black at 13×13; idx-2 was the fairest at
+~50%). Jason's call: "drop anything that isn't fair first … an exceptionally strong
+player from ONE fair opening beats an imbalanced player from many" — `GOMOKU_DROP_OPENERS`
+keeps only idx-2. Specialize, don't generalize: **"Bruce Lee" — fear the man who
+practiced one kick 10,000 times.** Plan: plow forth even if white lags; hold all
+verdicts until the 15-series has depth.
+
+**Overnight (8 workers, e224→~616, hands-off).** Three fixed rulers, idx-2 board, both
+seats, 16 games/seat, `temp_plies=6` opening variety:
+- **vs Rapfi** (saturated ceiling): **0/16 all night**, unmoved — expected; Rapfi reads
+  clean through us at this strength and will for a long while.
+- **vs champ0235** (era-2 best, warm-started from prior winners): bounced ~even, peaked
+  **69%**. Trading blows with the old champion on its home board — promising for the recipe.
+  (The early "16–0 sweep" was a *determinism artifact* — one line repeated 8×; it vanished
+  once `temp_plies` variety was added. **Lesson: net-vs-net MCTS is deterministic → flat
+  series; always sample opening plies for a real H2H read.**)
+- **vs self126** (FROZEN e126 self, the sensitive "am I improving?" probe): climbed
+  37→62→56→**75**→… settling a touch above 50. Tipped positive — beating its own past self.
+- **self-play balance**: sloshed 39–62% white, no trend, no collapse. `vl` halved over the
+  night (0.082→0.043) — value head sharpening while the policy thrashed (Jason's
+  spidey-sense/decision split: it *knows* who's winning before it can reliably *decide*).
+
+Verdict held: **trading real blows, not winning the war** — stronger than past-self,
+even-ish with the milestone champ, can't touch Rapfi. A healthy *developing* net. (Jason's
+pure-vibes pre-call — "won't win yet but will start to win" — landed.)
+
+**The lever — buffer balance (8→4→3 workers, 2026-06-22).** Jason noticed self-play was
+out-generating training: `train/sample_reuse_ratio ≈ 0.67` (consumed/ingested). At reuse
+<1 with random sampling (~Poisson(0.67)), **~51% of generated positions are evicted from
+the 150k buffer never having had a single gradient step** — a good move can be played and
+never learned from. The 8-worker config was *flooding* the trainer. Cut workers, resumed
+from `latest.pt` (weights+buffer; preserved copies `babysit/snapshots/PRE4_*`):
+
+| workers | reuse (per-cycle) | buffer age_p90 | s/epoch | epochs/min |
+|--------:|------------------:|---------------:|--------:|-----------:|
+| 8       | ~0.67 (½ unseen)  | ~0 (firehose)  | 65.2    | 0.9        |
+| 4       | ~1.4              | rising         | 36.5    | 1.6        |
+| 3       | **~3** (2.2–4.4)  | ~15–20         | **26.1**| **2.3**    |
+
+**The finding (⭐ the gen-flood double-tax):** flooding the buffer cost us on TWO axes at
+once — sample-efficiency *and* wall-clock. At 8 workers each epoch drowned in inflow
+(~128 new games/cycle → buffer inserts, cross-game-store updates), so epochs were both
+*less useful* and ~2.5× *slower*. Dropping to 3 fixed both: reuse → ~3 (firmly normal-AZ;
+each position studied ~3×, age_p90 off zero), and **65→26 s/epoch**. This is the SAME
+gen-flood pattern already documented at the 96×8 cell (`run_sweep.py` ~L352: "8 workers
+FLOODED it, per-epoch ingest ran away 62→313s"); it resurfaced at 15×15 fixed-openings.
+**Takeaway: `n_workers` is a first-class buffer-balance knob, not just a throughput knob —
+target reuse ~1–4; reuse <1 is self-sabotage (slower AND lossy).** Note 8→3 dropped
+ingestion *more* than linearly (new_games/cycle 128→16–24), so 3 workers overshot the ~1.8
+projection to ~3 — fine, still healthy AZ. `n_workers=3` is an uncommitted live toggle in
+the worktree; flip to 4 for reuse ~1.8 if ~3 feels deep. Whether deeper reuse settles the
+balance slosh is still open (the run was time-boxed by AC power).
+
+**Babysit infra built this session** (`/Users/jason/data/swap2/babysit/`):
+`rapfi_opener_eval.py` (vs Rapfi, idx-2, both seats), `champ_h2h_eval.py` +
+`champ_h2h_cadence.sh` (vs self126/champ0235, `temp_plies` variety), hourly
+`snapshot_loop.sh` (preserved last-good ladder; `latest.pt` embeds the buffer so each is a
+real resume point). Tank-restart safety net agreed but kept *manual* (auto-restart-at-4
+would fuse recovery with the reuse experiment → unreadable; a hard collapse is itself the
+night's best data, not something to erase).
+
+## 2026-06-23 — 1M buffer overnight: a clean NEGATIVE result + the recency-curator fix ⭐
+
+Run `gogpmbhw` resumed from e877 with `buffer_size` **150k → 1M** (#73 follow-up; bit-packed
+so 1M ≈ 1.3GB). Hypothesis: a longer consolidation window would steady the white/black slosh.
+**Result: it did NOT.** ~930 epochs overnight (e877→e1804, ~2 epochs/min, no crashes/tanks):
+- **slosh did not narrow** (white% band stayed ~30–60 pts, arguably wider).
+- **pl/vl flatlined and smoothed** — vl crept 0.057→0.050 then leveled; Jason's read: *"that's
+  not learning."* Correct.
+- `buffer/age_p90` climbed **linearly** (13→285→545→897) instead of plateauing at the ~FIFO
+  window — the tell.
+
+**Root-cause (corrected mid-investigation):** the buffer (`gomoku/replay_buffer.py`) is a **FIFO
+ring** (eviction overwrites oldest). The pathology was NOT eviction — it was **`_recency_frac=0.0`
+= UNIFORM sampling over a ring so large it spanned the whole run.** Uniform-over-all-history makes
+the training distribution **stationary**, so the loss converges to a fixed point and stops chasing
+the improving policy → flat pl/vl, persistent slosh. (Jason had remembered adding "reservoir" to
+fight collapse; the real mechanism is uniform-sampling-over-a-huge-ring, and collapse was actually
+the provable first-player/black edge, NOT a buffer issue — so that fix was for a misdiagnosis and
+had been quietly taxing learning.)
+
+**The fix (already coded, just OFF):** `configure_curator(recency_frac, recency_window)` /
+CLI `--buffer-recency-frac` — the #17 recency curator. Draws a fraction of each batch from the
+most-recent `--buffer-recency-window` (200k) positions, rest uniform. Crucially this is a
+**validated lever**: `run_sweep.py` history shows it was a **+90-elo derby winner** (v8
+"buffer-comp", `--buffer-recency-frac 0.5` in multiple proven cells). KataGo's design exactly:
+big window for memory, recency-weighted sampling for freshness.
+
+**Experiment now LIVE (2026-06-23):** rewound to `snapshots/SHUTDOWN_e877` (clean pre-stationary
+baseline), kept the 1M ring, flipped **`--buffer-recency-frac` 0 → 0.5**. ONE variable changed vs
+the overnight, so any effect is attributable to the curator. **Watch `loss/policy` + `loss/value`:
+if they come back ALIVE (keep decreasing) the recency lever is working;** secondary: does the slosh
+band finally narrow. `n_workers=3`, reuse ~3, ~2.8 epochs/min. Resume point preserved as
+`snapshots/PRE4_e601` (8w-era) + `SHUTDOWN_e877` (pre-1M).
+
+### 2026-06-23 (later) — recency-0.5 VERDICT: loss alive, strength flat (the plateau is buffer-knob-proof) ⭐
+
+Ran ~e877→**e2300** under recency-0.5 (~1400 epochs). **What it did:** broke the stationary plateau —
+`loss/policy` went from smooth-dead (uniform, std 0.034) to alive-and-oscillating (recency, std 0.052 at
+matched epochs); the loss *moved* again. **What it did NOT do:** improve strength. On-demand 3-ruler eval
+@ e2300 (n=16/seat, idx-2, opening variety):
+- **vs self126 (frozen e126 self): 37.5%** (6–10) — *below even*, losing to its own past self
+- **vs champ0235 (era-2 milestone): 46.9%** (7–8–1) — slightly below even
+- **vs Rapfi (ceiling): 0/16** — unmoved
+
+Squarely in the same plateau band every self-play variant has occupied (even-ish vs beatable rulers,
+0 vs Rapfi); flat-to-slightly-down vs the e793 read (40.6 / 56.2 / 0). **Conclusion: keeping the loss
+alive ≠ keeping strength climbing.** Recency = *perturbation/mutation* that churns in place without a
+*selection* mechanism to cash it (see swap2 §13). We have now exhausted three data-pipeline levers —
+**reuse** (n_workers), **window** (buffer_size 1M), **freshness** (recency_frac) — and strength has not
+moved off the self-play ceiling. **The plateau is real and buffer-knob-proof; the only lever left that
+points up is an external TEACHER** (#46 curriculum / #18 exact-solver / distillation). Bruce-1 continues
+as the self-play-only *baseline-to-beat* for the teacher era.
+
+### 2026-06-23 (later still) — BUILT the eval+teacher sensei (the lever up after the knobs)
+
+After the recency-0.5 verdict closed the self-play-knob era (three data-pipeline levers
+exhausted; the plateau is buffer-knob-proof; teachers are the only lever that points up), built
+the keystone: an **eval+teacher sensei** on `feat/eval-teacher-sensei` (off main). One subsystem,
+two faces — the eval is the teacher's measuring stick AND its selector.
+
+**Eval face (closes #34):** a warm `RapfiPool` (persistent NNUE processes, no per-pass respawn —
+the 10×+ win) behind an HTTP daemon (`gomoku-eval-daemon serve`) PLUS a flatfile-reducer cadence
+loop (`… cadence`) that watches a checkpoint and appends a per-color-split JSONL series every N
+epochs. **White is reported separately** (the hard #34 constraint): every row carries
+`white_score`/`white_loss_rate`/`white_wld`, never folded into the aggregate. CPU-only → never
+competes with the MPS trainer (same property that makes the babysit cadence safe). Rulers map to
+the babysit set (self126/champ0235/rapfi) at the fixed idx-2 opening via a new additive
+`play_match_pickers(start_state=…)` seam (default None = byte-identical). `EvaluatorCache` keeps
+fixed-ruler nets warm across epochs; `run_panel` pins one (weights, epoch) snapshot so the series
+is never mislabeled.
+
+**Teacher face (advances #46/#18/#44):** Rapfi exposes only a MOVE, and #18/#44 say the policy
+must carry the load and value-only teaching is structurally wrong — so the teacher is **policy-side
+one-hot distillation** ("the master plays here"), value untouched. `python -m gomoku.teacher
+generate` self-plays from the opening (stall-guarded), labels positions with the warm pool, writes
+an npz with D4-augment-at-sample-time; `gomoku-train --teacher-data-path … --teacher-weight 0.3`
+mixes a teacher CE into every SGD step (BatchNorm frozen on the teacher forward so it doesn't
+pollute inference running-stats; weight 0 = byte-identical).
+
+**Verification:** full new-surface test suite (5 files) green at board 9; real-Rapfi pool tests
+green at board 15; the FULL existing suite shows no regressions from the `train_step` /
+`play_match_pickers` edits (the only failures are pre-existing-on-main `test_defense_teacher_conv`
++ an optional `huggingface_hub` dep missing from the minimal worktree venv). Adversarial 5-reviewer
+workflow verified the load-bearing correctness (seat-parity, color accounting, white-split math,
+gradient-accum scaling, action-perm alignment, cadence reducer) and surfaced 14 edge findings — the
+2 HIGH (BN running-stat pollution from the teacher's 2nd forward; `gather_states` infinite-hang)
+and the substantive mediums (RapfiPool close-vs-respawn leak; torn in-place checkpoint read;
+malformed-opening 500→400; serve pool-leak-on-startup-failure) all fixed. Live smoke on real Rapfi:
+panel reads epoch + white-split correctly; teacher labelled 60 idx-2 positions at 18.6/s.
+
+**Operational constraint discovered:** the live Bruce checkpoints are written by the SWAP2 branch,
+whose `ModelConfig` has a `choice_head` field main lacks — so a **main-built daemon cannot load
+swap2-trained weights** (panel degrades gracefully to per-ruler error rows). To eval live Bruce,
+run the daemon from a checkout whose `model.py` matches the trainer (swap2, or main after both this
+build and swap2 merge). Watch `worker_weights.pt` (atomically written) not `latest.pt` (in-place).
+
+**NOT validated:** that distillation actually breaks the plateau — that needs hours of live training
+(gate on not competing for the GPU). Bruce-1 (recency-0.5) is the strength-to-beat. Wiki:
+`topics/eval-teacher-sensei.md`.
+
+## 2026-06-24 — #77 Rapfi policy-distillation teacher on warm-started Bruce: CATASTROPHIC REGRESSION (teacher@0.3 + high-LR warmstart wrecks the policy)
+
+**Setup.** Warm-started plateaued Bruce (g15 e2659, 128x10 15x15, G15-fixed-openings recipe: 1M packed buffer, recency-0.5, 9 fair openings, 3 workers, gumbel-root m16, value-discount 0.95, sgd-steps 64), turned ON policy-side Rapfi distillation: `--teacher-weight 0.3` over `teacher_bruce_e2659_fair9.npz` (4050 fair-opening Rapfi-labeled one-hot positions). Value head untouched (per #18/#44). wandb `bruce-sensei-77` (`5nzr45ns`). e2659->e3021 (~362 epochs), 0 crashes. Preserved `snapshots/g15_sensei_e3021.pt`. Seed: `teacher/bruce_e2659_warmstart.pt` (e2659 weights+optim+1M buffer, wandb id stripped).
+
+**Verdict (#77 = NO, worse than null).** H2H vs frozen Bruce-1/e2659 (`run_h2h.py`): teacher net **0W-48L-0D at sims=160 AND 0W-48L-0D at sims=100 = 0/96**, both seats (black 0-8, white 0-40), both swap2 roles (opener 0-24, responder 0-24). The teacher@0.3 didn't break the plateau — it destroyed the policy that defined the plateau's floor.
+
+**Mechanism = policy-side trunk corruption, NOT the teacher term.** loss/policy (self-play CE) 1.1->5.0 carries ~all of total (1.85->7.30); policy_net_entropy 1.26->4.57 (toward uniform, log81=4.39); policy_acc 0.685->0.30; policy_kl 0.78->2.97. The teacher CE term stayed small/benign (0.96->1.83, weighted 0.3). Self-reinforcing diffusion: flat policy -> diffuse MCTS targets (target_entropy 0.49->1.60) -> longer games (plies 22->70) -> softer targets. Net-entropy outran target-entropy => the head destabilized on its own. Value degraded only mildly (vl 0.063->0.154). Stable plateau-of-degradation (no NaN, sat in the bad basin 340 epochs — did not blow up, could not recover). NOT a fast-attack collapse (plies ROSE; the opposite tell).
+
+**#44 CONFIRMED — via the policy channel, not value.** Its predicted signature landed: strong warm-started net + sudden teacher target at fixed lr=0.001, no head/trunk freeze => destructive trunk step, pl balloons (1.1->5.0) and stays, instead of holding ~1.25. Same trunk-corruption-via-high-LR failure mode as #44, but through the POLICY-side one-hot Rapfi CE (value untouched). #44's mitigations (1/2-1/4 LR, staged freeze) are the obvious next interventions — UNTESTED in this run.
+
+**#46 unresolved, but the plateau looks FRAGILE.** One naive external-signal injection knocked Bruce well below his own plateau and he stably stayed there (no self-heal) => mild evidence the equilibrium is a delicate basin, not a hardened floor. Curriculum/external-gradient direction (#46) still live, but the injection must be GENTLE or it corrupts the trunk before any benefit accrues.
+
+**Caveats.** weight=0.3 unswept (can't separate "distillation harmful" from "0.3 too hot"); NO matched teacher-OFF control (warm-start/buffer-refresh transient not isolated from teacher harm); LR fixed, no freeze (#44 mitigations untested); H2H used full swap2 negotiation while teacher data was fair-opening-labeled (graded off-distribution); `run_h2h.py` hardcodes CPU. The 0/96 SIGN is certain; magnitude/attribution is what's caveated.
+
+**Process win.** Ran all night crash-free, but the Rapfi *cadence* eval (0% vs Rapfi throughout) was NON-discriminating — Bruce was already 0/16 vs Rapfi. The H2H-vs-frozen-parent + loss decomposition are what revealed the harm. Future overnight teacher runs must gate on H2H-vs-frozen-parent and auto-abort on regression (don't burn 362 epochs on a known-bad basin).
+
+## 2026-06-24 — #86 gentle one-hot teacher retry ALSO regressed (the one-hot SIGNAL is the culprit; soft target untested)
+
+**Setup (#86, follow-up to #77).** The #77 caveats said "the injection must be GENTLE." So two cells were run off the same warm-started Bruce (resume from `/Users/jason/data/swap2/teacher/bruce_e2659_warmstart.pt`, ~e2659), this time at **HALF learning rate** (`lr=5e-4`, the #44 mitigation), fixed-openings, board15, 30-min wall cap each, **with a matched OFF control** (the #77 caveat: no control then):
+- **`bruce-sensei-86-gentle-on`** (wandb `liy2dflw`, started 07:33): `teacher_weight=0.1`, ONE-HOT teacher npz (`teacher_bruce_e2659_fair9.npz`).
+- **`bruce-sensei-86-gentle-off`** (wandb `5briruqf`, 08:56 then resumed 09:27): `teacher_weight=0.0`, otherwise matched.
+
+**Verdict (#86 = NO; gentleness insufficient).** The gentle ON cell **COLLAPSED** anyway: by ~38 epochs in (~e2697) policy_acc fell to **0.18**, policy_net_entropy rose to **3.75** (vs the OFF control's 1.2; log81=4.39), loss/policy 3.76, selfplay/plies inflating (plies_mean ~60). loss/teacher was present (~0.13) and benign — the damage was again the **policy head flattening toward uniform**, same channel as #77. The matched OFF cell was **ROCK-STABLE**: policy_acc 0.69, net_entropy 1.2, no teacher loss.
+
+**Because the matched OFF control was stable, the ONE-HOT SIGNAL ITSELF is the culprit — not the LR, not the warm-start, not buffer-refresh transient.** Half-LR (5e-4) + weight 0.1 was NOT enough to prevent the collapse. This isolates what #77 could only caveat (it had no control): the harm rides the one-hot Rapfi target, and turning the LR/weight knobs down does not detoxify it. Confirms the #44 failure mode via the policy channel, and sharpens the #77 postmortem (same collapse there at weight 0.3 / full LR).
+
+**NOTE — no Elo/H2H this round.** These were 30-min slices and **no H2H/Elo was ever logged**; the H2H-vs-frozen-Bruce gate never fired. The collapse is read purely from the train-side policy metrics (policy_acc / net_entropy / plies). That is sufficient here ONLY because the matched OFF control isolates the cause — absent the control these train-side reads would not, by themselves, prove teacher harm (cf. #77's caveats).
+
+**The designed fix is coded but NEVER live-validated.** This branch's commit `8d12d95` implements **SOFT-target distillation** — distill Rapfi's per-move WINRATE as a soft policy target via a masked temperature-softmax, instead of a one-hot best move. It has **13 passing unit tests**, but was committed at 09:58, AFTER both runs had ended (~09:57). `soft_policy_weight=0` in every run that actually executed and **no soft npz was ever generated**, so the soft target is **untested** — the untried next step, still subject to the same gate: H2H-vs-frozen-parent, over hours, machine idle.
+
+## 2026-06-25 — #86 soft-target distillation, finally MINED AT SCALE + warm-started ("Bruce Lee one-position", idx-2 only) — infra SUCCESS, science inconclusive; run banked
+
+**This closes the open thread above** ("soft target untested, no soft npz ever generated"). Instead of distilling a handful of fair openings, we built a mining harness and generated Rapfi's SOFT-policy winrate map over the idx-2 neighbourhood at scale, pretrained on it, and warm-started AlphaZero from it — idx-2 ONLY (the over-specialization bet: master one position, not breadth). Full synthesis in **[wiki/topics/rapfi-idx2-distillation-mine.md](wiki/topics/rapfi-idx2-distillation-mine.md)**; reusable capabilities indexed in **[wiki/capabilities.md](wiki/capabilities.md)** (NEW synthesis layer this session).
+
+**Mine.** New `gomoku/rapfimine/` harness (multiprocess flat-file BFS, D4-canonical dedup, crash-robust resume) banked **1,126,597 canonical idx-2 positions** (soft_policy + value, teacher v2 npz) at **~700 moves/s** on the M5 Max (~75% machine). Two fixes surfaced: the long-undiagnosed Rapfi **multiPV mate-crash** (pv-scaled analysis cap — a forced-mate emits 2302 lines past the old 2000 cap) and a **thread-per-line** reader bug (68→17 ms/analyze). Data lives durably OUTSIDE git at `/Users/jason/data/rapfimine/idx2_15x15/` (9.5 GB; absolute paths, no symlink).
+
+**Pretrain (the soft target, finally exercised).** `rapfimine.pretrain` = supervised distillation of the masked temperature-softmax soft policy + `2·best_wr−1` value into a STANDARD checkpoint (`build_model`/`save_checkpoint`, no reinvention). Banked the epoch-3 seed `checkpoints/idx2_pretrain.pt` (policy_ce 2.04, vmse 0.097 — vs ~5.4 uniform, so it captured Rapfi's idx-2 policy). Finding: pretrain is **GPU-bound** (~437 s/epoch, batch 1024); a per-step `float(loss)` was forcing an MPS→CPU sync every step (host pinned ~7%) — fixed to sync once/epoch.
+
+**Warm-start AZ.** `run_sweep --cell G15-idx2-warmstart --resume checkpoints/idx2_pretrain.pt` with `GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8` (idx-2 only; D4 recovered by the trainer's augment). Byte-identical to Bruce's `G15-fixed-openings` cell except run-dir + run-name. wandb `idx2-warmstart-86`. Resumed at epoch 4 (pretrained weights confirmed loaded), trained to **epoch 250** (pl 4.18 peak → 1.27, vmse 0.10), banked `checkpoints/idx2_warmstart_final.pt`.
+
+**Outcome (science = inconclusive, by choice).** At epoch 250 the warm-started net **does NOT yet beat strong Rapfi @idx-2** — still 0/48 vs `timeout=1000ms`, the same wall the seed hit. Beating it is a multi-day climb (Bruce's black-42%/white-0% bar took ~3700 epochs); **not pursued** — Jason banked the run for its infrastructure value. The net DID climb the low end: it crushes random/heuristic/lookahead-d2 at 100% and beats `rapfi@25ms`, losing at `50ms+`.
+
+**Eval-gradient finding (reusable).** Max-strength Rapfi is a wall (0 for hours), so `fast_eval.py` measures progress vs a graded-Rapfi ladder — **~20 s/pass** (batched net MCTS across all games + parallel `RapfiPool.label_states`), vs minutes serial. Two lessons: (1) **think-time is the strength dial, NOT max_node** — even `max_node=2,000,000` loses 100% to the net while `timeout=1000ms` wins 0/48; (2) the live band is LOW timeouts (net's transition at **rapfi 25↔50 ms** @ ep250), which are also fast. `sims=32` gives the same transition as 160.
+
+**Banked & stopped (this is NOT a regression entry — the loop is healthy).** Training stopped cleanly by choice at ep250; nets in `checkpoints/`, data in `~/data/rapfimine/`, tooling + wiki committed on `feat/gentle-rapfi-teacher`. Also fixed a `.gitignore` bug (an inline comment silently broke the `mined/` rule → 9.5 GB of artifacts were not being ignored). The durable win: the mining + fast-eval + warm-start tooling, now a first-class capability.
+
+## 2026-06-25 — On-book DAgger for idx-2: loop BUILT, a critical bug FOUND+FIXED (history-less train/inference mismatch), no strength gain yet ⭐
+
+**The idea (Jason).** From ep250, run **on-book DAgger** (Ross/Gordon/Bagnell 2011): roll out the current net, have Rapfi label the states the net actually visits, AGGREGATE (never forget), and re-fit by **pure supervised imitation** — explicitly NOT the AZ teacher-mix that caused the #77 collapse. Stay on-book (no improvising), idx-2 only, **rollout vs Rapfi both seats, "partitioned and covered."** Hard constraint: the aggregator must run **≤ 2× slower than its constituent parts** (self-play gen + Rapfi labeling) — "don't waste a day testing something too slow." White is NOT specially targeted (the white weakness was likely an empty-board first-player artifact; from a Rapfi-seeded fixed opening it should wash out via balanced-seat coverage).
+
+**Built (`gomoku/rapfimine/dagger.py`, + `tests/test_dagger.py`, full suite green).** A reuse-not-reinvent loop: `rollout_once` (concurrent student-vs-Rapfi, both seats, batched MCTS on MPS + `RapfiPool` opponent on CPU — the `fast_eval` pattern) → canonical dedup → soft/hard label → `store.ShardWriter` (byte-identical to the mine schema) → warm-continue supervised train (the `pretrain` pipeline) → **net-vs-frozen-parent** gate (NOT vs Rapfi — that cadence was non-discriminating in #77). Plus a `loop` subcommand = the flywheel (round i+1 rolls from the BEST net so far, gates vs the FROZEN ep250, stateless reducer over on-disk result JSONs).
+
+**Perf gate PASSED (the 2× contract).** Microbench on the M5 Max: (A) student MCTS sims=32 batched ≈ **220 moves/s** (MPS); (B) `RapfiPool` label ≈ **872/s** @50ms/24w (the #86 reader-thread fix killed the old GIL ceiling); (C) the combined student-vs-Rapfi rollout ≈ **215 plies/s ≈ A** — the disjoint MPS/CPU compute genuinely overlaps, **no meaningful coupling penalty**, soft-labelling distinct states post-hoc adds <1 s on an ~8 s rollout. Coverage is balanced (both seats ~50/50 of stored states) and `rollout_temp_until_ply` sampling keeps novelty high (~800 fresh canonical/roll, no decay) — the funnelling I feared didn't bite.
+
+**THE WALL — every first round REGRESSED the net to 0/48 vs the parent.** Three round-0 variants, all → 0/48 (gate), all → **rapfi@25ms = 0.00** on the deployment-path gradient (the parent reads **1.00** there). Crucially the *training loss DECREASED* each time (policy_ce fell) while *play collapsed* — the tell of a **train/inference mismatch, not a strength/teacher problem**. The diagnosis chain:
+1. **First suspect (wrong as sole cause): weak teacher.** The SOFT label uses `analyze` (node-bounded, max_node 5000). This very notebook already records: *node-bounded Rapfi — even 2M nodes — loses 100% to the net; think-TIME is the strength dial.* So a soft label is a **sub-student teacher** → distilling it should drag the net down. Real, but **not the whole story**: a round with STRONG time-bounded HARD one-hot labels (`--label-timeout-ms 300`, on-book DAgger's actual classifier target) ALSO went 0/48.
+2. **Root cause (confirmed): the aggregate stored HISTORY-LESS planes.** The mine drops history (`drop_history`) — sound there because AZ self-play afterward repopulates the recency channels. **Pure-supervised DAgger has no such repair step.** Training the net on zero-recency planes and then *playing it with real recency planes* is an out-of-distribution input → garbage output → clean 0/48 regardless of teacher. Fix = **store the real history** (one line: `canonical_state(s)` not `canonical_state(drop_history(s))`; the D4 canonical transform already carries history under the same symmetry; the label stays board-only since Rapfi is history-blind). Round 0c (history fix + value-weight 0) holds at **rapfi@25ms = 1.00 = parent** — the catastrophic regression is GONE.
+3. **Second issue found: HARD one-hot labels corrupt the VALUE target.** `PretrainData` sets value = `2·best_winrate−1`; a one-hot `{move:1.0}` makes best_winrate≡1 → value target ≡ +1 everywhere → the value head collapses to constant "+1" (value_mse→0 trivially). Mitigation used: `--value-weight 0` (freeze the parent's already-good value head). The SOFT map's one virtue was a genuine value; a clean design decouples **strong timed pick for POLICY + soft winrate for VALUE** (or just freeze value).
+
+**State / verdict.** The DAgger machinery is correct, fast, and tested; the catastrophic-regression BUG is fixed; round 0c sits at ≈parent (gate 0.354 = black 0.458 / white 0.25, but only 6 gradient steps — a confirmation, not a real training run). **No strength GAIN demonstrated yet** — that needs a proper round now that the blocker is cleared. Recommended next round: history fix (done) + **HARD timed-pick policy labels** + **value frozen (or soft-sourced)** + bigger `--target-new` (≥30k) + enough steps + gentle LR, gated vs frozen ep250; then iterate the `loop`. Artifacts: `mined/dagger_*_r0.log`, `mined/dagger_*_r0_result.json`; throwaway round checkpoints in `checkpoints/dagger_r0.pt` (overwritten across variants — not banked). Branch `feat/gentle-rapfi-teacher`. This is a "stopped cleanly at a well-characterized wall" entry, not a success — the loop is ready; the science question (does idx-2 DAgger beat the self-play ceiling) is still open.
+
+### 2026-06-25 (later) — Proper DAgger rounds RUN: a clean NEGATIVE. Imitation sharpens the net but does NOT move the Rapfi ceiling (search-depth wall) ⭐
+
+Ran the real experiment with **every** fix in (real-history planes + Monte-Carlo value + strong 150ms timed-pick one-hot policy labels, dagger-only data, gentle lr=1e-4): one 20k-state round (`dagger_v2_r0`) then a 2-round `loop` (~38k cumulative aggregate, best-net rollout, frozen-ep250 gate). **Result — reproducible and clear:**
+- **Gate vs frozen parent (net-vs-net):** v2 **0.479** (black 0.79 / white 0.17) · loop r0 **0.458** (b0.79/w0.125) · loop r1 **0.438** (b0.83/w0.04). The net gets **markedly stronger as black and weaker as white** with each round — the asymmetry *intensifies* (b0.79→0.83, w0.17→0.04) while the aggregate sits ≈parity (the seat gains/losses cancel). More rounds did NOT compound toward beating the parent.
+- **The decisive check — think-time gradient vs Rapfi (the real ceiling):** parent and the most-trained dagger net are **byte-for-byte identical** — both beat rapfi@25ms (1.00) and lose at 50ms+ (0.00). **The Rapfi wall never moved**, across the single round AND ~38k of cumulative DAgger training.
+
+**Interpretation (the lesson).** Policy-imitation of Rapfi **sharpens the net's prior** (it beats its own past self, especially as black) but **cannot cross the rapfi@50ms wall, because that wall is a SEARCH-depth gap, not a prior gap** — Rapfi@50ms+ wins by *searching deeper at move time*, and distilling its *move* (a one-hot at sims=32) doesn't give the student that search. This is exactly what the project's own calibration predicted (think-time, not node budget, is Rapfi's strength dial). Corollary, from the seat asymmetry: **idx-2 looks black-favored** — imitation + MC outcomes double down on black's winning attack (sharper) while the white signal is mostly "you lose" (Rapfi's best white move still loses), so white play degrades. If idx-2 is a first-player win, "crush Rapfi from idx-2" is achievable only *as black*; white may be structurally lost (consistent with Jason's empty-board-artifact hypothesis being incomplete — the asymmetry is the *position's*, not a random-start's).
+
+**Verdict: DAgger is the wrong lever for THIS wall.** It's correct, fast, and bug-free, and it *does* shape the policy — but it can't out-search Rapfi. **Pivot recommendation → [idea-pile](topics/idea-pile.md) #1 (out-*search*-yourself-then-distill):** give the net a big test-time search budget at idx-2 (high sims / in-tree VCF), find where deep-net-search beats Rapfi, distill *those* policies — distill SEARCH, not the prior. And #2 (solve idx-2): if it's a black win, a threat-space tablebase is the perfect black teacher. Artifacts: `mined/dagger_loop.log`, `mined/dagger_r{0,1}_result.json`, `checkpoints/dagger_r{0,1}.pt` (not banked). DAgger code is committed/tested on `feat/gentle-rapfi-teacher` and ready to reuse (swap the Rapfi label for a deep-search label = idea #1).
+
+### 2026-06-25 (later still) — idea #1's premise FAILS: the net is EVAL-capped, not search-capped. + perf numbers (card is compute-bound; GPU VCF-detect is ~free)
+
+Before building idea #1 (out-search-then-distill), tested its premise directly: does the net's DEEP search find what its shallow search misses? **Net-MCTS at sims 32 / 200 / 800 / 1600 vs the Rapfi gradient is IDENTICAL — all read rapfi@25ms=1.00, 50ms+=0.00.** 50× more search moves the wall ZERO. **The net's EVALUATION (policy+value) is the ceiling, not its search depth** — so *vanilla* #1 ("distill the net's own deep search") is dead: searching harder finds the same thing, nothing better to distill. And 1600 sims is a LOT of search — if the gap were *tactical* (forced wins/losses), that much MCTS would usually stumble into them and cross a rung; it didn't, which leans toward a **positional evaluation** gap (Rapfi-NNUE just judges positions better) over a tactical one. (**Confirmed:** a net+root-VCF-overlay gradient is IDENTICAL to net-only — rapfi@50/100ms = 0.00 either way — and the overlay logged **0 forced-win hits** across ~180 net positions. The net is NOT leaving findable forced wins on the table; the gap is **positional**, not attacker-tactical. Caveat: this tested attacker-VCF only, not defense — the net could still be walking into Rapfi's threats, which a *defensive* VCF/eval would catch.)
+
+**The surviving form of #1:** search with a BETTER EVALUATOR (VCF tactics and/or Rapfi-NNUE eval at the leaves), then distill THAT — not the net's own eval-capped search.
+
+**Perf numbers (M5 Max, 15×15; benches in `scratchpad/bench_batch.py`, `bench_gpu_vcf.py`):**
+- **The card is COMPUTE-bound for the net, not memory-bound.** Net-eval throughput is FLAT at **~11,500 boards/s from batch 64 → 65,536** (no OOM at 65k). Batching more boards buys ZERO throughput — the GPU saturates at batch≈64. The hard currency is **net-evals/sec, not board count**; wave-batching cuts wall-clock latency, not total compute.
+- **GPU VCF threat-detection is ~free** (Jason's "put VCF on the GPU, measure the handoff" brainstorm, measured): directional length-5 line-convs run **12.7M boards/s resident** (10.0M with the CPU↔GPU handoff — real but negligible), vs CPU `has_four_threat` **1,057/s** and CPU `solve_vcf` full-tree **53/s**. So *detection* isn't the cost — the **sequential forcing-TREE recursion** is. The build that follows: a **batched-frontier GPU-VCF** (thousands of VCF searches in lockstep, GPU detection kernel per ply) for a plausible ~100× full-solve throughput → VCF tactical truth becomes a real-time teacher/guard-rail (idea-pile #9).
+
+**Net strategic read:** three things tried/measured — imitation (DAgger), more search (deep MCTS), attacker-tactics (VCF overlay) — all fail to cross the Rapfi wall; the wall is a **positional evaluation** ceiling (the net plays positions worse than rapfi@50ms; it isn't missing forced wins). So the front-runner lever is now **#7 (distill Rapfi-NNUE's positional evaluation)** — give the net a better static eval, not more search/tactics. **#9 (GPU-batched VCF)** is repurposed toward **DEFENSE** (don't walk into Rapfi's threats) + as a real-time guard-rail (the perf is proven: 12.7M detect/s). **#2 (solve idx-2)** remains the ground-truth option. Nothing further built this session pending Jason's read on the eval-lever fork.
+
+### 2026-06-25 (perf spike) — GPU batch-VCF CRACKED: full forced-win solves at ~2,500× CPU, 100% correct vs `solve_vcf` ⭐
+
+Built and measured the batched-frontier GPU-VCF that the prior entry and idea-pile #9 only projected (~100×). **It blew past the projection — ~2,500×, not ~100× — at 100% correctness.** Prototype: `scripts/gpu_vcf_prototype.py` (`solve_vcf_batch(boards (B,2,15,15) bool) -> (won, hit_cap)`, MPS). Run: `GOMOKU_BOARD_SIZE=15 uv run python scripts/gpu_vcf_prototype.py`.
+
+**THE INSIGHT (why it's exact AND batchable).** Plain VCF is a pure **OR / reachability** search, *not* a real AND/OR tree: the defender is ALWAYS forced to the *unique* completion square of the attacker's four, so every defender node has exactly one child. Hence "is there a forced win?" == "from the root, can the attacker reach (within max_depth) a node with an immediate five or a sound double-four?" — run as a **breadth-first frontier**: every node in the current frontier is an attacker-to-move board at the *same depth*, so the whole frontier advances **in lockstep** and ALL threat detection batches across the B searches at once (directional length-5 shift-products over `(F,15,15)` bool planes — the proven-free conv primitive, applied frontier-wide). One host sync per BFS level (the child-gather `nonzero`); no `.item()` in the inner loop. Four-detection is provably identical to `vcf._five_completions` (a four-move m+completion c ⟺ a 5-window of 3 own + {m,c} empty + 0 opp; each (dir, signed-offset) → a unique completion cell, so #firing pairs == CPU `len(comps)` and the single-four block is `m+δ·d`); the forcing test == `_has_immediate_five(defender)`.
+
+**CORRECTNESS — 100% agreement vs CPU `solve_vcf` across 5,300 positions** (500 spec + 2,400 random midgame + 2,400 dense), including **121 deep mates out to mate-distance 15** — every verdict matched. CPU `hit_cap`=0; the single GPU frontier-truncation case still agreed.
+
+**THROUGHPUT (M5 Max MPS, random midgame mix) — full solves/sec:** scales to **~130–146k solves/s at B≈16k–65k** vs CPU's **53/s** = **~2,500× (peak 2,749× @ B=65,536, depth 8; ~2,480× @ depth 16)**. Saturates near B≈16k; small B is kernel-launch-bound (~8–10k/s @256). depth barely matters (random wins are shallow). Throughput is position-mix-dependent: a batch of deep-tree forced-wins branches the frontier wider and costs more (capped `max_frontier=4M`, ~1.8 GB, flagged `hit_cap`).
+
+**What it unlocks.** VCF tactical TRUTH is now real-time at training scale — the throughput blocker on idea-pile #9 (ground-truth forced-win/certain-death teacher + anti-guard-rail move ranking) is GONE. Combined with the prior entry's strategic read, the highest-value use is **DEFENSE**: batch-VCF every state the net reaches to detect "the opponent has a forced four-win here" (certain-death, value −1, and the saving move via `vcf_refutations`) — directly attacking the net's positional/defensive wall in real time. **Open items:** returns the *verdict*, not `winning_move`/`mate_distance` yet (block-index machinery already present — easy add); **no child-board dedup yet** (per-level hash dedup is the obvious next win on tactical batches); plain VCF only, **not VCT** (the continuous-threes solver). Budget accounting differs (CPU DFS calls vs BFS frontier nodes) so the only possible disagreements are cap-boundary cases — and across ~5,900 total positions **exactly ONE** appeared (a later 600-dense-board run): a dense board where the CPU **hit its 200k-node DFS cap and returned an *unproven* `False`** (`hit_cap=True`) while the GPU completed and **proved a genuine forced win**. The divergence is the GPU being strictly *more complete* than the cap-limited CPU, **not a false positive** — clean (non-capped) agreement stays **100%** (598/598 in that run, incl. all 21 deep mates). Committed on `feat/gentle-rapfi-teacher` (not merged/pushed — left for Jason).
+
+## 2026-06-26 — VCT-GPU REBUILD: a working batched GPU VCT solver + the on-device megakernel path proven ⭐
+
+The v0 GPU-VCT spike hit the "this is not GPU-shaped" wall (correct but CPU-bound: ~84% host, the AND/OR orchestration fights the GPU — see `wiki/topics/gpu-vct-feasibility.md` §1–§6). This is a **from-scratch rebuild** pursuing Jason's three sharpenings — **(A) compiled line-threat grammar + (B) intersection (bitmask) defense generation + (C) work-first continuation stealing** — toward a persistent-epoch Metal megakernel. Hermetic in `scripts/vct_metal/` (nothing else imports it). **Vehicle: MLX** `mx.fast.metal_kernel` — runtime-compiled MSL, no Xcode needed; bitwise/popcount + device atomics confirmed on the M5 Max. Discipline: every layer validated against the CPU oracle `gomoku.vcf` before building the next; tests on **real Rapfi positions** (`~/data/games_raphi/`, a loader built this session) under a 2-min `timeout` cap. Full §7 lives in the wiki page.
+
+**What landed (all oracle-validated):**
+- `detect_ref` (numpy spec) + `detect_metal` (**Metal kernel**) — OR-node detection (fives, four-structure, candidates, tempo). Matches `vcf` cell-for-cell over 900 boards; ~1M boards/s on-GPU. Subtlety: `four_structure` counts fours *created by the move* (m in the five-window) = `vcf._completions_through` exactly in the no-immediate-five regime the OR-node runs in.
+- `threes_ref` + `threes_metal` (**Metal kernel**) — forcing-threes + **(B) bitmask defense**: reply-set = OR of threats' `{f}∪comps` masks, **fork = a disjoint mask pair**. The v0 70% (host tempo-guard + open-four assembly) reduced to set-algebra. Matches `vcf` over ~1.8k threes.
+- `search_ref` — the AND/OR solver *composed from the primitives*; verdict matches `vcf.solve_vct` on clean cases. Slow (B=1 recursion, 2.2 s/board) — the B=1 shape is exactly what batching fixes.
+- **`wavefront` — THE WORKING GPU VCT SOLVER.** Host orchestration + all-GPU per-node kernels (detect + threes + a swapped-detect tempo pass), single reverse-order AND/OR backup; detection amortized over the whole frontier per wave. On real Rapfi positions verdict matches `vcf` with **0 false-positive and 0 false-negative** clean disagreements; ~12 ms/board batched at B=50. Sound: four-soundness conservative (never a false win), three-tempo exact via batched materialisation.
+- **`mega_vcf` — fully on-device VCF megakernel** (one thread/position, iterative DFS with make/unmake on a thread-local board, NO host orchestration per node). Validated sound vs `vcf.solve_vcf`: clean-agree 40/40, 0 FP/FN. Throughput amortizes with batch (71→**12 ms/board** at B=2048) but is **tail-bound** — B=512 and B=2048 take the same ~24.6 s wall: one deep position serializes the batch (no work-stealing; per-node detection O(N²)).
+- **`mega_vct` — fully on-device VCT megakernel** (the (C) vision: OR-frames = fours + forcing threes, AND-frames = defender replies, all in-kernel). Compiles, runs, returns plausible verdicts — **VCT fully on the GPU** — but **impractically slow naive** (~11 s/board): per-node detection recomputed O(N³)-ish + no work-stealing → severely tail-bound.
+
+**Throughput measured (perfsweep subagent, real positions, M5 Max).** Correctness gate re-run B=50 × 3 seeds (150 positions): **0 FP / 0 FN** every seed, `found_extra=0` (no wavefront WIN ever needed the vcf cap-lift recheck). GPU throughput (`max_depth=8`, `max_nodes=20000`): B=128 → 5.47 ms/board / 183 solves/s; B=512 → 0.53 / 1893; B=2048 → 0.28 / 3528 (peak RSS 2.0 GB). **Two caveats that flip the naive reading:** (1) **host-orchestration-bound at every scale** — only **24–40 %** of wall time is inside the MLX kernels, the other 60–76 % is the host Python per-node expand+backup loop (incl. host↔GPU transfer); (2) **`max_nodes` is a GLOBAL pool across the batch, not per-board**, so the falling ms/board is a *node-cap artifact* (each board gets 20000/B nodes; cap% rises 34→42→47 %), **not** GPU amortization — for real corpus labeling, **scale `max_nodes` with B**. CPU baseline (single-thread `vcf.solve_vct`): **0.64 solves/s aggregate**, sharply bimodal (median 30 ms ≈ 33 solves/s typical; ~14 % of positions hit a ~90 s tail). **Speedup 5.5× (typical position) → 286× (B=128 vs aggregate CPU)** — clears the 20–50× "pay for itself" bar *via the aggregate measure, because the GPU dodges the CPU's ~90 s-per-hard-position tail*, not via raw per-board speed. **The punchline: the wavefront being host-bound (60–76 % of wall outside the kernels) is the empirical case FOR the megakernel** — the (C) direction is where the measured time actually is, and the megakernel's own bottlenecks (incremental detection + work-stealing) attack the other end. Both ends measured, not guessed.
+
+**Verdict.** VCT is **on the GPU**. The **`wavefront` solver is the usable deliverable** (correct on real positions; throughput host-orchestration-bound, clears the 20–50× bar by aggregate measure). The **megakernel path is proven** — the fully-on-device search machine is correct (VCF: sound 40/40) and structurally complete for VCT — and the naive megakernel's two bottlenecks **pin the (C) levers precisely**: (1) **incremental/bitboard detection** (patch the ≤4 lines a move touches instead of rescanning O(N²–N³)/node), and (2) **work-stealing** to kill the single-deep-position tail. (A) and (B) are *proven correct*; (C)'s orchestration is the remaining adversary, exactly as v0 predicted — but now with a working solver in hand and the levers measured, not guessed. All committed + pushed on `feat/gentle-rapfi-teacher`.
+
+## 2026-06-26 — VCT-GPU OPTIMIZED: bitboard megakernel, ~195× per-board, ~900× CPU throughput ⭐
+
+Goal: make GPU VCT *as fast as I can*. Lever (1) from the rebuild (incremental/bitboard detection) was the dominant cost — the naive megakernel rescanned the board O(N²)/node and the per-move soundness check was O(N²)/move → **O(N⁴)/node**. Rebuilt detection on **bitboards** (`bb_ref.py` golden Python-bigint ref + `bb.py` MSL `ulong[4]` helpers: `shr256`/`shl256`/`has_five`/`completion_mask`; validated bit-for-bit, 1200 random + 600 real boards, 0 mismatch). Five-completion sets and forcing-move generation become shift-AND set-algebra.
+
+- `mega_vcf_bb.py` (VCF): forcing-move gen by hole-pair set-algebra; soundness + double-four via `completion_mask`. **13–14× faster** than `mega_vcf` (84→6.4 ms/bd @B=512; 21→**1.48** @B=2048; wall 42.5→3.0 s). Validated **0 FP / 0 FN vs `gomoku.vcf.solve_vcf` over 360 real positions**.
+- `mega_vct_bb.py` (full AND/OR VCT): bitboard detection + four more levers — fours generated once by set-algebra; threes restricted to **Chebyshev-2 of OWN** (radius-2-per-side argument; ~halves candidates, **1.65×**); follow-up `f` restricted to `vcf._collinear_empties(m)` (**correctness fix** — without it, far pre-existing fours over-generate spurious threes, which I caught via a verdict shift between versions); monotone defender-five/tempo fast-paths (computed once/node, skipped when globally absent); `rmask` aliased into `fmask`. Per-board algorithmic speedup at **equal config** (B=24, mn=600): cell-scan `mega_vct` **38.4 s → 4.0 s = ~10×, 0 verdict disagreements** (bitboard detection ≈10–14× as in VCF, candidate-own ×1.65 on top). **Validated 0 FP / 0 FN vs `vcf.solve_vct` over 320 real positions** (258 clean agreements, 8 seeds). The bigger practical win is *batchability*: the cell-scan kernel's tail can't finish even B=64 @ mn=1500 in 2 min; the bitboard kernel batches to B≈16k (below).
+
+**The throughput finding.** Wall is **flat ~16 s for B=128…2048** at mn=1500 — completely **tail-bound by the single deepest board**. For batch labeling that's a *feature*: throughput ∝ B at constant wall. Measured solves/s (mn=1500, fully on-device, RSS 0.3 GB): 8192→526, 16384→**891**, 32768→**1 020** (saturating ≈ GPU concurrency). CPU `vcf.solve_vct` = 0.64 solves/s → **~1 600× aggregate**, and (unlike the wavefront's 24–40 % GPU util) there is **no host bottleneck** — fully on-device. A late **shift-precompute** (reuse each direction's five `shr256` of own/empty across the hole loops of `gen_forcing`/`completion_mask` — verdict-preserving, `test_*_bb` still pass) lifted the saturated ceiling ~1.5× (583→891 @ B=16384). NB: `load_position_stack` samples a *live-growing* corpus (`~/data/games_raphi/` is being collected), so raw win/cap counts drift between invocations — verdicts are deterministic within a process and bb always matches the oracle on the loaded set.
+
+**What is and isn't the lever (honest).** Work-stealing (lever 2): board-level is already done by the GPU scheduler; the real tail is *one* deep board (one thread), so subtree-spill would cut single-board latency but **not** labeling throughput (already maximized by batching) — so it is *not* the lever for this use case. **Negative result:** generating threes by single-line open-three patterns is **incomplete** (misses *four-four-at-`f`* threats — the follow-up makes fours in two directions, only one through `m`); localizing detection to `m`'s lines hits the same wall, so `gen_threes` stays whole-board. The throughput knobs for labeling are **B** (batch) and **`max_nodes`** (depth/quality vs wall). **Negative result #2 (word width, tried + reverted):** a 256-bit detector can be `ulong[4]` (64-bit) or `uint[8]` (32-bit); a micro-bench of *pure* shift+AND favoured `uint[8]` 1.7× (Apple GPU 64-bit ALU is throughput-reduced), so I rewrote the whole kernel to `uint[8]` and re-validated (0 disagreements) — but it ran **~20 % slower** (VCT 693 vs 854 solves/s @ B=16384; VCF 1.55 vs 1.40 ms/bd) because the real kernels are bookkeeping-heavy (`popcount`/`lowbit`/`setbit`/`cpy`/`and`/frames) and that all doubles in word count, outweighing the detection-only gain. `ulong[4]` kept. Lesson: micro-benchmark the hot path *in situ*. Committed + pushed on `feat/gentle-rapfi-teacher`.
+
+## [2026-06-26] is-VCT recognition is learnable on unseen games — but attention loses to a CNN
+
+**What.** First learnability probe on the VCT puzzle labels: can a net classify "side-to-move
+has a forced VCT?" from the raw 15×15 board, generalizing to **unseen games**? Full synthesis:
+`wiki/topics/vct-recognition-learnability.md`. Code: `scripts/threat_shapes/gen_isvct_dataset.py`,
+`scripts/threat_shapes/train_isvct_attn.py`. Artifacts: `~/data/puzzle_miner/isvct_exp/`.
+
+**Setup.** Labels reused from the forward puzzle miner (`~/data/puzzle_miner/`), NO re-solve —
+POSITIVE = `win&~cap`; NEGATIVE = manifest ply **absent** from `puzzles.jsonl.gz` (proven
+no-VCT); `cap` excluded. Split **by shard** (md5%10): 400 manifest shards → **367 train / 33
+test, overlap 0** (+49-shard val from train for early-stop). Train 1,167,002 (17.3% pos), test
+101,745 (14.2% pos), balanced training (60k). Negative boards CPU-replayed in the exact
+side-to-move frame, **0 frame mismatches**. Light enough (CPU replay + MPS train, no GPU solve)
+to run without competing with the live `collect_rapfi` producer.
+
+**Held-out result (AUROC, the fair metric):** majority 0.500 · logreg-on-counts 0.946 · **CNN
+(168k) 0.971** · **attention (339k) 0.924**. Attention val→test 0.933→0.924 (no leakage). Wall:
+gen 20s, train+eval(×4) 356s on MPS.
+
+**Read.** (1) Feasibility = **yes** — the win-condition is perceivable and generalizes across
+shards. (2) Attention is the **laggard** — beaten by a CNN with *half* the params and by linear
+logreg-on-counts. VCT structure is local + translation-equivariant ⇒ conv bias fits; the signal
+is count-dominated. (3) Strategic: recognition was always the **exact oracle's** job (cheap),
+so this *clarifies* rather than dents the plan — **attention's real audition is the seeker**
+(steering toward VCT-reachable regions), not recognition. Caveats: small/untuned (60k, ≤12 ep,
+attention still inching up); "no-VCT" = no VCT within the miner's 500-node budget; trivial
+early-game negatives inflate natural-accuracy (use AUROC/balanced).
+
+**Also (same session):** the megakernel now emits a **passive GPU root-move**
+(`solve_vct_mega_bb(return_move=True)`) — resolves the `vct-backward-mining.md` §5 move-extraction
+gap; 2.38M forward puzzles move-labeled (`solutions.jsonl.gz`), 400/400 independently verified.
+All on `feat/gentle-rapfi-teacher` (not yet merged).
+
+## [2026-06-26] Seeker steering is learnable on unseen games (seek-VCT thesis, Phase A) — CNN > attention again
+
+**What.** The **steering** half of the seek-VCT thesis (the recognizer half named the seeker as
+attention's real audition). One question: can a net behaviorally-clone the **quiet-phase (pre-onset)
+moves of the side that reaches the first forced VCT**, and generalize to **unseen games**? Full
+synthesis: `wiki/topics/seeker-steering-learnability.md`. Code:
+`scripts/threat_shapes/gen_seeker_dataset.py`, `scripts/threat_shapes/train_seeker.py`. Artifacts:
+`~/data/puzzle_miner/seeker_exp/`.
+
+**Setup.** Reuse the miner verdicts, NO re-solve. `onset(game)` = first ply with `win&~cap`; the
+mover there = the **seeker S** (kept whether S converts or misses — "you reached a winnable position"
+is the target). STEERING EXAMPLE = every pre-onset ply `p < onset` with `p%2==onset%2` (S to move);
+input = side-to-move-relative board (`board[0]`=S), target = the move S actually played. Boards
+CPU-replayed in the exact miner frame (`all_boards`), every present puzzle key cross-checked → **0
+frame mismatches over 400 shards**. Split **by shard** (md5%10, the recognizer's rule for
+comparability): **367 train / 33 test, overlap 0** (+49-shard val for early-stop). **500,747**
+examples from **38,927 onset games** (1,073 no-onset); 459,415 train (200k used) / 41,332 test; mean
+208 legal cells/board. Per-cell policy with legal-move masking; light (CPU gen + MPS train, no GPU
+solve) → ran `nice`d without competing with the live `collect_rapfi` fleet.
+
+**Held-out result (top-k legal-move-match = is the seeker's *actual* move in the policy's top-k):**
+
+| model | params | top-1 | top-3 | top-5 | CE |
+|---|---|---|---|---|---|
+| uniform (random legal) | — | 0.005 | 0.014 | 0.023 | 5.37 |
+| adjacency-to-stones | — | 0.025 | 0.072 | 0.121 | 4.78 |
+| **CNN** | **224k** | **0.386** | **0.597** | **0.696** | **2.26** |
+| attention | 339k | 0.263 | 0.457 | 0.569 | 2.76 |
+
+Wall: gen 15 s (CPU), train+eval 1,541 s on MPS (CNN early-stop ep8 ~13 s/ep; attention full 20 ep
+~71 s/ep).
+
+**Read.** (1) Feasibility = **yes** — the CNN matches the *exact* strong-engine steering move ~39%
+(top-1) / ~70% (top-5) on unseen games, **~15×** the adjacency prior at top-1; CE confirms genuine
+calibration over the move distribution. The steering signal is learnable and generalizes — the cheap
+green light the seek-VCT plan needed. (2) **CNN > attention again** (top-1 0.386 vs 0.263, fewer
+params) — next steering move is *local*, fits the conv prior. (3) **Two honest limits:** attention
+was **still climbing at the epoch cap** (val 0.066→0.253 monotone, undertrained not capped), AND
+next-move BC is local so it does **NOT** settle attention's *global-receptive-field* bet for
+*sequential* seeking; and top-1 match is a **weak proxy** (≠ strong play; conflates seeking with
+general engine strength). The architecture verdict for seeking is deferred to the decisive test.
+
+**Next (gated with Jason — the GPU-spending real tests).** **Phase B:** replace the imitation target
+with an oracle-*constructed* one — score each pre-onset candidate by **VCT-reachability gain** (does
+a forced win appear within k plies after move + best reply?); principled but costs k-step batched
+lookahead per candidate. **Phase C (decisive):** a **hybrid player** — oracle every ply for attack +
+defense, exact solver finishes any VCT, net steers only in the tactically-quiet region — played vs a
+**fixed baseline** (heuristic/lookahead, not sibling H2H). Phase C is where attention's global bet is
+actually adjudicated. On `feat/gentle-rapfi-teacher` (not merged).
+
+## [2026-06-26] The pre-onset band is a KNIFE-EDGE — seek-VCT thesis update + non-VCF gold
+
+**What.** Two search-free/GPU-only ways to mine VCT-reachability from the 500k Rapfi-v-Rapfi games,
+toward the seeker. Full synthesis: `wiki/topics/vct-reachability-mining.md`. Code:
+`scripts/threat_shapes/vct_fan.py` (consolidated probe). All solving on the Metal **GPU** kernels
+(`mega_vct_bb`, `mega_vcf_bb`) — zero contention with the CPU `collect_rapfi` fleet. **Both seats are
+strong Rapfi**; every "losing move" is a counterfactual we inject.
+
+**The method (off-path fan).** Ride each game; at known-non-VCT pre-onset nodes, fan every alternative
+move the side did NOT play and solve VCT on each. **Framing (load-bearing, code-verified):** a VCT
+belongs to the side-to-move, so after S plays alt `m` it's the opponent's turn → a fanned VCT is the
+**opponent's** forced win = `m` is a forced-LOSING move for S. The fan is a **defense/blunder + VCT
+miner, NEVER an offense detector** (S would need its own turn = the expensive ∀-reply search). Integrity:
+**0.000%** of fanned nodes are themselves VCT, 0 parity violations.
+
+**Finding 1 — the knife-edge (the headline, a thesis update).** Fraction of a side's alternatives that
+lose by force, by who's-to-move × distance-to-onset: opponent-to-move **98.3% (d1) / 92.7 / 84.6**;
+VCT-holder-to-move **89.4 (d2) / 52.7 / 45.7**. Even **6 plies before the VCT, ~half of moves lose**;
+the *winner* at onset−2 loses 89% if it deviates. **Both players walk a tightrope; sharpness ramps
+BEFORE the onset.** ⇒ the seek-VCT split's "pre-onset = the net's forgiving region" is **wrong** — that
+band is not approximation-tolerant; the net's safe domain is further back than onset−6, and the
+solver/lookahead must own the whole sharp ramp (the "oracle every ply" hybrid already does — now with
+the *why*).
+
+**Finding 2 — 96% of the wins are trivial; the gold is the winner's combinations.** VCF kernel on the
+406,202 fanned VCT-wins (81.1% of all fanned): **VCF 96.1%** (four-driven, trivial — the extreme is
+"you didn't block my five"), **non-VCF VCT 3.5%** (14,380; need a *three* = combinational molecules),
+VCF-cap 0.3%. The non-VCF gold splits by parity — concentrated on the **WINNER's** wins (defender
+perturbed): non-VCF rate 1.9/6.0/6.2% on the winner's rows vs 0.0/0.7/1.2% on the opponent's.
+**Combinations belong to the side with the initiative.** Harvest plan: **perturb the *defender*** at
+pre-onset opponent-to-move nodes → ~100k+ non-VCF VCT boards (a few free-GPU hours) = non-trivial
+offense termini for the distance field + hard defense lessons (the white-defense wound).
+
+**Also banked — the free distance-to-VCT field** (from the existing per-ply verdicts, no re-solve):
+terminal-VCT 99%, multi-window (lose-then-refind) 11.6% of games, offense coverage **49%** (an
+upper-bound, censored target — the realized game found *a* path, maybe not the shortest), cap holes
+13.9%. Proposed target Φ=γ^(my-moves-to-VCT) with Φ=0 floor + a defense channel (a value function for
+"force a win", global by construction). **Banked negatives:** both yield predictions were wrong (81%
+VCT / 5% cap, NOT cap-dominated as guessed); the 81% looks rich but is 96% trivial; a brief
+"VCT-where-one-already-existed → impossible!" alarm was a **labeling** confusion (all fanned nodes are
+pre-onset non-VCT). Separately this session: marked the slow CPU solver `gomoku/vcf.py` OBSOLETE
+(reference/history only; GPU kernel is the sound, 1600× one). On `feat/gentle-rapfi-teacher` (not merged).
+
+### 2026-06-27 — Φ distance-to-VCT field: the proof-frontier is learnable; CNN beats attention a 3rd time
+
+Trained the **first real L2 model** (overnight, MPS, zero GPU contention with the live collector).
+Target = the free dual potential from the VCT-reachability mine: `phi_off=γ^(my-moves-to-my-next-VCT)`
++ `phi_def=γ^(opp-moves-to-their-next-VCT)`, γ=0.8, read off the puzzle miner's per-ply verdicts (no
+re-solve), cap excluded. **The gradient of Φ IS Jason's question** "which moves move the proof frontier
+toward my VCT vs theirs". 40k games → 1.167M train / 101,745 held-out test, shard-disjoint (overlap 0),
+0 frame mismatches. Scripts `gen_phi_dataset.py` / `train_phi.py` (committed); metrics
+`~/data/puzzle_miner/phi_exp/phi_metrics.json`.
+
+**Result — learnable + generalizes:** held-out **CNN** offense ρ=0.719 / R²=0.761 / reach-AUROC=0.912,
+defense ρ=0.761 / R²=0.690 / 0.917; well-calibrated (top decile pred 0.91 → true 0.93). Two sharp
+secondaries: **(1) NOT count-dominated** — CNN nearly doubles a ridge-on-raw-board baseline (offense ρ
+0.36→0.72), unlike is-VCT recognition where logreg-on-counts nearly matched ⇒ closeness-to-a-fork is
+genuinely *spatial*, structure lives in **distance, not presence**. **(2) CNN beats attention a third
+time** — now param-matched (376k vs 348k) on the **global** target (attention's claimed home turf) with
+3×+ the gradient steps (CNN early-stops ep6, best val by ep1; attn plateaus ~0.72 at ep20) ⇒ the
+global-receptive-field bet **does not cash out** at this scale; conv tower + GAP wins. Surprise: defense
+reads *better* than offense (net sees incoming danger best — aimed at the white wound).
+
+**Banked negative + caveats:** the "global target is attention's chance" hypothesis was wrong (lost,
+param-matched, epoch-alibi removed). Honest reach: it's the *realized-play proxy* frontier (upper-bound,
+censored), single-position regression (not whole-game seeking), small/untuned. ρ on a proxy = green light,
+not strong play — that's the Phase C hybrid-play eval (gate w/ Jason). **Default L2 arch = the CNN.** Synthesis:
+`wiki/topics/phi-distance-field-learnability.md`. On `feat/gentle-rapfi-teacher` (not merged).
+
+### 2026-06-27 — Molecule corpus banked: 146,655 non-VCF combinational forced wins, move-labeled
+
+While Jason was at coffee (free GPU, his invite). Ran the corpus-scale writer of the §3 probe:
+`harvest_molecules.py --side defender` — fan opponent-to-move pre-onset non-VCT nodes of real
+Rapfi games, on each fanned (winner-to-move) board keep **VCT but NOT VCF** = forced wins needing
+a *three* = the combinational "molecules". Move-labeled via the kernel's passive `return_move`.
+GPU-only, 0 collector contention; banked to `~/data/molecule_gold/gold.jsonl.gz` (+ README, schema
+matches puzzles.jsonl.gz). Scripts committed (79d7ad2).
+
+**First bank:** 20,000 defender-side nodes / 68 of 400 shards / **25 min** → 4.01M fanned →
+**3.71M VCT (92.4%)** → **146,655 non-VCF gold (3.95% of VCT)**, **99.0% distinct boards**, **100%
+move-labeled**, from 3,438 source games. Boards **sparse** (winner mean 6.2 stones, median 6 — the
+clean "combination already forced" regime). Gold **grows with distance-to-onset** (dist-1/3/5 =
+28.8k/51.7k/66.2k): deeper = more genuinely *needs a three* = purer molecule (matches §3's
+distance trend). The 92.4% VCT rate (vs §3's both-sides 81%) is the **defender-side knife-edge** —
+nearly every pre-onset alt the defender could play loses by force.
+
+**Each gold board pays twice** (the §4 thesis, now realized as data): a non-trivial offense
+terminus (a molecule candidate) AND a defense lesson (defender's natural-looking losing move →
+white-side wound). Only 68/400 shards consumed at the node cap ⇒ resumable, ~60× headroom on the
+full corpus. Next natural uses (Jason's call): D4-canonical dedup → distinct-shape count; feed L1
+stencil minimization; a non-VCF-aware Φ/defense target. On `feat/gentle-rapfi-teacher` (not merged).
+
+## 2026-06-27 — `mega_vct_bb`: support + complete outputs (+ a canonical solver wiki page)
+
+Extended the on-device VCT megakernel `scripts/vct_metal/mega_vct_bb.py :: solve_vct_mega_bb` with two
+optional outputs, mirroring the passive `return_move` style and keeping the default `(win, hit, move)`
+path **byte-identical** (asserted `_build_src(False,False)==_src()`; cross-check vs cell-scan `mega_vct`
+0 disagreements). Each flag compiles its **own** kernel variant (`_KERNEL_CACHE`), so the fast path pays
+nothing.
+
+- **`return_support=True`** → `(B,4)` uint64 `support`: the cells the found proof line touches — a
+  stencil seed / relevance window for the shape-library engine. Built by **return-path accumulation**: a
+  per-frame `fsupp[]` merged into its parent ONLY on a winning return (`ret==1`), so abandoned/refuted
+  branches never pollute it. OR-win adds move(+four-block); AND-win adds every defender reply; the three
+  inline OR wins add move + completion/threat cells. `support ⊆ root EMPTY cells` (played cells, not the
+  pre-existing threat stones — the ablation pass works the full board). Over-inclusive vs minimal, by design.
+- **`complete=True`** (slower) → `(B,4)` uint64 `winmask`: ALL winning FIRST MOVES. The root OR node stops
+  short-circuiting and records every winning forcing candidate; non-root nodes untouched (their
+  short-circuit IS the per-root-move verdict). Winmask = winning *forcing* first moves (fours +
+  tempo-guard-passing threes) = exactly the VCT first moves; non-forcing free-wins in already-won
+  positions are correctly excluded.
+
+**Validation (the work).** Invariants (B=32, budget per Jason = `max_nodes=500`, runs in seconds, added as
+`test_support_and_complete_invariants`): support-variant verdict/move identical; complete `win`==default
+`win` on clean boards; default move ∈ winmask; support cells empty/contain-move/zero-on-loss — all PASS.
+**Gold** (`~/.claude/jobs/d524d833/tmp/gold_complete.py`, 6 winning boards, all empties × all replies via
+the kernel, vs vcf's exact forcing-move generation): **0 unsound winmask moves, 0 winning-forcing-moves
+missing.** *Lesson banked:* my first completeness oracle FAILED (21 "misses") because I forgot vcf's
+**tempo guard** (`_defender_has_four_or_five`, vcf line 942) — a three where the defender has a counter
+four/five is NOT a forcing VCT move; `verify_one` (wins-vs-all-replies) still flags it in an overwhelmingly
+won position, but it is correctly absent from winmask. Adding the guard to the oracle → clean PASS. **The
+solver was right; the verifier was wrong** — exactly the kind of subtlety the move-verifier pattern exists
+to catch.
+
+New canonical wiki page **`wiki/topics/mega-vct-solver.md`** (the API/contract reference) + index doorway
+row; `gpu-vct-feasibility.md` §9 and `vct-backward-mining.md` §5 updated with pointers. On
+`feat/gpu-vct-support-complete` (not merged).
+
+## 2026-06-27 — CPU vcf solver RETIRED (gated, not deleted) + fast/deep VCT test tiers
+
+Two linked changes on `feat/cpu-solver-retire` (branches off the just-landed
+return_support/complete solver work; NOT merged).
+
+**(1) CPU solver retired as a runtime dependency.** `gomoku/vcf.py` is the slow CPU
+AND/OR solver (~0.65 ms/node, ~90s tail on hard 15×15). It was a wonderful bootstrap
+and stays fully intact as the kept oracle/reference, but Jason's standing intent —
+session after session he'd stop me reaching for it — is now enforced in code: the four
+public entry points (`solve_vcf`/`solve_vct` + `*_from_planes`) raise `CpuSolverRetired`
+with a message pointing at `scripts.vct_metal.mega_vct_bb.solve_vct_mega_bb` (the GPU
+solver). The ONLY sanctioned bypass is env `GOMOKU_ALLOW_CPU_SOLVER=1` (fixture-gen,
+deep validation, the kept-oracle test suite). All internals untouched; no CPU feature
+parity intended.
+
+**Runtime reaches surfaced for Jason's triage (all OPT-IN, so default runs are
+unaffected; isolated on a branch so nothing breaks until merge):**
+- `gomoku/self_play.py` — the VCF/VCT **teacher** (`vcf_teacher`/`_apply_vct_teacher`,
+  `configure_vcf_teacher`): `solve_vcf/vct_from_planes` + `solve_vcf`. Fires only when a
+  run enables the teacher (e.g. the `gentle-rapfi-teacher` line) → will throw unless
+  ported to the GPU solver or run with the override.
+- `gomoku/eval.py` — the VCF-**overlay** player (`solve_vcf` before/at MCTS leaf).
+- `gomoku/train.py` — the MCTS-leaf-VCF flag (derby-b3n) wiring into the above.
+These three are the triage list: port to `solve_vct_mega_bb`, set the override per-run,
+or retire the lever.
+
+**(2) Fast/deep test tiers (kills the minute-plus walls).** The slow test walls were never
+the GPU solver (4s flat at B=16k) — they were slow ORACLES in the loop (live `vcf` ~90s
+tail; the cell-scan `mega_vct`). Restructured:
+- `scripts/vct_metal/regen_vct_fixture.py` — one-shot, sets the override, solves a fixed
+  seeded real-position stack with the CPU oracle at high budget, keeps clean (non-cap)
+  boards, writes `(boards, win, hit, move, winmask)` truth to committed
+  `scripts/vct_metal/fixtures/vct_golden.npz` (seed+budget recorded inside).
+- `scripts/vct_metal/test_mega_vct_bb.py` — FAST tier: loads the npz (NO vcf, NO cell-scan
+  at test time), diffs `solve_vct_mega_bb` at `max_nodes=500` (cap→skip; non-cap verdicts
+  are budget-independent so they MUST match high-budget truth) + the support/complete
+  self-oracle invariants. Runs in seconds.
+- `scripts/vct_metal/validate_deep.py` — DEEP tier (sets override): live vcf at high budget,
+  larger n, the all-empties winmask soundness+completeness gold (oracle includes vcf's
+  tempo guard `_defender_has_four_or_five` — the subtlety from this session). Run on-demand
+  / when the verdict changes, not in the gate.
+
+**Validated:** fast tier PASS; gate tests 9/9 (`CpuSolverRetired` raised without override,
+runs with it); kept-oracle + overlay tests (`test_vcf`/`test_vct`/`test_eval_vcf_overlay`)
+green via the session-wide override in `tests/conftest.py` (at the DEFAULT board size 9 —
+they encode 9×9 cells). The reusable lesson banked on [topics/mega-vct-solver.md]: commit a
+golden fixture, never re-derive truth at test time; the GPU solver is fast, slow oracles are
+the test-wall.
+
+## 2026-06-28 — md-extraction CRACKED (#91): the §3 stencil-minimizer blocker is gone; load-bearing W measured
+
+The single named blocking prerequisite for the shape-library L1 minimizer
+([shape-library-engine.md](wiki/topics/shape-library-engine.md) §8) was **md-extraction**:
+the minimizer must ablate stones on **mate-distance invariance** (a load-bearing stone is one
+whose removal *shortens* the mate — §3 correction #2), but `solve_vct_mega_bb` returned only
+`(win, hit_cap)` and capped *nodes*, not depth. Cracked tonight on `feat/md-extraction` (NOT
+merged). Autonomous overnight run; Jason's charge was "try things that don't work and write
+them down so we learn" — both the wins and the honest bounds are below.
+
+**Approach (de-risked by a 7-agent design workflow first).** A background Workflow ran 5
+read-only design analysts (kernel audit, md theory, approach ranking, validation, minimizer) →
+an adversarial reviewer → a synthesizer, before any kernel surgery (the megakernel is the #1
+silent-wrong-answer trap). The adversary earned its keep: it killed the plan's CPU md_min
+cross-oracle as **mis-calibrated** — the kernel's `candidate_own` (own-only Chebyshev-2) is
+*narrower* than CPU `vcf`'s any-stone candidate set, so `md_gpu > md_cpu` can occur with **no
+bug** — and it would have re-summoned the retired CPU solver (against canon + the
+`feedback-trust-validated-oracle` memory). Dropped; validate **GPU-self** instead.
+
+**The kernel primitive (issue #91, the chosen "Approach C").** A new compiled variant gated by
+a `depth_cap` flag adds **one input** (`max_depth`, per-board int32) and **zero outputs**: a
+branch reaching frame `sp == max_depth` returns a clean `ret=0` (a definitive "no forced win
+within `sp < max_depth` frames") **without** setting `hit_cap` and **before making any move**
+(so `own==own_in`/`opp==opp_in` at break is preserved — carriers/w safe). Then
+**`md_min(b) = min{ d : solve(b, max_depth=d).win }`**, read from the boolean verdict alone, so
+it is **order-independent** (no move-ordering / OR short-circuit can move a True/False
+threshold), monotone, minimax-correct. `solve_md_min(boards)` binary-searches it per-board —
+every board marches its own bracket in **one** bulk call, so a whole corpus resolves in ~5 flat
+tails (the call-cost law). The edit is **purely additive**: `_build_src(s,c,cr,w,depth_cap=False)`
+is **byte-identical to git HEAD** for all 16 flag combos (verified) — no existing variant moves.
+
+**md is in FRAME units, not attacker-plies.** A four = +1 frame, a forcing three = +2 (it
+pushes an AND node), and an inline win (immediate-five / sound double-four / fork-three)
+**collapses** (ret=1 at its frame, +0). This is the right *consistent* measure for shortening-
+detection but is coarser than the CPU's `mate_distance`; never reconcile the two (banked as
+invariant #9 + a §metric note).
+
+**Validation — all green, GPU-only (no CPU).** A gate confirmed, in order: [1] byte-identical
+default vs HEAD; [2] depth_cap composes additively; [3] `max_depth=MAXD-1` reproduces the
+default `(win,hit,move)` exactly; [4] **depth monotonicity** `win(d)` never True→False (the
+adversary's "single most important" correctness gate); [5] `solve_md_min` brackets correctly
+**and equals an independent linear scan** on every uncapped board. Permanent FAST-tier tests +
+a GPU-self golden fixture (`regen_vct_md_fixture.py`, no CPU) added.
+
+**L1 md-invariant minimizer built + measured** (`scripts/threat_shapes/md_minimize.py`).
+Cumulative lockstep ablation, directional single-cap tests (exploiting freestyle monotonicity):
+OWN stone probed at cap `md0` (clean win → redundant DROP; nowin → load-bearing `B` KEEP); OPP
+stone at cap `md0−1` (clean win → a shorter mate opened → load-bearing `W` KEEP; nowin → DROP);
+hit_cap → KEEP (fail-safe). No windowing (sound; sidesteps the found-line-vs-shortest-line
+windowing risk the adversary flagged). One bulk call per ablation step, all boards in lockstep.
+
+**RESULTS — `molecule_gold` (16,345 non-VCF combinational VCTs, the first 16,384 by `dist`):**
+- **md_min over the corpus in 19.6 s; ablation 98 s.** 99.8% resolved, **zero ceiling pressure**
+  (max md0 = 9 ≪ MAXD=32). Reduction: orig 13.2 stones → **4.91** (B+W) ablated (63% ↓).
+- **Load-bearing W is the long-VCT phenomenon — MEASURED.** W-rate by md0: **md0=1 → 0%**
+  (correct: inline root wins are degenerate, defender-cap=0), md0=2 → 72%, **md0≥4 → 100%**.
+  Exactly the wiki's claim ("load-bearing white is the *rule* in long VCTs — they're long
+  *because* white denies the short wins"), now quantified.
+- **The `w` channel (#90) is a ~10× over-approximation.** It flagged 88,637 defender stones;
+  ablation distilled only **8,694 actually load-bearing** (9.8%). So the cheap `w` over-approx is
+  a real ~10× over-count of the minimal load-bearing W — md-ablation is *necessary* to get it.
+
+**Honest bounds / negatives (the "write it down" half):**
+- **73% of `molecule_gold` is md0=1** — root-collapsed inline wins (a fork-three detected at
+  frame 0 without descending). The R5 inline-collapse *dominates* this corpus, so it's a **poor
+  substrate for the W phenomenon** (the real W story lives in the md0≥2 tail). This is why the
+  denser/deeper real-game `enable_serial` corpus is the cleaner test (run in progress; contrast
+  to be appended).
+- **Corpus caveat:** `molecule_gold` was harvested by *perturbing the defender* (injecting a
+  blunder), which likely inflates the W-rate — `enable_serial` (real-game, unperturbed) is the
+  control.
+- **Vocabulary did NOT fully saturate at 16k** (902 distinct ablated stencils, curve decelerating
+  but still +35/800). Honest yellow flag for the "finite vocabulary" bet; needs more boards
+  (and/or the §3-deferred D4 fold to dedup 8×) to call.
+- Two accepted, *length-over-estimating / over-keeping* (never unsound — L0 re-verifies) md
+  bounds carried forward: the `def_tempo` veto can inflate three-opening lines; the inline
+  collapse can hide a ≤2–3-ply shortening at constant `sp` (future fix = emit `md = sp +
+  leaf_offset`, additive).
+
+**RESULTS — `enable_serial` contrast (the deep, real-game, UNPERTURBED control; 105 resolved of
+the 512 deepest-`run` boards, `max_nodes=1500`, frame-cap `hi=16`).** The W story flips from
+"rare" to "universal" exactly as the depth hypothesis predicts. md0 is **deep** (histogram spans
+6–13 frames; vs molecule's 1–9 with 73% at md0=1) — these are real enabling *setups*, not root
+collapses. **Load-bearing W is 100% at *every* md0 (6–13), mean ~10 W stones/stencil** (vs
+molecule ~0.5) — on *unperturbed* real-game data, so it is **not** a harvest artifact. Three sharp
+contrasts: **(1)** the `w` channel (#90) is **regime-dependent** — a ~10× over-approximation on
+shallow molecules (9.8% load-bearing) but only **~1.3×** on deep shapes (1106/1471 = **75%
+load-bearing**); the cheap `w` is a *good* approximation exactly where defensive structure is real.
+**(2)** deep stencils barely reduce (**37%** vs 63%) and the ablated `B+W` object (mean **20.6**)
+is **larger** than `support∪carriers` (14.0) — because for deep defensive shapes the baseline is
+**incomplete** (no W), not over-inclusive; ablation *adds* the ~10 load-bearing W the carriers
+heuristic cannot represent. **(3)** vocabulary does **NOT** saturate — **96% of deep stencils are
+distinct** (101/105, near-zero repetition) vs molecule's 6% — the §7 "library too specific" risk is
+**real for the deep regime** (shallow molecules form a finite vocabulary; deep enabling-shapes are
+nearly all unique). Honest costs banked: **407/512 deep boards capped** at this budget (the deep
+tail wants more nodes/depth than `max_nodes=1500`/`hi=16`), and no-window ablation took **590 s for
+105 boards** — the dense-board (32.6 stones) perf wall; **windowing is the fix** (§8 NEXT). The
+16,384-board `enable` run did not finish under no-window (killed) — that *is* the perf finding.
+
+**Net:** the §3/§8 blocker is gone, the L1 minimizer exists and produces typed minimal stencils
+`(B, W, support, md0)` today, and the load-bearing-W hypothesis is confirmed on BOTH a shallow
+perturbed corpus (W-rate 0%→100% with md0) and a deep unperturbed one (100% W, mean ~10), with the
+`w`-channel over-approximation quantified and shown regime-dependent. Next: the `enable_serial` contrast (deeper VCTs), then the v0
+distance-field + fork player (§5) and L2 (§4). Files: `scripts/vct_metal/mega_vct_bb.py`
+(`max_depth`/`solve_md_min`), `scripts/threat_shapes/md_minimize.py`,
+`scripts/vct_metal/regen_vct_md_fixture.py`, FAST tests; docs
+[mega-vct-solver.md](wiki/topics/mega-vct-solver.md) (`max_depth` + invariant #9) +
+[shape-library-engine.md](wiki/topics/shape-library-engine.md) §3/§8.
+
+### 2026-06-28 (second pass) — calibration of the claims above (accuracy/durability; Jason: "null result is also fine")
+
+A same-day audit of the morning entry's conclusions. The **kernel/tool results stand**; several
+**interpretive claims were overstated** and are corrected here (originals left intact above per the
+append-only norm). New analysis is CPU-only on the banked stencil dumps (`scripts` in
+`$JOB/tmp/analyze_vocab.py`); no GPU.
+
+- **RETRACTED — "deep VCT shapes don't saturate / have no small vocabulary / the §7 'library too
+  specific' risk is real."** This was an **exact-match-on-large-objects artifact.** The banked
+  stencils are wildly **over-inclusive** (mean **41 cells** on `enable`: found-line `support`
+  openings, never ablated, + ~10 over-counted `w`-derived W + B), and *every* diversity metric is
+  size-dominated. Measured (matched n=105): exact-set distinct **enable 96% / molecule 10%**, but
+  **IoU≥0.5 clusters enable 2 (2%) / molecule 3 (3%)**, IoU≥0.3 → **1 each**. So exact-match
+  over-counts diversity (big objects rarely identical) and IoU under-counts (big dense blobs all
+  overlap); the truth is **unresolvable from these stencils.** Honest status: **the vocabulary /
+  saturation question is OPEN (a null result)** — it needs *minimal* stencils (ablate the support
+  openings, fold D4, use minimal-W) and a size-controlled metric before any saturation claim is
+  meaningful. The morning "matched-n ~10% vs ~97%" contrast is real but **not** evidence of a
+  tactical-vocabulary difference — it is mostly the ~4× size difference.
+- **TIGHTENED — the W-rate-by-md0 curve.** "0% at md0=1" is **definitional, not a finding** (md0=1
+  ⇒ the `md0−1=0` cap always returns nowin ⇒ no W is *testable*). For **deep** mates, "≥1
+  load-bearing W" is **near-definitional**: a long forced mate *is* the defender delaying, so
+  removing a delayer shortens it — "100% of deep boards have a load-bearing W" is close to what
+  "deep mate" means. The informative, non-trivial numbers are the mid-range rate (**md0=2 → 72%,
+  md0=3 → 59%**) and the **counts/ratios** below — not the 0%→100% sweep.
+- **TIGHTENED — "load-bearing W" is an operational, order-dependent definition:** a stone whose
+  *single* removal (under cumulative-greedy ablation) opens a win at `md0−1`. It can miss
+  *jointly* load-bearing sets and is order-sensitive; it is a reasonable proxy, **not** the unique
+  minimal load-bearing set. So the `w`-channel ratios (**~10×** over-inclusive on shallow molecules,
+  **~1.3×** on deep) compare `w` to *this* proxy; the regime-direction (w over-approximates far more
+  on shallow than deep) is the durable part, the exact multiplier is proxy-dependent.
+- **CLARIFIED — md_min validation scope.** Verified: byte-identical default vs HEAD (16/16),
+  depth-monotonicity (no counterexample; monotone by construction), the bracket, and md_min == an
+  independent **linear scan**. The linear scan uses the *same* kernel, so this is **internal
+  consistency + the depth-cap mechanism**, NOT a cross-check of md_min's *absolute value* against an
+  independent oracle (the morning entry's "validated" slightly oversells this). No well-calibrated
+  external md oracle exists — the CPU searches a *different* fragment (`candidate_own` own-only vs
+  any-stone) — except on the **VCF (four-only) subset**, where the fragments coincide and a gated
+  CPU `mate_distance` cross-check *would* be sound (an open, durable follow-up). The **FRAME unit**
+  (`md = F + 2T + 1`) is **source-traced, not independently measured.**
+- **TIGHTENED — causality.** The data show md-depth *correlates* with load-bearing-defender count;
+  "long *because* white denies the short wins" remains a **hypothesis** consistent with (not proven
+  by) the measurement.
+- **STANDS (solid):** the kernel primitive (byte-identical default, monotone depth-cap, order-
+  independent md_min), the validated FAST tests + golden fixture, and the **minimizer as a working
+  analytical tool**. The honest net is a **tool + a method**, with the headline tactical questions
+  (vocabulary, minimal-W) still open — which is a fine place to be.
+
+**Follow-ups updated (#92):** ablate the `support` openings (the dominant over-inclusion source) +
+fold D4 + minimal-W, THEN re-ask vocabulary on minimal stencils with a size-controlled metric; and
+the VCF-subset CPU md cross-check as a one-time absolute-value validation.
+
+## 2026-06-28 (n=1225 streaming scale-out) — the vocabulary null holds at 10× scale; a resumable harness for unbounded n
+
+Jason: "run a larger sample, n=1000+, append-only, trivially resumable, to prove that out and set us
+up for unbounded n later." Built `scripts/threat_shapes/md_minimize_stream.py` (reducer-over-a-log:
+the JSONL output is the only state; each board content-addressed `sha1(corpus|atk|dfd)`, written once
+with status ok/capped/dead; resume = skip logged ids; capped ids recorded so they aren't retried) +
+`analyze_vocab_stream.py` (O(n) exact/D4 distinct over all n, IoU on a capped sample). Commit ca26b58.
+
+- **Input-order is the throughput lever (a real finding).** Deepest-first (the prior n=105 strategy)
+  cherry-picks pathologically-unsolvable boards: **256 → 51 ok / 205 md0-capped in 1109 s (~20% yield)**.
+  Shuffled (seeded, representative real-game sample): **256 → 237 ok / 19 capped in 287 s (93% yield,
+  4× faster)**. The capped boards are unusable anyway (no md0 ⇒ nothing to minimize), so deepest-first
+  spends ~80% of compute on dead ends. Full shuffled run: **1225 ok / 55 capped / 0 dead in 1278 s
+  (~21 min)**, log `~/data/md_stencils/stream_enable_shuf.jsonl`.
+- **The vocabulary null is now stable at n=1225 (10× the n=105 second-pass result).** mean stencil
+  **22.6 cells** (B 6.3, W 4.7); **exact-distinct 98% / D4-distinct 96%**, but **IoU≥0.5 → 19%
+  clusters / IoU≥0.3 → 0.25% (one blob)** — the "diversity" number swings ~400× with the threshold.
+  No stable vocabulary count exists because the metric is dominated by **stencil size + threshold**,
+  not tactical content. Confirms the second-pass retraction: the question is **unanswerable until the
+  stencils are minimal** (openings ablated).
+- **NEW sub-finding — D4 is NOT the dedup lever.** The second pass flagged D4-folding as a possible
+  ~8× deduplicator; at n=1225 it moves exact-distinct only **98% → 96%** (≈2% of stencils are D4
+  images of another). So the inflator is **over-inclusion** (un-ablated `support` openings → mean
+  22.6 cells), not missing symmetry. This re-prioritises #92: **ablate the support openings first**;
+  D4 is a rounding error by comparison.
+- **W findings reproduce cleanly + stably at scale.** W-rate **0% at md0=1 (definitional)**, **100%
+  at md0=2, 95% at md0=3, 100% at md0≥4**; `w`-channel **2.2×** the single-removal load-bearing set
+  — squarely between molecule's ~10× (shallow) and the deepest-band's ~1.3×, i.e. the `w`
+  over-approximation tightens monotonically with mate depth, now traced across three regimes.
+- **Honest scope caveat.** Shuffled enable is **moderate depth** — 91% of the 1225 are md0≤4 (mean 22.6
+  cells), vs the prior n=105 *deepest* band (mean 41 cells, IoU≥0.5 → 2 clusters). The deepest band
+  shows an even starker size-driven collapse; both regimes point the same way (over-inclusion
+  dominates), but the n=1225 sample under-represents the 41-cell tail. Unbounded-n on the deep tail
+  needs the #92 budget/windowing work (the deepest band caps at ~80%).
+
+Net: the **harness is the deliverable** (resumable, append-only, 96% yield, ready for unbounded n),
+and it **proves the second-pass null durable at 10× scale** while sharpening the path forward (ablate
+openings ≫ fold D4). Files: `scripts/threat_shapes/md_minimize_stream.py`,
+`analyze_vocab_stream.py`; log `stream_enable_shuf.jsonl` (+ `stream_enable.jsonl`, 51 deep stencils).
+
+## 2026-06-30 (issue #98) — VCT-terminus self-play: end games at the first cap50 VCT, not at five (9×9 generator + the 15×15 oracle ported to 9×9)
+
+Jason: "9×9 AlphaZero, but this time instead of playing to win, play to VCT @ 50-node budget. VCT is the
+terminus — with that in hand we can win any game, so further searching is noise." This is idea-pile #11
+(⭐ "first VCT at median ply 19") built onto the generators, using the validated `mega_vct_bb` GPU oracle
+as a batched per-ply terminal test across the wave of live games. **Code-only capability landed (default
+OFF = byte-identical); the training-science comparison is the next phase.** Merged `feat/9-9-az`.
+
+- **Step 0 — the oracle was 15×15-ONLY; ported to be N-general (the prerequisite nobody had hit).**
+  `scripts/vct_metal/bb.py` computed `TOPMASK=(1<<(NN-192))-1` and masked only bitboard **word 3** — correct
+  only when the board fills words 0–2 (N∈{14,15}). At N=9 (NN=81) it crashes at import (negative shift) AND
+  would leak off-board "empty" cells in the high words (`empty=~(own|opp)` unmasked). `n_sweep`'s "N" is
+  *pool size*, not board size — **the solver had never run at board-9.** Fix: replace the word-3-only
+  `TOPMASK` with a full 4-word `BMASK[4]` (= `bb_ref.BOARDMASK` split) + a `mask4()` helper, applied at
+  every masking site (`bb.py` ×3, `mega_vcf_bb.py`, `mega_vct_bb.py`). **Provably byte-identical at N=15**
+  (words 0–2 masked with all-ones = no-op). Revalidated: `test_bb.py` (Metal port vs golden `bb_ref`)
+  ALL PASS at N=9 (1800 positions, 0 errors) AND N=15; `test_mega_vct_bb.py` 16/16 vs the committed N=15
+  golden (byte-identical confirmed); 4 hand-verified 9×9 VCTs correct with sound winning moves. The
+  15×15 threat-shapes tool `certificate_falsification.py` still compiles unchanged (TOPMASK kept).
+- **Step 1 — the generator hook.** New `--vct-terminus` / `--vct-terminus-budget 50` (`selfplay_worker.py`)
+  → `configure_vct_terminus()` (`self_play.py`; process-global gate, so default-off never imports MLX). In
+  the wave loop (native + Python paths), BEFORE search each ply: gather every active game's side-to-move-
+  relative root planes → **ONE** bulk-synchronous `solve_vct_mega_bb(boards, max_nodes=50, return_move=True)`
+  (the call-cost law — never solve-in-a-loop) → any game where the side to move has a forced VCT is
+  terminated now: record the decisive position with the oracle's winning move as a **one-hot policy target**
+  (= the seek-VCT objective), credit that side the win, drop it from the wave; survivors continue to normal
+  MCTS. The exact terminal value flows through the SAME sign-flip + mate-distance discount as a real five
+  terminal. Plane convention reuses `vcf.solve_vct_from_planes` (attacker=plane 0, defender=plane
+  HISTORY_PLY). Gumbel paths guarded (NotImplementedError); ownership masked at a VCT terminus (not a real
+  five board).
+- **Coexistence works (the frankenstein's viability question).** native-C MCTS + PyTorch-MPS evaluator +
+  MLX(Metal) oracle all run in ONE process — verified live during generation, not just at import.
+- **E2E smoke (random net, 9×9, 64 games each, augment off):** plies_mean **36.0 → 19.9 (0.55×)**, median
+  **35 → 20**; every terminus game decisive (a VCT is always a win), **64/64 ended at a VCT** with a one-hot
+  oracle-move terminal (vs 1/64 accidental for the five-terminated baseline). Median terminus ply **20**
+  matches the 15×15 rapfi-corpus finding (median first-VCT ply 19–20) — on a *different board size with a
+  random net*. The "~half the plies" prediction lands almost exactly.
+- **Tests:** `tests/test_vct_terminus.py` (5 deterministic unit tests, monkeypatched oracle) + a focused
+  gen-path gate (native / gumbel-guard / teachers / swap2 / ownership / board15) green.
+- **Next (the science, gate with Jason):** a real 9×9 training slice with `--vct-terminus` vs a
+  five-terminated control at equal wall-clock — MTTE/Δelo, value-head calibration on held-out oracle
+  verdicts, and whether "reach a VCT" self-play trains a stronger net faster (idea #11's #4 ms-ladder
+  crossing). **Caveat to watch (idea #11):** terminating at VCT removes defender "play-it-out" learning
+  past onset — the knife-edge result predicts it should SHARPEN signal, but measure.
+
+## 2026-06-30 (issue #99) — VCT-finisher hybrid player: policy to the VCT, GPU oracle to the win (eval vs anything, no special harness)
+
+Follow-up to #98. A VCT-terminus net stops at the first VCT and takes the oracle verdict — great for
+training, but to EVALUATE it vs any opponent through the standard match harness it must win a REAL game
+(actual five-in-a-row), not lean on a "VCT = win" special harness. Jason: "extend the player so it plays
+by policy to VCT then just hammers the rest out rote... if we capture the logic in the player, we can eval
+vs anything, and not be trapped with a special harness." Merged `feat/vct-finisher-hybrid`.
+
+- **Built `vct_finish_picker(base, *, budget)`** in `gomoku/eval.py` — the GPU-oracle sibling of the
+  existing CPU `vcf_overlay_picker` (same compose-a-picker shape). Each turn: batched
+  `solve_vct_mega_bb(state.board[None], max_nodes=budget, return_move=True)`; if the side to move has a
+  forced VCT, play the oracle's winning move, else delegate to `base`. `state.board` is already the
+  (2,N,N) side-to-move-relative solver input (plane 0 attacker / plane 1 defender) — no conversion, no
+  HISTORY_PLY. `budget=0` = OFF (byte-identical, never imports MLX). Threaded via a `vct_finish_nodes`
+  param on `mcts_picker` (wrapped OUTERMOST — VCT ⊇ VCF). Wired: `match.py` `model:` spec
+  (`model:checkpoint=X,vct_finish=50` — ad-hoc eval vs any baseline / external Rapfi) + `eval_worker.py
+  --vct-finish-nodes` (SEQUENTIAL; the parallel path is guarded — MLX under multiprocessing fork is
+  unvalidated / Metal-wedge risk). Solver import behind `_load_vct_solver()` so tests monkeypatch without MLX.
+- **Why cap50 also CONVERTS, not just detects:** after each forced exchange the remaining position is a
+  SUB-proof of the original ≤50-node VCT proof, so re-solving each turn keeps handing back the next
+  forcing move until a real five. Whatever the opponent plays, the win stays forced.
+- **E2E smoke (random net, 9×9, standard `play_match_pickers`):**
+  - vs random: plain 40W-0L (0 finisher fires — correct); hybrid 39W-1L, **finisher fired 54× over 264
+    picks** → converts VCTs to genuine wins.
+  - vs heuristic: plain 0W-40L, hybrid 0W-40L, **0 fires over 180 picks** — a random net earns no VCT vs a
+    defender, so the finisher never fires and NEVER HURTS (≡ plain, only ever plays proven wins).
+  - **Crafted open-four, hybrid to move (terminal_before=False): 1W-0L, fired once → wins a REAL
+    five-in-a-row** through the standard harness. The money shot: policy→VCT→hammered to five, no special harness.
+- Tests: `tests/test_vct_finish.py` (5 unit tests, monkeypatched oracle) + eval-path gate
+  (vcf-overlay / proven-prop / tree-reuse / panel / color-split) green. This hybrid is also the deployable
+  web-UI player and realizes the wiki's long-anticipated "Phase C hybrid-play eval" (seeker-steering).
+
+## 2026-06-30 (issue #100) — VCT-terminus science run: the 9×9 A/B (throughput win, robustness LOSS)
+
+The science slice for #98/#99. **Full synthesis: [wiki/topics/vct-terminus-selfplay-result.md](wiki/topics/vct-terminus-selfplay-result.md).**
+Matched 9×9 pair (`scripts/run_sweep.py`: `vctsci-terminus` vs `vctsci-control`), byte-identical except the
+terminus; both cloned from `derby-v9-small` (fresh 64×4) minus `--gumbel-root` (terminus guard) and
+`--vcf-teacher` (VCF ⊆ VCT). Grown by `--resume` to **e500** (100 was smoke — strength only broke out in
+the extended epochs). wandb terminus `cc0fy0ao` / control `7cu4ho9w`. Jason: "start with 100 epochs… keep
+going to 500, it's screaming fast." Merged `feat/vct-terminus-science`.
+
+- **Training:** terminus self-play plies 36→**9.1** (control 34→11.8), wall **~2.1 s/epoch** (control
+  ~4.7 s) — the terminus reaches EQUAL fixed-baseline strength at **~45% of the control's wall-clock**
+  (idea #11's throughput claim: CONFIRMED). Internal EMA elo @e500 **1366 vs 1347** — a tie. Both
+  fast-attack-narrow but pass the balanced-baseline test (h/la2/la4 climb together).
+- **⚠ Eval gotcha (reusable):** `worker_weights.pt` = the **EMA** weights (what self-play + internal eval
+  use); `load_checkpoint(epochNNNN.pt)` returns the **raw** state_dict, *far weaker* under `ema_tau=0.99`
+  on short-game training (terminus **6%** raw vs **68%** EMA vs heuristic). Eval the EMA. First pass used
+  raw and looked like a 6% net — chased it down, re-ran on EMA.
+- **Fixed baselines (EMA, n=40):** terminus 66/81/49% (h/la2/la4), control 80/75/38%, champion 62\*/75\*/61\*
+  (\*draw-saturated). **Finisher lift concentrated at the top: terminus +12.5% vs la4**, ~0 else; control ~0
+  everywhere. Fixed baselines saturate for strong nets ⇒ coarse ruler, gate on H2H.
+- **Head-to-head (the headline — both predictions REFUTED):** terminus wins **0 of 120 games vs the
+  control** (25%: 0W-20L-20D in every config), and **never reaches a VCT** (finisher fires **0**/1060).
+  Loses **0-40** to the champion. Champion 40-0 on the control (calibration). Jason predicted a control
+  *crush* + a champion win; Claude hedged to a control-crush too. **Both lost to the same mechanism**: the
+  terminus's only opponent was a non-defending copy of itself, so it never learned to defend or play a long
+  game; a sound opponent denies every VCT and it collapses out-of-distribution. The control, playing to
+  five, learned both sides ⇒ wins the sibling H2H at equal fixed-baseline strength. **Non-transitivity in
+  the flesh.**
+- **Rapfi coda (giggles):** `champion+finisher vs Rapfi@50ms` (native mix9svq NNUE, 9×9) = **20 straight
+  draws** (0W-0L-20D) — even a shallow Rapfi denies every VCT; 9×9 is drawish at this level.
+- **Verdict:** idea #11's throughput claim holds; its "strong player" claim is refuted — VCT-terminus
+  self-play induces attack-only specialization (idea #11's own caveat as the dominant effect). The seek-VCT
+  *objective* survives; the missing piece is DEFENSE (record past-terminus for the losing side / mix full
+  games / curriculum). Next probe filed: **#101** (train the terminus long — p90 plies → 81, or wicked
+  strong at short games?). Eval harness: `scripts/vctsci_finisher_eval.py` (`--list`/`--run`/`--collate`,
+  one matchup/process).
+
+## 2026-07-01 (issue #101) — train the VCT-terminus player LONG: does p90 plies reach 81? (no — a stable attractor at ≈14.5)
+
+The natural next probe of #100. **Full synthesis: [wiki/topics/vct-terminus-selfplay-result.md](wiki/topics/vct-terminus-selfplay-result.md) § Long-run coda (#101).**
+Question: train the VCT-terminus player (games END at the first cap50 VCT) continuously with `--internal-eval`
+**off** — just train, no train-time evals — and watch `selfplay/plies_p90`. The retired 9×9→11×11 graduation
+gate was **p90 = 81** (a full board). Two hypotheses: **(A)** p90 climbs → the net learns to *avoid* VCTs
+(emergent VCT-avoidance at equilibrium); **(B, Jason's bet)** it never gets there and just gets "wicked strong
+exploring short games."
+
+**Result — Hypothesis B held.** A **fresh from-scratch** run (the #100 terminus buffer died with its worktree;
+fresh also gives a clean single p90 timeline through the collapse), `vctsci-terminus` recipe verbatim (64×4,
+`n_sim=100`, 4 workers, `--vct-terminus --vct-terminus-budget 50`, `ema_tau=0.99`, 64 SGD-steps/epoch). wandb
+**`kgajrge4`** (`jasonyandell-forge42/gomoku`; run dir `~/data/vctsci-101-long/`, outside the repo). Reached
+**~2,700 epochs (≈14× the #100 e500 slice) and was still riding its 12h / 1M-epoch wall at writeup**; the
+verdict was locked by ~e1,200 and only hardened over the next ~1,500 flat epochs. Hand-off was to the #103
+moonshot.
+
+- **The p90 trajectory (verified from the run, 200-epoch block means):** cold **~28** → collapsed to a trough
+  **11.9** by ~e85 → a **decelerating creep** back up: 11.9 → 12.7 → 13.2 → 13.4 → 13.6 → 14.0 → 14.4 → **14.7**,
+  increments off the trough **+0.8, +0.5, +0.2, +0.2, +0.4, +0.2 …** flattening to **~14.5–14.6** and holding
+  for the final ~1,000 epochs. **Never a hint of a march toward 81** (≈6× short). mean plies pinned **~9.6**.
+  `loss/policy` fell monotonically **4.38 → ~2.17** then flat; `loss/value` **0.39 → ~0.022**, flat. Every dial
+  converged — a **stable attractor**, just a *rising* one in the low teens.
+- **Mechanism (co-evolution, capped by the self-play ceiling):** the 11.9→14.5 creep is the defender (its own
+  EMA twin) learning to **postpone** the VCT a few plies, *never to prevent* it — self-play offers no opponent
+  strong enough to *punish* weak defense. The net got sharper at the **same ~9-ply game** (pl/vl down), not at
+  longer games. Same self-play ceiling #100 exposed head-to-head; Hypothesis A (VCT-avoidance) refuted.
+- **Confound (cap50 recall):** the terminus ends at the first *cap50*-detected VCT; as play sharpens some real
+  VCTs need **>50 nodes** and cap50 misses them, so **part** of the p90 creep is the detector losing recall on
+  the shifting distribution, not genuine defense. `plies` is therefore an **unreliable defense proxy** — only
+  `fires>0` vs a real opponent (the #100 finisher yardstick) settles "did it learn defense," and #100 already
+  answered **no** (fires = 0 vs the control/champion).
+- **Honesty caveat:** #101 ran with **no evals**, so "gets stronger at short games" is **inferred from falling
+  pl/vl, not a measured strength number** — a plausibility argument, not a proof.
+- **Verdict + the way out:** the self-play defensive ceiling is **structural**, not undertraining — 2,700 epochs
+  of pure self-play buys a few plies of postponement and nothing more. The path past it is **opponent-independent
+  defensive signal**: the supervised VCT aux-head (**#102**) / the from-scratch VCT-gate + aux-head gauntlet
+  (**#103**, now in-progress), which regress the VCT structure directly rather than hoping a non-defending twin
+  will teach defense. Cross-ref #100 (the head-to-head yardstick), idea-pile #11 (lineage).
+
+## 2026-07-01 (issue #103) — the VCT-defense aux head: it learns the percept, the policy never acts on it
+
+Executes the #102 aux-head design. **Full synthesis: [wiki/topics/vct-defense-aux-head-result.md](wiki/topics/vct-defense-aux-head-result.md).**
+Built a per-cell **"VCT-blunder map"** defense aux head (supervised by the GPU mega VCT solver: for each legal
+move, does it walk the side-to-move into a forced opponent VCT; defense label via **escape-search over every
+legal move** — a move is "lost" iff all children lose). `--aux-vct-weight 0.1`, default 0 byte-identical.
+Ran **two** experiments; **both failed to make the net *defend*, instructively.**
+
+**Experiment A — 9×9 from-scratch moonshot (wandb `8mtowemb`, retired e1152).** From-scratch 9×9, VCT-terminus
+gate (budget 50), the defense head (weight 0.1, full escape-search), + surviving Bruce levers (value-discount
+0.98, global-pool, WL2 stack, 64 SGD-steps/epoch, 64×4, 1.5M buf, sims=100). NO gumbel (terminus-incompatible),
+NO `--vcf-teacher` (CPU solver RETIRED → `CpuSolverRetired`; also inert under terminus since VCF⊆VCT). Run dir
+`~/data/moonshot-103/`.
+- **The head learns the representation:** `train/vct_loss` **0.60→0.03**, `mask_frac` ~0.9.
+- **Self-play does NOT change:** `selfplay/plies_mean` flat **~9-10 for all 1152 epochs** — the #101 attractor.
+- **Conclusion:** the supervised defense gradient forms the **percept** but self-play offers no opponent strong
+  enough to make the **policy** act on it. The #101 ceiling holds **even with the representation present** —
+  rules out "the net can't *see* the blunder." Motivated concentrating on a strong net at a hard fixed position.
+
+**Experiment B — Bruce/idx-2 pivot (wandb `zrjfwny2` from e613, retired e862 ≈ 257 pivot epochs).** When A didn't
+dig out, pivoted: warm-start from **Bruce** (`g15_128x10_bigbuf_e588_best.pt`, 128×10 15×15, ep 605) + **layer
+the VCT-defense head on** via a new `load_checkpoint(force_aux_vct=True)` splice (`gomoku/model.py:635/673`,
+`gomoku/train.py:1417-1422`; core loads strict, fresh `vct_*` params splice in like the swap2 choice head, off =
+byte-identical) + **restrict self-play to the idx-2 opening** (`GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8`, the
+white-to-move "Bruce-Lee board") + VCT-terminus. Idea: concentrate the defense gradient on Bruce's measured
+white-defense wound.
+- **The head learns again:** `train/vct_loss` **0.52→0.026** (loaded clean, no arch mismatch — the splice worked).
+- **The self-play POLICY drifts hard:** `loss/policy` **1.93→2.62** (rising) and `selfplay/plies_mean`
+  **collapses 11.6→9.6** — the terminus attractor, reached *even from a champion*. The terminus + narrow-opening
+  regime **specializes / erodes** the champion's general play.
+
+**THE EVAL-SATURATION CATCH (the thing most likely to be documented wrong).** Ran the idx-2 verdict eval
+(`gomoku.rapfimine.eval_idx2`, **n=48, sims=160, GOMOKU_BOARD_SIZE=15**) on **both** the pivot EMA checkpoint
+**and frozen Bruce**, identical settings:
+- Pivot EMA: **0/48** (black 0/24, white 0/24).
+- **Frozen Bruce (identical settings): ALSO 0/48** (black 0/24, white 0/24).
+So the eval at sims=160 is **SATURATED — Rapfi crushes both nets; it does NOT discriminate**, and therefore does
+**NOT** show the pivot degraded Bruce. Do **NOT** write "the pivot degraded the champion black 42%→0" — frozen
+Bruce also scores 0/48 here. The wiki's "Bruce black ~42% / white 0/12" is a **different eval config**
+(stronger-net / higher think-time, white-defense-plan §1B.2, n=24 vs Rapfi 5s/move), not comparable. **The real
+evidence of "it fell apart" is the self-play policy drift** (`loss/policy` up, `plies` collapsed), NOT the Rapfi
+eval. A clean strength-delta (pivot vs frozen Bruce) would need a **higher-sim or direct-H2H** eval — **not run**
+(experiment abandoned at the pivot).
+
+**Verdict.** Across both experiments the recurring lesson: **the VCT-defense aux head reliably learns the
+defensive REPRESENTATION, but nothing so far makes the POLICY act on it** — not from-scratch self-play (no
+opponent to punish weak defense) and not a frozen-champion warm-start (terminus/narrow regime just specializes
+the policy). **"Frankenstein + aux head" is not the recipe** (Jason). The head is a working **sensor** with **no
+actuator yet**. What-to-try-next (open directions): target the POLICY directly — the escape-search as a
+defensive *policy* target (mask/penalize blunder moves, cf. #43), the defense head at MCTS *inference* time to
+prune blunders, or a curriculum/opponent that actually forces defense. Cross-ref #100/#101 (the structural
+self-play defensive ceiling this head was meant to break), idea-pile #11.
+
+## 2026-07-01 (issue #107) — the sound world: oracle veto + defender terminus + line planes. The attractor is gone.
+
+**Thesis** (from #100/#101/#103's "sensor with no actuator"): every prior VCT injection edited TARGETS
+off-policy; none changed the BEHAVIOR distribution the net distills. The fix: put the oracle in the
+ENVIRONMENT — (1) `--oracle-veto`: per ply, the bulk escape-solve MASKS proven-blunder moves out of
+both the played move and the recorded policy target (on-policy by construction); all-moves-lose ends
+the game as a DEFENDER terminus (z=−1, mirror of #98); with `--vct-terminus` both ends of every game
+are oracle-sound — the twin can never hand over a VCT, so the missing punisher exists from epoch 0.
+(2) `--line-planes`: 8 in-forward line-potential input channels (per-cell × 4-dir × {me,opp} max
+live-5-window count /4) — double threats become LOCAL reads (the claw wound). Both byte-identical-off.
+Code merged `aa91a34`; cell `sound-world` (clone of `moonshot` minus aux-head levers); NO
+--record-vct / --aux-vct-weight (the #103 sensor had no reader; the veto IS the actuator).
+
+**Run:** wandb `zeed2xw5`, from-scratch 9×9 small (345,885 params, 25-ch stem), run base
+`~/data/sound-world-107/`. Smoke (random net, 8 games): **mean 48 plies vs the ~9-10 attractor**,
+two 81-ply draws, 6 defender termini, 24/24 recorded targets zero-mass on proven blunders.
+
+**Result — the #101 attractor is structurally gone.** plies_mean lived in the mid-20s→high-50s for
+the entire first ~1240 epochs (monitor watch, 6 cycles), never trending to 9-10. pl fell
+**4.38→1.34** by e1256 (vs #101: 4.38→2.17 in 2,700 epochs), vl stable ~0.06. Buffer full (1.5M) by
+~e600. ms/game warmed 2200→~830-1040 (sharper play compresses games → oracle cost falls with skill).
+Ladder while it ran: elo 389→~1120, la:2 0%→75%, heuristic 0%→25%, strongly DRAWISH shape.
+
+**Evals @ e1239** (arena `gomoku-arena`, sims=100, 40 games each, bare net): la:4 **3W-0L-37D**;
+la:2 0W-0L-40D; heuristic 5W-3L-32D; **old derby champion (peak.pt): 0W-0L-40D** — the matchup where
+the #100 terminus-only net went **0/120** is now UNLOSEABLE at 5h from scratch. Finisher-hybrid
+(`vct_finish=50`, legacy match path — the batched arena silently drops `vct_finish`, filed **#109**):
+vs heuristic **14W-0L-6D (85%)** vs bare 52.5% — the net REACHES winning positions and doesn't cash
+them (trained where such positions never arise); the oracle converts. vs champ still 0-0-20: no cap50
+VCT ever exists between two sound players. **Mounting evidence 9×9 freestyle is a practical draw**
+(Jason's wall intuition) — the sound world converges toward the game's truth instead of blunder-wins.
+
+**Accidental causal ablation (perf-scout `--oracle-veto-max-cands 24` A/B):** capping veto breadth at
+9×9 → leaked blunders get played → **games collapse to ~11 plies — the attractor returns**. Cap the
+veto, resurrect the disease: the veto is confirmed as THE anti-attractor mechanism, not a bystander.
+
+**Perf (perf-scout, receipts in wiki/topics/mcts-perf-ceiling.md, merged `ec69e1b`):** gen wall =
+oracle 75% / net evals 23% / **native MCTS tree 0.6% (exonerated — "ton of headroom" refuted)**.
+Solver cost = calls × ~44ms tail-grind; **width is FREE** (43.8ms @151 boards ≈ 44.3ms @48) — so:
+merged per-ply solve (bit-identical, sha256 receipt) 1.07×; `--oracle-overlap` (solve under the MPS
+wave) **1.18×, now ON in the cell**; null-board precheck REFUTED at 9×9 (61% fewer boards, +17 calls
+→ slower; default OFF, big-board re-measure). Future levers, leverage-ranked: cross-worker shared
+solve (width-free ⇒ aggregate oracle ÷4), kernel tail pass (0.9ms/node/thread), cap50→25 recall
+study, fp16 eval (1.7×/position, needs TQ canary).
+
+**State:** resumed e1239→ on merged+overlap code (buffer intact, same wandb timeline), verified
+healthy through e1275 — including surviving its worktree being janitor-reclaimed mid-run (#111; all
+data paths live in ~/data, processes on open handles). Oracle proven board-size-parametric (salvaged
+`9863cce`→`fa0dac2`, tests for 11/13). **Next:** let 9×9 run; graduation 11→13 is the attractive
+frontier (walls stop dominating; needs the ÷4 solver lever for veto cost); product shape = net +
+finisher hybrid (#109 unblocks arena-speed hybrid evals); verdict evals stay H2H + white-column,
+never internal elo.
+
+## 2026-07-01 (issue #107, dated correction) — the defender-terminus uniform-pi wound: white collapse at e1982, root-caused and fixed
+
+**Symptom.** 30-min re-eval after the resume: e1982 vs old derby champ **0W-20L-20D — black 0/0/20,
+white 0W-20L-0D** (ALL white games lost); heuristic 0W-12L-28D. At e1239 the same matchups were
+all-draws / near-clean. Self-metrics (pl falling, plies healthy) saw NOTHING — the #100 lesson again.
+
+**Ruled out, in order:** (1) the new #110 eval code — champ vs heuristic 40W-0L-0D, eval sane; (2) the
+perf-scout merge / `--oracle-overlap` race — poison detector (re-solve every recorded position at full
+breadth, assert recorded pi has zero mass on proven blunders) found **5/309 violations IDENTICALLY**
+with overlap ON, overlap OFF, and on pre-merge code `fa0dac2` at the same seed. **Scout exonerated;
+the wound shipped with the launch code.**
+
+**Root cause (classified violators):** all 5 = side=1(white), last-example-of-game, z=−1,
+**uniform-over-legal pi at a DEFENDER TERMINUS** — the launch design recorded doomed positions with
+pi = uniform over ~70 legal cells ("no move is better; z does the teaching"). At scale that IS the
+teaching: by e1982, black forces a proven all-moves-lose position by ply 9-15 in ~5/8 self-play games,
+so white's most common late-training examples were pure policy noise exactly at the sharpest
+positions → white's policy degraded toward uniform → 20/20 white losses. Delayed onset explained:
+early training rarely reached defender termini; the sharper black got, the higher the poison dose.
+(Launch-day smoke missed it: the spot-check sampled only early, threat-free plies.)
+
+**Fix (merged with this entry):** `_oracle_veto_partition` records NO example for the doomed
+position — the game still ends (z propagates via mate-distance discount; the trap-completing black
+move with real MCTS pi becomes the final example). The poison-detector invariant is now STRICT: no
+recorded example may carry blunder mass. Detector: `scratchpad/poison_check.py` pattern — re-solve
+recorded positions, assert zero blunder mass; run it on any future gen-semantics change.
+
+**Also observed:** black forcing proven wins by ply 9-15 under near-sound defense is evidence 9×9
+freestyle is a fast BLACK WIN within cap50 horizons (not a draw) — the walls do not save white at 9×9.
+
+**Decision:** restart from scratch on fixed code (run dir `sound-world-107b`), keeping the poisoned
+run's artifacts intact as evidence. Cheap (~2.5h to e2000) and gives clean attribution vs a
+buffer-wash resume.
+
+## 2026-07-02 (issue #107, closing entry) — 107b validates the fix; the 9×9 sound-world chapter closes with a carry-forward recipe
+
+**107b eval @ e1368** (fresh run on fixed code; same battery as run A's e1239, arena sims=100 n=40,
+finisher via legacy path):
+| matchup | 107b e1368 | run A e1239 (pre-collapse) |
+|---|---|---|
+| old derby champ, bare | **0W-0L-40D, color-symmetric (20D/20D)** | 0-0-40 |
+| heuristic, bare | 0W-0L-40D | 5W-3L-32D |
+| la:2, bare | 0-0-40 | 0-0-40 |
+| la:4, bare | 0W-5L-35D (all 5 as WHITE) | 3W-0L-37D |
+| heuristic, finisher(cap50) | **18W-0L-2D (95%)** | 14W-0L-6D (85%) |
+| la:4, finisher | 0W-1L-19D | — |
+The uniform-pi wound stayed closed (champ column clean + symmetric where run A later collapsed
+20/20 as white); the white-vs-la:4 softness (5/20) is the open question the run didn't live long
+enough to settle (stopped e1540; the e2000 bet — white holds champ + finisher ≥70% heuristic —
+retires UNSETTLED, leaning held). la:4's brute 4-ply tactics still poke white occasionally.
+
+**Chapter verdict (Jason, 2026-07-02): "9×9 has taught us what it can."** What it taught, in one
+entry: (1) the actuator belongs in the ENVIRONMENT (oracle veto at gen), not the loss — one day of
+the sound world beat weeks of target-side injection; (2) the veto is causally THE anti-attractor
+mechanism (K-cap ablation resurrects the 9-ply attractor); (3) never hand the policy head a
+"harmless" degenerate target — the uniform-pi shrug scaled into white's collapse precisely because
+the experiment SUCCEEDED (dose ∝ black's skill); (4) self-metrics cannot see self-play diseases —
+H2H + color columns only (third confirmation); (5) 9×9 freestyle within cap50 is a fast BLACK WIN
+(proven all-moves-lose by ply 9-15 vs sound defense) — the walls cap trap complexity, they don't
+save white; two sound players draw; (6) the product shape is net + oracle finisher (95% vs
+heuristic where bare draws) — bare-net drawishness is division of labor, not weakness.
+
+**Carry-forward recipe → 13×13** (wiki/topics/sound-world-recipe.md): cell `sound-world` = terminus
++ veto + `--oracle-overlap` + line-planes + no-example-at-defender-terminus, gate on
+`gen_poison_check` (scripts/) before trusting any gen-semantics change. Perf prerequisite for 13×13:
+the cross-worker shared oracle solve (÷4, width-is-free law) — filed. Runs preserved:
+`~/data/sound-world-107` (poisoned, evidence), `~/data/sound-world-107b` (clean, resumable e1540,
+wandb zeed2xw5→107b run).
+
+## 2026-07-02 (issue #113, 13×13 sound-world graduation) — SLICE 1: offense transfers, white-defense collapses (undertraining, NOT poison); wandb 8rp0gjpm
+
+**Setup:** carry the validated #107 sound-world recipe up to 13×13. WARM-STARTED from
+9×9 107b e1540 — the conv tower (75 params, the threat-shape features) transferred; the
+board-shaped FC heads (`policy_fc`, `value_fc1`) are flattened-board and were REINIT fresh
+for 13×13 (seed built offline: fresh 13×13 net + shape-matching tower copy → strict-loadable
+via the production board-size guard). Run dir `~/data/sound-world-13`, cell `sound-world`
+unchanged (full-breadth veto + vct-terminus + oracle-overlap + line-planes), 40-min slices,
+resume-latest cadence. Fresh wandb run 8rp0gjpm (lineage cleaned — no 9×9 run-id inherited).
+
+**Slice 1 (40 min → e801):** `pl` 3.36→2.18, `vl` 0.047 (value transferred well from tower),
+buffer full 1.5M. `selfplay/plies` slid 27–30 → stabilized ~14–17 (did NOT crash to 9). Warm
+tower = strong attacker → cap50 VCT-terminus fires earlier as policy sharpens.
+
+**Eval @ e801 (batched arena, EMA worker_weights.pt, n=40/matchup, sims=100, 13×13):**
+| matchup | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 0-8-12 | **0-20-0** |
+| bare vs lookahead:4 | 6-10-4 | **0-18-2** |
+| finisher(50) vs heuristic | **12**-8-0 | **0-20-0** |
+| finisher(50) vs lookahead:4 | 11-9-0 | 2-17-1 |
+Offense is REAL: the cap50 finisher takes black from 0 wins (bare) to 11–12. WHITE is 0/20
+in every config — total defensive collapse, even vs the weak heuristic. (Note: no 13×13 champ
+opponent exists yet — a 9×9 net can't play 13×13; heuristic/lookahead are the board-agnostic
+rulers.)
+
+**Poison guardrail: 0/612 positions with blunder mass (clean).** So the white collapse is NOT
+the #107 uniform-pi wound — the fix holds at 13×13. Poison-gen output corroborates the eval:
+31/32 self-play games end decisive (outcome 1.0) by ~ply 13 → black forces a fast VCT, white
+almost never holds in self-play.
+
+**Interpretation (working, to falsify over next slices):** UNDERTRAINING of the reinit'd
+defense heads, not a defect. The warm tower gives offense for free (transfers) but 13×13 white
+defense is a policy/value-head skill that must be relearned from fresh init, and 735 epochs on
+`pl`=2.18 is early (9×9 sound world defended only near `pl`~1.3 / ~1300 epochs). WATCH: does
+white recover as `pl` converges? Secondary concern — plies FELL here (30→14) whereas the 9×9
+sound world plies ROSE as defense developed; if the warm-started aggressive tower is actively
+suppressing defense development, from-scratch may be the cleaner path. ESCALATION LINE: if by
+~slice 4 (`pl` < 1.6) white is still <10% vs heuristic, flag Jason + recommend a from-scratch
+13×13 control. Decision: CONTINUE (poison clean, offense transferring, too early to judge).
+
+## 2026-07-02 (issue #113, cont.) — SLICE 2 confirms warm-start ATTACK-COLLAPSE; pivoting the loop to a from-scratch 13×13 control
+
+**Slice 2 @ e1500** (wandb 8rp0gjpm): pl 2.18→2.01 (PLATEAUING, not marching to 1.3), vl 0.032,
+plies flat ~14. Eval (EMA, n=40, 13×13):
+| config | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 7-7-6 (↑ from slice-1 0-8-12) | **0-20-0** |
+| finisher vs heuristic | **20-0-0** | **0-20-0** |
+| bare vs lookahead:4 | 4-14-2 | 0-18-2 |
+Poison CLEAN (0/414). Poison-gen: 32/32 self-play games decisive by ply 9–13, several at the
+9-ply FLOOR (fastest possible five).
+
+**Diagnosis (confirmed over 2 slices):** attack-collapse caused by the aggressive warm-start.
+Black offense → perfect (20-0 finisher); white defense → perfect ZERO (0/20 every config, no
+movement across 2 slices, pl plateaued ~2.0). MECHANISM: the warm 9×9 tower forces black VCT
+wins by ply 9–13 in self-play, so white is ALWAYS already-lost when threats appear → the veto
+masks all white's moves → defender terminus → **white sharp-defense examples never enter the
+buffer**. So white cannot learn defense at any slice count; the slice-4/pl<1.6 gate is moot
+because pl won't reach 1.6 (no gradient left — offense saturated, white starved). Contrast 9×9
+sound world: plies ROSE (20s→50s), white could draw. Here plies FELL to the floor.
+
+**Decision — PIVOT to a from-scratch 13×13 control** (deviating from the stated slice-4 gate
+deliberately; the mechanism makes more warm-start slices ~zero-information). From-scratch is the
+VALIDATED sound-world recipe and the documented #113 alternative; it is the control that
+DISTINGUISHES the two hypotheses: (H1) warm-start broke it → from-scratch plies RISE like 9×9,
+white learns; (H2) the 13×13 veto itself is broken/insufficient at 169 cells → from-scratch
+ALSO collapses to the 9-ply floor. Either result is decisive. Warm-start run PRESERVED intact
+(~/data/sound-world-13, HF jasonyandell/gomoku-13x13, wandb 8rp0gjpm) as evidence; Jason can
+resume it if he disagrees with the pivot. From-scratch run dir: ~/data/sound-world-13-scratch,
+fresh wandb. Escalate to Jason with the H1/H2 verdict once from-scratch has ~3–4 slices.
+
+## 2026-07-02 (issue #113, cont.) — FROM-SCRATCH control slice 1: white ALSO 0/20 at matched epoch (H1/H2 undecided; leaning watch H2); wandb uublz536
+
+**From-scratch slice 1 @ e814** (fresh 13×13 sound-world, no resume; wandb uublz536): pl 1.83
+(converging FASTER than warm-start's 2.18 @ e801 — no transferred-bias fight), vl 0.053, plies
+~16-18. Eval (EMA, n=40, 13×13):
+| config | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 0-11-9 | **0-20-0** |
+| finisher vs heuristic | 14-6-0 | **0-20-0** |
+Poison CLEAN (0/411). Poison-gen plies cluster 9–13 with MANY at the 9-floor (like warm-start).
+
+**Read:** at MATCHED slice-1 epoch, from-scratch ≈ warm-start on the white gate — both white 0/20.
+So slice 1 does NOT separate H1 (warm-start was the seed problem) from H2 (13×13 sound-world can't
+teach white defense within cap50 regardless of seed). The warm-start/from-scratch DIVERGENCE (if
+any) must show in slices 2–4: does from-scratch white climb off 0 + plies RISE (H1), or stay stuck
++ plies floored (H2)? Hopeful-for-H1 signs: from-scratch pl lower/faster (1.83 vs 2.18), plies not
+yet floored (~17 vs warm-start's 14→9). Worrying-for-H2 sign: from-scratch self-play ALSO forces
+fast black wins (poison plies many 9s) — the same white-starvation mechanism could bite from scratch
+too. NB vs heuristic (a WEAK non-forcing opponent), white 0/20 is NET weakness not game-unfairness
+(a sound white should beat heuristic-as-black), so white defense IS learnable in principle — the
+question is whether THIS recipe teaches it at 13×13. Continuing from-scratch; escalate to Jason with
+the H1/H2 verdict at scratch-slice ~3–4. Now launching scratch-slice 2.
+
+## 2026-07-02 (issue #113, cont.) — FROM-SCRATCH slice 2: white STILL 0/20 at BETTER pl than warm-start → H2 strengthening (structural, not seed)
+
+**From-scratch slice 2 @ e1531** (wandb uublz536): pl 1.83→1.74 (better than warm-start's 2.0 @
+matched e1500), vl 0.039, plies still flat ~14. Eval (EMA, n=40):
+| config | black (w-l-d) | white (w-l-d) |
+|---|---|---|
+| bare vs heuristic | 4-13-3 (↑ from 0-11-9) | **0-20-0** |
+| finisher vs heuristic | 15-5-0 | **0-20-0** |
+Poison CLEAN (0/410).
+
+**KEY COMPARISON (matched ~e1500–1530):** warm-start = white 0/20, plies ~14, pl 2.0; from-scratch
+= white 0/20, plies ~14, pl 1.74. From-scratch has BETTER policy convergence but IDENTICAL white
+result and IDENTICAL flat plies — the faster pl is buying only OFFENSE (black bare 0→4, finisher
+15), zero defense. Two independent runs (warm + scratch) now both show white EXACTLY 0/20 across 2
+slices each with flat plies → the white-defense failure is looking STRUCTURAL to the sound-world
+recipe at 13×13, NOT a warm-start seed artifact. Shared mechanism: black forces fast VCT wins (plies
+~14, poison plies cluster at 9) → white always already-lost in self-play → veto masks white's moves →
+white sharp-defense examples never enter the buffer → white can't learn to defend at any pl.
+Distinguishes from 9×9 where the veto made plies RISE (20s→50s) and white could draw.
+
+**Plan:** running scratch-slice 3 — pl should cross under ~1.6 toward the 9×9 white-defense zone
+(~1.3); a genuine last test of whether white emerges late. If white is STILL ~0 at pl<1.6 with flat
+plies → H2 CONFIRMED, escalate to Jason with the recipe-change recommendation. This is shaping up to
+be the night's headline learning: the 9×9 sound-world recipe does NOT transfer white defense to 13×13
+under a fixed cap50 terminus — the bigger board lets black force wins before white ever learns to hold.
+
+## 2026-07-02 (issue #113, morning) — Comprehensive 13×13 eval + perf isolation: sound-world nets are ATTACK-ONLY specialists (lose to everything that defends); the OLD full-game net is stronger; perf gain was NET SIZE, not the gen path
+
+Ran on Jason's request after the overnight loop. **Jason's stated predictions (PVE bet, logged before results):** eval — (P1) both nets NOT always lose vs rapfi@50ms; (P2) both win-or-draw vs simple heuristics; (P3) warm-start wins H2H vs from-scratch. perf — (P4) much faster gen rate; (P5) similar train rate.
+
+**EVAL MATRIX** (n=40 each, EMA worker_weights, sims=100, 13×13; our two nets FINISHER-armed vct_finish=50):
+| # | matchup | result (A w-l-d) | black | white |
+|---|---|---|---|---|
+| 1 | from-scratch+fin vs **rapfi@50ms** | 0-40-0 (0%) | 0/20 | 0/20 |
+| 2 | warm-start+fin vs **rapfi@50ms** | 0-40-0 (0%) | 0/20 | 0/20 |
+| 3 | from-scratch+fin vs warm-start+fin [H2H] | 20-20 (50%) | 20-0 | 0-20 |
+| 4 | from-scratch+fin vs **OLD 128×10** (bare) | 0-40-0 (0%) | 0/20 | 0/20 |
+| 5 | warm-start+fin vs **OLD 128×10** (bare) | 0-40-0 (0%) | 0/20 | 0/20 |
+| 6 | OLD 128×10 (bare) vs **rapfi@50ms** [anchor] | 3-37 (7.5%) | 3/20 | 0/20 |
+OLD = G-ladder-13-board13 e424 (large 128×10, swap2/full-game recipe, NO cap50 terminus, self-play plies 50–64). Earlier smoke: OLD went 2-0 as WHITE vs heuristic (our terminus nets are 0/20 white).
+
+**PREDICTIONS SCORED:**
+- P1 (both not-always-lose vs rapfi) → **REFUTED.** Both lose 40/40 = 100% vs rapfi, even finisher-armed.
+- P2 (win-or-draw vs heuristic) → **HALF.** Win as black (finisher 20-0/15-5), but LOSE as white 0/20 — not always win-or-draw.
+- P3 (warm-start wins H2H) → **REFUTED.** Exactly 50/50, purely color-determined (whoever is BLACK wins by forcing a VCT; both nets are behaviorally identical attack specialists — no skill delta).
+- P4 (much faster gen rate) → **REFUTED** (see perf below).
+- P5 (similar train rate) → **CONFIRMED.**
+
+**THE FINDING:** the sound-world/cap50-terminus recipe produces an ATTACK-ONLY SPECIALIST at 13×13. The finisher only fires when a forced VCT exists; a defending opponent (rapfi, or even our own OLD net) never hands one over → the finisher never fires → the bare attack-only net plays → 0%. Our nets only "win" when the opponent lets them force a fast VCT (weak heuristic-as-black, or their own twin when black). **The OLD "we-never-focused-on-it" 128×10 net BEATS both sound-world nets 40-0 AND scores 7.5% vs rapfi where ours score 0%** — because it trained on FULL games and learned to DEFEND. This is the overnight H2 white-defense wound taken to its conclusion: no defense ⇒ lose to everything that defends. Net+finisher is NOT a product at 13×13; it's a black-only party trick.
+
+**PERF ISOLATION** (bench_gen_refill, SAME small 64×4 net, 13×13, sims=100 — net size held constant):
+| config | games/min | aug_pos/s | oracle_s / wall_s |
+|---|---|---|---|
+| oracle ON, lockstep (concurrent=0) | 215.6 | 449 | 16.2 / 17.8 (91%) |
+| oracle ON, streaming (concurrent=64→256) | 216.4 | 451 | 16.2 / 17.7 |
+| oracle OFF, lockstep | 638 | 2497 | 0 |
+| oracle OFF, streaming | 644 | 2520 | 0 |
+- Streaming ≈ lockstep in a SINGLE process, oracle-on OR off. #112's 3.4× win was 8-proc FLEET → 1 wide proc, a DIFFERENT comparison; the refill loop itself adds ~0 single-process throughput here.
+- The **VCT oracle veto is the gen bottleneck at 13×13**: 91% of wall, cuts throughput ~3× (640→216 games/min). That's the #114-kernel domain, not the gen loop.
+- **The overnight "14× faster epoch (45s→3.1s)" was ~ENTIRELY NET SIZE** (large 128×10 train ~44s → small 64×4 train ~2.7s); train time is net-size-bound (P5 confirmed). The "2 results overnight" was bought by the SMALL NET + unattended looping, NOT a gen-path perf overhaul.
+
+**Takeaways:** (1) if we want a STRONG 13×13 net, the full-game (defense-learning) recipe beats the terminus recipe — the OLD net is the better lineage; (2) the sound-world recipe needs a real modification to teach defense at 13×13 (raise terminus budget / white curriculum) before it's worth more GPU; (3) perf: the lever for faster sound-world gen at 13×13 is the VCT solver (oracle = 91% of gen), not the gen loop.
+
+## 2026-07-03 (issue #116, RAILS-V0 LAUNCH) — the #113 white-starvation cure: DROP the terminus, PLAY ON, keep both sides sound (veto + attacker-preserve), 15×15 idx-2. Predictions logged BEFORE results.
+
+**Thesis (direct follow-up to the #113 13×13 negative result).** #113 proved the cap-terminus recipe is a STRUCTURAL trap: black forces a fast VCT (self-play plies floored ~9–14), so white is already-lost when threats appear → the veto masks all white's moves → the defender terminus fires → **white's sharp-defense examples never enter the buffer** → white 0/20 everywhere, two independent runs. The cure (sound-world-recipe.md open-directions #1+#2): **remove the terminus and PLAY ON to a natural five** (z = actual result) so black's forced win no longer ejects white — white stays ON-POLICY everywhere and generates the sharp-defense examples the terminus never let it see. Keep the defender `--oracle-veto` (both sides sound) and add a NEW **`--attacker-preserve`** mask (idea #2): when the mover has a proven VCT, restrict the recorded+played policy to the winmask (all winning first moves) so the net learns to CLOSE on-policy — folding the oracle finisher INTO the net (9×9: bare net attacks but draws, finisher converts 95%).
+
+**New code (merged to main, #116, byte-identical-off).** `--attacker-preserve` worker flag: per ply, one bulk complete-mode `solve_vct_mega_bb` over the mover-to-move roots → winmask; `_preserve_policy` masks pi to the winning first moves at the same single masking point as the veto, BEFORE pi is recorded or sampled. Gate on `win` alone (0-FP kernel ⇒ a capped partial winmask is sound, only ever over-restricts). Unit-tested + real-MLX smoke at board 15 (`scripts/rails_smoke_check.py`): plies ~45 (vs terminus-era ~14 floor), balanced 4W/4B outcomes from a random net, **veto poison 0/338, 0 preserve leaks** — the #107 guardrail passes at the rails live config.
+
+**Run.** Cell `rails-v0` = FRESH 15×15 small (64×4) net + `--line-planes`, `--oracle-veto` + `--oracle-overlap` + `--attacker-preserve`, **NO `--vct-terminus`** (play-on), idx-2 opener ONLY (`GOMOKU_DROP_OPENERS=0,1,3,4,5,6,7,8`, the Bruce-Lee board, white-to-move, fairest measured 15×15 opening), 1M packed ring + `--buffer-recency-frac 0.5` (mandatory — a 1M ring without recency goes stationary, §13), n_workers=1, sims=100, value-discount 0.98, cap25 shared veto/preserve budget. Run base `/Users/jason/data`, wandb project `gomoku`, run id **`vraf0b6e`** (run name `9x9-sweep-rails-v0` — the "9x9" prefix is a run_sweep naming default; the board IS 15×15 via `GOMOKU_BOARD_SIZE=15`). Launched from worktree `/Users/jason/code/gomoku-attacker-preserve` (own venv + native ext; run DATA in ~/data so a janitor reclaim can't touch it, #111).
+
+**PRE-STATED PREDICTIONS (logged before any result, Jason's PVE discipline):**
+- **P1:** `selfplay/plies_mean` RISES vs the terminus-era runs (#113 floored ~9–14) — games play out; smoke already shows ~45. Watch it stay high, not collapse to the floor.
+- **P2:** White's self-play column comes ALIVE — white takes a real share of decisive self-play games (NOT the 0/20 signature of #113). Morning arena H2H should show white's per-color column climbing off 0.
+- **P3:** Bare-net conversion improves over the terminus-era nets (attacker-preserve teaches closing on-policy) — the bare net should start cashing winning positions instead of needing the oracle finisher bolted on.
+- **Risk being watched:** the buffer tilting toward low-entropy forced-tail positions (attacker-preserve one-hot-ish targets on long forcing tails). Death-tells: `loss/value` → <0.08 (value poisoning), `plies` collapsing to the floor (attack-collapse returned), or `train/sample_reuse_ratio` <1 (gen flood) / ≫4 (gen starved) — adjust n_workers per the §12 buffer-balance knob.
+
+Overnight monitoring: wandb `plies_mean`, `loss/policy`, `loss/value`, white-share, `sample_reuse_ratio`, s/epoch (Jason predicts 8–20s trainer-bound at the small net). Gate on H2H + per-color columns in the morning, never internal loss. Results to follow in append-only entries below.
+
+## 2026-07-03 (issue #116, RAILS-V0 EARLY READ + FRAMING CORRECTION) — the "overnight" never happened: run is 8 MINUTES old at check-in; bets scored provisionally from self-play, heavy eval DEFERRED
+
+**Framing correction (authoritative, from the W&B server timestamp + wandb debug log, not the wall-clock narrative).** A replacement driver session was briefed to do an "overnight rails-v0 morning close-out." That premise is **factually wrong.** W&B run `vraf0b6e` `created_at = 2026-07-03T06:56:44Z = 01:56 CDT`; the trainer/worker pids (40240/40275) both have process-start 01:56 AM; the wandb config shows `resume: None`. At check-in the machine clock read **02:04 CDT** — the run is **~8 minutes / ~235 epochs old**, and 01:56 is the **ORIGINAL launch, NOT a watchdog relaunch** (fresh wandb init, no resume). There was no overnight trajectory to reconstruct. The predecessor ("rails-15") logged the launch entry + the "epoch ~120" early signal and was stopped ~8 min later. Recording this so no future session mistakes this run for a matured overnight campaign.
+
+**Run health @ e235 (alive, healthy, progressing ~3.3 s/epoch):**
+| metric | value | read |
+|---|---|---|
+| `selfplay/plies_mean` | 49.5 (e105) → **32** (e230–234), p10 17 / p50 29 / p90 50 | above the #113 ~9–14 floor; the drop is random-net→sharpening, not collapse. Sparse (3 points). |
+| `loss/policy` | 4.99 → **3.39** monotone | converging; still near-random (policy_acc 0.33) — 8 min in. |
+| `loss/value` | 0.29 → dipped 0.08 (e120) → settled **~0.16** | NOT poisoned; never stuck <0.08. |
+| `train/sample_reuse_ratio` | 7.4 → **8.5** | **HIGH (≫4 = gen-starved, §12).** n_workers=1 trainer outruns gen (`selfplay/new_games=0` most epochs). The one live watch item. |
+| `time/epoch_s` | **~3.3** stable | trainer-bound at the small 64×4 net. |
+| buffer | 0 → **537k** of the 1M ring; `frac_current 0`, `z_wins 0.503 / z_losses 0.494 / z_draws 0.004` | filling fast (streaming concurrent=256); balanced win/loss. |
+| self-play decisive (cumulative) | black **1070** / white **620** / draws 1 → **white share 0.367** | recent batches 16W/48B, 13W/54B. |
+| per-side | pl black 3.26 / white 3.60; value-mse black 0.155 / white 0.161 | BOTH colors training — no one-sided starvation. |
+
+**PRE-STATED BETS SCORED (provisional, 8-min read — self-play data only; no GPU eval burned):**
+- **Throughput bet → CONFIRMED (down).** Jason 8–10 s/ep, Fable hedged ≤20, launch ~3.5 → **actual ~3.3 s/ep**. Both predictions beaten downward; trainer-bound at the small net as expected.
+- **P1 (plies RISE vs the terminus-era ~9–14 floor) → PROVISIONAL PASS, watch.** plies ~32 (p90 50) sits **well above** the #113 floor — games play out, white is not ejected. Caveat: only 3 plies points and a within-run decline from the ~49 early-random peak; if it slides toward the floor as pl drops, revisit (attack-collapse tell).
+- **P2 (white column ALIVE, not #113's 0/20) → PROVISIONAL PASS (self-play).** White wins **37%** of decisive self-play games (620/1690) — decisively off the 0/20 signature; both colors show real value/policy gradient. This is the falsifiable P2 signal and it needs **no GPU**. Arena H2H confirmation deferred (below).
+- **P3 (bare-net conversion improves) → NOT YET SCOREABLE.** pl 3.4 is a near-random net; conversion is meaningless at 8 min. Score after maturity.
+
+**Eval DEFERRED, deliberately (ML judgment + tenant respect).** The briefed "arena H2H + white-column eval on the latest checkpoint" was NOT run, for three compounding reasons: (1) the checkpoint is **8 minutes / pl 3.4** — below hint-level signal; (2) at **15×15 the heuristic/lookahead ladder saturates at 0.0 win-rate from epoch 0** (`scripts/ladder_eval_15x15.py` docstring), so a "vs-heuristic white column" tests nothing here — the only honest 15×15 yardstick is **Rapfi (CPU)**, against which a pl-3.4 net loses 40/40 for zero signal; (3) the live trainer **owns the GPU** and short noisy evals compete for nothing. The real close-out eval (Rapfi at 15×15 + per-color split) should run once the net matures (trigger ~`loss/policy < 1.6`, cf. #113 where meaningful evals landed at pl ~1.7). Filed as **#117**.
+
+**Live watch item / recommendation.** `sample_reuse_ratio ≈ 8.5` (≫4) says the single self-play worker can't feed the trainer — most epochs record `new_games=0`. Not yet harmful (buffer still filling, losses healthy), but as the 1M ring saturates this risks staleness. Per the §12 buffer-balance knob, if reuse stays ≫4 after the ring fills, add a second worker (or cut `--sgd-steps-per-epoch`). Death-tells all currently NEGATIVE: vl not <0.08, plies not floored, reuse not <1. Continuing to watch light-touch; one relaunch authorized if it dies.
+
+## 2026-07-03 (issue #116/#117, ~e1150–1280, pl≈1.6) — falling-plies investigation + CPU per-color eval: NOT the #113 collapse, white OFF the zero-floor, but competence UNCONFIRMED (#117 stays open)
+
+**Trigger.** Between the launch and ~e1096, `selfplay/plies_mean` drifted down 49→32→24→~20 (approaching, not at, the #113 ~14 floor), prompting the question: healthy sharpening or the #113 white-starvation signature re-emerging? Investigated the discriminator = **white's share of decisive self-play games**, then ran a brief CPU eval (device=cpu, local Rapfi build, zero GPU/Metal contention with the live trainer) to harden the verdict. Net at check: e1149 pl 1.71 (eval checkpoint, snapshotted to /tmp so `keep_last_n 3` couldn't delete it mid-eval); live run at write time e1281 pl 1.56 vl 0.155 reuse 7.0.
+
+**Self-play white-share arc (pulled from wandb `vraf0b6e`, per-batch `selfplay/white_wins`/`black_wins`):**
+- e97–171: **0.35–0.50** (healthy, ~43%)
+- e230–330: falls 0.25 → 0.05
+- e330–900: **long trough ~0.05–0.09** (white 0–5 wins of ~65 games/batch for ~600 epochs)
+- e1084–1101: **RECOVERING — 0.12 / 0.18 / 0.11 / 0.15 / 0.18 / 0.22 / 0.08 / 0.265** (last batch 18W/50B)
+
+**Read = healthy sharpening on a black-tilted opening, NOT #113 starvation.** Four structural tells: (1) **the #113 mechanism is structurally absent** — that run starved white via the defender *terminus* ejecting already-lost positions (no example recorded); rails-v0 has **no terminus** (play-on), so white positions are *always* recorded and the pathway cannot fire. (2) **White is still actively training** — per-side `train/policy_ce` black 0.78 vs white 2.64 (falling), value-mse black 0.097 ≈ white 0.107; starvation = a frozen/degenerate white head, not seen. (3) **Plies not floored + draws rising** — buffer `z_draws` climbed 0.4%→**22.9%**; games go the distance, opposite of fast-attack collapse. (4) `z_wins 0.387 ≈ z_losses 0.384`. If this were #113 the white share would pin at ~0 and stay; instead it bottomed and recovered. The falling plies is black converting its idx-2 initiative faster as the net sharpens (pl 4.99→1.56) — idx-2 is "fairest *measured*" but still black-tilted, exactly the case recipe open-directions #3/#4 anticipated.
+
+**CPU per-color eval (n=20 games/tier unless noted, sims=100, 15×15 freestyle, eval ckpt e1149 pl 1.71):**
+| opponent | agg W-L-D | our net as BLACK (W-L-D) | our net as WHITE (W-L-D) |
+|---|---|---|---|
+| **Rapfi @50ms** | 0-20-0 | 0-10-0 | **0-10-0** |
+| **Rapfi @200ms** | 0-20-0 | 0-10-0 | **0-10-0** |
+| **heuristic** (n=20) | 8-12-0 | 7-3-0 | **1-9-0** |
+| **heuristic** (n=40) | 11-26-3 | 9-8-3 | **2-18-0** |
+
+**Interpretation (partial-satisfaction of #117 — issue kept OPEN):**
+- **Rapfi is too strong to discriminate at pl 1.71** — our net is 0/40 as *both* colors. This does NOT reproduce the #113 asymmetry (there black was competent while white was zero); here both colors are zero because a ~2625-Elo engine simply crushes a pl-1.71 net. Uninformative about white specifically — the exact "near-random-vs-Rapfi 0/40" caveat pre-stated at launch. So Rapfi neither confirms nor refutes.
+- **The #113-comparable probe is vs the heuristic** (the same weak opponent that gave #113 white **0/20** across *two independent* 13×13 runs with zero movement). rails-v0 white scores **2/20 (10%)** vs heuristic — **off the zero-floor**, and consistent across the n=20 (1/10) and n=40 (2/20) samples. Small-n (Wilson 95% on 2/20 ≈ [2.8%, 30%] overlaps 0), so not *statistically* decisive alone — but it converges with the recovering self-play white-share and the absent-terminus argument.
+- **BUT white competence is UNCONFIRMED.** White at 2/20 vs a *weak* heuristic is barely off the floor and still far below black (9-8-3 = 60% non-loss). The net is genuinely weak overall this early (black only 60% non-loss vs heuristic; 0/40 vs Rapfi). A black>white asymmetry persists — expected on a black-tilted opening, but it means "white can defend" is not yet demonstrated, only "white is not #113-dead."
+
+**Verdict.** The falling plies is **sharpening, not the #113 starvation collapse** (high confidence: absent mechanism + recovering white-share + white non-zero vs heuristic + white head still training + draws rising). Whether rails-v0 produces a *genuinely competent* white is **not yet answerable** — the net is too weak for Rapfi to probe and only marginally beats the heuristic. **#117 stays OPEN** for the matured-net full eval (target: white per-color vs Rapfi with n≥40 once the net is strong enough that Rapfi discriminates — i.e., when black itself starts scoring >0 vs Rapfi). Recommend NOT intervening in the live run (no collapse signature). Watch-flip conditions (none present): white-share rolling back toward 0 AND plies to ~14 AND white `pl` freezing.
+
+## 2026-07-03 (issue #116, ~e1880, pl≈1.6 — CORRECTION to the entry above) — the e1096 recovery was TRANSIENT; white-share RE-COLLAPSED + vl death-tell tripped. The flip condition is MET. Key learning: **same OUTCOME as #113 via a DIFFERENT pathway (hopeless-tail buffer tilt, NOT terminus-ejection).**
+
+**Dated correction, not a rewrite of the above.** The immediately-preceding entry (~e1150–1280) called the falling plies "healthy sharpening, not #113," resting substantially on the e1084–1101 white-share *recovery* (0.05 trough → 0.11–0.265). **That recovery did NOT hold.** ~600 epochs later the discriminator reversed and two death-tells are now firing. This is exactly why we watch-and-recheck instead of declaring — a transient recovery is not a trend.
+
+**The flip evidence @ ~e1880 (wandb `vraf0b6e`, live run e1881 pl 1.63 vl 0.052 reuse 7.0, ~2.9 s/ep):**
+- **white-share RE-COLLAPSED to 0.015** over the window e1856–1880 (12 batches: white 13 / black 857, per-batch white 0–2 of ~70). Back near the #113-like near-zero, far below the 0.15–0.25 recovery band.
+- **plies ~17–18** (16.3–19.5), closing on the ~14 floor (a 49→32→24→20→17 monotone slide from launch).
+- **`loss/value` = 0.052, flat <0.08 for 15+ logged steps** → the **pre-stated value-poisoning death-tell is TRIPPED** (was 0.155 at e1280).
+- **per-side `train/policy_ce`: black 0.45 (very sharp) vs white 2.83 and RISING** (2.64 @ e1280 → 2.83) — the black↔white gap is *widening*; white's head is getting relatively worse, not better. Value-mse black 0.051 ≈ white 0.053.
+- **draw-rate → ~0** (buffer `z_draws` 0.23 → 0.19 and falling; recent batches essentially 0 draws) — games are decisive black wins again.
+
+Cluster = white-share re-collapse + plies→floor + vl<0.08 + white-pl rising = the **pre-stated "buffer tilting toward low-entropy forced-tail positions" risk materializing.** The watch-flip condition (white-share → 0 alongside plies → floor) is **MET.**
+
+**KEY LEARNING — same outcome as #113, DIFFERENT pathway (make this prominent).**
+- **#113 pathway (terminus-ejection):** the defender *terminus* fired on already-lost white positions and recorded **no example** → white's sharp-defense positions never entered the buffer → white couldn't learn defense. The cure hypothesis (rails-v0) was: drop the terminus, PLAY ON, so white positions are always recorded.
+- **rails-v0 pathway (hopeless-tail buffer tilt):** the terminus cure *worked on its own terms* — white positions ARE recorded now. But idx-2 is a **black-tilted opening**, and as the net sharpened black learned to force wins by ply ~17. So the white positions that get recorded are **losses from already-hopeless states**: white learns "everything is lost" (its policy target degrades → white pl rises), and the buffer fills with long low-entropy black-forced-win tails that drive value toward certainty (vl → 0.05, poisoning). **Net outcome is the same as #113 — white cannot learn to defend — reached by a completely different mechanism.** Recording *more* white examples doesn't help if they're all hopeless; the problem migrated from "white examples are missing" to "white examples are all losses."
+- **Implication for the recipe line:** removing the terminus (rails idea #1) is *necessary but not sufficient*. On a side-favored opening, on-policy play-on still starves the losing side of *learnable* (contestable) positions. Two levers follow, in order.
+
+**Lever 1 (pre-agreed first knob) — TAIL SUBSAMPLING.** Subsample the long low-entropy forced-win tails (the positions at/after the mover has a proven VCT — we already solve this for attacker-preserve) so the buffer stops being dominated by black-win-tail examples. Rebalances toward the contested early/mid game where white still has agency, and directly attacks BOTH death-tells (value-poisoning from certain-outcome tails, and white-starvation-of-learnable-positions). Being implemented behind a flag (byte-identical off, unit-tested, poison/smoke-extended), staged unmerged — **Jason decides whether to launch it.** NOT abandoning rails.
+
+**Lever 2 (fallback) — FAIRER OPENING.** If subsampling doesn't move white-share, the root cause is the opening being too black-tilted: bolt rails onto a **fair opening** — swap2, or a less black-favored opener than idx-2 (recipe open-directions #3/#4: "rails must be bolted onto FAIR openings if the board is a black win"). A sound white can only learn to hold if the game it's defending is actually holdable.
+
+**Disposition.** Run left ALIVE and untouched (deeper collapse is cheap, clean evidence at 2.9 s/ep; Jason makes the intervention call at wake). No relaunch, no flag change to the live run. Both levers staged/planned for his decision.
+
+## 2026-07-03 (issue #116, RAILS-V0 CLOSE-OUT) — vraf0b6e shut down gracefully at e5524; the pathology ran to the floor (clean confirmatory evidence) + a genuinely NEW capability signal: a mid-game MOMENTUM SWING
+
+**Shutdown (Jason's call on wake — "crashed and burned and we learned stuff? hell yeah").** Graceful SIGINT→SIGTERM (worker then trainer; never a mid-Metal-compile `-9`, per the standing rule). Trainer 40240 flushed and exited; worker 40275 (MLX, so signalled gracefully and exited at its next batch boundary). **Clean close confirmed:** wandb `vraf0b6e` state = **finished**, `latest.pt` (1.4 GB, epoch 5524, model + EMA + optimizer + embedded 1M buffer + `wandb_run_id` — fully resumable) loads sound (78 tensors), `epoch5522–5524.pt` kept (keep-last-n 3), `worker_weights.pt` current, **no orphans** (wandb-core gone too).
+
+**Final numbers.** Ran **01:56→07:23 CDT = 5.45 h**, **5524 epochs**, **234,487 self-play games**, ~3 s/epoch throughout (small 64×4 net + line-planes, trainer-bound). End-state metrics: `loss/policy` **1.98** (drifted back up as the white head degraded), `loss/value` **0.030** (deep in the value-poisoning zone, well under the 0.08 death-tell), `selfplay/plies_mean` **12.5** (AT the ~9–14 floor — the attack-collapse reached bottom), white decisive self-play share ~**0.015**, `sample_reuse_ratio` ~6.6.
+
+**Trajectory in one line** (full detail in the four entries above): white-share **0.37 → trough → 0.26 (transient recovery @ e1096) → RE-COLLAPSE to ~0.015**; plies **49 → 12.5**; vl **0.29 → 0.16 → 0.030**. The rails-v0 recipe (drop terminus, play-on, veto + attacker-preserve, 15×15 idx-2) **cured the #113 terminus-ejection mechanism but hit a NEW failure mode — the hopeless-tail buffer tilt** (black forces wins by ply ~17 on the black-tilted opening → recorded white positions are all hopeless losses → white learns "all lost", the value head is poisoned by certain-outcome forced-win tails). **Same OUTCOME as #113 (white can't learn to defend) via a genuinely different pathway.** That is the night's headline learning, and it is *decisive* — the run was allowed to mature to the floor precisely so the signature is unambiguous.
+
+**NEW CAPABILITY SIGNAL — a mid-game MOMENTUM SWING (Jason's morning observation, recorded alongside the pathology).** Watching self-play during the run, Jason saw something no prior run had produced: **white was dominating a game, then "splat" — the opponent (black) capitalized on a single weak white move and exploited it to flip the game and win.** A real momentum *change*, mid-game. Every earlier lineage's opponent was a static attack-only specialist that either had a forced win or didn't; **none had ever engineered a swing off a blunder.** Caveats stated plainly: anecdotal (eyeball, not a metric), not shown to be reliable/reproducible, and it coexists with the aggregate white-defense collapse. But it is a *positive* tactical signal — the play-on + rails recipe appears to have produced a net that can **recognize and punish a blunder to reverse a game**, a genuine strategic capability the terminus-era nets never displayed. Worth a dedicated probe on any future rails run (e.g. a scripted "inject a white blunder, does black punish?" eval) to see whether the swing capability is real and how often it fires. **The pathology is the headline; the momentum swing is the encouraging footnote that says the recipe is teaching something new, not just failing in a new way.**
+
+**Bets — final close-out scoring** (pre-stated at launch; provisional reads corrected over the night):
+- **Throughput → CONFIRMED (down).** ~3 s/epoch; Jason 8–10, Fable ≤20 — both beaten downward. 5524 epochs in 5.45 h.
+- **P1 (plies RISE vs the terminus-era floor) → REFUTED at the endpoint.** Rose early (→~59), then slid the whole way to **12.5** (the floor). The play-on kept games long only while the net was weak; a sharpening black on a tilted opening drove them back down.
+- **P2 (white column ALIVE, not 0/20) → REFUTED at aggregate, with a caveat.** White-share ended ~0.015 and white went 2/20 vs heuristic (off the literal 0/20 floor, but not competent). The **momentum swing is the one genuine positive** against this bet — white *can* sometimes contest — but the aggregate is a collapse.
+- **P3 (bare-net conversion improves) → UNRESOLVED.** The net never got strong enough (0/40 vs Rapfi) to evaluate conversion cleanly; #117 kept open for a future matured net.
+
+**Artifacts (all preserved — evidence, do not clean).** Run data: `/Users/jason/data/sweep_runs/rails-v0/` (`checkpoints/` incl. `latest.pt` e5524 + `epoch5522–5524.pt` + `worker_weights.pt`; `_records/`). W&B: `gomoku/vraf0b6e` (finished, 5.45 h history). Launch worktree `gomoku-attacker-preserve` (processes now down — normal hygiene applies). Code merged to main: attacker-preserve (#116, commit 7ff311f). **Staged/open for Jason:** **#118** tail-subsample knob (branch `feat/tail-subsample-knob`, e409e37, UNMERGED, byte-identical-off proven, 35 tests green — the lever-1 fix); **#117** matured-net white-vs-Rapfi eval (open); lever-2 fairer-opening (swap2 / less-tilted opener) as the fallback if subsampling doesn't move white-share.
+
+**Driver's-seat note.** The single most useful discipline tonight was watch-and-recheck over declare: the e1096 white-share *recovery* looked like vindication and would have been mis-logged as "healthy" if trusted — 600 epochs later it reversed into the flip. Pre-stated death-tells (vl<0.08, plies→floor, white-share→0) caught it cleanly. "We try, we learn, we write it down."

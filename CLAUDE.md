@@ -20,6 +20,11 @@ agent-instruction files.
 General read order: wiki → `TRAINING_WIKI.md` → W&B/logs/checkpoints → code
 (dynamics are subtle; code inspection alone usually misleads).
 
+**Remembering / curating anything into the wiki?** `wiki/curation.md` is the
+whole instruction: the routing table (where each input class lands) + the
+query rule (answers synthesized from 2+ pages get filed back) + rotation and
+lint. Don't improvise structure — read it first.
+
 ## Repo shape
 - `gomoku/`: `game.py` (9×9 state, D4 aug), `model.py` (residual policy/value +
   checkpoint format), `mcts.py` (PUCT, wave-batched eval), `self_play.py` /
@@ -31,13 +36,17 @@ General read order: wiki → `TRAINING_WIKI.md` → W&B/logs/checkpoints → cod
 
 ## Commands
 ```bash
-source .venv/bin/activate          # uv venv; uv pip install -e ".[dev]"
-pytest                              # run before claiming a change works
-gomoku-train --help                # latest.pt embeds the buffer for resume
-gomoku-play --checkpoint checkpoints/latest.pt
-gomoku-web                         # FastAPI UI around a checkpoint
+uv sync --extra dev                # per-worktree env (auto-run at worktree creation); uv.lock-pinned
+uv run pytest                      # run before claiming a change works
+uv run gomoku-train --help         # latest.pt embeds the buffer for resume
+uv run gomoku-play --checkpoint checkpoints/latest.pt
+uv run gomoku-web                  # FastAPI UI around a checkpoint
 ```
-Native ext A/B: `GOMOKU_DISABLE_NATIVE_MCTS=1`, `GOMOKU_DISABLE_NATIVE_STATE_OPS=1`.
+**`uv run <cmd>` — never `source .venv/bin/activate`.** Each worktree has its OWN
+`.venv` (uv, editable `gomoku` → that worktree); `uv run` resolves it from cwd, so
+you can never silently import the main checkout (the editable-install gotcha,
+`wiki/topics/worktree-hygiene.md`). Native ext A/B:
+`GOMOKU_DISABLE_NATIVE_MCTS=1`, `GOMOKU_DISABLE_NATIVE_STATE_OPS=1`.
 Prefer MPS over CPU. W&B project: `gomoku` (pull exact run histories, don't guess).
 
 ## Conventions that override default behavior
@@ -51,9 +60,16 @@ Prefer MPS over CPU. W&B project: `gomoku` (pull exact run histories, don't gues
   entangles diffs and blocks clean merges. **Never rebase, fast-forward, squash.**
   Start with `python scripts/worktree_session.py add <slug>` — records the owning
   session for `claude --resume <id>` (`worktree_session.py log` survives teardown).
-- **Janitor at session start:** `python scripts/reclaim_worktrees.py --apply`
-  reclaims what crashed sessions leak; `--gauge` prints the repo-hygiene metric.
-  Janitor + gauge, not a remembered procedure (`wiki/topics/worktree-hygiene.md`).
+  **Then actively `EnterWorktree` (path = the worktree)** — subagents and shell
+  calls inherit the SESSION's cwd, not the conversational "current worktree"; a
+  subagent spawned without absolute paths will silently act on the main checkout
+  (confirmed 2026-07-04). EnterWorktree pins the session so everything inherits
+  the worktree by default — mechanism, not vigilance.
+- **Worktree cleanup is MANUAL and careful.** The auto-janitor
+  (`reclaim_worktrees.py`) is retired (2026-07-01): it removed a worktree a
+  LIVE training run was executing from — "clean + merged" says nothing about
+  live processes. Before removing any worktree, `ps aux | grep <path>` first
+  (`wiki/topics/worktree-hygiene.md`).
 - **Fan out to preserve context.** Context is the scarcest resource; delegate
   context-heavy/parallel work to subagents (`run_in_background: true` when async)
   — broad searches, log trawls, many-file reads, independent tasks — and keep the

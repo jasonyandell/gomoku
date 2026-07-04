@@ -21,9 +21,9 @@ a launchctl/git/LaunchAgents dir:
   * ``--commit`` / ``git_head=...`` — pin the seed SHA (default: resolve
     ``git -C <MAIN_REPO> rev-parse HEAD`` at seed time).
 
-Canonical invocation: ``python -m gomoku.lab.up up`` (the editable install
-resolves the new module with no reinstall). ``gomoku-lab = gomoku.lab.up:main``
-is the convenience console script.
+Canonical invocation: ``uv run python -m gomoku.lab.up up`` (the per-worktree
+uv env resolves the module with no reinstall). ``gomoku-lab = gomoku.lab.up:main``
+is the convenience console script (``uv run gomoku-lab up``).
 """
 from __future__ import annotations
 
@@ -38,7 +38,11 @@ from . import daemon, ledger, status
 # ---- the locked decisions (the §c seed + §b plist contract) -------------
 
 MAIN_REPO = "/Users/jason/code/gomoku"
-VENV_PY = "/Users/jason/code/gomoku/.venv/bin/python"
+# uv is the one unified python runner (#87): launchd cannot use PATH lookup, so
+# ProgramArguments[0] must be the absolute uv binary. `uv run` (cwd=WORKDIR)
+# resolves to main repo's per-worktree .venv (uv.lock-pinned).
+UV_BIN = "/opt/homebrew/bin/uv"
+UV_RUN_PYTHON = (UV_BIN, "run", "python")
 WORKDIR = "/Users/jason/code/gomoku"
 MONITOR_SCRIPT = "/Users/jason/code/gomoku/scripts/autolab_monitor.py"
 
@@ -100,8 +104,8 @@ def _sub(name: str, fname: str) -> str:
 _DAEMON_ENV = {
     "AUTOLAB_HOME": daemon.home,           # resolved at render time (honors AUTOLAB_HOME)
     "HOME": "/Users/jason",
-    "PATH": ("/Users/jason/code/gomoku/.venv/bin:/opt/homebrew/bin:"
-             "/usr/bin:/bin:/usr/sbin:/sbin"),
+    # PATH includes /opt/homebrew/bin so child processes can find uv too.
+    "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     "PYTORCH_ENABLE_MPS_FALLBACK": "1",
     "HF_HUB_DISABLE_PROGRESS_BARS": "1",
     "WANDB_MODE": "offline",
@@ -110,8 +114,7 @@ _DAEMON_ENV = {
 _PERIODIC_ENV = {
     "AUTOLAB_HOME": daemon.home,
     "HOME": "/Users/jason",
-    "PATH": ("/Users/jason/code/gomoku/.venv/bin:/opt/homebrew/bin:"
-             "/usr/bin:/bin:/usr/sbin:/sbin"),
+    "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 }
 
 
@@ -166,19 +169,19 @@ def render_plists(*, board_size: int | None = None) -> dict[str, dict]:
     return {
         "com.gomoku.autolab.train": _daemon_plist(
             "com.gomoku.autolab.train",
-            [VENV_PY, "-m", "gomoku.lab.trainer", "--prod", "--stop-file", stop],
+            [*UV_RUN_PYTHON, "-m", "gomoku.lab.trainer", "--prod", "--stop-file", stop],
             "train", board_size=board_size),
         "com.gomoku.autolab.arena": _daemon_plist(
             "com.gomoku.autolab.arena",
-            [VENV_PY, "-m", "gomoku.lab.arena", "--stop-file", stop],
+            [*UV_RUN_PYTHON, "-m", "gomoku.lab.arena", "--stop-file", stop],
             "arena", board_size=board_size),
         "com.gomoku.autolab.monitor": _periodic_plist(
             "com.gomoku.autolab.monitor",
-            [VENV_PY, MONITOR_SCRIPT],
+            [*UV_RUN_PYTHON, MONITOR_SCRIPT],
             600, _sub("monitor", "launchd.out.log"), _sub("monitor", "launchd.err.log")),
         "com.gomoku.autolab.research": _periodic_plist(
             "com.gomoku.autolab.research",
-            [VENV_PY, "-m", "gomoku.lab.research", "--once"],
+            [*UV_RUN_PYTHON, "-m", "gomoku.lab.research", "--once"],
             1800, _sub("research", "launchd.out.log"), _sub("research", "launchd.err.log")),
     }
 

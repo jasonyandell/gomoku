@@ -1,5 +1,14 @@
 # ML Perf Experiment Ledger
 
+**Campaign section ARCHIVED-IN-PLACE (2026-07-04); intake LIVE.** This file is
+the live intake for NEW perf/benchmark receipts (per
+[curation.md](../curation.md) § Ingest routing table): **new receipts append at
+the bottom under a fresh dated era header — do NOT interleave with the May
+receipts.** The 44 receipts below are the closed May 2026 campaign
+(2026-05-22→24), frozen evidence, kept in place — read them as history, not
+status. The live promotion doctrine that used to live here (the Training-Quality
+Promotion Gate) now has its own page: **[promotion-gate.md](promotion-gate.md)**.
+
 Append concise receipts here after the curator reads worker open notes. Worker-specific detail can live under `wiki/ops/open-notes/`.
 
 ## Receipt Schema
@@ -25,17 +34,35 @@ next_action:
 
 ## Training-Quality Promotion Gate
 
-Perf changes that touch training behavior, inference outputs, MCTS/search behavior, replay/data encoding, checkpoint refresh cadence, or game-start distribution need more than throughput. A receipt may not use `decision: promote` unless it records all of the following:
+**Moved 2026-07-04 → [promotion-gate.md](promotion-gate.md).** The gate is live
+doctrine (10+ pages cite it); it was extracted verbatim to its own page so it
+isn't buried in this frozen campaign evidence. A receipt may not claim
+`decision: promote` without satisfying that gate — read it there.
 
-1. **Named quality gate before the run.** Use at least one fixed external baseline or fixed validation archive. Current named options are:
-   - external baselines: `heuristic`, `lookahead:depth=2`, and/or `lookahead:depth=4` via the match/eval harness with alternating colors;
-   - validation archive: `archives/wl5_validation_v1.pt`, reporting at least `val/policy_ce`, `val/policy_kl`, and `val/value_mse` against the parent/reference checkpoint.
-2. **Game-shape guardrail.** Report `selfplay/plies_mean` and, when available, `selfplay/plies_p90` or equivalent game-length distribution. Promotion is blocked or marked `needs_repeat` if the candidate shows sustained fast-attack collapse: falling plies, shorter-game buffer-fill concavity, or a material drop below the parent run's game-length band without an explicit strength explanation.
-3. **Short-eval noise policy.** State game count and uncertainty. `n < 20` is smoke only and cannot support a strength claim. `n=20` can be a canary but normally needs a repeat or archive agreement for promotion. Prefer `n >= 50` or two independent same-shape `n >= 20` reads for behavior-changing promotion; otherwise use `decision: needs_repeat`.
-4. **Reproducibility IDs.** Behavior-changing perf receipts must include checkpoint path(s), W&B run ID(s) or explicit `wandb: disabled`, commit hash, seed policy, and env/backend flags such as `GOMOKU_DISABLE_NATIVE_MCTS`, `GOMOKU_DISABLE_NATIVE_STATE_OPS`, `PYTORCH_ENABLE_MPS_FALLBACK`, device, model size, stem padding, sims, wave size, workers, and evaluator backend.
-5. **Explicit decision.** Every receipt ends with `decision: promote | reject | blocked | needs_repeat`. Throughput-only wins that lack the selected quality gate, plies/game-shape read, or reproducibility IDs are not promotions; mark them `blocked` if the harness/artifact is missing or `needs_repeat` if the evidence is merely noisy/short.
+## Open Notes (Worker Receipts)
+
+Worker-specific receipts and detailed lane notes live under `wiki/ops/open-notes/` (timestamped). Quick reference:
+
+| File | Date | Finding |
+|---|---|---|
+| [20260522T054739Z-01-baseline-receipts.md](open-notes/20260522T054739Z-01-baseline-receipts.md) | 2026-05-22 | Native MCTS 3.7× faster than Python fallback on MPS under contention |
+| [20260522T054739Z-02-production-contour-sweep.md](open-notes/20260522T054739Z-02-production-contour-sweep.md) | 2026-05-22 | Native 8w8g wave64 confirmed production optimum; sims/tiny untested for quality |
+| [20260522T054739Z-03-ane-residency-rail-proof.md](open-notes/20260522T054739Z-03-ane-residency-rail-proof.md) | 2026-05-22 | ANE residency requires same-window powermetrics; blocked on passwordless sudo |
+| [20260522T054739Z-04-quality-promotion-gates.md](open-notes/20260522T054739Z-04-quality-promotion-gates.md) | 2026-05-22 | Training-Quality Promotion Gate codified (behavior-touching perf needs explicit gates) |
+| [20260522T054739Z-05-control-room-curation.md](open-notes/20260522T054739Z-05-control-room-curation.md) | 2026-05-22 | Synced ops pages with disk evidence; 934b ANE candidates still detached |
+| [20260522T061713Z-01-outer-loop-python-profile.md](open-notes/20260522T061713Z-01-outer-loop-python-profile.md) | 2026-05-22 | Post-search Python is ~5% of wall-clock; evaluator+search owns 95% (no major lever) |
 
 ## Receipts
+
+## May 2026 campaign (2026-05-22→24) — ARCHIVED-IN-PLACE, frozen evidence
+
+The 44 receipts below are one closed 3-day perf campaign. They are frozen — read
+as history, not status; the durable conclusions live in the M5-as-Mainframe hub
+topics ([m5-max-fp16-and-throughput-regimes.md](../topics/m5-max-fp16-and-throughput-regimes.md),
+[m5-max-cross-engine-coupling.md](../topics/m5-max-cross-engine-coupling.md),
+[mcts-perf-ceiling.md](../topics/mcts-perf-ceiling.md)). **New receipts do NOT
+go here — append them at the very bottom of the file under a fresh dated era
+header.**
 
 ### 2026-05-24 — Δelo Derby v3 (UNIFIED prior-art race) — CALLED as-is; Gumbel@100 dominates; fixed-step co-equal with wave (structural wins, NOT a rate separation)
 

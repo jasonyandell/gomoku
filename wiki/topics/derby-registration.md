@@ -1,5 +1,7 @@
 # Registering a contestant with the Δelo Derby (the intake model)
 
+> **Status: HISTORICAL** *(2026-07-04)* — intake mechanics for the CLASSIC `delo_derby`, **stopped at v9 2026-05-27** (see [../derby.md](../derby.md)). Preserved as the registration design of record; the `gomoku-derby-runner` loop it fed is not running.
+
 How a new idea becomes a derby lane. This is the **synthesis / source of truth**; the
 operational playbook (commands, templates) is the `gomoku-derby-register` skill, and the
 loop that *consumes* registrations is `gomoku-derby-runner`. Governance (who gates) lives
@@ -7,6 +9,10 @@ in [research-loop.md](research-loop.md); this page is the **mechanics of intake*
 (Set up 2026-05-27.)
 
 ## The runner model (2026-05-26; issues since 2026-05-28)
+
+> **Historical.** The autonomous derby is **stopped** (see [derby.md](../derby.md)
+> for status). The runner model below describes the CLASSIC `delo_derby` v9 era
+> (~300s chunks, stopped 2026-05-27); kept as the intake-mechanics design record.
 
 The derby is run by a **single GPU executor** — one `delo_derby.py` process that doles
 ~300s chunks by Δelo-rate. New contestants enter as cells in `run_sweep.CELLS`; the

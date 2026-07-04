@@ -1,4 +1,5 @@
 # Lab Conventions
+> **Status: LIVE** *(2026-07-04)* — cross-cutting conventions.
 
 Durable cross-cutting conventions for the gomoku project. Cross-referenced
 from the memory system so any session (current Claude, fresh Claude, other
@@ -69,14 +70,11 @@ then `git worktree remove <path>` and `git branch -d <name>`.
 A losing experiment: same cleanup, no rebase to "preserve" it. (Only force-push
 and pushes to shared/long-lived branches stay Class B — confirm first.)
 
-But don't *rely* on remembering this — the cleanup-after-merge procedure
-fails silently when a session crashes mid-run (our overnight regime). The
-backstop is the **session-start janitor** `scripts/reclaim_worktrees.py`
-(see [worktree-hygiene.md](worktree-hygiene.md)): it reclaims agent
-worktrees orphaned by dead sessions and deletes merged branches, and is
-safe to run while other sessions are live. Run it (and its `--gauge`) every
-session start. This is the "janitor + gauge, not a procedure" rule
-([worktree-hygiene](worktree-hygiene.md)).
+The session-start janitor (`reclaim_worktrees.py`) that used to backstop
+this is **retired** (2026-07-01: it removed a worktree a live training run
+was executing from — see [worktree-hygiene.md](worktree-hygiene.md)).
+Cleanup is manual: before `git worktree remove`, check
+`ps aux | grep <path>` for live processes.
 
 **Why:** Jason's words at lab kickoff — "embrace [worktrees], and merge
 commit them, it's safe every time and rebase bores me." Safety driven

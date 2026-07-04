@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
+import os
+import threading
 import time
 from typing import MutableMapping
 
 import numpy as np
 
 from gomoku.game import (
+    BOARD_SIZE,
     GameState,
     HISTORY_PLY,
     N_ACTIONS,
@@ -92,6 +95,735 @@ def configure_vct_teacher(max_depth: int | None = None,
         _VCT_MAX_DEPTH = int(max_depth)
     if max_nodes is not None:
         _VCT_MAX_NODES = int(max_nodes)
+
+
+# ---------------------------------------------------------------------------
+# VCT-terminus self-play (issue #98): end a game at the FIRST cap50 VCT instead
+# of playing out to five-in-a-row. A VCT is a forced win the GPU oracle
+# (scripts.vct_metal.mega_vct_bb) both DETECTS and terminally VALUES (exact win +
+# winning move), so the rollout tail past the VCT (empirically ~half the game;
+# first VCT at median ply ~19) is pure label noise. Terminate there and take the
+# oracle verdict: cheaper AND cleaner data, and the objective becomes "reach a
+# VCT". Unlike the per-move --vct-teacher (which RELABELS a full playout via the
+# retired CPU solver), this ENDS the game early using the batched GPU oracle.
+#
+# THE CALL-COST LAW (wiki gpu-vct-feasibility.md): the solver's wall is set by the
+# single hardest board and is ~flat in batch size, so every caller MUST be
+# bulk-synchronous — gather the WHOLE wave of live games into ONE solve per ply,
+# never solve-in-a-loop. cap50 (max_nodes=50) is the near-complete first-VCT
+# detector sweet spot (98.8% of VCTs, 96%+ of games; 40-850x cheaper than deep
+# search). See wiki idea-pile.md #11 + vct-cascade-run-2026-06-30.md.
+_VCT_TERMINUS_ENABLED = False
+_VCT_TERMINUS_BUDGET = 50            # per-board node cap (cap50)
+_vct_terminus_solver = None         # lazily-imported MLX solve_vct_mega_bb
+# Multi-thread-per-board kernel (issue #114): K simd lanes cooperate on each
+# board inside the solver. The verdict is BIT-IDENTICAL to base (regression-
+# tested invariant); this is purely a perf knob. Measured on 132 real 13x13
+# merged-veto batches (360,925 boards, cap50): K=8 -> 1.34x, K=16 -> 1.36x
+# solve-wall vs base. 0/1 (default) = off = the byte-identical base kernel.
+_VCT_SOLVER_LANES = int(os.environ.get("GOMOKU_VCT_LANES", "0"))
+# Moonshot VCT-defense labeler breadth cap. 0 (default) = enumerate ALL legal
+# empty cells as blunder candidates per recorded position; K > 0 caps to the K
+# empty cells nearest an existing stone (a per-ply gen-cost lever). Only read by
+# _vct_defense_solve, which is only called when record_vct is on.
+_VCT_DEFENSE_MAX_CANDS = 0
+
+
+def configure_vct_terminus(enabled: bool | None = None,
+                           budget: int | None = None,
+                           defense_max_cands: int | None = None) -> None:
+    """Enable / parameterize VCT-terminus self-play (process-wide). None leaves a
+    field unchanged. Call once before generation, before any game loop. Gating is
+    purely on this global, so the default-off path is byte-identical self-play and
+    never imports MLX. `defense_max_cands` caps the VCT-defense labeler breadth
+    (0 = all legal empty cells; K > 0 = K cells nearest existing stones)."""
+    global _VCT_TERMINUS_ENABLED, _VCT_TERMINUS_BUDGET, _VCT_DEFENSE_MAX_CANDS
+    if enabled is not None:
+        _VCT_TERMINUS_ENABLED = bool(enabled)
+    if budget is not None:
+        _VCT_TERMINUS_BUDGET = int(budget)
+    if defense_max_cands is not None:
+        _VCT_DEFENSE_MAX_CANDS = int(defense_max_cands)
+
+
+# Sound-world oracle veto (issue #107). When enabled, every self-play ply runs
+# the bulk VCT-defense escape-solve (_vct_defense_solve, FULL breadth unless
+# _VETO_MAX_CANDS staged escalation is configured) over the
+# wave and the resulting per-cell blunder map is ACTED ON instead of merely
+# recorded:
+#   * moves proven to lose to a forced opponent VCT are masked OUT of the root
+#     visit distribution — both the move actually played AND the recorded
+#     policy target `pi` (on-policy by construction: the target stays the
+#     net's own search, just constrained; no post-hoc relabeling);
+#   * a position where EVERY legal move is a proven blunder is a defender
+#     terminus: the game ends there, side-to-move loses (the exact mirror of
+#     the attacker VCT-terminus), giving an opponent-independent value target.
+# Composes with (but does not require) _VCT_TERMINUS_ENABLED and record_vct —
+# the per-ply solve is shared by all three consumers. Native gen path only.
+# Default OFF = byte-identical self-play.
+_ORACLE_VETO_ENABLED = False
+
+# Staged-escalation breadth cap for the VETO's escape-solve (big-board lever).
+# 0 (default) = FULL breadth every ply (the original #107 semantics,
+# byte-identical). K > 0 = stage 1 tests only the K empty cells nearest existing
+# stones (the same _defense_candidate_cells rule as the labeler cap) and vetoes
+# the proven blunders among THEM (conservative-safe: an untested cell is simply
+# never vetoed); the one soundness-critical event — "ALL legal moves lose", the
+# defender terminus — can only be declared at full breadth, so any position
+# whose tested cells are ALL blunders is ESCALATED: its remaining untested legal
+# cells are solved in a second bulk call before the partition runs. The
+# partition condition np.all(vmap[legal] >= 0.5) is automatically sound under
+# partial maps (untested legal cells read 0.0 -> the game survives).
+_VETO_MAX_CANDS = 0
+
+# Oracle/search overlap (perf, flag-gated): run the per-ply bulk mega-solve in a
+# background thread WHILE the native MCTS wave searches on MPS, joining before
+# the verdicts are consumed. MLX releases the GIL inside the Metal dispatch and
+# the two libraries drive separate Metal queues, so the smaller of (solve,
+# search) hides almost entirely (measured). NOT byte-identical to the serial
+# order: games the oracle would have terminated pre-search are searched (and
+# discarded) this ply, which changes evaluator batch shapes on firing plies —
+# the same numeric class as a wave-size change; targets/records are unchanged
+# in kind and the flag-on path is deterministic per seed. Default OFF.
+_ORACLE_OVERLAP_ENABLED = False
+
+
+def configure_oracle_veto(enabled: bool | None = None,
+                          max_cands: int | None = None) -> None:
+    """Enable / parameterize the gen-side oracle veto (process-wide). None
+    leaves a field unchanged. Call once before generation. Gating is purely on
+    these globals, so the default-off path is byte-identical self-play and never
+    imports MLX. `max_cands` (0 = full breadth) is the staged-escalation stage-1
+    breadth cap; see _VETO_MAX_CANDS."""
+    global _ORACLE_VETO_ENABLED, _VETO_MAX_CANDS
+    if enabled is not None:
+        _ORACLE_VETO_ENABLED = bool(enabled)
+    if max_cands is not None:
+        _VETO_MAX_CANDS = int(max_cands)
+
+
+def configure_oracle_overlap(enabled: bool | None = None) -> None:
+    """Enable the oracle/search overlap (process-wide). None leaves it
+    unchanged. Call once before generation. Native gen path only; see
+    _ORACLE_OVERLAP_ENABLED for the semantics note. Default OFF."""
+    global _ORACLE_OVERLAP_ENABLED
+    if enabled is not None:
+        _ORACLE_OVERLAP_ENABLED = bool(enabled)
+
+
+# Attacker-preserve mask (sound-world idea #2 — learn CLOSING on-policy). The
+# complement of the defender veto: when the side to move has a CLEAN proven VCT
+# win, restrict the root visit distribution — both the played move AND the
+# recorded policy target `pi` — to the winmask (ALL winning first moves, the
+# moves that PRESERVE the forced win). Any move that lets the win-class slip
+# (win -> draw/loss) is masked out, so the net learns the forcing TAIL
+# on-policy instead of renting conversion from the oracle finisher at inference
+# (9x9: the bare net attacks but draws, finisher converts 95%). Paired with
+# play-on (NO --vct-terminus) + the defender veto, this is the "rails" recipe:
+# both sides play soundly and the game plays out to a natural five, z = actual
+# result. Uses ONE bulk complete-mode mega-solve per ply over the mover-to-move
+# root boards (the call-cost law; width is free). Masks on `win=True` alone
+# (always sound — the kernel has 0 false-positives; a capped complete-mode proof
+# yields a PARTIAL winmask that only over-restricts to a subset of proven-winning
+# moves, never unsound — see _attacker_preserve_solve). Native gen path only.
+# Default OFF = byte-identical self-play.
+_ATTACKER_PRESERVE_ENABLED = False
+
+
+def configure_attacker_preserve(enabled: bool | None = None) -> None:
+    """Enable / parameterize the gen-side attacker-preserve mask (process-wide).
+    None leaves it unchanged. Call once before generation. Gating is purely on
+    this global, so the default-off path is byte-identical self-play and never
+    imports MLX. See _ATTACKER_PRESERVE_ENABLED for the semantics."""
+    global _ATTACKER_PRESERVE_ENABLED
+    if enabled is not None:
+        _ATTACKER_PRESERVE_ENABLED = bool(enabled)
+
+
+def _preserve_solver():
+    """Lazy-import the BASE mega VCT solver for the attacker-preserve
+    complete-mode solve. Deliberately NOT the lanes-wrapped `_load_mega_solver`
+    handle: `complete=True` is an optional output and the lanes=K kernel raises
+    on optional outputs (mega-solver invariant #11)."""
+    from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+    return solve_vct_mega_bb
+
+
+def _cells_from_words(words):
+    """Unpack a (4,) uint64 cell bitmask (kernel bit r*N+c) to flat indices."""
+    from scripts.vct_metal.mega_vct_bb import cells_from_words
+    return cells_from_words(words)
+
+
+def _load_mega_solver():
+    """Lazy-import the MLX mega VCT solver (one-time Metal compile on first
+    call; coexists with the PyTorch/MPS evaluator in-process, verified)."""
+    global _vct_terminus_solver
+    if _vct_terminus_solver is None:
+        from scripts.vct_metal.mega_vct_bb import solve_vct_mega_bb
+        if _VCT_SOLVER_LANES > 1:
+            import functools
+            _vct_terminus_solver = functools.partial(
+                solve_vct_mega_bb, lanes=_VCT_SOLVER_LANES)
+        else:
+            _vct_terminus_solver = solve_vct_mega_bb
+    return _vct_terminus_solver
+
+
+_MEGA_WARMED = False
+
+
+def _warm_mega_solver() -> None:
+    """One tiny synchronous solve so the MLX import + Metal kernel compile
+    happen on the MAIN thread before any background-thread solve (overlap
+    mode). Idempotent, ~0.2s once per process."""
+    global _MEGA_WARMED
+    if not _MEGA_WARMED:
+        solver = _load_mega_solver()
+        solver(np.zeros((1, 2, BOARD_SIZE, BOARD_SIZE), dtype=bool),
+               max_nodes=1, return_move=True)
+        _MEGA_WARMED = True
+
+
+_MEGA_PRESERVE_WARMED = False
+
+
+def _warm_preserve_solver() -> None:
+    """One tiny synchronous complete-mode solve so the attacker-preserve kernel
+    variant (`complete=True`, a distinct compiled kernel) is compiled on the
+    MAIN thread before any background-thread solve (overlap mode). Idempotent."""
+    global _MEGA_PRESERVE_WARMED
+    if not _MEGA_PRESERVE_WARMED:
+        solver = _preserve_solver()
+        solver(np.zeros((1, 2, BOARD_SIZE, BOARD_SIZE), dtype=bool),
+               max_nodes=1, complete=True, return_move=True)
+        _MEGA_PRESERVE_WARMED = True
+
+
+def _terminus_boards(arrs):
+    """(B, 2, N, N) bool solver batch (attacker = plane 0 = side to move,
+    defender = plane HISTORY_PLY) from a list of to_planes() stacks."""
+    attacker = np.stack([a[0] for a in arrs]).astype(bool)
+    defender = np.stack([a[HISTORY_PLY] for a in arrs]).astype(bool)
+    return np.stack([attacker, defender], axis=1)
+
+
+def _vct_terminus_solve(planes_list):
+    """Batched cap50 VCT test across the whole wave of live games. `planes_list`
+    is one (N_INPUT_PLANES, N, N) input-plane stack per active game, in the SAME
+    side-to-move-relative convention as :func:`vcf.solve_vct_from_planes`
+    (attacker = plane 0, defender = plane HISTORY_PLY). Returns (win, move): win
+    (B,) bool = the side to move has a forced VCT; move (B,) int = the oracle's
+    winning first move (flat index, -1 where no win). ONE bulk-synchronous MLX
+    solve — never per-game (the call-cost law)."""
+    solver = _load_mega_solver()
+    boards = _terminus_boards([np.asarray(p) for p in planes_list])
+    win, _hit, move = solver(
+        boards, max_nodes=_VCT_TERMINUS_BUDGET, return_move=True)
+    return np.asarray(win).astype(bool), np.asarray(move).astype(np.int64)
+
+
+def _defense_candidate_cells(empty_flat, occupied, max_cands):
+    """Pick which empty cells to test as blunder candidates. max_cands <= 0 (or a
+    board with fewer empties than the cap) => ALL legal empty cells; otherwise the
+    `max_cands` empty cells with the smallest Chebyshev distance to any existing
+    stone (breadth cap near the action). Returns a 1-D int array of flat indices."""
+    empty_flat = np.asarray(empty_flat, dtype=np.int64)
+    if max_cands is None or max_cands <= 0 or empty_flat.size <= max_cands:
+        return empty_flat
+    n = occupied.shape[0]
+    stones = np.argwhere(occupied)                 # (S, 2) rows, cols
+    if stones.size == 0:
+        return empty_flat[:max_cands]
+    rows = empty_flat // n
+    cols = empty_flat % n
+    rc = np.stack([rows, cols], axis=1)            # (E, 2)
+    # Chebyshev distance from each empty cell to the NEAREST existing stone.
+    dist = np.abs(rc[:, None, :] - stones[None, :, :]).max(axis=2).min(axis=1)
+    order = np.argsort(dist, kind="stable")
+    return empty_flat[order[:max_cands]]
+
+
+def _vct_defense_solve(planes_list, max_cands=0):
+    """Moonshot VCT-defense labeler. For each input position (side-to-move = me),
+    produce a per-cell (N_ACTIONS,) 0/1 "blunder map": map[m] = 1.0 iff, after I
+    play empty cell m, the OPPONENT has a forced VCT (i.e. m walks me into a lost
+    position). `planes_list` is one (N_INPUT_PLANES, N, N) stack per position, in
+    the same side-to-move-relative convention as :func:`_vct_terminus_solve`
+    (attacker = plane 0 = my stones, defender = plane HISTORY_PLY = opp stones).
+
+    For each candidate m the CHILD board is framed from the OPPONENT's
+    perspective (they are now to move):
+        attacker = opp stones (my defender-plane, HISTORY_PLY)
+        defender = my stones (plane 0) with cell m set to 1
+    ALL children of ALL positions are concatenated into ONE (Sum_L, 2, N, N) batch
+    and solved with a SINGLE solve_vct_mega_bb call (the call-cost law) — never
+    per-position. `max_cands` <= 0 tests every legal empty cell; K > 0 caps to the
+    K empties nearest existing stones.
+
+    Returns (maps, masks): maps is a list of (N_ACTIONS,) float32 arrays (1.0 on
+    proven-blunder cells, 0.0 elsewhere), masks is a list of (N_ACTIONS,) bool
+    arrays marking which cells were evaluated (candidate cells)."""
+    solver = _load_mega_solver()
+    arrs = [np.asarray(p) for p in planes_list]
+    maps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in arrs]
+    child_boards, owner_pos, owner_cell, masks = _defense_children(arrs, max_cands)
+    if child_boards is None:
+        return maps, masks
+    win, _hit = solver(
+        child_boards, max_nodes=_VCT_TERMINUS_BUDGET, return_move=False)
+    win = np.asarray(win).astype(bool)
+    for k in np.flatnonzero(win):
+        maps[owner_pos[k]][owner_cell[k]] = 1.0
+    return maps, masks
+
+
+def _attacker_preserve_solve(planes_list):
+    """Attacker-preserve labeler (sound-world idea #2). For each input position
+    (side-to-move = mover), if the mover has a proven VCT win, return a
+    (N_ACTIONS,) bool mask of the winning first moves — the moves that PRESERVE
+    the forced win; else None. `planes_list` is one (N_INPUT_PLANES, N, N) stack
+    per position in the side-to-move-relative convention (attacker = plane 0 =
+    mover, defender = plane HISTORY_PLY). ONE bulk-synchronous complete-mode
+    solve_vct_mega_bb call over the mover-to-move root boards (the call-cost law;
+    width is free) — never per-game.
+
+    Gate: `win` ALONE, NOT `win & ~hit_cap`. `complete=True` enumerates EVERY
+    winning first move, so it exhausts the per-board node budget (`hit_cap=True`)
+    on almost every genuinely winning board — gating on ~hit_cap would skip
+    nearly all real wins. This is SOUND because the megakernel never reports a
+    false win (0 FP, cap only causes false NEGATIVES), so `win=True` is always a
+    real proof, and every bit of the (possibly partial, on a capped board)
+    winmask is an INDEPENDENTLY proven winning move. A partial winmask only
+    OVER-restricts (to a subset of proven-winning moves) — never unsound; the
+    net still learns to close, just less diversely, and a higher budget widens
+    the mask.
+
+    Returns a list aligned with `planes_list`: each entry is a (N_ACTIONS,) bool
+    "preserve" mask (True on winning first moves) or None (no proven win)."""
+    solver = _preserve_solver()
+    arrs = [np.asarray(p) for p in planes_list]
+    boards = _terminus_boards(arrs)
+    # complete=True flips `win` to "∃ a winning first move" and appends the
+    # winmask of the winning first moves (fixed output order: move, winmask).
+    win, _hit, _move, winmask = solver(
+        boards, max_nodes=_VCT_TERMINUS_BUDGET, complete=True, return_move=True)
+    win = np.asarray(win).astype(bool)
+    winmask = np.asarray(winmask)
+    out: list[np.ndarray | None] = []
+    for i in range(len(arrs)):
+        if not win[i]:
+            out.append(None)
+            continue
+        cells = np.asarray(_cells_from_words(winmask[i]), dtype=np.int64)
+        m = np.zeros(N_ACTIONS, dtype=bool)
+        if cells.size:
+            m[cells] = True
+        out.append(m if m.any() else None)
+    return out
+
+
+def _stack_children(me: np.ndarray, opp: np.ndarray, cands: np.ndarray):
+    """Vectorized child-board build for ONE position: for each candidate cell m,
+    the child is (attacker=opp, defender=me+m) — the OPPONENT-to-move frame the
+    escape-solve tests. Returns (E, 2, N, N) bool in `cands` order."""
+    E = int(cands.size)
+    n = me.shape[0]
+    child_def = np.repeat(me[None], E, axis=0)
+    child_def.reshape(E, -1)[np.arange(E), cands] = True
+    child_att = np.repeat(opp[None], E, axis=0)
+    return np.stack([child_att, child_def], axis=1).reshape(E, 2, n, n)
+
+
+def _defense_children(arrs, max_cands, build_for=None):
+    """Build the escape-solve child batch for a list of to_planes() stacks.
+
+    Returns (child_boards, owner_pos, owner_cell, masks): child_boards is the
+    concatenated (Sum_L, 2, N, N) bool solver batch (None when no position has
+    any candidate), owner_pos/owner_cell are (Sum_L,) int arrays mapping each
+    child back to (position index, flat cell), and masks is the per-position
+    (N_ACTIONS,) bool "which cells were evaluated" list. Same candidate rule and
+    ordering as the historical per-cell loop, vectorized per position.
+
+    `build_for` (optional (B,) bool) skips the child-board BUILD for positions
+    marked False while still marking their candidate masks — the null-board
+    precheck's contract: a position with a clean opp-no-VCT-on-pass has every
+    child PROVEN no-win (freestyle monotonicity + solver 0-FP), so its cells
+    count as evaluated (zero blunder map) without ever hitting the solver."""
+    masks = [np.zeros(N_ACTIONS, dtype=bool) for _ in arrs]
+    seg_boards: list[np.ndarray] = []
+    seg_pos: list[np.ndarray] = []
+    seg_cell: list[np.ndarray] = []
+    for pos_idx, p in enumerate(arrs):
+        me = p[0].astype(bool)               # my stones (plane 0)
+        opp = p[HISTORY_PLY].astype(bool)    # opponent stones (plane HISTORY_PLY)
+        occupied = me | opp
+        empty_flat = np.flatnonzero(~occupied.reshape(-1))
+        cands = np.asarray(
+            _defense_candidate_cells(empty_flat, occupied, max_cands),
+            dtype=np.int64)
+        if cands.size == 0:
+            continue
+        masks[pos_idx][cands] = True
+        if build_for is not None and not build_for[pos_idx]:
+            continue
+        seg_boards.append(_stack_children(me, opp, cands))
+        seg_pos.append(np.full(cands.size, pos_idx, dtype=np.int64))
+        seg_cell.append(cands)
+    if not seg_boards:
+        return None, None, None, masks
+    return (np.concatenate(seg_boards, axis=0), np.concatenate(seg_pos),
+            np.concatenate(seg_cell), masks)
+
+
+# Null-board precheck (perf, byte-identical): before building the
+# ~(legal cells) escape-solve children of a position, solve its NULL board
+# (attacker = opponent, i.e. "the side to move passes"). A CLEAN no-win (win
+# False AND hit_cap False) is an exhaustive proof that the opponent has no VCT
+# even with a free tempo; every child adds one DEFENDER stone to that exact
+# frame, and by freestyle monotonicity (a defender stone never makes an
+# attacker VCT appear — documented mega-solver invariant, see return_w) no
+# child can hold an attacker VCT either; the solver never returns win=True on
+# a no-VCT board (0 FP), so every child would come back win=False. The whole
+# children build+solve is therefore skippable with a provably identical zero
+# blunder map. A capped null (hit_cap=True) is NOT skippable: a child's extra
+# defender stone can prune the attacker's move list enough that the child
+# search completes (and proves a win) within the same node budget. Measured on
+# live sound-world gen positions: ~68% of plies are clean -> ~64% of children
+# solver-work skipped (the veto-stretched endgame plies 40+ are ~all clean).
+#
+# DEFAULT OFF (2026-07-01 A/B verdict): at the 9x9 live config the per-call
+# solver cost is ~CONSTANT (~44 ms at 48 or 151 boards/call — the call is
+# call-count x tail-grind bound, width is FREE), so skipping 61% of the boards
+# saved nothing while the phase-2 split added ~0.2 calls/ply => net SLOWER
+# (oracle 3.55 -> 4.35 s/batch). Results are byte-identical either way; the
+# flag stays as a BIG-BOARD experiment (N^2-children build cost and batch
+# widths change the trade there — re-measure before enabling).
+_ORACLE_PRECHECK_ENABLED = False
+
+
+def configure_oracle_precheck(enabled: bool | None = None) -> None:
+    """Enable/disable the null-board precheck (process-wide; A/B escape hatch —
+    the results are byte-identical either way, only the cost changes)."""
+    global _ORACLE_PRECHECK_ENABLED
+    if enabled is not None:
+        _ORACLE_PRECHECK_ENABLED = bool(enabled)
+
+
+def _oracle_ply_solve(planes_list, *, want_terminus, want_defense,
+                      defense_max_cands=0, profile=None):
+    """Bulk mega-solve per ply for every oracle consumer (the call-cost law:
+    gather everything, never solve-in-a-loop). Phase 1 concatenates the
+    attacker-terminus boards (B) and — with the precheck on — the null boards
+    (B) into ONE solve_vct_mega_bb dispatch; phase 2 solves the defense
+    escape-children ONLY for positions whose null board came back win-or-cap
+    (with the precheck off, the children ride along in phase 1 and there is no
+    phase 2).
+
+    Bit-identical to running _vct_terminus_solve + _vct_defense_solve
+    separately: the megakernel runs one GPU thread per board with a PER-BOARD
+    node budget (`int nodes=0` thread-local), so a board's verdict is
+    independent of batch composition; `return_move` selects the SAME kernel
+    (the move output is always computed, the flag only gates the Python
+    return); and the precheck skip is a proof, not an approximation (see
+    _ORACLE_PRECHECK_ENABLED). Verified by tests/test_oracle_merged_solve.py,
+    a live-solver probe, and same-seed whole-gen hash receipts.
+
+    Returns (win_t, move_t, vmaps, vmasks): the terminus pair is None unless
+    `want_terminus`; the defense pair is None unless `want_defense`. Slot order
+    follows `planes_list`."""
+    solver = _load_mega_solver()
+    B = len(planes_list)
+    precheck = want_defense and _ORACLE_PRECHECK_ENABLED
+    with _profile_timer(profile, "oracle_build_s"):
+        arrs = [np.asarray(p) for p in planes_list]
+        segs: list[np.ndarray] = []
+        if want_terminus:
+            segs.append(_terminus_boards(arrs))
+        if precheck:
+            null_att = np.stack([a[HISTORY_PLY] for a in arrs]).astype(bool)
+            null_def = np.stack([a[0] for a in arrs]).astype(bool)
+            segs.append(np.stack([null_att, null_def], axis=1))
+        child_boards = owner_pos = owner_cell = masks = None
+        if want_defense and not precheck:
+            child_boards, owner_pos, owner_cell, masks = _defense_children(
+                arrs, defense_max_cands)
+            if child_boards is not None:
+                segs.append(child_boards)
+    win_t = move_t = None
+    vmaps = vmasks = None
+    if want_defense and not precheck:
+        vmaps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in arrs]
+        vmasks = masks
+    if not segs:
+        return win_t, move_t, vmaps, vmasks
+    batch = segs[0] if len(segs) == 1 else np.concatenate(segs, axis=0)
+    with _profile_timer(profile, "oracle_solve_s"):
+        win, hit, move = solver(
+            batch, max_nodes=_VCT_TERMINUS_BUDGET, return_move=True)
+    _profile_add(profile, "oracle_solve_calls", 1.0)
+    _profile_add(profile, "oracle_boards", float(batch.shape[0]))
+    win = np.asarray(win).astype(bool)
+    off = 0
+    if want_terminus:
+        win_t = win[:B]
+        move_t = np.asarray(move)[:B].astype(np.int64)
+        off = B
+    if precheck:
+        null_win = win[off:off + B]
+        null_hit = np.asarray(hit).astype(bool)[off:off + B]
+        need = null_win | null_hit          # only these can hold a blunder
+        vmaps = [np.zeros(N_ACTIONS, dtype=np.float32) for _ in arrs]
+        with _profile_timer(profile, "oracle_build_s"):
+            child_boards, owner_pos, owner_cell, vmasks = _defense_children(
+                arrs, defense_max_cands, build_for=need)
+        _profile_add(profile, "oracle_precheck_skips", float(B - int(need.sum())))
+        if child_boards is not None:
+            with _profile_timer(profile, "oracle_solve_s"):
+                child_win, _chit = solver(
+                    child_boards, max_nodes=_VCT_TERMINUS_BUDGET,
+                    return_move=False)
+            _profile_add(profile, "oracle_solve_calls", 1.0)
+            _profile_add(profile, "oracle_boards", float(child_boards.shape[0]))
+            child_win = np.asarray(child_win).astype(bool)
+            for k in np.flatnonzero(child_win):
+                vmaps[owner_pos[k]][owner_cell[k]] = 1.0
+    elif want_defense and child_boards is not None:
+        child_win = win[off:]
+        for k in np.flatnonzero(child_win):
+            vmaps[owner_pos[k]][owner_cell[k]] = 1.0
+    return win_t, move_t, vmaps, vmasks
+
+
+def _escalate_all_blunder_positions(planes_list, surv_slots, vmaps, vmasks,
+                                    profile=None):
+    """Staged-escalation stage 2 (see _VETO_MAX_CANDS): among the surviving
+    positions, find those whose TESTED cells are ALL proven blunders while
+    untested legal cells remain — the only positions where the (soundness-
+    critical, full-breadth-only) defender terminus could fire — and solve their
+    remaining untested legal cells in ONE bulk call, updating vmaps/vmasks in
+    place to full breadth. Positions with any tested-safe cell can never fire
+    the terminus and keep their partial (conservative) map."""
+    todo: list[tuple[int, np.ndarray]] = []
+    for s in surv_slots:
+        mask = vmasks[s]
+        if not mask.any():
+            continue
+        if not np.all(vmaps[s][mask] >= 0.5):
+            continue                       # a tested safe cell exists
+        legal = _legal_mask_from_planes(planes_list[s])
+        untested = legal & ~mask
+        if not untested.any():
+            continue                       # already full breadth
+        todo.append((s, np.flatnonzero(untested).astype(np.int64)))
+    if not todo:
+        return
+    solver = _load_mega_solver()
+    with _profile_timer(profile, "oracle_escalation_s"):
+        segs, seg_slot, seg_cell = [], [], []
+        for s, cells in todo:
+            p = np.asarray(planes_list[s])
+            me = p[0].astype(bool)
+            opp = p[HISTORY_PLY].astype(bool)
+            segs.append(_stack_children(me, opp, cells))
+            seg_slot.append(np.full(cells.size, s, dtype=np.int64))
+            seg_cell.append(cells)
+        batch = np.concatenate(segs, axis=0)
+        win, _hit = solver(
+            batch, max_nodes=_VCT_TERMINUS_BUDGET, return_move=False)
+    win = np.asarray(win).astype(bool)
+    slot_arr = np.concatenate(seg_slot)
+    cell_arr = np.concatenate(seg_cell)
+    for s, cells in todo:
+        vmasks[s][cells] = True
+    for k in np.flatnonzero(win):
+        vmaps[slot_arr[k]][cell_arr[k]] = 1.0
+    _profile_add(profile, "oracle_escalated_positions", float(len(todo)))
+    _profile_add(profile, "oracle_escalation_boards", float(batch.shape[0]))
+
+
+def _ply_for(ply, g_idx):
+    """Per-game ply lookup. `ply` is either a global int (the lockstep paths,
+    where every active game is at the same round) or a per-game indexable
+    (the continuous-refill native path, where games start at different
+    rounds). Values coincide in lockstep, so helpers using this are
+    byte-identical on the legacy path."""
+    return ply[g_idx] if hasattr(ply, "__getitem__") else ply
+
+
+def _vct_terminus_partition(active, active_games, planes_list, ply, initial_plies,
+                            trajectories, completed, final_state, record_ownership,
+                            profile, win=None, move=None):
+    """Run the batched VCT test over the wave and TERMINATE every game whose side
+    to move has a forced VCT: record the decisive position (one-hot on the oracle
+    winning move) as that game's final training example, credit that side the win,
+    and drop it from the active set. Games with no VCT survive and continue to
+    normal MCTS + play this ply. Returns the surviving (active, active_games).
+
+    `win`/`move` may be precomputed by the merged per-ply oracle solve
+    (:func:`_oracle_ply_solve`, slot-aligned with `active`); when None this runs
+    its own bulk solve (the historical form; the Python gen path uses this).
+
+    The terminal outcome flows through the SAME sign-flip + mate-distance discount
+    as a real five-in-a-row terminal (:func:`_apply_teachers_to_trajectory`): the
+    appended VCT position is the last trajectory element, so it gets plies-to-end
+    = 0 (crisp +-1) and earlier positions get discounted back from it."""
+    if win is None:
+        with _profile_timer(profile, "vct_terminus_s"):
+            win, move = _vct_terminus_solve(planes_list)
+    if not win.any():
+        return active, active_games
+    keep = []
+    for slot_idx, g_idx in enumerate(active):
+        if not win[slot_idx]:
+            keep.append(slot_idx)
+            continue
+        n_initial = initial_plies[g_idx]
+        ply_g = _ply_for(ply, g_idx)
+        side = (n_initial + ply_g) % 2        # the side to move HAS the forced win
+        mv = int(move[slot_idx])
+        pi_term = np.zeros(N_ACTIONS, dtype=np.float32)
+        if 0 <= mv < N_ACTIONS:
+            pi_term[mv] = 1.0                 # exact winning move = seek-VCT target
+        else:                                 # win with no move: never expected
+            pi_term[:] = 1.0 / N_ACTIONS
+            _profile_add(profile, "vct_terminus_moveless", 1.0)
+        trajectories[g_idx].append(
+            (np.asarray(planes_list[slot_idx]).copy(), pi_term, side))
+        outcome_for_black = 1.0 if side == 0 else -1.0
+        if record_ownership:
+            # A VCT terminus is NOT an actual five-in-a-row board, so there is no
+            # honest final-ownership target — MASK it (like a max-plies draw).
+            final_state[g_idx] = (None, 0)
+        completed.append((g_idx, outcome_for_black, n_initial + ply_g + 1))
+        _profile_add(profile, "vct_terminus_fired", 1.0)
+    return [active[s] for s in keep], [active_games[s] for s in keep]
+
+
+def _legal_mask_from_planes(planes) -> np.ndarray:
+    """(N_ACTIONS,) bool legal (empty) mask from a to_planes() stack."""
+    p = np.asarray(planes)
+    occupied = p[0].astype(bool) | p[HISTORY_PLY].astype(bool)
+    return ~occupied.reshape(-1)
+
+
+def _veto_policy(pi: np.ndarray, vmap: np.ndarray, legal: np.ndarray) -> np.ndarray:
+    """Mask proven-blunder cells out of a root visit distribution.
+
+    `vmap` is the (N_ACTIONS,) 0/1 blunder map from _vct_defense_solve, `legal`
+    the (N_ACTIONS,) bool legality mask. Returns a renormalized distribution
+    with zero mass on proven blunders. If the search put ALL its mass on
+    blunders (visited only losing moves), falls back to uniform over the legal
+    non-blunder cells — the caller guarantees at least one exists (the all-lose
+    case is partitioned out as a defender terminus before search)."""
+    keep = vmap < 0.5
+    masked = np.where(keep, pi, 0.0)
+    s = masked.sum()
+    if s > 0.0 and np.isfinite(s):
+        return (masked / s).astype(np.float32)
+    fallback = (legal & keep).astype(np.float32)
+    n = fallback.sum()
+    if n <= 0.0:                       # defensive: should be unreachable
+        return (legal.astype(np.float32) / max(legal.sum(), 1)).astype(np.float32)
+    return fallback / n
+
+
+def _preserve_policy(pi: np.ndarray, pmask: np.ndarray) -> np.ndarray:
+    """Restrict a root visit distribution to the moves that PRESERVE the mover's
+    forced win (attacker-preserve, idea #2).
+
+    `pmask` is the (N_ACTIONS,) bool winning-first-move mask from
+    :func:`_attacker_preserve_solve` (every True cell is a proven winning VCT
+    first move). Returns a renormalized distribution with mass only on
+    win-preserving moves. If the search put ALL its mass off the winning moves,
+    falls back to uniform over the winning moves (which are guaranteed to exist —
+    the caller only masks when pmask is non-empty). Every kept move is a proven
+    win, so this is sound: the recorded target and the played move both preserve
+    the forced win, teaching the net to CLOSE on-policy."""
+    keep = np.where(pmask, pi, 0.0)
+    s = keep.sum()
+    if s > 0.0 and np.isfinite(s):
+        return (keep / s).astype(np.float32)
+    fallback = pmask.astype(np.float32)
+    n = fallback.sum()
+    if n <= 0.0:                       # defensive: caller guarantees non-empty
+        return pi.astype(np.float32)
+    return (fallback / n).astype(np.float32)
+
+
+def _oracle_veto_partition(active, active_games, planes_list, pending_vct, ply,
+                           initial_plies, trajectories, completed, final_state,
+                           record_ownership, record_vct, vct_maps, profile):
+    """Defender terminus: END every game whose side to move has NO non-losing
+    move (every legal cell is a proven blunder on its map). The exact mirror of
+    :func:`_vct_terminus_partition` — side-to-move LOSES and the game leaves
+    the active set before any search is spent on it. Only positions with a FULL
+    blunder map (veto forces max_cands=0) can terminate here; positions with no
+    map (None) always survive. Returns the surviving (active, active_games).
+
+    The doomed position itself records NO training example (2026-07-01 wound
+    fix, #107): the original design appended it with a uniform-over-legal
+    policy target ("no move is better; z does the teaching"), but at scale
+    that IS the teaching — as black's attack sharpens, most games end here, so
+    white's most common late-training examples became uniform noise over ~70
+    cells and white's policy collapsed (e1982: 0W-20L-0D as white vs the old
+    champion, vs all-draws at e1239; self-metrics saw nothing). Dropping the
+    example loses nothing real: the trap-completing move (real MCTS pi, crisp
+    discounted z) becomes the trajectory's final example and the loss still
+    propagates through the mate-distance discount."""
+    keep = []
+    for slot_idx, g_idx in enumerate(active):
+        vmap = pending_vct.get(g_idx)
+        if vmap is None:
+            keep.append(slot_idx)
+            continue
+        legal = _legal_mask_from_planes(planes_list[slot_idx])
+        if not legal.any() or not np.all(vmap[legal] >= 0.5):
+            keep.append(slot_idx)
+            continue
+        n_initial = initial_plies[g_idx]
+        ply_g = _ply_for(ply, g_idx)
+        side = (n_initial + ply_g) % 2     # the side to move is LOST
+        outcome_for_black = -1.0 if side == 0 else 1.0
+        if record_ownership:
+            # Not a real five-in-a-row board -> ownership target MASKED.
+            final_state[g_idx] = (None, 0)
+        completed.append((g_idx, outcome_for_black, n_initial + ply_g))
+        _profile_add(profile, "oracle_veto_all_lose", 1.0)
+    return [active[s] for s in keep], [active_games[s] for s in keep]
+
+
+def _apply_oracle_partitions(oracle_res, active, active_games, planes_list,
+                             slot_of, ply, initial_plies, trajectories,
+                             completed, final_state, record_ownership,
+                             record_vct, vct_maps, profile):
+    """Consume one ply's merged oracle verdicts (:func:`_oracle_ply_solve`):
+    run the attacker-terminus partition, build `pending_vct` for the survivors,
+    run staged escalation when the veto breadth is capped, then the
+    defender-terminus/all-lose partition. `planes_list`/`slot_of` are aligned
+    with the ACTIVE SET AT SOLVE TIME (pre-partition slots). Returns the
+    surviving (active, active_games, pending_vct)."""
+    win_t, move_t, vmaps, vmasks = oracle_res
+    pending_vct: dict[int, np.ndarray | None] = {}
+    if win_t is not None and active:
+        active, active_games = _vct_terminus_partition(
+            active, active_games, planes_list, ply, initial_plies,
+            trajectories, completed, final_state, record_ownership, profile,
+            win=win_t, move=move_t)
+    if vmaps is not None and active:
+        surv_slots = [slot_of[g_idx] for g_idx in active]
+        if _ORACLE_VETO_ENABLED and _VETO_MAX_CANDS > 0:
+            _escalate_all_blunder_positions(
+                planes_list, surv_slots, vmaps, vmasks, profile)
+        for g_idx, s in zip(active, surv_slots):
+            pending_vct[g_idx] = vmaps[s] if vmasks[s].any() else None
+        if _ORACLE_VETO_ENABLED:
+            surv_planes = [planes_list[s] for s in surv_slots]
+            active, active_games = _oracle_veto_partition(
+                active, active_games, surv_planes, pending_vct, ply,
+                initial_plies, trajectories, completed, final_state,
+                record_ownership, record_vct, vct_maps, profile)
+    return active, active_games, pending_vct
 
 
 # Value-discount (Derby v6 'mate-discounted-value'): scale ordinary outcome value
@@ -204,28 +936,97 @@ _DEFENSE_POLICY_MODE = False
 # fewer of that position's saving moves, never a false save).
 _DEFENSE_REFUTE_MAX_CANDIDATES = 24
 
+# White-defense "sparse bite" sampler (2026-06-19, the #43 follow-on). The EXACT
+# VCF detection solve is the generation bottleneck (~180 ms/solve, ~21 four-threat
+# plies/game on a 15x15 net ⇒ ~3.8 s/game; the whole teacher ~7 s/game ≈ 90% of
+# gen wall, measured on g15-wdl@0). AlphaZero distills a defensive lesson over many
+# epochs from a PRESENT signal — it does NOT need every forced loss stamped. So
+# invoke the proper solver on only a FRACTION of danger plies: gen cost scales ~1:1
+# with the fraction, the stamps stay EXACT (no new correctness surface), and even a
+# 10% rate in a fresh 150k buffer is ~1000× denser than the #43 race that drowned
+# in a 1.5M warm buffer. Default 1.0 = solve every danger ply (byte-identical to the
+# pre-sampler behavior). Sampled with a dedicated process-local RNG so it never
+# perturbs the gen/MCTS RNG stream. See wiki/topics/white-side-defense-plan.md.
+_DEFENSE_DETECT_FRAC = 1.0
+_DEFENSE_SAMPLE_RNG = np.random.default_rng()
+
+# CONV block-teacher (2026-06-19, the white-defense "dense shallow" arm). The
+# complement of the sparse-deep VCF policy teacher: instead of the EXACT (and
+# expensive) solver firing on a sampled fraction of plies, a CHEAP vectorized
+# board scan fires on EVERY ply and stamps the BLOCK to the opponent's IMMEDIATE
+# threat onto the POLICY head, leaving the value target at the natural outcome.
+# Cost is a couple of numpy line-scans per ply (~microseconds), NO tree search, so
+# it never throttles generation the way the VCF teacher did (~7 s/game). Hypothesis:
+# a present, dense "block the obvious threat" reflex is exactly the basic defensive
+# skill the white net lacks — and the sparse-deep approach did NOT move it off the
+# floor (a clean null), so this is the orthogonal bite. Two tiers:
+#   Tier 1 (SOUND CORE): the opponent has exactly one immediate five-completion (a
+#     bare four) -> that cell is the forced block -> one-hot policy stamp. Blocking
+#     it or losing next move is unambiguous. A double-four (>=2 opp win cells) is
+#     genuinely lost -> NO stamp (mirrors the exact teacher leaving true losses
+#     untouched). The defender having its OWN five-completion -> NO stamp (convert,
+#     don't defend; mirrors the StM-own-win guard).
+#   Tier 2 (HEURISTIC BITE, _DEFENSE_CONV_TIER2): no opp four, but the opponent has
+#     an OPEN THREE (a move that would make an unstoppable open four). Stamp the
+#     defender move(s) that PREVENT every such open four (the intersection of the
+#     threats' defeating cells); uniform if several. This is a strong heuristic, NOT
+#     strictly forced — the opponent could have other replies — so it lives behind
+#     its own sub-toggle, but is ON by default (it is where the real defensive bite
+#     is; the net likely already blocks bare fours). When the intersection is empty
+#     (no single move stops all open fours) we do NOT stamp (sound: never a false
+#     save). Both globals default OFF so generation is byte-identical when the conv
+#     lever is not set. See wiki/topics/white-side-defense-plan.md.
+_DEFENSE_CONV_MODE = False
+_DEFENSE_CONV_TIER2 = True
+
 
 def configure_defense_teacher(soft_value: float | None = None,
                               max_fraction: float | None = None,
-                              policy_mode: bool | None = None) -> None:
+                              policy_mode: bool | None = None,
+                              detect_frac: float | None = None,
+                              sample_seed: int | None = None,
+                              conv_mode: bool | None = None,
+                              conv_tier2: bool | None = None) -> None:
     """Set the process-wide defense-teacher knobs (issues #42, #43). None leaves a
     field at its current value. Call once before generation.
 
     ``soft_value``  -> :data:`_DEFENSE_SOFT_VALUE` (default -1.0, the hard loss).
     ``max_fraction`` -> :data:`_DEFENSE_MAX_FRACTION` (default 1.0, unbounded).
     ``policy_mode``  -> :data:`_DEFENSE_POLICY_MODE` (default False, value-only).
+    ``detect_frac`` -> :data:`_DEFENSE_DETECT_FRAC` (default 1.0, solve every
+    danger ply). <1.0 invokes the EXACT solver on only that fraction of four-threat
+    plies — the "sparse bite" gen-cost lever; cost scales ~1:1 with the fraction,
+    stamps stay exact. ``sample_seed`` reseeds the sampler RNG (test determinism).
+    ``conv_mode`` -> :data:`_DEFENSE_CONV_MODE` (default False). The cheap dense
+    "block the opponent's immediate threat" POLICY teacher (no tree search). When
+    on, it is a SIBLING of policy_mode in the per-game seam (the two are exclusive
+    levers on the same gate); the value target is left at the natural outcome.
+    ``conv_tier2`` -> :data:`_DEFENSE_CONV_TIER2` (default True): include the
+    open-three -> open-four prevention heuristic tier (Tier 2). Set False to keep
+    only the SOUND forced-four block (Tier 1).
+
     The defaults reproduce the original hard / unbounded value-only behavior
     byte-for-byte. ``policy_mode=True`` is the #43 saving-move-on-policy lever
     (``soft_value`` is then unused — the value target is left at the natural
     game outcome; ``max_fraction`` still bounds the per-game stamp count).
     """
     global _DEFENSE_SOFT_VALUE, _DEFENSE_MAX_FRACTION, _DEFENSE_POLICY_MODE
+    global _DEFENSE_DETECT_FRAC, _DEFENSE_SAMPLE_RNG
+    global _DEFENSE_CONV_MODE, _DEFENSE_CONV_TIER2
     if soft_value is not None:
         _DEFENSE_SOFT_VALUE = float(soft_value)
     if max_fraction is not None:
         _DEFENSE_MAX_FRACTION = float(max_fraction)
     if policy_mode is not None:
         _DEFENSE_POLICY_MODE = bool(policy_mode)
+    if detect_frac is not None:
+        _DEFENSE_DETECT_FRAC = float(detect_frac)
+    if sample_seed is not None:
+        _DEFENSE_SAMPLE_RNG = np.random.default_rng(sample_seed)
+    if conv_mode is not None:
+        _DEFENSE_CONV_MODE = bool(conv_mode)
+    if conv_tier2 is not None:
+        _DEFENSE_CONV_TIER2 = bool(conv_tier2)
 
 
 def _defense_budget(n_positions: int) -> int:
@@ -317,6 +1118,7 @@ def _apply_teachers_to_trajectory(
     out: list[tuple[np.ndarray, float]] = []
     defense_fires: list[tuple[int, float]] = []
     defense_policy_candidates: list[tuple[int, tuple]] = []
+    conv_fires: list[tuple[int, np.ndarray]] = []
     for ply_idx, (planes, pi, side) in enumerate(traj):
         z = outcome_for_black if side == 0 else -outcome_for_black
         z = _discount_z(z, n - 1 - ply_idx)
@@ -330,7 +1132,19 @@ def _apply_teachers_to_trajectory(
             pi, z, vcf_fired = _apply_vcf_teacher(planes, pi, z, side=int(side),
                                                   profile=profile)
         if defense_teacher:
-            if _DEFENSE_POLICY_MODE:
+            if _DEFENSE_CONV_MODE:
+                # Conv block-teacher: a CHEAP dense scan stamps the block to the
+                # opponent's immediate threat on the POLICY head (value left at the
+                # natural outcome). No tree search; fires on every qualifying ply.
+                # Collected here and budget-capped after the loop (same per-game
+                # FRACTION cap as the policy teacher, latest plies first) so
+                # --defense-max-fraction still applies — though with the cheap scan
+                # a dense (frac 1.0) stamp is the intended use.
+                c_pi, _z, fired = _apply_defense_teacher_conv(
+                    planes, pi, z, profile=profile)
+                if fired:
+                    conv_fires.append((ply_idx, c_pi))
+            elif _DEFENSE_POLICY_MODE:
                 # #43/#60: detect the refutation CANDIDATE cheaply now (prescan +
                 # detection/own-win solves, NO refutation); the expensive saving-move
                 # enumeration is deferred to the budgeted reverse pass below, so we
@@ -369,6 +1183,13 @@ def _apply_teachers_to_trajectory(
                 continue  # candidate had no saving move — genuinely lost, not a fire
             out[ply_idx] = (new_pi, out[ply_idx][1])
             kept += 1
+    if conv_fires:
+        # Same per-game FRACTION budget as the policy teacher: keep the LATEST
+        # firing plies (closest to the loss / most informative). Default frac 1.0
+        # keeps every conv stamp (the dense intent). Value left at the outcome.
+        kept_conv = _relabel_defense_policy_game(conv_fires, n)
+        for ply_idx, new_pi in kept_conv.items():
+            out[ply_idx] = (new_pi, out[ply_idx][1])
     return out
 
 
@@ -622,6 +1443,14 @@ def _defense_detect_candidate(
     if not danger:
         return None
 
+    # Sparse-bite sampler (the #43 follow-on): invoke the EXACT solver on only a
+    # fraction of danger plies. The cheap prescan above still runs on every ply;
+    # this gate skips the expensive detection (and the guard + refute that follow)
+    # for the un-sampled 90%. Default frac 1.0 keeps every solve (byte-identical).
+    if _DEFENSE_DETECT_FRAC < 1.0 and _DEFENSE_SAMPLE_RNG.random() >= _DEFENSE_DETECT_FRAC:
+        _profile_add(profile, "defense_detect_skipped", 1.0)
+        return None
+
     with _profile_timer(profile, "defense_solve_s"):
         res = vcf.solve_vcf(swapped_board, max_depth=max_depth, max_nodes=max_nodes)
     _profile_add(profile, "defense_solves", 1.0)
@@ -751,6 +1580,121 @@ def _apply_defense_teacher_policy(
     return new_pi, z, True
 
 
+def _conv_block_detect(
+    planes: np.ndarray,
+    *,
+    tier2: bool = True,
+) -> np.ndarray | None:
+    """CHEAP, NO-tree-search defensive POLICY detector (the conv block-teacher).
+
+    Reconstructs the board the same way the VCF defense teacher does — ``me =
+    planes[0]`` is the DEFENDER (side to move), ``opp = planes[HISTORY_PLY]`` is
+    the attacker — then, with a handful of numpy line scans (NO ``solve_vcf``, NO
+    recursion), decides whether to stamp a defensive block and over which cells.
+
+    Returns a SET of flat action indices (a 1-D int array) the defender should
+    play, or ``None`` for "no stamp" (the caller leaves the record untouched). The
+    caller turns a non-None result into a uniform policy target over those cells.
+
+    Freestyle rules: >= 5 in a row wins (overlines included) — ``vcf._five_completions``
+    already uses ``>=`` so a six-completion counts as a win cell.
+
+    Detection rules (sound core first, then the heuristic bite):
+
+    1. OWN-WIN guard. If the DEFENDER itself has any immediate five-completion,
+       it should CONVERT, not defend -> return None (mirror of the policy teacher's
+       StM-own-win guard / the offensive "side-to-move already winning" short-circuit).
+    2. Opponent four. Let ``opp_win`` be the opponent's immediate five-completion
+       cells (the cells where the opponent makes >= 5 next move).
+         * exactly one  -> the unique FORCED BLOCK -> stamp that one cell. Blocking
+           it or losing next move; unambiguously correct defense.
+         * two or more  -> a double-four, genuinely lost -> return None (mirror of
+           the exact teacher leaving truly-lost positions untouched).
+    3. (Tier 2, ``tier2`` True) No opponent four, but the opponent has an OPEN
+       THREE: a move ``f`` that would make an OPEN FOUR (>= 2 completion cells =
+       unstoppable next move). The defender must occupy a cell that defeats EVERY
+       such open-four threat. A defender move ``d`` defeats threat ``(f, comps)``
+       iff ``d == f`` or ``d in comps`` (occupying the would-be open-four square or
+       one of its completions). Stamp the INTERSECTION of all threats' defeating
+       sets (uniform if several). If that intersection is empty (no single move
+       stops all of them) return None — SOUND: never stamp a cell that does not
+       actually prevent the open four (no false saves). This tier is a strong
+       HEURISTIC, not strictly forced (the opponent has other replies), so it is
+       behind a sub-toggle; on by default since the net likely already blocks bare
+       fours and the open-three reflex is where the real bite is.
+
+    Never mutates ``planes``. ``vcf`` helpers are reused only for the (cheap,
+    non-recursive) collinear completion / open-four scans, never the solver.
+    """
+    planes = np.asarray(planes)
+    me = planes[0].astype(bool)        # DEFENDER (side to move)
+    opp = planes[HISTORY_PLY].astype(bool)  # attacker
+    occupied = me | opp
+    empty_plane = ~occupied
+
+    # Rule 1: defender can win now -> convert, don't defend.
+    if vcf._five_completions(me, empty_plane):
+        return None
+
+    # Rule 2: opponent's immediate five-completion cells (the opponent's "four").
+    opp_win = vcf._five_completions(opp, empty_plane)
+    if len(opp_win) == 1:
+        return np.array([int(opp_win[0])], dtype=np.int64)  # forced block
+    if len(opp_win) >= 2:
+        return None  # double four -> genuinely lost, no stamp
+
+    # Rule 3 (Tier 2): opponent open-three -> open-four prevention.
+    if not tier2:
+        return None
+    empty_idx = vcf._empties_from_plane(empty_plane)
+    if len(empty_idx) == 0:
+        return None
+    # Open-four-making moves for the opponent (>=2 completions), restricted to the
+    # near-stone candidate cells (a four can only form next to existing stones).
+    of_cands = vcf._candidate_cells_from_planes(opp, me, empty_idx)
+    threats = vcf._open_four_threats(opp.copy(), me.copy(), empty_plane,
+                                     [int(c) for c in of_cands])
+    if not threats:
+        return None
+    # Intersection of each threat's defeating set {f} ∪ comps. A single defender
+    # move in the intersection neutralizes every threatened open four at once; if
+    # the intersection is empty, no one move suffices -> do not stamp (sound).
+    defeating_sets = [set([f, *comps]) for f, comps in threats]
+    common = set.intersection(*defeating_sets)
+    # Only still-empty cells are legal stamps (all should be, but be defensive).
+    common = {c for c in common
+              if not occupied[c // vcf.BOARD_SIZE, c % vcf.BOARD_SIZE]}
+    if not common:
+        return None
+    return np.array(sorted(common), dtype=np.int64)
+
+
+def _apply_defense_teacher_conv(
+    planes: np.ndarray,
+    pi: np.ndarray,
+    z: float,
+    *,
+    profile: ProfileStats | None = None,
+) -> tuple[np.ndarray, float, bool]:
+    """Per-ply conv block-teacher: run :func:`_conv_block_detect` and, if it
+    returns block cells, stamp a uniform policy target over them; the value ``z``
+    is left untouched (pure policy lever, exactly like the #43 policy teacher).
+
+    Returns ``(new_pi, z, fired)``; the inputs unchanged with ``fired=False`` when
+    the detector declines (no threat / lost / own win). Profile counters:
+    ``defense_conv_s`` (wall) and ``defense_conv_fired`` (stamp count).
+    """
+    with _profile_timer(profile, "defense_conv_s"):
+        cells = _conv_block_detect(planes, tier2=_DEFENSE_CONV_TIER2)
+    _profile_add(profile, "defense_conv_calls", 1.0)
+    if cells is None or len(cells) == 0:
+        return pi, z, False
+    new_pi = np.zeros_like(pi)
+    new_pi[cells] = 1.0 / float(len(cells))
+    _profile_add(profile, "defense_conv_fired", 1.0)
+    return new_pi, z, True
+
+
 def _profile_add(profile: ProfileStats | None, key: str, value: float) -> None:
     if profile is not None:
         profile[key] = float(profile.get(key, 0.0)) + float(value)
@@ -798,6 +1742,34 @@ class SelfPlayExample:
     # the SAME D4 symmetry as planes/pi/aux_pi under augmentation. None when the
     # ownership lever is off — masked out of the ownership loss.
     ownership: np.ndarray | None = None  # (N_ACTIONS,) float32 or None
+    # Moonshot VCT-defense target: per-cell (81,) 0/1 "blunder map" for THIS
+    # position (side-to-move = me). vct[m] = 1.0 iff playing at empty cell m walks
+    # the side to move into a forced VCT for the opponent, 0.0 otherwise. Unlike
+    # `ownership` (one per-GAME final board), this is a PER-PLY target computed by
+    # the escape-search labeler at the position that is being recorded. Under D4
+    # augmentation it is permuted by the SAME symmetry as planes/pi/ownership (it
+    # is a per-cell board map). None when the vct lever is off or the position was
+    # not labeled — masked out of the vct loss.
+    vct: np.ndarray | None = None  # (N_ACTIONS,) float32 or None
+
+
+@dataclass
+class ChoiceExample:
+    """One swap2 NEGOTIATION-choice training example for the choice head.
+
+    Distinct from :class:`SelfPlayExample`: it lives at a swap2 CHOICE node (the
+    responder's {STAY, SWAP, PLACE2} or the opener's pick-color), carries an
+    N_CHOICES-wide legal mask, and its target is OUTCOME-driven (v2a): the slot
+    actually played, re-signed to this chooser's frame by ``chooser_z`` (the
+    game's outcome in [-1, 1] from the chooser's perspective). NOT D4-augmented
+    (choice slots are not spatial), and NEVER stored in the main ReplayBuffer
+    (which is shaped for the policy width) — it rides a separate ChoiceBuffer.
+    """
+
+    planes: np.ndarray       # (N_INPUT_PLANES, BOARD_SIZE, BOARD_SIZE) float32 — the choice node
+    legal_mask: np.ndarray   # (N_CHOICES,) bool — legal choice slots
+    chosen: int              # the slot actually applied during negotiation
+    chooser_z: float         # game outcome in [-1, 1] from THIS chooser's perspective
 
 
 @dataclass
@@ -808,6 +1780,39 @@ class GameRecord:
     plies: int
     outcome: float  # +1 if first-mover (black) won, -1 if second-mover (white) won, 0 draw
     archive_start: bool = False  # WL5: True if game was seeded from validation archive
+    # v2a swap2 choice-head examples. One per negotiation CHOICE node of the
+    # game's opening (0 when the game did not use a swap2 opening). Default is an
+    # empty list so every non-swap2 path stays byte-identical.
+    choice_examples: list[ChoiceExample] = field(default_factory=list)
+
+
+def _choice_examples_for_game(res, outcome_for_black: float) -> list[ChoiceExample]:
+    """Build the v2a choice-head examples for one game from its swap2 result.
+
+    `res` is the game's :class:`~gomoku.swap2_search.Swap2Result` (None when the
+    game did not use a swap2 opening → no choice examples). `outcome_for_black`
+    is +1 / -1 / 0 from the HAND-OFF MOVER's perspective: because `to_normal()`
+    frames board[0] as the mover at hand-off, `outcome_for_black` is really the
+    outcome for `res.mover_actor`. For each choice record we re-sign that to the
+    chooser's frame: the actor-form of `backup_sign` is `+1 iff the chooser at
+    that node IS the hand-off mover`, so
+        chooser_z = (+1 if cr.to_act == res.mover_actor else -1) * outcome_for_black.
+    Choice examples are NOT D4-augmented (the slots are not spatial).
+    """
+    if res is None or not res.choice_records:
+        return []
+    out: list[ChoiceExample] = []
+    for cr in res.choice_records:
+        sign = 1.0 if cr.to_act == res.mover_actor else -1.0
+        out.append(
+            ChoiceExample(
+                planes=cr.planes,
+                legal_mask=cr.legal_mask,
+                chosen=int(cr.chosen),
+                chooser_z=float(sign * outcome_for_black),
+            )
+        )
+    return out
 
 
 def _aux_target_for(
@@ -885,22 +1890,24 @@ def _build_examples(
     augment_symmetries: bool,
     profile: ProfileStats | None = None,
     ownership: np.ndarray | None = None,
+    vct: np.ndarray | None = None,
 ) -> list[SelfPlayExample]:
     """Expand one recorded position into training example(s).
 
     With D4 augmentation, emits 8 symmetry variants; the per-cell aux targets
-    (opponent-reply `aux_pi` and/or `ownership`, when present) are transformed
-    by the SAME symmetry as planes+pi via augment_with_cell_targets, so each
-    label stays board-aligned with its position. Without augmentation, emits the
-    single position. A None target propagates to the example unchanged → masked
-    out of that target's loss.
+    (opponent-reply `aux_pi`, `ownership`, and/or the vct-defense blunder map,
+    when present) are transformed by the SAME symmetry as planes+pi via
+    augment_with_cell_targets, so each label stays board-aligned with its
+    position. Without augmentation, emits the single position. A None target
+    propagates to the example unchanged → masked out of that target's loss.
 
-    Byte-identical guarantee: when BOTH aux_pi and ownership are None, this uses
-    the plain `augment` (the pre-aux path), so the off-case output is unchanged.
+    Byte-identical guarantee: when aux_pi, ownership, AND vct are all None, this
+    uses the plain `augment` (the pre-aux path), so the off-case output is
+    unchanged.
     """
     out: list[SelfPlayExample] = []
     if augment_symmetries:
-        if aux_pi is None and ownership is None:
+        if aux_pi is None and ownership is None and vct is None:
             with _profile_timer(profile, "d4_augment_s"):
                 augmented = list(augment(planes, pi))
             for aug_planes, aug_pi in augmented:
@@ -908,21 +1915,24 @@ def _build_examples(
                     out.append(SelfPlayExample(
                         aug_planes, aug_pi.astype(np.float32), z,
                         side=int(side), ply=int(ply_at_capture),
-                        aux_pi=None, ownership=None,
+                        aux_pi=None, ownership=None, vct=None,
                     ))
         else:
-            # One or both per-cell targets present: carry them through the
+            # One or more per-cell targets present: carry them through the
             # identical D4 symmetry as planes+pi. Slot order is fixed
-            # [aux_pi, ownership]; a missing target keeps its slot as None so
+            # [aux_pi, ownership, vct]; a missing target keeps its slot as None so
             # the example field stays None (masked out of that loss).
             cell_targets = []
-            aux_slot = ownership_slot = None
+            aux_slot = ownership_slot = vct_slot = None
             if aux_pi is not None:
                 aux_slot = len(cell_targets)
                 cell_targets.append(aux_pi)
             if ownership is not None:
                 ownership_slot = len(cell_targets)
                 cell_targets.append(ownership)
+            if vct is not None:
+                vct_slot = len(cell_targets)
+                cell_targets.append(vct)
             with _profile_timer(profile, "d4_augment_s"):
                 augmented = list(augment_with_cell_targets(planes, pi, cell_targets))
             for aug_planes, aug_pi, aug_targets in augmented:
@@ -934,6 +1944,8 @@ def _build_examples(
                                 if aux_slot is not None else None),
                         ownership=(aug_targets[ownership_slot].astype(np.float32)
                                    if ownership_slot is not None else None),
+                        vct=(aug_targets[vct_slot].astype(np.float32)
+                             if vct_slot is not None else None),
                     ))
     else:
         with _profile_timer(profile, "example_create_s"):
@@ -942,6 +1954,7 @@ def _build_examples(
                 side=int(side), ply=int(ply_at_capture),
                 aux_pi=(aux_pi.astype(np.float32) if aux_pi is not None else None),
                 ownership=(ownership.astype(np.float32) if ownership is not None else None),
+                vct=(vct.astype(np.float32) if vct is not None else None),
             ))
     return out
 
@@ -1068,6 +2081,166 @@ def _random_opening_state(rng: np.random.Generator, n_moves: int) -> tuple[GameS
         # restart from scratch
 
 
+# Rapfi's 9 hand-curated BALANCED swap2 openings, defined for a 15x15 board.
+# VERIFIED faithful to Rapfi source @6e0a1329 (Rapfi/search/opening.cpp, the static
+# SWAP2 list for board.size()==15): these exact 9 triples, stored as bare Pos(x,y)
+# with NO explicit colors -- color is implied purely by placement ORDER from an
+# empty BLACK-first board, so stone[0]=BLACK, stone[1]=WHITE, stone[2]=BLACK
+# (2 black + 1 white) and after 3 plies currentSide=~BLACK => WHITE to move. That
+# is exactly the board Rapfi EMITS to the swap2 responder ("Rapfi says go"): a
+# pre-decision 3-stone, white-to-move position; neither color is illegal (free-
+# style). Our construction below reproduces it byte-for-byte (cross-checked against
+# swap2.OpeningState.to_normal() in tests/test_fixed_openings.py). So we capture
+# Rapfi's MOVE, not just its shape -- white-to-move is the protocol-correct seat,
+# not an assumption. (The broad swap2 protocol CAN also settle to a 5-stone,
+# black-to-move board via the responder's place-2 branch, but Rapfi's hardcoded
+# canon -- and thus ours -- is strictly the 3-stone white-to-move board.)
+# Used by the fixed-opening training mode (#73): we hand the net these fair
+# positions DIRECTLY and skip the (unfair) negotiation entirely.
+_RAPFI_BALANCED_OPENINGS_15: tuple[tuple[tuple[int, int], ...], ...] = (
+    ((6, 7), (6, 4), (4, 2)),
+    ((3, 3), (5, 5), (6, 6)),
+    ((3, 2), (5, 4), (4, 5)),
+    ((5, 2), (1, 5), (1, 6)),
+    ((8, 5), (5, 8), (6, 7)),
+    ((5, 5), (8, 8), (7, 7)),
+    ((13, 12), (13, 9), (10, 12)),
+    ((11, 7), (10, 6), (13, 5)),
+    ((3, 7), (1, 8), (0, 4)),
+)
+
+# Fair-opening LADDER (#73/#74): the SAME Rapfi shapes RE-CENTERED onto the smaller
+# boards (translate each 3-stone cluster so its bounding box sits at board center;
+# the footprints are <=3x6 so all 9 fit on 9/11/13 -- none dropped). The relative
+# arrangement (and thus the rough balance) is preserved; centering keeps them off
+# the edges. 15 keeps Rapfi's native placements. So a fresh net trains the same
+# canned fair openers at every rung, climbing 9->11->13->15.
+_FAIR_OPENINGS: dict[int, tuple[tuple[tuple[int, int], ...], ...]] = {
+    9: (
+        ((5, 7), (5, 4), (3, 2)), ((3, 3), (5, 5), (6, 6)), ((3, 2), (5, 4), (4, 5)),
+        ((6, 2), (2, 5), (2, 6)), ((6, 3), (3, 6), (4, 5)), ((3, 3), (6, 6), (5, 5)),
+        ((5, 6), (5, 3), (2, 6)), ((3, 5), (2, 4), (5, 3)), ((5, 5), (3, 6), (2, 2)),
+    ),
+    11: (
+        ((6, 7), (6, 4), (4, 2)), ((3, 3), (5, 5), (6, 6)), ((4, 4), (6, 6), (5, 7)),
+        ((7, 3), (3, 6), (3, 7)), ((6, 3), (3, 6), (4, 5)), ((3, 3), (6, 6), (5, 5)),
+        ((7, 6), (7, 3), (4, 6)), ((5, 6), (4, 5), (7, 4)), ((7, 6), (5, 7), (4, 3)),
+    ),
+    13: (
+        ((7, 9), (7, 6), (5, 4)), ((5, 5), (7, 7), (8, 8)), ((5, 4), (7, 6), (6, 7)),
+        ((8, 4), (4, 7), (4, 8)), ((8, 5), (5, 8), (6, 7)), ((5, 5), (8, 8), (7, 7)),
+        ((7, 8), (7, 5), (4, 8)), ((5, 7), (4, 6), (7, 5)), ((7, 7), (5, 8), (4, 4)),
+    ),
+    15: _RAPFI_BALANCED_OPENINGS_15,
+}
+
+
+def _active_fixed_openings(
+    board_size: int | None = None,
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    """The fixed opening book for ``board_size`` (default: active), minus any
+    indices listed in ``$GOMOKU_DROP_OPENERS`` (comma-separated indices into the
+    ORIGINAL book).
+
+    The black-advantage prune gate (#73, 9x9): if a rung shows a persistent black
+    edge, the orchestrator identifies the most black-favoring opener (offline
+    balance probe) and re-runs with that index dropped via this env var -- no
+    source edit, reversible, indices stay stable across drops. Raises if the drop
+    list would empty the book.
+    """
+    n = BOARD_SIZE if board_size is None else board_size
+    openings = _FAIR_OPENINGS.get(n)
+    if openings is None:
+        raise ValueError(
+            f"_active_fixed_openings: no fixed opening book for board size "
+            f"{n}; have {sorted(_FAIR_OPENINGS)} (set GOMOKU_BOARD_SIZE)"
+        )
+    raw = os.environ.get("GOMOKU_DROP_OPENERS", "").strip()
+    if not raw:
+        return openings
+    drop = {int(t) for t in raw.replace(",", " ").split() if t.strip() != ""}
+    kept = tuple(o for i, o in enumerate(openings) if i not in drop)
+    if not kept:
+        raise ValueError(
+            f"GOMOKU_DROP_OPENERS={raw!r} would drop every opener for "
+            f"board {n} (book has {len(openings)})"
+        )
+    return kept
+
+
+def _fixed_opening_state(
+    rng: np.random.Generator,
+    openings: tuple[tuple[tuple[int, int], ...], ...] | None = None,
+) -> tuple[GameState, int]:
+    """Pick one fixed BALANCED opening uniformly and place its 3 stones directly.
+
+    Stones are colored BLACK, WHITE, BLACK in list order (the swap2 opener order),
+    yielding 2 black + 1 white -> white to move. Returns ``(GameState, plies=3)``,
+    mirroring ``_random_opening_state``'s contract so the gen loops drop it into the
+    same opening branch. NO swap2 negotiation, NO net call, NO choice records -- the
+    construction is byte-identical to ``swap2.OpeningState.to_normal()`` for the
+    2-black-1-white SWAP outcome (plane 0 = mover/white stones, plane 1 = black).
+
+    The opening book is selected by the active board size (9/11/13/15); raises on
+    any other size.
+    """
+    if openings is None:
+        openings = _active_fixed_openings(BOARD_SIZE)
+    opening = openings[int(rng.integers(0, len(openings)))]
+    black = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
+    white = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
+    for i, (x, y) in enumerate(opening):  # x=col, y=row -> board[y, x]
+        (black if i % 2 == 0 else white)[y, x] = True  # i=0,2 black; i=1 white
+    # 2 black + 1 white -> nb == nw + 1 -> WHITE to move; plane 0 = mover (white).
+    board = np.stack([white, black]).astype(bool)
+    state = GameState(board=board, move_count=3, history=())
+    assert not state.is_terminal()[0]  # 3 scattered stones can never be 5-in-a-row
+    return state, 3
+
+
+def _make_swap2_oracle(evaluator: Evaluator):
+    """Wrap a batch `evaluator` as a single-state swap2 oracle.
+
+    The negotiator wants `Callable[[GameState], (policy_probs, value)]` where
+    `policy_probs` is a true probability distribution over `N_ACTIONS` (sums to
+    1) and `value` is a float in [-1, 1] from the state's side-to-move. The
+    evaluator returns RAW LOGITS for a batch, so we softmax the single row. The
+    opening is ~30 forwards/game (negligible), so a batch-of-1 call is fine.
+    """
+
+    def oracle(gs: GameState) -> tuple[np.ndarray, float]:
+        priors, values = evaluator([gs])
+        logits = np.asarray(priors[0], dtype=np.float64)
+        logits = logits - logits.max()  # numerically stable softmax
+        e = np.exp(logits)
+        probs = e / e.sum()
+        return probs, float(values[0])
+
+    return oracle
+
+
+def _swap2_opening_state(
+    evaluator: Evaluator, rng: np.random.Generator
+) -> tuple[GameState, int, "Swap2Result"]:
+    """Negotiate a swap2 opening and return `(normal_state, opening_plies, res)`.
+
+    Mirrors `_random_opening_state`'s `(state, plies)` contract so the generation
+    loops can swap it in at the same opening seam: the returned state is the
+    canonical, legal, non-terminal position normal play begins from, and
+    `opening_plies` is its move count (the stones placed during negotiation,
+    which — like the random opening prefix — are NOT recorded as policy/value
+    training examples). v2a ALSO threads out the full `Swap2Result` so the caller
+    can fold the negotiation `choice_records` into choice-head examples (the
+    `res.choice_records` / `res.mover_actor` were previously discarded).
+    """
+    from gomoku.swap2_search import negotiate
+
+    oracle = _make_swap2_oracle(evaluator)
+    res = negotiate(oracle, rng)
+    start_state = res.normal_state
+    return start_state, start_state.move_count, res
+
+
 def _gamestate_from_archive(archive: dict, idx: int) -> GameState:
     """WL5 archive-start: build a GameState from one archived position.
 
@@ -1116,6 +2289,8 @@ def _generate_games_native_gumbel(
     augment_symmetries: bool = True,
     wave_size: int = 16,
     random_opening_moves: int = 0,
+    swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     profile: ProfileStats | None = None,
@@ -1169,6 +2344,7 @@ def _generate_games_native_gumbel(
     games = []
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
     n_archive = 0 if archive is None else int(archive["planes"].shape[0])
     with _profile_timer(profile, "game_setup_s"):
         for _ in range(n_games):
@@ -1177,10 +2353,15 @@ def _generate_games_native_gumbel(
                 and n_archive > 0
                 and float(rng.random()) < archive_start_frac
             )
+            swap2_res = None
             if from_archive:
                 idx = int(rng.integers(0, n_archive))
                 start_state = _gamestate_from_archive(archive, idx)
                 opening_plies = start_state.move_count
+            elif swap2:
+                start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+            elif fixed_openings:
+                start_state, opening_plies = _fixed_opening_state(rng)
             elif random_opening_moves > 0:
                 start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
             else:
@@ -1199,6 +2380,7 @@ def _generate_games_native_gumbel(
             )
             initial_plies.append(opening_plies)
             archive_start_flags.append(from_archive)
+            swap2_results.append(swap2_res)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
@@ -1318,6 +2500,8 @@ def _generate_games_native_gumbel(
                 plies=plies,
                 outcome=outcome_for_black,
                 archive_start=archive_start_flags[g_idx],
+                choice_examples=_choice_examples_for_game(
+                    swap2_results[g_idx], outcome_for_black),
             ))
     return records
 
@@ -1337,6 +2521,8 @@ def _generate_games_gumbel(
     rng: np.random.Generator | None = None,
     augment_symmetries: bool = True,
     random_opening_moves: int = 0,
+    swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     profile: ProfileStats | None = None,
@@ -1374,16 +2560,22 @@ def _generate_games_gumbel(
     games: list[MCTSGame] = []
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
     n_archive = 0 if archive is None else int(archive["planes"].shape[0])
     for _ in range(n_games):
         from_archive = (
             archive is not None and n_archive > 0
             and float(rng.random()) < archive_start_frac
         )
+        swap2_res = None
         if from_archive:
             idx = int(rng.integers(0, n_archive))
             start_state = _gamestate_from_archive(archive, idx)
             opening_plies = start_state.move_count
+        elif swap2:
+            start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+        elif fixed_openings:
+            start_state, opening_plies = _fixed_opening_state(rng)
         elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
@@ -1398,6 +2590,7 @@ def _generate_games_gumbel(
         )
         initial_plies.append(opening_plies)
         archive_start_flags.append(from_archive)
+        swap2_results.append(swap2_res)
 
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
@@ -1486,6 +2679,8 @@ def _generate_games_gumbel(
             plies=plies,
             outcome=outcome_for_black,
             archive_start=archive_start_flags[g_idx],
+            choice_examples=_choice_examples_for_game(
+                swap2_results[g_idx], outcome_for_black),
         ))
     return records
 
@@ -1506,6 +2701,8 @@ def _generate_games_native(
     augment_symmetries: bool = True,
     wave_size: int = 1,
     random_opening_moves: int = 0,
+    swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
@@ -1517,6 +2714,11 @@ def _generate_games_native(
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
+    record_vct: bool = False,
+    concurrent_games: int = 0,
+    flush_records=None,
+    flush_games: int = 32,
+    refresh_evaluator=None,
 ) -> list[GameRecord]:
     rng = rng or np.random.default_rng()
     if max_plies is None:
@@ -1534,7 +2736,13 @@ def _generate_games_native(
     pcr_active = playout_cap_frac < 1.0
     fast_sims = playout_cap_fast_sims if playout_cap_fast_sims > 0 else n_simulations
 
-    planes_evaluator = evaluator.evaluate_planes  # type: ignore[attr-defined]
+    # Evaluator indirection: streaming mode (refresh_evaluator) hot-swaps the
+    # net between rounds — games in flight keep their trees, subsequent leaf
+    # evals use the new weights (the standard continuous-self-play shape).
+    eval_box = {"ev": evaluator}
+
+    def planes_evaluator(planes_batch):
+        return eval_box["ev"].evaluate_planes(planes_batch)  # type: ignore[attr-defined]
 
     def _timed_planes_evaluator(planes_batch):
         t0 = time.perf_counter()
@@ -1555,45 +2763,191 @@ def _generate_games_native(
     games = []
     initial_plies: list[int] = []
     archive_start_flags: list[bool] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
+    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = []
+    # Moonshot VCT-defense per-ply targets, kept in LOCKSTEP with `trajectories`:
+    # vct_maps[g_idx][k] is the (N_ACTIONS,) blunder map (or None) for the k-th
+    # RECORDED position of game g_idx. Terminal VCT-terminus one-hot positions are
+    # appended to `trajectories` by the partition (which knows nothing of vct) and
+    # get NO vct_maps entry — they sit at the end, so the finalize loop reads a
+    # None (masked out) for any ply_idx past the vct_maps length. Off (record_vct
+    # False) => never populated, byte-identical to the pre-vct path.
+    vct_maps: list[list] = []
+    # Game-local ply counts (moves made since gen start, per game). On the
+    # legacy lockstep path every active game shares the same value; continuous
+    # refill (below) is what desynchronizes them.
+    ply_of: list[int] = []
     n_archive = 0 if archive is None else int(archive["planes"].shape[0])
-    with _profile_timer(profile, "game_setup_s"):
-        for _ in range(n_games):
-            from_archive = (
-                archive is not None
-                and n_archive > 0
-                and float(rng.random()) < archive_start_frac
-            )
-            if from_archive:
-                idx = int(rng.integers(0, n_archive))
-                start_state = _gamestate_from_archive(archive, idx)
-                opening_plies = start_state.move_count
-            elif random_opening_moves > 0:
-                start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
-            else:
-                start_state, opening_plies = GameState.initial(), 0
-            games.append(
-                native_mcts.NativeMCTSGame(
-                    start_state,
-                    c_puct=c_puct,
-                    c_puct_base=c_puct_base,
-                    dirichlet_alpha=dirichlet_alpha,
-                    dirichlet_eps=dirichlet_eps,
-                    seed=int(rng.integers(1, 2**63 - 1)),
-                    forced_playout_k=forced_playout_k,
-                )
-            )
-            initial_plies.append(opening_plies)
-            archive_start_flags.append(from_archive)
 
-    trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
-    active: list[int] = list(range(n_games))
+    def _seed_game() -> int:
+        """Create one new game (same opening logic + RNG draw order as the
+        historical setup loop) and append it to every per-game structure.
+        Returns the new game index."""
+        from_archive = (
+            archive is not None
+            and n_archive > 0
+            and float(rng.random()) < archive_start_frac
+        )
+        swap2_res = None
+        if from_archive:
+            idx = int(rng.integers(0, n_archive))
+            start_state = _gamestate_from_archive(archive, idx)
+            opening_plies = start_state.move_count
+        elif swap2:
+            start_state, opening_plies, swap2_res = _swap2_opening_state(
+                eval_box["ev"], rng)
+        elif fixed_openings:
+            start_state, opening_plies = _fixed_opening_state(rng)
+        elif random_opening_moves > 0:
+            start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
+        else:
+            start_state, opening_plies = GameState.initial(), 0
+        games.append(
+            native_mcts.NativeMCTSGame(
+                start_state,
+                c_puct=c_puct,
+                c_puct_base=c_puct_base,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps,
+                seed=int(rng.integers(1, 2**63 - 1)),
+                forced_playout_k=forced_playout_k,
+            )
+        )
+        initial_plies.append(opening_plies)
+        archive_start_flags.append(from_archive)
+        swap2_results.append(swap2_res)
+        trajectories.append([])
+        vct_maps.append([])
+        ply_of.append(0)
+        return len(games) - 1
+
+    # Continuous refill (issue #112): cap the ACTIVE set at `concurrent_games`
+    # and seed a replacement the moment a game completes, so every merged
+    # oracle solve (one TAIL ~= 44 ms regardless of width) and every MPS
+    # search wave serves a full-width batch instead of the thinning tail of a
+    # lockstep batch. 0 (default) = legacy lockstep, byte-identical.
+    refill = 0 < concurrent_games < n_games
+    width = concurrent_games if refill else n_games
+    with _profile_timer(profile, "game_setup_s"):
+        for _ in range(width):
+            _seed_game()
+
+    active: list[int] = list(range(width))
     completed: list[tuple[int, float, int]] = []
     final_state: dict[int, tuple[np.ndarray, int]] = {}
+    flush_queue: list[tuple[int, float, int]] = []
 
-    ply = 0
-    while active and ply < max_plies:
+    def _build_record(g_idx: int, outcome_for_black: float, plies: int) -> GameRecord:
+        examples: list[SelfPlayExample] = []
+        n_initial = initial_plies[g_idx]
+        traj = trajectories[g_idx]
+        ownership = None
+        if record_ownership:
+            fp, term_side = final_state.get(g_idx, (None, 0))
+            ownership = _ownership_target(fp, term_side, outcome_for_black)
+        finalized = _apply_teachers_to_trajectory(
+            traj, outcome_for_black, vcf_teacher=vcf_teacher,
+            vct_teacher=vct_teacher, defense_teacher=defense_teacher,
+            profile=profile)
+        vmaps = vct_maps[g_idx] if record_vct else None
+        for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
+            pi, z = finalized[ply_idx]
+            ply_at_capture = n_initial + ply_idx
+            aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            # Per-ply vct map (None for terminal VCT-terminus positions that
+            # sit past the recorded-position count → masked out of the loss).
+            vct = (vmaps[ply_idx]
+                   if vmaps is not None and ply_idx < len(vmaps) else None)
+            examples.extend(_build_examples(
+                planes, pi, z, side, ply_at_capture, aux_pi,
+                augment_symmetries, profile, ownership=ownership, vct=vct,
+            ))
+        return GameRecord(
+            examples=examples,
+            plies=plies,
+            outcome=outcome_for_black,
+            archive_start=archive_start_flags[g_idx],
+            choice_examples=_choice_examples_for_game(
+                swap2_results[g_idx], outcome_for_black),
+        )
+
+    while active:
+        # Streaming (issue #112): hot-swap the evaluator between rounds (games
+        # in flight keep their trees; later leaf evals use the new weights —
+        # the standard continuous-self-play shape).
+        if refresh_evaluator is not None:
+            new_ev = refresh_evaluator()
+            if new_ev is not None:
+                eval_box["ev"] = new_ev
+        n_done_before = len(completed)
         with _profile_timer(profile, "active_list_s"):
             active_games = [games[i] for i in active]
+
+        # Oracle phase (issues #98/#107): the attacker VCT-terminus test, the
+        # VCT-defense blunder maps (recorded aux target and/or root-policy
+        # veto), and the defender terminus all consume ONE merged bulk
+        # mega-solve per ply (_oracle_ply_solve — one solver call costs one
+        # TAIL; the historical two-call form cost two; per-board verdicts are
+        # independent of batch composition, so the merge is bit-identical).
+        # The veto's escape-solve runs FULL breadth by default — an untested
+        # cell can't be vetoed, and "all moves lose" is only sound when every
+        # legal cell was tested; --oracle-veto-max-cands K > 0 switches to the
+        # staged-escalation form (K nearest cells, full breadth only for
+        # positions whose tested cells ALL lose). With _ORACLE_OVERLAP_ENABLED
+        # the solve runs in a background thread WHILE the MPS search below
+        # runs, and the partitions apply post-search (flag-gated; see the
+        # semantics note at the flag). Default features OFF = byte-identical.
+        pending_vct: dict[int, np.ndarray | None] = {}
+        oracle_wanted = (_VCT_TERMINUS_ENABLED or record_vct
+                         or _ORACLE_VETO_ENABLED or _ATTACKER_PRESERVE_ENABLED)
+        oracle_box: dict = {}
+        oracle_thread = None
+        planes_list: list | None = None
+        slot_of: dict[int, int] = {}
+        if oracle_wanted:
+            with _profile_timer(profile, "oracle_planes_s"):
+                planes_list = [g.root_planes() for g in active_games]
+            slot_of = {g_idx: s for s, g_idx in enumerate(active)}
+            defense_cands = (
+                _VETO_MAX_CANDS if _ORACLE_VETO_ENABLED else _VCT_DEFENSE_MAX_CANDS)
+            want_defense = record_vct or _ORACLE_VETO_ENABLED
+            want_preserve = _ATTACKER_PRESERVE_ENABLED
+            if _ORACLE_OVERLAP_ENABLED:
+                _warm_mega_solver()   # compile on the main thread, once
+                if want_preserve:
+                    _warm_preserve_solver()
+
+                def _oracle_bg(pl=planes_list, dc=defense_cands,
+                               wt=_VCT_TERMINUS_ENABLED, wd=want_defense,
+                               wp=want_preserve):
+                    try:
+                        oracle_box["res"] = _oracle_ply_solve(
+                            pl, want_terminus=wt, want_defense=wd,
+                            defense_max_cands=dc, profile=profile)
+                        if wp:
+                            with _profile_timer(profile, "attacker_preserve_s"):
+                                oracle_box["preserve"] = _attacker_preserve_solve(pl)
+                    except BaseException as exc:  # pragma: no cover - re-raised
+                        oracle_box["err"] = exc
+
+                oracle_thread = threading.Thread(target=_oracle_bg, daemon=True)
+                oracle_thread.start()
+            else:
+                oracle_box["res"] = _oracle_ply_solve(
+                    planes_list, want_terminus=_VCT_TERMINUS_ENABLED,
+                    want_defense=want_defense, defense_max_cands=defense_cands,
+                    profile=profile)
+                if want_preserve:
+                    with _profile_timer(profile, "attacker_preserve_s"):
+                        oracle_box["preserve"] = _attacker_preserve_solve(
+                            planes_list)
+                active, active_games, pending_vct = _apply_oracle_partitions(
+                    oracle_box["res"], active, active_games, planes_list,
+                    slot_of, ply_of, initial_plies, trajectories, completed,
+                    final_state, record_ownership, record_vct, vct_maps,
+                    profile)
+                if not active and not refill:
+                    break
 
         # Playout-Cap Randomization: decide per-game-per-ply whether this is a
         # full-search (recorded) move or a fast (non-recorded) move. The native
@@ -1604,6 +2958,12 @@ def _generate_games_native(
         # below; game advancement happens identically for both kinds of move.
         if pcr_active:
             is_full = rng.random(len(active_games)) < playout_cap_frac
+            # Recorded-move gating is keyed by g_idx (not slot) so it stays
+            # correct when the overlap path partitions `active` post-search;
+            # in the default serial path `active` is unchanged between here
+            # and the post-search loop, so this is byte-identical to the old
+            # slot indexing.
+            full_set = {active[s] for s in range(len(active_games)) if is_full[s]}
             full_slots = [s for s in range(len(active_games)) if is_full[s]]
             fast_slots = [s for s in range(len(active_games)) if not is_full[s]]
             with _profile_timer(profile, "native_search_batch_s"):
@@ -1632,26 +2992,78 @@ def _generate_games_native(
                     _profile_add(profile, "search_calls", 1.0)
         else:
             is_full = None  # every move is full + recorded (production path)
-            with _profile_timer(profile, "native_search_batch_s"):
-                native_mcts.search_batch(
-                    active_games,
-                    search_evaluator,
-                    n_simulations=n_simulations,
-                    wave_size=wave_size,
-                    add_root_noise=True,
-                )
-            _profile_add(profile, "search_calls", 1.0)
+            full_set = None
+            if active_games:  # refill: a round can be emptied pre-search
+                with _profile_timer(profile, "native_search_batch_s"):
+                    native_mcts.search_batch(
+                        active_games,
+                        search_evaluator,
+                        n_simulations=n_simulations,
+                        wave_size=wave_size,
+                        add_root_noise=True,
+                    )
+                _profile_add(profile, "search_calls", 1.0)
+
+        # Oracle/search overlap: join the background solve and apply the
+        # partitions AFTER the search (games the oracle terminates this ply
+        # were searched anyway and are simply dropped — their extra search is
+        # the price of hiding the solve under the MPS wave).
+        if oracle_thread is not None:
+            with _profile_timer(profile, "oracle_join_stall_s"):
+                oracle_thread.join()
+            if "err" in oracle_box:
+                raise oracle_box["err"]
+            active, active_games, pending_vct = _apply_oracle_partitions(
+                oracle_box["res"], active, active_games, planes_list, slot_of,
+                ply_of, initial_plies, trajectories, completed, final_state,
+                record_ownership, record_vct, vct_maps, profile)
+            if not active and not refill:
+                break
 
         next_active: list[int] = []
         with _profile_timer(profile, "post_search_loop_s"):
             for slot_idx, g_idx in enumerate(active):
                 g = active_games[slot_idx]
-                record_target = is_full is None or bool(is_full[slot_idx])
-                tau = 1.0 if ply < temperature_moves else temperature_final
+                ply_g = ply_of[g_idx]
+                record_target = is_full is None or g_idx in full_set
+                tau = 1.0 if ply_g < temperature_moves else temperature_final
                 with _profile_timer(profile, "policy_export_s"):
                     pi = g.policy(temperature=tau)
+                # Sound-world oracle veto (issue #107): zero out proven-blunder
+                # cells and renormalize BEFORE pi is either recorded as the
+                # training target or sampled for play — one masking point, both
+                # consumers. The target stays the net's own visit distribution
+                # (on-policy), just constrained to non-losing moves. NOTE: not
+                # composed with search-contempt (the contempt pick reads raw
+                # visits and could select a vetoed move; don't run both).
+                if _ORACLE_VETO_ENABLED:
+                    vmap = pending_vct.get(g_idx)
+                    if vmap is not None and vmap.any():
+                        with _profile_timer(profile, "oracle_veto_mask_s"):
+                            # The root hasn't advanced since the oracle solve,
+                            # so this ply's planes are reusable (same values as
+                            # a fresh g.root_planes() export).
+                            legal = _legal_mask_from_planes(
+                                planes_list[slot_of[g_idx]])
+                            pi = _veto_policy(pi, vmap, legal)
+                            _profile_add(profile, "oracle_veto_masked", 1.0)
+                # Attacker-preserve (issue #116, idea #2): when the mover has a
+                # CLEAN proven VCT, restrict pi to the winning first moves so the
+                # net learns to CLOSE on-policy. Applied AFTER the veto (a
+                # winning move never hands the opponent a VCT, so the veto never
+                # touches it — the preserve set is a strict subset of the
+                # non-blunder set) and BEFORE pi is recorded or sampled — the
+                # same one masking point, both consumers.
+                if _ATTACKER_PRESERVE_ENABLED:
+                    pmaps = oracle_box.get("preserve")
+                    if pmaps is not None:
+                        pmask = pmaps[slot_of[g_idx]]
+                        if pmask is not None and pmask.any():
+                            with _profile_timer(profile, "attacker_preserve_mask_s"):
+                                pi = _preserve_policy(pi, pmask)
+                                _profile_add(profile, "attacker_preserve_masked", 1.0)
                 n_initial = initial_plies[g_idx]
-                side = (n_initial + ply) % 2
+                side = (n_initial + ply_g) % 2
                 # Sanitize pi before recording the training example: NaN entries
                 # from the native MCTS policy export must not enter the buffer.
                 # _sample_action handles NaN for the *play* path, but trajectories
@@ -1670,9 +3082,19 @@ def _generate_games_native(
                             else:
                                 pi = pi / s
                     with _profile_timer(profile, "root_planes_s"):
-                        planes = g.root_planes()
+                        # Reuse this ply's oracle plane export when available
+                        # (the root hasn't advanced; same values, one fewer
+                        # native materialization). Nothing mutates these
+                        # arrays, so storing the shared reference is safe.
+                        if planes_list is not None:
+                            planes = planes_list[slot_of[g_idx]]
+                        else:
+                            planes = g.root_planes()
                     with _profile_timer(profile, "trajectory_append_s"):
                         trajectories[g_idx].append((planes, pi.copy(), side))
+                        if record_vct:
+                            # Keep vct_maps in lockstep with the recorded traj.
+                            vct_maps[g_idx].append(pending_vct.get(g_idx))
 
                 with _profile_timer(profile, "sample_action_s"):
                     # Search-contempt (Derby 'x-search-contempt', bead derby-qoq):
@@ -1702,51 +3124,63 @@ def _generate_games_native(
                         outcome_for_black = 0.0
                     if record_ownership:
                         # Post-advance root is the TERMINAL board; side-to-move
-                        # (plane 0) is the non-mover, abs parity (n_initial+ply+1)%2.
+                        # (plane 0) is the non-mover, abs parity (n_initial+ply_g+1)%2.
                         final_state[g_idx] = (
                             np.asarray(g.root_planes()).copy(),
-                            (n_initial + ply + 1) % 2,
+                            (n_initial + ply_g + 1) % 2,
                         )
-                    completed.append((g_idx, outcome_for_black, n_initial + ply + 1))
+                    completed.append((g_idx, outcome_for_black, n_initial + ply_g + 1))
+                elif ply_g + 1 >= max_plies:
+                    # Per-game max-plies draw (the legacy loop's post-while
+                    # retirement, moved inline for the per-game ply world).
+                    if record_ownership:
+                        final_state[g_idx] = (None, 0)  # ownership MASKED OUT (None), not scored
+                    completed.append((g_idx, 0.0, n_initial + max_plies))
                 else:
                     next_active.append(g_idx)
+                ply_of[g_idx] = ply_g + 1
+
+        # Continuous refill: seed replacements the moment games finish, so the
+        # next round's merged solve + search wave stay at full width.
+        if refill and len(games) < n_games:
+            with _profile_timer(profile, "game_setup_s"):
+                while len(games) < n_games and len(next_active) < width:
+                    next_active.append(_seed_game())
+
+        # Free finished games' native trees now (never touched again); on the
+        # streaming path also build + hand off chunks and drop their per-game
+        # state so memory stays flat over an unbounded run.
+        if completed and len(completed) > n_done_before:
+            for g_idx, _o, _p in completed[n_done_before:]:
+                games[g_idx] = None
+            if flush_records is not None:
+                flush_queue.extend(completed[n_done_before:])
+                del completed[n_done_before:]
+                if len(flush_queue) >= flush_games:
+                    with _profile_timer(profile, "record_build_s"):
+                        chunk = [_build_record(g, o, p) for g, o, p in flush_queue]
+                    for g_idx, _o, _p in flush_queue:
+                        trajectories[g_idx] = []
+                        vct_maps[g_idx] = []
+                        final_state.pop(g_idx, None)
+                    flush_queue.clear()
+                    flush_records(chunk)
 
         active = next_active
-        ply += 1
 
-    for g_idx in active:
-        if record_ownership:
-            final_state[g_idx] = (None, 0)  # max-plies draw -> ownership MASKED OUT (None), not scored
-        completed.append((g_idx, 0.0, initial_plies[g_idx] + ply))
+    if flush_records is not None:
+        # Streaming: everything goes through the callback; flush the remainder.
+        if flush_queue:
+            with _profile_timer(profile, "record_build_s"):
+                chunk = [_build_record(g, o, p) for g, o, p in flush_queue]
+            flush_queue.clear()
+            flush_records(chunk)
+        return []
 
     records: list[GameRecord] = []
     with _profile_timer(profile, "record_build_s"):
         for g_idx, outcome_for_black, plies in sorted(completed):
-            examples: list[SelfPlayExample] = []
-            n_initial = initial_plies[g_idx]
-            traj = trajectories[g_idx]
-            ownership = None
-            if record_ownership:
-                fp, term_side = final_state.get(g_idx, (None, 0))
-                ownership = _ownership_target(fp, term_side, outcome_for_black)
-            finalized = _apply_teachers_to_trajectory(
-                traj, outcome_for_black, vcf_teacher=vcf_teacher,
-                vct_teacher=vct_teacher, defense_teacher=defense_teacher,
-                profile=profile)
-            for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
-                pi, z = finalized[ply_idx]
-                ply_at_capture = n_initial + ply_idx
-                aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
-                examples.extend(_build_examples(
-                    planes, pi, z, side, ply_at_capture, aux_pi,
-                    augment_symmetries, profile, ownership=ownership,
-                ))
-            records.append(GameRecord(
-                examples=examples,
-                plies=plies,
-                outcome=outcome_for_black,
-                archive_start=archive_start_flags[g_idx],
-            ))
+            records.append(_build_record(g_idx, outcome_for_black, plies))
 
     return records
 
@@ -1767,6 +3201,8 @@ def generate_games(
     augment_symmetries: bool = True,
     wave_size: int = 1,
     random_opening_moves: int = 0,
+    swap2: bool = False,
+    fixed_openings: bool = False,
     archive: dict | None = None,
     archive_start_frac: float = 0.0,
     playout_cap_frac: float = 1.0,
@@ -1782,11 +3218,32 @@ def generate_games(
     defense_teacher: bool = False,
     record_aux: bool = False,
     record_ownership: bool = False,
+    record_vct: bool = False,
+    concurrent_games: int = 0,
+    flush_records=None,
+    flush_games: int = 32,
+    refresh_evaluator=None,
 ) -> list[GameRecord]:
     """Generate `n_games` self-play games in parallel.
 
     All games advance in lockstep: at each ply we batch-MCTS across active games,
     sample an action per game, apply it, and remove any games that ended.
+
+    `concurrent_games` > 0 (native path only) caps the active set at that width
+    and seeds a replacement game the moment one completes (continuous refill,
+    issue #112): every merged oracle solve costs one ~44 ms tail regardless of
+    width, so keeping the batch full amortizes it over `concurrent_games` games
+    instead of a lockstep batch's thinning tail. 0 (default) = legacy lockstep,
+    byte-identical. Ignored (with the lockstep behavior) on the pure-Python and
+    Gumbel fallback paths.
+
+    `flush_records` (native path only) switches to streaming delivery: completed
+    games are built into GameRecords and handed to the callback in chunks of
+    `flush_games` (their per-game state is freed, so memory stays flat over an
+    unbounded run) and the function returns []. `refresh_evaluator` (native path
+    only) is called once per round; returning a new evaluator hot-swaps the net
+    between rounds — in-flight games keep their trees and finish under the new
+    weights (the standard continuous-self-play shape).
 
     `gumbel_root=True` switches the ROOT to Gumbel AlphaZero selection + Sequential
     Halving (Danihelka et al. 2022): the root samples `gumbel_m` candidate actions
@@ -1841,7 +3298,24 @@ def generate_games(
     positions cost zero solver calls. Applied at the same record-build seam.
     """
     rng = rng or np.random.default_rng()
+    if swap2 and random_opening_moves > 0:
+        # Swap2 owns the opening; the two openings are mutually exclusive.
+        raise ValueError(
+            "swap2 and random_opening_moves are mutually exclusive "
+            "(swap2 negotiates the opening; set random_opening_moves=0)"
+        )
+    if fixed_openings and (swap2 or random_opening_moves > 0):
+        # The fixed balanced opening book places the opening directly; it is
+        # mutually exclusive with swap2 negotiation and random openings.
+        raise ValueError(
+            "fixed_openings is mutually exclusive with swap2 and "
+            "random_opening_moves (the opening book owns the opening)"
+        )
     if gumbel_root:
+        if _VCT_TERMINUS_ENABLED:
+            raise NotImplementedError(
+                "--vct-terminus is not wired into the Gumbel generation paths; "
+                "run the native / Python (non-Gumbel) path (drop gumbel_root).")
         # Gumbel root selection + Sequential Halving. When the native C engine
         # is available AND implements the Gumbel batch path, use it — it
         # inherits the wave-batching that keeps Gumbel wall-comparable to native
@@ -1860,6 +3334,8 @@ def generate_games(
                 augment_symmetries=augment_symmetries,
                 wave_size=wave_size,
                 random_opening_moves=random_opening_moves,
+                swap2=swap2,
+                fixed_openings=fixed_openings,
                 archive=archive,
                 archive_start_frac=archive_start_frac,
                 profile=profile,
@@ -1886,6 +3362,8 @@ def generate_games(
             rng=rng,
             augment_symmetries=augment_symmetries,
             random_opening_moves=random_opening_moves,
+            swap2=swap2,
+            fixed_openings=fixed_openings,
             archive=archive,
             archive_start_frac=archive_start_frac,
             profile=profile,
@@ -1914,6 +3392,8 @@ def generate_games(
             augment_symmetries=augment_symmetries,
             wave_size=wave_size,
             random_opening_moves=random_opening_moves,
+            swap2=swap2,
+            fixed_openings=fixed_openings,
             archive=archive,
             archive_start_frac=archive_start_frac,
             playout_cap_frac=playout_cap_frac,
@@ -1925,14 +3405,25 @@ def generate_games(
             defense_teacher=defense_teacher,
             record_aux=record_aux,
             record_ownership=record_ownership,
+            record_vct=record_vct,
+            concurrent_games=concurrent_games,
+            flush_records=flush_records,
+            flush_games=flush_games,
+            refresh_evaluator=refresh_evaluator,
         )
     if max_plies is None:
         max_plies = N_ACTIONS  # full-board fallback (game can't have more than this)
 
     games: list[MCTSGame] = []
     initial_plies: list[int] = []
+    swap2_results: list = []  # per-game Swap2Result (None unless a swap2 opening)
     for _ in range(n_games):
-        if random_opening_moves > 0:
+        swap2_res = None
+        if swap2:
+            start_state, opening_plies, swap2_res = _swap2_opening_state(evaluator, rng)
+        elif fixed_openings:
+            start_state, opening_plies = _fixed_opening_state(rng)
+        elif random_opening_moves > 0:
             start_state, opening_plies = _random_opening_state(rng, random_opening_moves)
         else:
             start_state, opening_plies = GameState.initial(), 0
@@ -1941,10 +3432,14 @@ def generate_games(
                               forced_playout_k=forced_playout_k,
                               rng=np.random.default_rng(rng.integers(0, 2**31))))
         initial_plies.append(opening_plies)
+        swap2_results.append(swap2_res)
 
     # Per-game trajectory of (planes, pi, side_to_move_at_that_ply)
     # side_to_move is encoded as 0 for the player who moved first ("black"), 1 for the other.
     trajectories: list[list[tuple[np.ndarray, np.ndarray, int]]] = [[] for _ in range(n_games)]
+    # Moonshot VCT-defense per-ply targets, in LOCKSTEP with `trajectories` (see
+    # the native path for the alignment contract). Off => never populated.
+    vct_maps: list[list] = [[] for _ in range(n_games)]
     active: list[int] = list(range(n_games))
     completed: list[tuple[int, float, int]] = []  # (game_idx, outcome_for_black, plies)
     final_state: dict[int, tuple[np.ndarray, int]] = {}
@@ -1952,6 +3447,25 @@ def generate_games(
     ply = 0
     while active and ply < max_plies:
         active_games = [games[i] for i in active]
+        # VCT-terminus (issue #98): same batched pre-search test as the native
+        # path; the Python game exposes planes via g.root.state.to_planes().
+        pending_vct: dict[int, np.ndarray | None] = {}
+        if _VCT_TERMINUS_ENABLED:
+            planes_list = [g.root.state.to_planes() for g in active_games]
+            active, active_games = _vct_terminus_partition(
+                active, active_games, planes_list, ply, initial_plies,
+                trajectories, completed, final_state, record_ownership, profile)
+            if not active:
+                break
+            # Moonshot VCT-defense labeler over the surviving positions (one bulk
+            # escape-solve per ply); attached to this ply's recorded position.
+            if record_vct:
+                surv_planes = [g.root.state.to_planes() for g in active_games]
+                vmaps_ply, vmasks_ply = _vct_defense_solve(
+                    surv_planes, max_cands=_VCT_DEFENSE_MAX_CANDS)
+                for k, g_idx in enumerate(active):
+                    pending_vct[g_idx] = (
+                        vmaps_ply[k] if vmasks_ply[k].any() else None)
         if wave_size > 1:
             run_batched_mcts_waves(
                 active_games,
@@ -1983,6 +3497,8 @@ def generate_games(
             n_initial = initial_plies[g_idx]
             side = (n_initial + ply) % 2
             trajectories[g_idx].append((g.root.state.to_planes(), pi.copy(), side))
+            if record_vct:
+                vct_maps[g_idx].append(pending_vct.get(g_idx))
 
             action = _sample_action(pi, rng)
             g.advance_root(action)
@@ -2029,15 +3545,24 @@ def generate_games(
             traj, outcome_for_black, vcf_teacher=vcf_teacher,
             vct_teacher=vct_teacher, defense_teacher=defense_teacher,
             profile=profile)
+        vmaps = vct_maps[g_idx] if record_vct else None
         for ply_idx, (planes, _pi_orig, side) in enumerate(traj):
             pi, z = finalized[ply_idx]
             ply_at_capture = n_initial + ply_idx
             aux_pi = _aux_target_for(traj, ply_idx, side) if record_aux else None
+            # Per-ply vct map (None for terminal VCT-terminus positions past the
+            # recorded-position count → masked out of the loss).
+            vct = (vmaps[ply_idx]
+                   if vmaps is not None and ply_idx < len(vmaps) else None)
             examples.extend(_build_examples(
                 planes, pi, z, side, ply_at_capture, aux_pi,
-                augment_symmetries, None, ownership=ownership,
+                augment_symmetries, None, ownership=ownership, vct=vct,
             ))
-        records.append(GameRecord(examples=examples, plies=plies, outcome=outcome_for_black))
+        records.append(GameRecord(
+            examples=examples, plies=plies, outcome=outcome_for_black,
+            choice_examples=_choice_examples_for_game(
+                swap2_results[g_idx], outcome_for_black),
+        ))
 
     return records
 
