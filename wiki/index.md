@@ -13,7 +13,8 @@ session starts smarter than the last.
 3. **Squeeze the M5 Max** — treat one Mac as a knowable mainframe and get
    everything out of it.
 
-**You are here.** *(full milestone index: [training-timeline.md](training-timeline.md))*
+**You are here.** *(the narrative arc: **[story.md](story.md)** · full milestone
+index: [training-timeline.md](training-timeline.md))*
 - **Started** *(2026-05-17)*: the origin 9×9 run (`o9npssu1`) collapsed to
   defensive draws by epoch 136 — establishing the baseline profile where
   **generation dominates training 25–30×** in wall-clock. The first thing to
@@ -70,9 +71,13 @@ the live surfaces you touch to run and promote work. The three you'll want most:
 
 ## How this wiki works (the operating model)
 
+- **Curating knowledge INTO the wiki? → [curation.md](curation.md)** — the whole
+  playbook (layer map, status banners, settled-verdict-first, rotation, lint).
 - **Hub-of-hubs.** This page is one screen and one fetch. Each hub tells the same
   self-similar story — **started → now → learned + links** — and *prose lives in
   the leaf pages*, never in the hub tables. Each hub also fits one fetch.
+- **The story layer.** [story.md](story.md) is the maintained narrative arc
+  (prologue → chapters → epilogue); update it at era boundaries.
 - **What-worked / what-didn't live *inside* each hub**, next to their evidence —
   not as a front-page list (that would drift).
 - **Evidence vs synthesis.** [TRAINING_WIKI.md](../TRAINING_WIKI.md) is the
