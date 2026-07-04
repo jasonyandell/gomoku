@@ -6,6 +6,19 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] New topic: wiki-curation-lessons — the portable meta
+
+Closing synthesis of the whole curation effort, written for export to Jason's
+other projects: [wiki-curation-lessons.md](topics/wiki-curation-lessons.md).
+Nine lessons with local evidence — chronicle-itis lives at the leaves,
+staleness flows upward, query-is-a-write-operation, mechanism-over-vigilance
+(the day's four vigilance failures + their tool fixes), git-is-the-archive,
+test-with-cold-agents-and-count-fetches, the load-bearing separations,
+self-hosted schema + the minimal-instruction bar, curation-is-a-pass /
+maintenance-is-a-loop. Linked from reference.md (conventions table) and
+curation.md. Includes a bootstrap recipe for starting a new project's wiki
+from these parts.
+
 ## [2026-07-04] Chronicle-itis check adjudicated: all 13 >25 KB topics KEEP-AS-IS
 
 The lint's 13 size notices were formally reviewed (Opus, conservative rules).

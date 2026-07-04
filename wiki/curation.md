@@ -4,7 +4,8 @@
 page is the whole instruction. It extends
 [wiki-operating-model](topics/wiki-operating-model.md) (the philosophy) with
 the concrete rules the 2026-07-04 reorganization established. If this page and
-a habit disagree, this page wins.
+a habit disagree, this page wins. *(The exportable why behind these rules:
+[wiki-curation-lessons](topics/wiki-curation-lessons.md).)*
 
 ## The layer map (where things live)
 
