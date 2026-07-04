@@ -20,6 +20,11 @@ agent-instruction files.
 General read order: wiki → `TRAINING_WIKI.md` → W&B/logs/checkpoints → code
 (dynamics are subtle; code inspection alone usually misleads).
 
+**Remembering / curating anything into the wiki?** `wiki/curation.md` is the
+whole instruction: the routing table (where each input class lands) + the
+query rule (answers synthesized from 2+ pages get filed back) + rotation and
+lint. Don't improvise structure — read it first.
+
 ## Repo shape
 - `gomoku/`: `game.py` (9×9 state, D4 aug), `model.py` (residual policy/value +
   checkpoint format), `mcts.py` (PUCT, wave-batched eval), `self_play.py` /
@@ -55,6 +60,11 @@ Prefer MPS over CPU. W&B project: `gomoku` (pull exact run histories, don't gues
   entangles diffs and blocks clean merges. **Never rebase, fast-forward, squash.**
   Start with `python scripts/worktree_session.py add <slug>` — records the owning
   session for `claude --resume <id>` (`worktree_session.py log` survives teardown).
+  **Then actively `EnterWorktree` (path = the worktree)** — subagents and shell
+  calls inherit the SESSION's cwd, not the conversational "current worktree"; a
+  subagent spawned without absolute paths will silently act on the main checkout
+  (confirmed 2026-07-04). EnterWorktree pins the session so everything inherits
+  the worktree by default — mechanism, not vigilance.
 - **Worktree cleanup is MANUAL and careful.** The auto-janitor
   (`reclaim_worktrees.py`) is retired (2026-07-01): it removed a worktree a
   LIVE training run was executing from — "clean + merged" says nothing about

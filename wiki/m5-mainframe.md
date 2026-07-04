@@ -19,7 +19,9 @@ sequence for the perf era on Jason's M5 Max.
 | **[m5-max-fp16-and-throughput-regimes.md](topics/m5-max-fp16-and-throughput-regimes.md)** ⭐ | **Flagship perf findings**: fp16-on-MPS reversal (+97% eval), bandwidth-vs-dispatch regimes, independent levers compose multiplicatively (2.529× vs 2.530× predicted). |
 | [perf-bench-vs-real-training-cost.md](topics/perf-bench-vs-real-training-cost.md) | The fp16 epilogue: the +152% bench measured cold-buffer generation; the real run runs away to ~3–7 min/epoch — a bench that stops before buffer-fill is non-predictive. |
 | [mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) | Where MCTS gen-time wins are and are not. Don't re-port "v2 storage" — we're already there. **2026-07 perf blitz: the gen-loop thread is CLOSED** — in the oracle-dominated regime the VCT solver is ~90%+ of 13×13 gen wall, so the levers all landed on the *solver* (cap25 budget flip #114 + `lanes=K` kernel #114 + one-worker refill #112), not the MCTS loop. |
-| [15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md) | Measured board/net scaling on MPS (96×8 @15×15 costs only 2.32× at wave=64); week-scale feasibility envelope. |
+| [batched-eval-arena.md](topics/batched-eval-arena.md) | Current core eval infra (`gomoku/arena.py`, 2026-07-01): bulk matches at self-play speed by batching net leaf-evals across the whole field. ~6–120× faster eval; batched VCT finisher; default eval path with byte-identical legacy escape hatches. |
+| [wall-clock-to-elo-metric.md](topics/wall-clock-to-elo-metric.md) | _Design-only spec_: the R-ELO-\* metric family (MTTE + EPWH) — wall-clock-to-elo as the runaway-proof objective the throughput proxies must be checked against. Not yet implemented. |
+| 15x15-era-feasibility-and-plan.md *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/15x15-era-feasibility-and-plan.md`)* | Measured board/net scaling on MPS (96×8 @15×15 costs only 2.32× at wave=64); week-scale feasibility envelope. |
 | **[coreml-design-envelope-and-our-fit.md](topics/coreml-design-envelope-and-our-fit.md)** | **Canonical ANE/Core ML entry**: why Core ML misfits our tiny high-rate workload; the RangeDim bug that faked prior "ANE" results; the value is contention-immunity, not throughput. |
 | [coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) | Rail-proof lab for ANE residency claims (powermetrics-gated). |
 | [ane-int8-inference.md](topics/ane-int8-inference.md) | _Historical_ — the WL5-era ANE int8 scout; **superseded by coreml-design-envelope**. |
@@ -36,7 +38,7 @@ wedge*.)
 
 ## Full page index — every page in this hub
 
-*Complete map (10 pages); the sections above surface the headline ones.*
+*Complete map (12 pages); the sections above surface the headline ones.*
 
 | Page | Note |
 |---|---|
@@ -44,6 +46,8 @@ wedge*.)
 | [mcts-perf-ceiling.md](topics/mcts-perf-ceiling.md) |  |
 | [m5-max-fp16-and-throughput-regimes.md](topics/m5-max-fp16-and-throughput-regimes.md) | flagship perf findings |
 | [perf-bench-vs-real-training-cost.md](topics/perf-bench-vs-real-training-cost.md) | the fp16 epilogue / runaway trap |
+| [batched-eval-arena.md](topics/batched-eval-arena.md) | current core eval infra (2026-07-01) |
+| [wall-clock-to-elo-metric.md](topics/wall-clock-to-elo-metric.md) | design-only spec (R-ELO-\* / MTTE + EPWH) |
 | [m5-max-cross-engine-coupling.md](topics/m5-max-cross-engine-coupling.md) |  |
 | [coreml-design-envelope-and-our-fit.md](topics/coreml-design-envelope-and-our-fit.md) | canonical ANE entry |
 | [coreml-ane-residency-lab.md](topics/coreml-ane-residency-lab.md) |  |

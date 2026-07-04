@@ -1,6 +1,6 @@
 # Rapfi idx-2 distillation mine — the "Bruce Lee one-position" experiment
 
-**Status: BANKED — successful infra/tooling run (2026-06-25).** Full pipeline ran
+**Status: DORMANT — banked, successful infra/tooling run (2026-06-25), reactivatable.** Full pipeline ran
 end-to-end and is preserved in this worktree; training stopped by choice at AZ
 epoch 250 (a new experiment follows). The deliverable here was the *infrastructure*,
 and it all works. This page is the synthesis; raw run detail goes to `TRAINING_WIKI.md`.
@@ -52,7 +52,8 @@ is not a virtue here; **depth on one position is**.
 
 A reusable, crash-robust, max-throughput harness to mine `(position, Rapfi soft
 policy+value)` pairs by BFS over a fixed opening. Built because the in-process
-`RapfiPool` could not feed many engines (see Throughput below).
+`RapfiPool` could not feed many engines (see Throughput below; the warm
+`RapfiPool` itself is documented in [rapfi-pool.md](rapfi-pool.md)).
 
 - **`canonical.py`** — D4-canonical state hashing. Stores ONE representative per
   symmetry class; the trainer's existing sample-time D4 augment recovers the 8×.

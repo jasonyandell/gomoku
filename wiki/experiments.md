@@ -11,7 +11,7 @@ it cleanly. The largest by far is the **seek-VCT program** — it gets its own h
 
 | Sub-hub | The thesis |
 |---|---|
-| **⭐ [Seek-VCT program](seek-vct.md)** | The net *steers*, the GPU oracle *finishes* (anti-correlated tractability). A dozen+ threads: the mega-VCT solver, backward/reachability mining, the shape-library engine, the learnability trilogy, the corpus-scale cascade. **This is the current live research frontier.** |
+| **⭐ [Seek-VCT program](seek-vct.md)** | The net *steers*, the GPU oracle *finishes* (anti-correlated tractability). A dozen+ threads: the mega-VCT solver, backward/reachability mining, the shape-library engine, the learnability trilogy, the corpus-scale cascade. **This is the current live research frontier.** Newest results: [VCT-terminus self-play](topics/vct-terminus-selfplay-result.md) (#100/#101) · [VCT-defense aux head](topics/vct-defense-aux-head-result.md) (#103). |
 
 ## Other threads
 

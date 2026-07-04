@@ -1,4 +1,5 @@
 # The net's architecture AND its representation design (incl. the recovered "Fable" rationale)
+> **Status: LIVE** *(2026-07-04)* — numbers re-measured 2026-07-02.
 
 **One-line synthesis.** The gomoku net is a small AlphaZero-style residual conv
 trunk with two heads (policy + value); the *interesting* engineering is not the

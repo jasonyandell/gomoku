@@ -1,5 +1,7 @@
 # Registering a contestant with the Δelo Derby (the intake model)
 
+> **Status: HISTORICAL** *(2026-07-04)* — intake mechanics for the CLASSIC `delo_derby`, **stopped at v9 2026-05-27** (see [../derby.md](../derby.md)). Preserved as the registration design of record; the `gomoku-derby-runner` loop it fed is not running.
+
 How a new idea becomes a derby lane. This is the **synthesis / source of truth**; the
 operational playbook (commands, templates) is the `gomoku-derby-register` skill, and the
 loop that *consumes* registrations is `gomoku-derby-runner`. Governance (who gates) lives

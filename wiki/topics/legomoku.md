@@ -1,6 +1,6 @@
 # LeGomoku — latent-space world models for a rule-following game
 
-**Status: brainstorm** (2026-07-03, Jason + Claude, no code yet). An experiment
+**Status: LIVE (brainstorm seed)** (2026-07-03, Jason + Claude, no code yet). An experiment
 hub-in-waiting — expected to grow child pages if/when spikes run. **No strong
 claims anywhere on this page; predictions are pre-stated bets, not conclusions.**
 Named goal is double: (a) see if a world model can make a *better search*, and

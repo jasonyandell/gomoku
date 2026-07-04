@@ -1,6 +1,6 @@
 # The continuous research loop
 
-> **Historical / paused.** The autonomous flywheel described here has **stopped**
+> **Status: HISTORICAL / paused** *(dated 2026-07-04)*. The autonomous flywheel described here has **stopped**
 > (see [derby.md](../derby.md) for status). Kept as the intake + governance design
 > record; the roles and rules below still describe how the loop was wired.
 

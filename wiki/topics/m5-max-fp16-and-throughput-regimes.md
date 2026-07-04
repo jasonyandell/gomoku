@@ -1,5 +1,10 @@
 # M5 Max self-play eval on MPS: bandwidth vs dispatch regimes (and the fp16-on-MPS reversal)
 
+> **Status: LIVE (2026-05-23).** Canonical owner of the fp16-on-MPS reversal
+> finding. **Caution:** Finding 3's throughput compound is a *generation* win — in
+> a real training run that same recipe runs away; read its cautionary epilogue,
+> [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md).
+
 *Findings from the gomoku AlphaZero perf lab on 2026-05-23. Hardware: MacBook Pro Mac17,6, Apple M5 Max, 48 GB, macOS 26.4.1. PyTorch 2.11.0 with `Conv2d + BatchNorm2d` fused for inference. Workload: ResNet-style policy/value network, MCTS-driven self-play in this repo's `gomoku` module.*
 
 This page documents three findings about PyTorch-on-MPS eval throughput on Apple silicon that surprised us, contradict prevailing folk wisdom, and (as far as we've been able to find) are not in Apple's published docs. Numbers are reproducible from the receipts in this repo; commands inline.
@@ -174,7 +179,7 @@ These findings are specific to the conditions we measured. We're being explicit 
 - **Pure-inference eval workload.** The fp16 path here is "model.half(), inputs cast to half, outputs cast back to float." Training-side fp16 (mixed-precision SGD with loss scaling) is a different game with different concerns; we did NOT measure that, and `gomoku.train` stays fp32.
 - **Specific model scales.** `small` here is ~325k params; `medium` is ~1.5M. If your model is much smaller (< 50k), Finding 2 suggests you may be in the dispatch-bound regime where fp16 doesn't help. Reference: tiny at V=512 = +3.6%.
 - **Apple M5 Max specifically.** Chip-level findings don't necessarily transfer to M1/M2/M3/M4 Max or Pro variants. The bandwidth/dispatch threshold (Finding 2) is plausibly chip-specific because it depends on the GPU's compute-to-memory ratio.
-- **Findings 1 and 3 went through the [lab's Training-Quality Promotion Gate](../ops/experiment-ledger.md#training-quality-promotion-gate):** any throughput finding that touches training-behavior knobs (Finding 3's `sgd_per_position` change) is recorded as `needs_repeat` for production adoption, not `promote`. The perf lab's job is to identify levers; certifying a knob for production requires a separate canary training run with validation-archive metrics. **Finding 1's fp16 win is a clean perf promote (no MCTS-boundary behavior change); Finding 3's compound is a perf reference only, with a TQ canary gate for any production adoption.**
+- **Findings 1 and 3 went through the [lab's Training-Quality Promotion Gate](../ops/promotion-gate.md#training-quality-promotion-gate):** any throughput finding that touches training-behavior knobs (Finding 3's `sgd_per_position` change) is recorded as `needs_repeat` for production adoption, not `promote`. The perf lab's job is to identify levers; certifying a knob for production requires a separate canary training run with validation-archive metrics. **Finding 1's fp16 win is a clean perf promote (no MCTS-boundary behavior change); Finding 3's compound is a perf reference only, with a TQ canary gate for any production adoption.**
 
 ## Receipts and primary sources
 
@@ -195,6 +200,7 @@ The session narrative is in [`wiki/ops/perf-log.md`](../ops/perf-log.md) under t
 
 ## Cross-refs
 
+- [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md) — **the cautionary epilogue to Finding 3.** The +152% throughput compound this page measured honestly as a *generation* win became an unbounded per-epoch runaway in a real training run once the replay buffer filled. Read it before treating any throughput compound here as a training-speed claim.
 - [research-lab-charter.md](research-lab-charter.md) — the lab's mission, autonomy boundaries, and stop-gates triage.
 - [m5-max-as-mainframe.md](m5-max-as-mainframe.md) — parent philosophy: treat the chip as a knowable mainframe and tune it specifically.
 - [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — what was already optimized in our MCTS before this cycle (saves reviewers from re-suggesting known-done work).

@@ -50,7 +50,7 @@ reckoning, since fixed). See
 | Cross-board warm-start + the 9→11→13→15 ladder | [board-size-transfer-and-warm-start.md](topics/board-size-transfer-and-warm-start.md) |
 | The sound-world recipe (current frontier) | [sound-world-recipe.md](topics/sound-world-recipe.md) |
 | Every knob & switch to launch/tune a run | [training-run-reference.md](topics/training-run-reference.md) |
-| Run designs (preserved records) | [WL1](topics/wave-of-lockstep-design.md) · [WL2](topics/wl2-scale-emulation-design.md) · [WL5](topics/wl5-diagnostics-archive-start-design.md) |
+| Run designs (preserved records) | [WL1](topics/wave-of-lockstep-design.md) · [WL2+WL5 index](topics/wl-era.md) |
 
 ## What worked
 
@@ -86,13 +86,19 @@ principled fixes confirmed at the data level (strength-vs-champion still open):
 **swap2** ([swap2-opening-protocol.md](topics/swap2-opening-protocol.md)) and
 **fixed-fair-openings** ([card](cards/gomoku-15x15-fixed-fair-openings.md)).
 
-**Live "what next" (untried, after the 13×13 negative):**
-- **Role-invariant symmetric rails** — drop the terminus, cure white-starvation
-  on-policy (the terminus ejects white before it ever learns defense).
-- **Attacker-preserve closing** on top of rails.
+**Live "what next" (updated 2026-07-04, after the 13×13 negative):**
+- **Rails-v0 TRIED** (2026-07-03, #116, wandb `vraf0b6e`, 15×15 idx-2) — partial:
+  dropping the terminus + attacker-preserve DID record white positions (the cure
+  worked), but on the black-tilted idx-2 opener white re-collapsed and the
+  forced-win tails **poisoned value** (vl→0.03, death-tell tripped); closed at
+  e5524. Removing the terminus is necessary but NOT sufficient on a side-favored
+  opening. [sound-world-recipe.md](topics/sound-world-recipe.md) § rails-v0.
+- **Next levers, in order:** (1) **tail subsampling** (`--tail-subsample`, #118 —
+  staged, byte-identical off, Jason-gated); (2) a **fairer opening** (swap2 / a
+  less black-favored opener than idx-2).
 - **The pivotal unknown: is 13×13 a forced black win?** 15×15 is proven, 9×9 is
-  drawish, **13×13 is UNKNOWN** — probe it with the mega-VCT oracle. Rails alone
-  if drawish; rails + fair openings (swap2/idx-2) if black-win. Full analysis:
+  drawish between sound players (a fast black win within cap50), **13×13 is
+  UNKNOWN** — probe it with the mega-VCT oracle. Full analysis:
   [sound-world-recipe.md](topics/sound-world-recipe.md) § new directions.
 
 ## Full page index — every page in this hub
@@ -101,9 +107,8 @@ principled fixes confirmed at the data level (strength-vs-champion still open):
 
 | Page | Note |
 |---|---|
-| [alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) | 1255-line essay; split into capacity-vs-search / eval-yardstick / white-defense leaves later |
-| [15x15-training-campaign.md](topics/15x15-training-campaign.md) | campaign log; overlaps feasibility |
-| [15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md) | feasibility+phased plan; cross-link m5 |
+| [alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) | the learning artifact; settled-verdicts-first (restructured 2026-07-04) |
+| [15x15-training-campaign.md](topics/15x15-training-campaign.md) | the 15×15 era (feasibility merged in 2026-07-04) |
 | [training-run-lineage.md](topics/training-run-lineage.md) |  |
 | [training-run-reference.md](topics/training-run-reference.md) | also on workflow-train |
 | [launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | launch runbook; also workflow-train |
@@ -118,8 +123,7 @@ principled fixes confirmed at the data level (strength-vs-champion still open):
 | [eval-teacher-sensei.md](topics/eval-teacher-sensei.md) | teacher distillation; cross reference |
 | [rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |  |
 | [wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | run design WL1 |
-| [wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md) |  |
-| [wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) |  |
+| [wl-era.md](topics/wl-era.md) | WL2/WL5 index (designs archived 2026-07-04) |
 | [vct-terminus-selfplay-result.md](topics/vct-terminus-selfplay-result.md) | training result; bridges seek-vct |
 | [vct-defense-aux-head-result.md](topics/vct-defense-aux-head-result.md) | training result; bridges seek-vct |
 | [cross-game-value-sidecar.md](topics/cross-game-value-sidecar.md) | derby lever; meta-lesson |

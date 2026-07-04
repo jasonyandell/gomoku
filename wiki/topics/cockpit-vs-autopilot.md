@@ -1,4 +1,5 @@
 # Cockpit vs Autopilot
+> **Status: LIVE** *(2026-07-04)* — operating doctrine.
 
 **Role:** The lab's operating lens for *when to build more autonomy vs. more
 control*. It is a synthesis of Sid Bidasaria's **"Stop babysitting your agents"**

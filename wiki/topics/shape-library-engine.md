@@ -1,5 +1,18 @@
 # The Shape-Library Engine — the gomoku AI: steer toward proven winning shapes, deny the opponent theirs
 
+> **Status (2026-07-04): DORMANT (paused, not dead) — coda below, read first.**
+> - **L0 (exact GPU VCT solver): BUILT + measured** — [mega-vct-solver.md](mega-vct-solver.md).
+> - **L1 (md-invariant stencil miner/minimizer): BUILT + measured** — `md_minimize.py`;
+>   the md-extraction prerequisite that once *blocked* L1 is **DONE** (2026-06-28, #91:
+>   `max_depth`/`solve_md_min`), so every "blocking prerequisite / not cracked yet" note
+>   in §3 below is **resolved** (see §8). The open L1 refinement is *openings*-ablation
+>   (stencils are still over-inclusive → the vocabulary/saturation question stays open).
+> - **L2 (learned meta-VCT field) and the fork-seeking player: DESIGN-NEVER-BUILT** (§4/§5).
+> - **Program status: PAUSED, not dead.** No 2026-07 activity on the stencil-player; the
+>   project's live front moved to the **sound-world recipe** ([sound-world-recipe.md](sound-world-recipe.md))
+>   and 13×13, which realizes the same seek-VCT thesis via oracle-in-the-environment. The
+>   plan below stands as the design of record; revive from the §8 NEXT list.
+
 **One-line thesis.** Compile Allis's threat theory *out of data* instead of hand-building
 it: mine every game for its proven winning **shapes**, reduce each to the exact minimal
 configuration that makes the win inevitable, and play by finding the shortest *forcing*
@@ -186,7 +199,9 @@ correction below.
 > md-extraction (the move/depth-out-of-the-kernel work open since
 > [vct-backward-mining.md](vct-backward-mining.md) §5) moves from "nice to have" to a **blocking
 > prerequisite for L1** — or we depth-cap solves (e.g. "still win at `md−1`?" detects a
-> shortening). *Not cracked yet; written down. We try, we learn, we write it down.*
+> shortening). **RESOLVED 2026-06-28 (#91): this blocker is GONE** — the depth-cap variant
+> `max_depth`/`solve_md_min` gives order-independent mate distance on GPU, and the md-invariant
+> minimizer `md_minimize.py` is built + measured (see §8). *We tried, we learned, we wrote it down.*
 
 What survives md-invariant ablation is the stencil: the attacker skeleton, the empties the
 forcing sequence needs, and the load-bearing `W` stones that pin this exact line. The algorithm

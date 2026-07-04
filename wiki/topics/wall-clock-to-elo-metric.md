@@ -1,4 +1,5 @@
 # Wall-clock-to-elo as a first-class metric family (LF1-followup #4)
+> **Status: DESIGN-NEVER-BUILT** *(2026-07-04)* — 2026-05-23 spec; MTTE/EPWH family unimplemented.
 
 *Design document. Drafted 2026-05-23 in worktree `feat/perf-LF1-metric-design`,
 as LF1-followup lane #4 from
@@ -246,7 +247,7 @@ lane**; it is the implementation follow-up this page justifies.
 
 **A wall-clock-to-elo win with degraded validation CE is not a win.** This is
 not optional — it is what separated "real" from "gamed" in LF1, and it is the
-named [Training-Quality Promotion Gate](../ops/experiment-ledger.md#training-quality-promotion-gate)
+named [Training-Quality Promotion Gate](../ops/promotion-gate.md#training-quality-promotion-gate)
 the lab already runs behavior-borderline knobs through.
 
 - **Gate metric:** `val/policy_ce` evaluated against the named fixed archive

@@ -1,5 +1,7 @@
 # Φ distance-to-VCT field learnability — can a net see "which moves move the proof frontier toward my VCT vs theirs?"
 
+> **Status: LIVE** *(2026-07-04)* — feasibility result (trilogy 3/3, first L2 model).
+
 **One-line finding.** The dual **proof-frontier potential** Φ — `phi_off = γ^(my-moves-to-my-next-VCT)`
 and `phi_def = γ^(opp-moves-to-their-next-VCT)` — is **strongly learnable and generalizes** to
 held-out, shard-disjoint games: a **CNN** scores **offense ρ=0.719 / R²=0.761 / reach-AUROC=0.912**

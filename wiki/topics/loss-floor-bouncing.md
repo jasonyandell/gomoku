@@ -1,4 +1,5 @@
 # Loss Floor Bouncing In Small-Scale AlphaZero
+> **Status: LIVE doctrine** *(2026-07-04)* — the bug-vs-healthy triage rule.
 
 Maintained interpretation page for the recurring pattern where policy/total
 loss reaches a low floor, bumps upward, then returns to the floor while fixed

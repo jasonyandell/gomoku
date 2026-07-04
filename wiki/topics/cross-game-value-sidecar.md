@@ -1,5 +1,19 @@
 # Cross-game value sidecar — the lever, and why it kept failing under live flooding
 
+**Status: DEAD-END (lesson kept) — 2026-05-27.** The lever was **shelved**: four
+principled fixes (`derby-eft`→`derby-eda`→`derby-4bq`→round-4) each passed CPU tests
+and each still regressed the derby runner's LIVE re-race. The code stays OFF by
+default and byte-identical when off, pending design attention.
+
+> **The durable keeper (this is why the page exists): VALIDATE INGEST/PERF UNDER
+> LIVE FLOOD SCALE, not CPU-sim.** Per-epoch ingest cost is *inflow-bound*; a toy
+> benchmark under-counts it. Three fixes "passed CPU tests" and still regressed
+> live. Treat the derby runner's **full-load re-race (epoch 50+)** as the only true
+> gate. Corollaries: cheap filter before expensive per-item op (ply-gate before
+> keygen); a hand-rolled per-position hash in a hot ingest loop is a perf liability
+> — vectorize it. This lesson is cited forward by the 15×15 campaign guardrails and
+> the feasibility page's "scars" section.
+
 ## What it is
 The cross-game value aggregation **"position-stats sidecar"**: blend a position's
 single-game value target `z` with a low-variance aggregate of outcomes across ALL

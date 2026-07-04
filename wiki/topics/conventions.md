@@ -1,4 +1,5 @@
 # Lab Conventions
+> **Status: LIVE** *(2026-07-04)* — cross-cutting conventions.
 
 Durable cross-cutting conventions for the gomoku project. Cross-referenced
 from the memory system so any session (current Claude, fresh Claude, other

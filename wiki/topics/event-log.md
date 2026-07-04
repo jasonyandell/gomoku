@@ -1,4 +1,5 @@
 # Lab event log — record what happened + what we observed; view it separately
+> **Status: LIVE tooling** *(2026-07-04)* — post-derby write cadence unverified.
 
 Two layers, deliberately separate (the AGENTS.md model: raw evidence stays
 stable, synthesis is built on top):

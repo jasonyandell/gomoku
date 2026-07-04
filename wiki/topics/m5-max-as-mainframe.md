@@ -1,4 +1,5 @@
 # M5 Max as Mainframe: the 9×9 Perf Proving Ground
+> **Status: LIVE philosophy** *(2026-07-04)* — inline-superseded tables bannered where they sit.
 
 Captured 2026-05-21 during WL5 monitoring as guiding philosophy for the
 post-WL5 perf era and the long arc toward 15×15 + Gomocup submission.

@@ -1,5 +1,13 @@
 # Research Lab Session Runbook
 
+> **Status (2026-07-04): engineering contracts LIVE / perf-cell machinery
+> HISTORICAL.** The reusable *contracts* here — the 8-point resumability
+> contract, the everything-else fan-out pattern, and the receipt/env-capture
+> discipline — are **LIVE** doctrine. The concrete perf-cell / `canonical_sweep.py`
+> sweep machinery this page operates belongs to the **HISTORICAL** perf-derby era
+> (the autonomous loop is stopped; see [../derby.md](../derby.md)). Use the
+> patterns; treat the specific driver recipes as period reference.
+
 How to run a GPU-required lab item (perf cell, training slice, or sweep)
 end-to-end without rediscovering the convention. Sister page to
 [launch-sequence-runbook.md](launch-sequence-runbook.md) (for training

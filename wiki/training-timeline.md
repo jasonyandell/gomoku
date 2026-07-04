@@ -30,7 +30,7 @@ recorded — every row traces to a dated TRAINING_WIKI entry.)*
 | 2026-05-20 | alphazero | `sppjo3z5` stopped e5000: peak **model_elo=1718** @e3881; recovered 5-for-5 (refuted "arcs shrink asymptotically" and "eventually won't recover"). |
 | 2026-05-23 | alphazero | **LF1 correction** (`h9al2e0k`): perf-lab's +152% was *generation* throughput (cold-buffer transient); once the buffer fills, training cost explodes to ~3 min/epoch. |
 
-## Era 2 — WL wave-of-lockstep series (May 21–22)
+## Era 2 — WL wave-of-lockstep series (May 20–22)
 
 | Date | Hub | Milestone |
 |---|---|---|

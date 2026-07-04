@@ -1,5 +1,7 @@
 # Standard gomoku strategy — the "rule of priorities" (reference)
 
+> **Status: LIVE reference** *(2026-07-04)* — human vocabulary ↔ Allis mapping.
+
 External reference page distilling a clear presentation of **conventional, known**
 gomoku strategy. This is *evidence* (someone else's teaching of standard theory),
 **not our own synthesis** — it captures how the human gomoku community organizes

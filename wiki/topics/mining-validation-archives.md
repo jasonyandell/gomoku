@@ -1,5 +1,10 @@
 # Mining Validation Archives
 
+> **Status: LIVE** *(2026-07-04)* operational how-to (training-diagnostics / archive-mining
+> cluster). Despite the name, this is **NOT part of the seek-VCT program** — "mining"
+> here means mining a checkpoint for a *validation-archive* of positions, unrelated to
+> VCT solving.
+
 Operational recipe for `scripts/mine_validation_archive.py`, the script that
 turns a finished training checkpoint into a frozen archive of positions used
 for two things:
@@ -9,7 +14,8 @@ for two things:
    per-bucket variants. Separates *target-distribution noise* from *learning
    gap* in the policy loss. See
    [loss-floor-bouncing.md](loss-floor-bouncing.md) and
-   [wl5-diagnostics-archive-start-design.md](wl5-diagnostics-archive-start-design.md).
+   wl5-diagnostics-archive-start-design.md *(removed 2026-07-04; recover:
+   `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`)*.
 2. **Behavioral lever** — workers seed a fraction of self-play games from
    the archive (Go-Exploit pattern) instead of empty board.
 
@@ -171,7 +177,7 @@ same file or differ.
 
 ## Cross-refs
 
-- [wl5-diagnostics-archive-start-design.md](wl5-diagnostics-archive-start-design.md) —
+- wl5-diagnostics-archive-start-design.md *(removed; see note above)* —
   why the archive exists and how WL5 uses it.
 - [loss-floor-bouncing.md](loss-floor-bouncing.md) — the article that
   motivated the diagnostic side of the archive.

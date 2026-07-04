@@ -1,4 +1,5 @@
 # Workflow Harness Capabilities — probed facts
+> **Status: LIVE** *(2026-07-04)* — probed harness facts (2026-06-16).
 
 **Probed 2026-06-16** (throwaway probe workflow `harness-probe-workflow-capabilities`, run
 `wf_a1c3b5f5-420`) to put the composite-workflow sliding-derby design on *tested ground*

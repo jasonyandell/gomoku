@@ -1,5 +1,16 @@
 # Research Lab Charter — "Make the Mac Sing"
 
+> **Status (2026-07-04): doctrines LIVE / driven loop STOPPED.** The reusable
+> *doctrines* on this page — the two-queue (GPU-serial + parallel-fan-out)
+> scheduler, the Tier-1/2/3 priority system, the Class A/B/C autonomy taxonomy,
+> smoke-first cell timing, and the Reviewer gate — are **LIVE** and still describe
+> how lab-shaped work is run. The **autonomous perf-derby loop this charter drove
+> is STOPPED** (the Δelo Derby has ended; see [../derby.md](../derby.md)). Read the
+> operating-loop / stop-gate / triage-matrix sections as the *historical* record of
+> that loop, and the R-S*/R-TRAIN-* tables below as **dated 2026-05-23 snapshots**
+> (flagged inline), not a live leaderboard. The 2026-05-28 three-tier redesign
+> (epic #2, #4/#5/#6) status is **unverified** as of this dating.
+
 Captured 2026-05-23 at the launch of the autonomous research era and
 updated 2026-05-24 to reflect the lab's expanded scope. Sets the goal,
 the success metric, the operating loop, and the autonomy boundaries for
@@ -84,6 +95,10 @@ Pure self-play under `scripts/canonical_sweep.py`. Fresh random fused
 checkpoint, no trainer running. Default knobs:
 `--secs-per-cell 300 --max-plies 16 --device mps`.
 
+> **Dated snapshot (2026-05-23), not a live leaderboard.** The numbers below are
+> the reference points as measured on that one day; kept because later pages cite
+> them. They are not maintained and do not reflect any current run.
+
 | ref point | cell shape | current best (2026-05-23) |
 |---|---|---|
 | **R-S400** | small / W=8 / G=8 / sims=400 / wave=128 | 4,048 aug/s |
@@ -98,6 +113,10 @@ Measures the END-TO-END throughput that matters for actual elo gain.
 Per Jason's 2026-05-23 directive: training-side wins compound across
 the entire run, so this family is **higher tier than knob lanes on
 the generator side**.
+
+> **Dated snapshot (2026-05-23), not a live leaderboard.** The R-TRAIN-* rows
+> below are that day's measured reference points, retained because later pages
+> cite them; they are not maintained.
 
 > ⚠️ **METRIC-VALIDITY FLAG (2026-05-23, LF1): this cold-window R-TRAIN-*
 > measurement is NON-PREDICTIVE of real training and can HIDE a runaway.**
@@ -592,26 +611,16 @@ measured or built *anyway* — earned optimism, not generic
 self-congratulation. Both lines must react to something specific the
 lane actually found.
 
-**Worked examples** (shape, not template):
-
-> Apple ships 38 TOPS of ANE marketing and zero docs on how to
-> actually use it. We exported a Core ML eval model anyway, smoke
-> green on CPU_ONLY and CPU_AND_NE.
+**Worked examples** (shape, not template — two representative pairs; several
+more trimmed 2026-07-04 for length):
 
 > Eight workers should saturate a 14-TFLOPS GPU instantly; somehow
 > we're at 30% utilization. Doesn't matter — wave=512 just got us
 > +49.5% off the floor.
 
-> Core ML's ANE scheduling is documented across three blog posts that
-> disagree. We exported anyway, it ran, here's the smoke.
-
 > The Metal team picked a buffer size class boundary at exactly 512
 > elements years ago and never told anyone. We discovered it by
 > hitting it. Cheers.
-
-> PyTorch says "fp16 on MPS is slow" without ever defining "slow."
-> We measured it: at V=512 it's X aug/s vs fp32 Y aug/s. There. Now
-> it's a number.
 
 **Anti-patterns**:
 - Generic Apple-bashing not tied to today's result. The vibe footer

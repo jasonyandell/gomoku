@@ -13,7 +13,8 @@ session starts smarter than the last.
 3. **Squeeze the M5 Max** — treat one Mac as a knowable mainframe and get
    everything out of it.
 
-**You are here.** *(full milestone index: [training-timeline.md](training-timeline.md))*
+**You are here.** *(the narrative arc: **[story.md](story.md)** · full milestone
+index: [training-timeline.md](training-timeline.md))*
 - **Started** *(2026-05-17)*: the origin 9×9 run (`o9npssu1`) collapsed to
   defensive draws by epoch 136 — establishing the baseline profile where
   **generation dominates training 25–30×** in wall-clock. The first thing to
@@ -27,11 +28,15 @@ session starts smarter than the last.
   perf blitz landed the solver levers — cap25 gen budget (#114) + `lanes=K` kernel
   (#114) + one-worker refill (#112) — closing the gen-loop thread; see
   [M5-as-Mainframe](m5-mainframe.md).)*
-- **Next (untried)**: role-invariant symmetric **rails** (drop the terminus, cure
-  white-starvation on-policy) + attacker-preserve closing; and the pivotal open
-  question — **is 13×13 a forced black win?** (15×15 proven / 9×9 drawish / 13×13
-  unknown — probe with the mega-VCT oracle). See the [AlphaZero hub →
-  open wound](alphazero.md) and [sound-world-recipe.md](topics/sound-world-recipe.md).
+- **Next** *(2026-07-04)*: **rails-v0 was TRIED** (2026-07-03, #116, `vraf0b6e`) —
+  the terminus cure worked but a **new failure mode emerged**: on the black-tilted
+  idx-2 opener, forced-win tails poison value (vl→0.03) and white re-collapses.
+  Next levers, in order: **tail subsampling** (`--tail-subsample`, #118, staged +
+  Jason-gated) and a **fairer opening**; plus the pivotal open question — **is
+  13×13 a forced black win?** (15×15 proven / 9×9 drawish between sound players,
+  a fast *black win within the oracle's cap50 horizon* / 13×13 unknown — probe
+  with the mega-VCT oracle). See the [AlphaZero hub → open wound](alphazero.md)
+  and [sound-world-recipe.md](topics/sound-world-recipe.md).
 - **Learned (headlines)** — the durable, era-independent lessons:
   - **Fast-attack collapse** is the recurring failure mode (policy sharpens on
     attack, self-play never punishes missing defense). Watch `selfplay/plies_mean`.
@@ -70,9 +75,13 @@ the live surfaces you touch to run and promote work. The three you'll want most:
 
 ## How this wiki works (the operating model)
 
+- **Curating knowledge INTO the wiki? → [curation.md](curation.md)** — the whole
+  playbook (layer map, status banners, settled-verdict-first, rotation, lint).
 - **Hub-of-hubs.** This page is one screen and one fetch. Each hub tells the same
   self-similar story — **started → now → learned + links** — and *prose lives in
   the leaf pages*, never in the hub tables. Each hub also fits one fetch.
+- **The story layer.** [story.md](story.md) is the maintained narrative arc
+  (prologue → chapters → epilogue); update it at era boundaries.
 - **What-worked / what-didn't live *inside* each hub**, next to their evidence —
   not as a front-page list (that would drift).
 - **Evidence vs synthesis.** [TRAINING_WIKI.md](../TRAINING_WIKI.md) is the

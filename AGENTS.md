@@ -19,6 +19,10 @@ training works or fails. It is append-oriented: don't rewrite old conclusions;
 add a dated entry that explains the correction and points to the evidence.
 
 ## Wiki architecture
+**Remembering / curating anything into the wiki?** `wiki/curation.md` is the
+whole instruction: the routing table (where each input class lands) + the
+query rule (answers synthesized from 2+ pages get filed back) + rotation and
+lint. Don't improvise structure — read it first.
 - `wiki/index.md` — content entry point; keep current when durable pages appear.
 - `wiki/log.md` — chronological maintenance log; append on structure/synthesis changes.
 - `wiki/sources/` — stable source records for external references/evidence.
@@ -57,7 +61,14 @@ blocks clean merges). Never rebase, fast-forward, or squash. Start a worktree
 with `python scripts/worktree_session.py add <slug>` — it creates
 `~/code/gomoku-<slug>` on `feat/<slug>` and records the owning session so its
 logs are findable later via `claude --resume <id>` (`worktree_session.py log`
-survives teardown).
+survives teardown). **Then pin your session's working directory INSIDE the
+worktree** (Claude Code: the `EnterWorktree` tool; other harnesses: whatever
+sets the session/process cwd — if yours can't, pass absolute worktree paths in
+every subagent prompt and treat that as a harness gap to fix). Subagents and
+shell calls inherit the SESSION's cwd, not the conversational "current
+worktree"; a subagent spawned without absolute paths will silently act on the
+main checkout (confirmed 2026-07-04). Pinning makes everything inherit the
+worktree by default — mechanism, not vigilance.
 
 **Worktree cleanup is MANUAL and careful.** The auto-janitor
 (`reclaim_worktrees.py`) is retired (2026-07-01): it removed a worktree a LIVE

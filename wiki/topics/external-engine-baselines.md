@@ -1,5 +1,7 @@
 # External Engine Baselines
 
+> **Status: LIVE** *(2026-07-04)* — the native Rapfi-NNUE strength anchor.
+
 This page tracks rated, runnable OSS/source-available Gomoku engines that could
 be wrapped as fixed external baselines. It exists because the in-repo anchor
 ladder is useful but self-contained: random, heuristic, and lookahead tell us

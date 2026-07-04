@@ -4,10 +4,14 @@ The autonomous research lab: race training recipes in **time-capped slices**,
 score by **Δelo per Δt**, promote on receipts. Three roles keep it honest; a
 Reviewer gate audits every lane.
 
-> **Two eras (don't conflate the slice size).** The CLASSIC `delo_derby` v9 ran
-> **~300s chunks** (stopped 2026-05-27; see [derby-registration.md](topics/derby-registration.md)).
-> The later **autolab** ran **~1-hour slices**. Both are now historical — the
-> autonomous derby is **stopped** (status below).
+> **Two eras, both STOPPED (don't conflate the slice size).**
+> **CLASSIC `delo_derby`** (~300s chunks): ran 2026-05-24→27, **stopped at v9,
+> 2026-05-27** — verdicts on [ops/research-board.md](ops/research-board.md); see
+> [derby-registration.md](topics/derby-registration.md).
+> **AUTOLAB** (~1-hour slices, launchd-supervised): went **live 2026-06-19**, ran
+> 6 real 9×9 slices + a full 15×15 lane unattended (0 failures), crowned the
+> first 9×9 + 15×15 champions, then was **stopped** (the stop itself went
+> unrecorded in the wiki; work moved to 15×15 training + VCT-science).
 
 > **← Hubs:** [index](index.md) · sibling hubs: [AlphaZero](alphazero.md) ·
 > [Experiments](experiments.md) · [M5-as-Mainframe](m5-mainframe.md) ·
@@ -21,12 +25,14 @@ Reviewer gate audits every lane.
 | **Trainer** | Run the GPU slice (serial — one GPU tenant) | `gomoku-derby-runner`, [research-lab-session-runbook.md](topics/research-lab-session-runbook.md) |
 | **Runner** (issues) | Dispatch code-only work to worktrees, mirror status | `gomoku-bead-runner` |
 
-## Start → Now
+## Start → Now (chronological)
 
-- **Started:** the charter + two-queue scheduler (GPU-serial + parallel agent
-  fan-out); the autolab went **LIVE 2026-06-19** — ran 6 real 9×9 slices then a
-  full 15×15 lane unattended, crowned the first 9×9 + 15×15 champion, 0 failures.
-- **Now / where it stopped:** the recorded derby verdicts run to **v9** (concluded
+- **Started (May):** the charter + two-queue scheduler (GPU-serial + parallel
+  agent fan-out) drove the CLASSIC derby, v1→v9 in four days (2026-05-24→27).
+- **Then (June):** the **autolab** went **LIVE 2026-06-19** — ran 6 real 9×9
+  slices then a full 15×15 lane unattended, crowned the first 9×9 + 15×15
+  champions, 0 failures — and then stopped (unrecorded; work moved on).
+- **Where the record stops:** the recorded derby verdicts run to **v9** (concluded
   2026-05-27, on [ops/research-board.md](ops/research-board.md)) — the durable
   levers were a matured champion + `--fpu-reduction-c 0.45` sweeping the
   lookahead-ladder. Work then moved off the 9×9 perf derby to **15×15 training**

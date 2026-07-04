@@ -1,5 +1,15 @@
 # Autolab supervisor + monitor + research-lite (P5–P7): the unattended-overnight operating contract
 
+> **Status: DORMANT (operating appendix).** Built + integrated 2026-06-19 (#64) and
+> proven live that night, but the **autonomous derby is stopped** — see
+> [derby.md](../derby.md) for live status. This page is the *operating appendix* to the
+> canonical [autolab-architecture.md](autolab-architecture.md); it describes how to bring
+> a **currently-not-running** lab up/down. Read it as a build+runbook record, not a live
+> procedure — the forward-looking "tonight / the overnight run" phrasing below is
+> historical (2026-06-19). The literal launchd plist XML was moved to a separate
+> page and has since been removed *(2026-07-04; recover: `git show ca76350:wiki/_archive/topics/autolab-launchd-plists.md`)*.
+> (Marked 2026-07-04.)
+
 **What this is.** The contract that turns the tested autolab *library*
 (`gomoku/lab/{ledger,daemon,trainer,arena,status}.py` + `gomoku/hf.py` +
 `scripts/run_sweep.py`/`sliding_gate.py`) into a *running* self-driving lab that
@@ -141,86 +151,14 @@ install). The trainer computes `repo_root = Path(__file__).resolve().parents[2]`
 (trainer.py:41) independent of cwd, so `git worktree add` targets the right repo
 regardless; setting cwd to main just avoids relative-path surprises.
 
-### Literal plist — `~/Library/LaunchAgents/com.gomoku.autolab.train.plist`
+### Literal plists — removed
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.gomoku.autolab.train</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/bin/uv</string>
-    <string>run</string><string>python</string>
-    <string>-m</string><string>gomoku.lab.trainer</string>
-    <string>--prod</string>
-    <string>--stop-file</string><string>/Users/jason/data/autolab/stop</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>ThrottleInterval</key><integer>30</integer>
-  <key>WorkingDirectory</key><string>/Users/jason/code/gomoku</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>AUTOLAB_HOME</key><string>/Users/jason/data/autolab</string>
-    <key>HOME</key><string>/Users/jason</string>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <key>PYTORCH_ENABLE_MPS_FALLBACK</key><string>1</string>
-    <key>HF_HUB_DISABLE_PROGRESS_BARS</key><string>1</string>
-    <key>WANDB_MODE</key><string>offline</string>
-  </dict>
-  <key>StandardOutPath</key><string>/Users/jason/data/autolab/logs/train.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/jason/data/autolab/logs/train.err.log</string>
-  <key>ProcessType</key><string>Standard</string>
-  <key>Nice</key><integer>5</integer>
-</dict>
-</plist>
-```
-
-`com.gomoku.autolab.arena.plist` — **identical** except `Label` =
-`com.gomoku.autolab.arena`, `ProgramArguments` =
-`[/opt/homebrew/bin/uv, run, python, -m, gomoku.lab.arena, --stop-file, /Users/jason/data/autolab/stop]`,
-and `Standard{Out,Err}Path` → `arena.{out,err}.log`. (No `--prod`; the arena has
-no MVP/prod cap.)
-
-`com.gomoku.autolab.monitor.plist` — periodic, **no KeepAlive**:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.gomoku.autolab.monitor</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/bin/uv</string>
-    <string>run</string><string>python</string>
-    <string>/Users/jason/code/gomoku/scripts/autolab_monitor.py</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>600</integer>
-  <key>WorkingDirectory</key><string>/Users/jason/code/gomoku</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>AUTOLAB_HOME</key><string>/Users/jason/data/autolab</string>
-    <key>HOME</key><string>/Users/jason</string>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-  <key>StandardOutPath</key><string>/Users/jason/data/autolab/monitor/launchd.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/jason/data/autolab/monitor/launchd.err.log</string>
-</dict>
-</plist>
-```
-
-`com.gomoku.autolab.research.plist` — identical to monitor's shape except
-`Label` = `com.gomoku.autolab.research`, `ProgramArguments` =
-`[/opt/homebrew/bin/uv, run, python, -m, gomoku.lab.research, --once]`, `StartInterval` = `1800`,
-and `Standard{Out,Err}Path` → `research/launchd.{out,err}.log`. The monitor +
-research agents touch no GPU and need no MPS env (pure read + write + notify).
-
-> **`HOME` in the monitor plist** is what lets `osascript` display notifications
-> in the logged-in user's session.
+The four literal LaunchAgents plist XML blocks (train/arena/monitor/research) and the
+arena/monitor/research per-plist deltas were archival for this **DORMANT** lab and have
+since been removed *(see note above)*.
+Key shape: two KeepAlive={SuccessfulExit:false} daemons (train/arena) + two StartInterval
+one-shots (monitor 600s / research 1800s); env (AUTOLAB_HOME/HOME/PATH/MPS+W&B vars) per the
+table above; WorkingDirectory = /Users/jason/code/gomoku.
 
 ---
 
@@ -664,26 +602,8 @@ uv run pytest tests/test_lab_ledger.py tests/test_lab_daemon.py \
 
 (No editable-install finder repointing needed; `uv run` resolves the venv from
 cwd, so `gomoku` always points at the worktree you're standing in.)
+### Attended PROD-slice proof
 
-### Attended PROD-slice proof — run BEFORE the unattended launch
-
-The first prod slice via the trainer has never run unattended. De-risk the
-train→eval→ledger→flywheel→HF path with one foreground slice, HF off first
-(see also §f Runbook):
-
-```bash
-# 0. confirm the box is free (the preflight defers on any of these):
-pgrep -fl 'selfplay_worker|gomoku\.train|run_sweep|eval_worker'
-# 1. seed the ledger + one dry-run prod slice in the foreground (no HF):
-uv run python -m gomoku.lab.up up        # seeds the row + loads the jobs; OR seed-only then:
-AUTOLAB_HOME=~/data/autolab WANDB_MODE=offline \
-  uv run python -m gomoku.lab.trainer --prod --no-hf --once
-# inspect: a DONE result row with eval/model_elo + a continuation + an eval row;
-#   ~/data/autolab/runs/9x9-champ-recipe/sweep_runs/*/checkpoints/latest.pt exists.
-# 2. prove HF delivery once (real push), still foreground:
-AUTOLAB_HOME=~/data/autolab WANDB_MODE=offline \
-  uv run python -m gomoku.lab.trainer --prod --once
-# 3. read the digest by hand:
-uv run python scripts/autolab_monitor.py --print --no-notify
-# Only after all pass: uv run python -m gomoku.lab.up up
-```
+The attended de-risk sequence (foreground `--no-hf --once` slice, then a real-push `--once`,
+then a hand-read digest) is documented once in **§(f) Runbook → Attended PROD-slice proof** above
+— see there rather than duplicating the commands.

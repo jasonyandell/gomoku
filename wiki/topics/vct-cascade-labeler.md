@@ -1,5 +1,7 @@
 # VCT cascade labeler — corpus-scale verdict ledger + throughput knees (#97)
 
+> **Status: LIVE** *(2026-07-04)* — architecture + throughput-knee reference (the run itself concluded).
+
 A corpus-agnostic, resumable pipeline that labels **every position** of the rapfi
 game corpus with an exact GPU-VCT verdict, deepening the hard tail through a
 node-budget ladder. Built to push `solve_vct_mega_bb` to its sustained-throughput

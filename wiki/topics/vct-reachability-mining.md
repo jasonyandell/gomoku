@@ -1,5 +1,7 @@
 # Mining VCT-reachability from the Rapfi corpus — the free distance field, the off-path fan, the knife-edge, and non-VCF gold
 
+> **Status: LIVE** *(2026-07-04)* — finding record (the knife-edge; feeds Φ + shape-library).
+
 **One-line.** Two cheap, search-free (or GPU-only) ways to mine VCT-reachability signal from
 the half-million **Rapfi-vs-Rapfi** games, toward the **seek-VCT** plan ([seeker-steering-learnability.md](seeker-steering-learnability.md),
 [vct-recognition-learnability.md](vct-recognition-learnability.md)). The headline finding is a

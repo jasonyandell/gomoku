@@ -1,5 +1,7 @@
 # The Rapfi engine pool — the strength yardstick + teacher, warm
 
+> **Status: LIVE infrastructure** *(2026-07-04)* — provisioning + warm pool.
+
 **Rapfi** is the Gomocup-winning NNUE gomoku engine (Gomocup 2024 **and** 2025
 first place; freestyle Elo ~2625). In this project it plays two roles: the
 **strength yardstick** (the first honest reference past the ~1700 pure-baseline
@@ -13,7 +15,9 @@ the native-anchor bring-up, coord/config faithfulness audit),
 [reliable-eval-set.md](reliable-eval-set.md) (Rapfi as the sole native anchor in
 the no-wine reliable set), [eval-teacher-sensei.md](eval-teacher-sensei.md) (the
 always-on eval daemon + distillation teacher built on the pool),
-[eval-suite.md](eval-suite.md) (the broader eval surface).
+[eval-suite.md](eval-suite.md) (the broader eval surface),
+[rapfi-idx2-distillation-mine.md](rapfi-idx2-distillation-mine.md) (the idx-2
+mining harness that outgrew this in-process pool for multi-engine throughput).
 
 ## Provisioning — a pinned, sha256-verified HF binary
 

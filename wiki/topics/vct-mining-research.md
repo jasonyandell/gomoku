@@ -1,5 +1,7 @@
 # VCT-mining research — the synthesis hub for the "seek-VCT" program
 
+> **Status: LIVE** *(2026-07-04)* — the seek-VCT strand's synthesis hub.
+
 **What this page is.** A navigable map of the whole research program that mines
 **VCT (Victory-by-Continuous-Threats) structure** out of the game corpus and the GPU
 oracle, and turns it into a learnable, sound gomoku AI. Many threads have accumulated
@@ -187,4 +189,5 @@ re-solve), small/untuned go/no-go — and all three answer **yes**, with a **CNN
 [the-claw.md](the-claw.md) · [vct-recognition-learnability.md](vct-recognition-learnability.md) ·
 [seeker-steering-learnability.md](seeker-steering-learnability.md) ·
 [phi-distance-field-learnability.md](phi-distance-field-learnability.md) ·
-[rapfi-mix9svq-architecture.md](rapfi-mix9svq-architecture.md) §6.
+[rapfi-mix9svq-architecture.md](rapfi-mix9svq-architecture.md) §6 ·
+[../sources/incognito-claude-beat-rapfi-2026-07-03.md](../sources/incognito-claude-beat-rapfi-2026-07-03.md) (the df-pn primer — proof-number search as the *general* prover beyond threat-space; the mega-VCT solver is its threat-restricted cousin).

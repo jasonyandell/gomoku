@@ -1,4 +1,5 @@
 # The reliable eval set (wine engines shelved)
+> **Status: LIVE doctrine** *(2026-07-04)* — what counts as a reliable evaluator.
 
 **Directive (Jason, 2026-06-16):** *"bail on wine evals — another wine crash.
 eval just with reliable things. have workflows attempting to bring new reliable

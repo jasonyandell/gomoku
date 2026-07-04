@@ -13,6 +13,7 @@ evals** (including forgotten ones), the **tools**, and cross-cutting conventions
 | [capabilities.md](capabilities.md) | The one-screen capability map (mine · pretrain · train · evaluate · search · operate). |
 | [conventions.md](topics/conventions.md) | Deny-list autonomy, merge-commits-never-rebase, memory-narrow-project-knowledge-to-wiki, Opus-minutes. |
 | [wiki-operating-model.md](topics/wiki-operating-model.md) | This wiki's adaptation of the LLM-wiki pattern. |
+| [wiki-curation-lessons.md](topics/wiki-curation-lessons.md) | The portable meta: what keeping this wiki alive taught us — for export to other projects. |
 | [AGENTS.md](../AGENTS.md) | Schema for agents (native twin of CLAUDE.md). |
 | [branch-and-worktree-workflow.md](topics/branch-and-worktree-workflow.md) | The canonical worktree lifecycle: worktree off main → feat branch → merge --no-ff → push → teardown. |
 | [worktree-hygiene.md](topics/worktree-hygiene.md) | Cleanup rules (check for live processes first) + the uv editable-install gotcha. |

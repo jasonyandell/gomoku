@@ -17,6 +17,11 @@ model-index:
 
 # gomoku-15×15 · fixed-fair-openings (era-3, the fairness experiment)
 
+> **Era snapshot.** This card is an **IN-TRAINING snapshot (2026-06-21)**; the run
+> has since concluded. Read it as a point-in-time model card, not live status — the
+> fairness-experiment resolution lives in [[swap2-opening-protocol]] §11 and
+> [[board-size-transfer-and-warm-start]].
+
 **Status (2026-06-21): IN TRAINING — now a fair-opening LADDER (9→11→13→15).** A research
 checkpoint and a controlled experiment, not a finished player. The fixed fair openers are Rapfi's 9
 shapes **re-centered per board** (`_FAIR_OPENINGS[N]`; all 9 fit at every size), so a fresh net climbs

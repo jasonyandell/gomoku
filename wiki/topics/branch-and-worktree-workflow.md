@@ -1,4 +1,5 @@
 # Branch & worktree workflow (canonical)
+> **Status: LIVE** *(2026-07-04)* — canonical worktree lifecycle.
 
 **This is the canonical workflow for every change to this repo.** All other
 mentions — [conventions.md](conventions.md) § Branch integration,

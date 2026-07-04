@@ -1,4 +1,5 @@
 # Training-Run Reference — the zillion knobs and switches
+> **Status: LIVE** *(2026-07-04)* — the parameter dictionary (length is its job).
 
 The definitive launch/tune surface for a training run. **Quick-start first**
 (the handful of commands + knobs you actually reach for), then a

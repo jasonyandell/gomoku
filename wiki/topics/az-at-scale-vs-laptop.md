@@ -1,4 +1,5 @@
 # AlphaZero at Scale vs On a Laptop
+> **Status: LIVE** *(2026-07-04)* — framing doctrine.
 
 A framing observation Jason articulated (2026-05-20) while watching
 `buffer/age_mean` oscillate and `selfplay/plies_mean` swing between

@@ -1,5 +1,10 @@
 # `mega_vct_bb` — the on-device GPU VCT solver (canonical API reference)
 
+> **Status: LIVE.** This is the oracle contract — the single solver every
+> threat-shape/mining/labeling consumer and the self-play veto call. Current as of
+> 2026-07-03 (cap25 flip landed, lanes=K verdict COMPLETE). The API/invariants/atlas
+> are kept together on one page on purpose (URL stability). (Marked 2026-07-04.)
+
 **One-line.** `scripts/vct_metal/mega_vct_bb.py :: solve_vct_mega_bb` is the
 production VCT (Victory-by-Continuous-Threats) solver: one GPU thread per board
 runs the *whole* AND/OR proof search on-device as a bitboard (`own`/`opp`/`empty`
@@ -349,6 +354,13 @@ forced-narrow waves). Both are verdict-invariant (invariant #10).
   parallelizing one proof across lanes (§5.3).
 
 ### 5.3 The `lanes=K` multi-thread-per-board kernel (#114)
+> **Historical tuning context (noted 2026-07-04).** §5.3 and §5.6 record the
+> **2026-07 perf blitz** (#112/#114/#115), whose 13×13-gen tuning thread is now
+> **CLOSED**: `lanes=K` reached a COMPLETE verdict, the cap50→cap25 flip landed, and
+> the one-streaming-worker refill replaced the gen fleet. The *kernel levers below
+> remain live API*; the 13×13-throughput framing around them is settled — see
+> [mcts-perf-ceiling.md](mcts-perf-ceiling.md) (2026-07-03 closing section).
+
 The call-cost floor is one weak thread grinding the single deepest board; at
 13×13 half the batch is capped (§5.4), so *every* simdgroup is saturated with
 hard lanes and all the dispatch-level levers (ladder, oracle-sort, tg) have

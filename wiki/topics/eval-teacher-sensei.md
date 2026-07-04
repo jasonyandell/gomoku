@@ -1,5 +1,26 @@
 # The eval+teacher sensei — always-on Rapfi eval + Rapfi-as-teacher
 
+**Status: SPLIT VERDICT (2026-06-24).** One subsystem, two faces with opposite fates:
+
+- **Eval face — LIVE.** The always-on warm-Rapfi eval panel (#34) with its
+  **separate white/per-color column** is durable infrastructure and folded into the
+  standing eval doctrine ([eval-suite.md](eval-suite.md),
+  [reliable-eval-set.md](reliable-eval-set.md)). The warm `RapfiPool` (10×+ over
+  respawn) and the white-column defense gate are the keepers.
+- **Teacher face — DEAD-END (lesson kept).** Rapfi-as-teacher policy distillation
+  regressed **twice** (one-hot #77 and gentle #86), both via the **same mechanism:
+  the policy head flattened toward uniform** (the #44 trunk-corruption failure mode,
+  through the policy channel). The designed fix (SOFT-target distillation) was coded
+  but landed AFTER the runs and was **NEVER live-validated** (`soft_policy_weight=0`
+  everywhere). Do not treat the teacher as a working lever.
+  - **The path that actually addressed white/defense was NOT distillation** — it was
+    on-policy environment shaping (the oracle veto), see
+    [sound-world-recipe.md](sound-world-recipe.md). Off-policy target injection
+    (this page's teacher, and the whole #36/#42/#77/#86 lineage) fought the
+    distribution; the veto edits the *games* instead.
+
+The two warning boxes below are the teacher-face regression detail, kept verbatim.
+
 > ⚠️ **2026-06-24 — first live #77 validation REGRESSED. Read before running a teacher.**
 > Warm-started Bruce (g15 e2659) + policy-distillation teacher at `--teacher-weight 0.3`,
 > fixed lr=0.001, no head/trunk freeze → **0/96 H2H vs frozen Bruce-1** after 362 epochs.

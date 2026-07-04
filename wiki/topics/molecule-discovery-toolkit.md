@@ -1,5 +1,7 @@
 # Molecule-discovery toolkit — what we steal from computational genetics
 
+> **Status: LIVE research direction** *(2026-07-04)* — v0 probe negative, big swing unbuilt.
+
 Methods raided from computational genetics / bioinformatics (+ cryo-EM, crystallography,
 evolutionary ML) to **discover non-line "molecules" — including unknown "offensive fields" —** in
 gomoku. The actionable companion to [idea-pile.md](idea-pile.md) **#10** (*molecule ⊋ line; represent

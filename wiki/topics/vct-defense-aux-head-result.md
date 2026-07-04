@@ -1,7 +1,7 @@
 # The VCT-defense aux head — a working sensor with no actuator (#103)
 
-> **RESULT (2026-07-01): the supervised VCT-defense aux head reliably learns the defensive
-> REPRESENTATION, but nothing so far makes the POLICY act on it.** Two experiments — a
+> **Status: HISTORICAL — RESULT (2026-07-01): the supervised VCT-defense aux head reliably
+> learns the defensive REPRESENTATION, but nothing so far makes the POLICY act on it.** Two experiments — a
 > from-scratch 9×9 moonshot (wandb `8mtowemb`) and a Bruce/idx-2 warm-start pivot (wandb
 > `zrjfwny2`) — both had the head learn cleanly (`train/vct_loss` → ~0.03) while self-play
 > behavior did **not** change: the from-scratch run stayed pinned to the #101 attractor
