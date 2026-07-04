@@ -539,71 +539,18 @@ trainer (arena.py:58-61), never hard-defers — keep that asymmetry.
    daemon died and launchd respawn would deadlock on `acquire()`. Non-negotiable
    invariant; any future change to subprocess spawning must preserve it.
 
----
+## Build receipt (P5–P7, #64)
 
-## Build handoff (ordered; each names target files)
+P5–P7 were built + integrated on branch `feat/autolab-p7-autolab` (2026-06-19),
+glue-only and stdlib-only (`gomoku.lab.*` imports no torch/third-party): the four
+launchd jobs wire the already-tested spine into a self-driving overnight lab. The
+delivered surface — `gomoku/lab/up.py`, `scripts/autolab_monitor.py`,
+`gomoku/lab/research.py`, their tests, and the `pyproject.toml` entry points — is
+the running code; read it there. The ordered build-handoff task list, the final
+file-inventory table, and the full `uv run pytest` command were implementation
+receipts for that shipped era, not operating contract.
 
-1. **Seed** — `gomoku/lab/up.py` step appends the §c JSON row via
-   `ledger.experiment`/`ledger.append` (or a tiny `scripts/autolab_seed.py`).
-2. **Supervisor** — new `gomoku/lab/up.py` (`main(argv)`: up/down/status/restart;
-   `plistlib`-render the four plists into `~/Library/LaunchAgents/`; drive
-   `launchctl bootout`/`bootstrap`; manage `~/data/autolab/stop`; makedirs the
-   home subtree). Stdlib only; imports `daemon`, `ledger`, `status`.
-3. **Monitor** — new `scripts/autolab_monitor.py` (`build_digest`/`write_digest`/
-   `notify`/`main`; reuse `status.lane_board`; atomic-write `monitor/latest.md`;
-   append `monitor/log.md`; notify-on-change). No torch.
-4. **Research-lite** — new `gomoku/lab/research.py` (`summarize`/`gather_ideas`/
-   `propose_experiments`/`render_note`/`main` `--once`). Stdlib + `ledger`. No
-   torch/HF/network.
-5. **Entry points** — `pyproject.toml [project.scripts]`: add
-   `gomoku-lab = "gomoku.lab.up:main"` (and optionally
-   `gomoku-lab-research = "gomoku.lab.research:main"`). Convenience only; `-m`
-   paths are canonical.
-6. **Tests** — `tests/lab/test_research.py` (priority math: proposals < P_seed
-   and `pick("train")` still returns the seed; idempotent ids; note render;
-   cold-start refusal), `tests/lab/test_up.py` (plist render shape, idempotent
-   bootout-before-bootstrap argv, stop-file lifecycle — `launchctl` mocked),
-   `tests/test_autolab_monitor.py` (digest from a synthetic folded state; `None`
-   elo + one-data-point Δelo render; osascript escaping; notify-on-change diff).
-7. **De-stale** — `wiki/topics/autolab-architecture.md`: mark P5 (research) + P6
-   (status/monitor) + P7 (supervisor) shipped; point its ops section at this page.
-
----
-
-## Build log (#64)
-
-P5–P7 built + integrated on branch `feat/autolab-p7-autolab` (2026-06-19).
-Glue-only, stdlib-only (`gomoku.lab.*` imports no torch/third-party); the four
-launchd jobs wire the already-tested spine into a self-driving overnight lab.
-
-### Final file inventory
-
-| File | Role |
-|---|---|
-| `gomoku/lab/up.py` | Supervisor CLI `main(argv)` — `up`/`down`/`status`/`restart`; renders+loads the four plists (`render_plists`/`write_plists`); seeds the §c row (`seed_ledger`/`seed_row`, commit pinned non-null, idempotent); manages `~/data/autolab/stop`. Top-level flags `--ledger --launchd-dir --commit --dry-run --force` precede the subcommand. |
-| `scripts/autolab_monitor.py` | Monitor digest — `build_digest`/`build_header`/`build_log_line`/`build_notification`/`write_digest`/`notify`/`run_once`/`main`. Atomic-writes `monitor/latest.md`, appends `monitor/log.md`, `osascript` notify-on-change. Reuses `status.lane_board`; computes lane-local Δelo (no `delta_elo` field on results). |
-| `gomoku/lab/research.py` | Research-lite one-shot `main(argv) --once` — folds ledger, proposes ≤2 train rows at priority **strictly below** the live seed lane max (`research-<slug>-p<P_seed>`, idempotent), cold-start refusal, writes `research/latest.md`+`NOTES.md` with the honest `#61`-proxy banner, appends one `event` row. |
-| `tests/test_lab_up.py` | Plist render shape, idempotent bootout-before-bootstrap argv, stop-file lifecycle, seed idempotency (`launchctl` mocked, `AUTOLAB_HOME`→tmp). |
-| `tests/test_autolab_monitor.py` | Digest from synthetic folded state; `None`-elo + one-data-point Δelo render; osascript escaping; notify-on-change diff. |
-| `tests/test_lab_research.py` | Priority invariant (proposals < P_seed and `pick("train")` still returns the seed); idempotent ids; note render; cold-start refusal. |
-| `pyproject.toml` | Added `[project.scripts]` `gomoku-lab = gomoku.lab.up:main` + `gomoku-lab-research = gomoku.lab.research:main` (convenience; `-m` invocations are canonical and reinstall-free). |
-
-### Run the full suite (`uv run pytest`)
-
-#87 root-fixed the editable-install gotcha — each worktree now gets its own
-uv-managed `.venv` (`gomoku` editable → that worktree). From the worktree:
-
-```bash
-uv run pytest tests/test_lab_ledger.py tests/test_lab_daemon.py \
-  tests/test_lab_trainer.py tests/test_lab_arena.py tests/test_hf.py \
-  tests/test_run_sweep_runbase.py tests/test_lab_up.py \
-  tests/test_autolab_monitor.py tests/test_lab_research.py -q
-```
-
-(No editable-install finder repointing needed; `uv run` resolves the venv from
-cwd, so `gomoku` always points at the worktree you're standing in.)
-### Attended PROD-slice proof
-
-The attended de-risk sequence (foreground `--no-hf --once` slice, then a real-push `--once`,
-then a hand-read digest) is documented once in **§(f) Runbook → Attended PROD-slice proof** above
-— see there rather than duplicating the commands.
+*(build-handoff task list + file-inventory table + suite command removed 2026-07-04;
+recover: `git show 7c82b7d:wiki/topics/autolab-supervisor-and-monitor.md`. The
+attended PROD-slice de-risk sequence is documented once in §(f) Runbook → Attended
+PROD-slice proof above.)*
