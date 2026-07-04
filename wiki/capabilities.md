@@ -26,10 +26,11 @@ here supersedes those. **NEW** = added in the 2026-06-25 idx-2 distillation run
 | Capability | How | Deep doc |
 |---|---|---|
 | **AlphaZero self-play loop** (trainer + N self-play workers, replay buffer, W&B, checkpointing) via named **cells** | `scripts/run_sweep.py --cell <name>` | [topics/launch-sequence-runbook.md](topics/launch-sequence-runbook.md) |
+| **Oracle-sound self-play** ("sound world": GPU VCT oracle in the gen loop — per-ply escape-solve veto masks proven-losing moves + `--vct-terminus` ends games at the first forced win; the current frontier recipe, the 9-ply attractor is gone) **NEW** | cell `sound-world` (`--oracle-veto --oracle-overlap --vct-terminus --line-planes`, streaming one-worker) | [topics/sound-world-recipe.md](topics/sound-world-recipe.md) |
 | **Fixed-fair-openings training** (every game starts from a known-fair Rapfi opening; sidesteps the unfair-opener black edge) — the live 15×15 recipe | cell `G15-fixed-openings` (+ the `G{9,11,13}` ladder) | [cards/gomoku-15x15-fixed-fair-openings.md](cards/gomoku-15x15-fixed-fair-openings.md) |
 | **swap2 opening protocol** (rebalances the GAME so white becomes winnable; the principled white fix) | swap2 cells | [topics/swap2-opening-protocol.md](topics/swap2-opening-protocol.md) |
 | **Single-opening over-specialization** ("Bruce Lee one position": restrict self-play to one opening) **NEW** | `GOMOKU_DROP_OPENERS=…` (drop all but the target index) | [topics/rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |
-| **Cross-board warm-start** (seed a 15×15 net from a 9×9 champion's shared conv tower) | `scripts/warmstart_15x15.py` | [topics/15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md) |
+| **Cross-board warm-start** (seed a 15×15 net from a 9×9 champion's shared conv tower) | `scripts/warmstart_15x15.py` | [topics/15x15-era-feasibility-and-plan.md](_archive/topics/15x15-era-feasibility-and-plan.md) |
 | **Bit-packed replay buffer** (1M positions ≈ 1.3 GB; `--pack-buffer`, recency sampling) | cell flag `--pack-buffer --buffer-recency-frac` | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) |
 
 ## Evaluate strength
@@ -56,6 +57,7 @@ here supersedes those. **NEW** = added in the 2026-06-25 idx-2 distillation run
 | **Streaming stencil minimizer + vocab analysis** (append-only, trivially-resumable reducer-over-a-log; content-addressed boards, status ok/capped/dead; `--order shuffled` = 93% yield vs deepest-first 20%; proves the vocabulary null at n=1225; scales to unbounded n) | `scripts/threat_shapes/md_minimize_stream.py`, `analyze_vocab_stream.py` | [topics/shape-library-engine.md](topics/shape-library-engine.md) §8 |
 | **Forward VCT frontier expansion + opening danger map** (expand a fixed opening as an AND/OR frontier — Rapfi-top-8 moves both sides, GPU VCT solver as the only oracle, both-colour termini; append-only / resumable / D4-content-addressed; then a depths-1→7 danger map with both-sides danger densities + honest cap/gap accounting + Rapfi-prior-vs-oracle overlay) **NEW** | `scripts/idx2_vct/{frontier,probe_capped,analyze_opening}.py` | [topics/idx2-vct-frontier-map.md](topics/idx2-vct-frontier-map.md) |
 | **CPU VCF/VCT solver** (retired as a runtime dep — gated bootstrap oracle only; `GOMOKU_ALLOW_CPU_SOLVER=1`) | `gomoku.vcf` | [topics/mega-vct-solver.md](topics/mega-vct-solver.md) § CPU solver retired |
+| **Non-line "molecule" discovery toolkit** (methods raided from comp-genetics/cryo-EM/crystallography/evo-ML to find off-axis offensive/defensive shapes lines engines miss — spectral claw detector, DCA bond map, cryo-EM class-averaging, TF-MoDISco importance motifs, MAP-Elites; + the Allis threat-network forcing/residual split as the first experiment) | research seeds (spectral / DCA / cryo-EM / FANMOD on `vcf.py`) | [topics/molecule-discovery-toolkit.md](topics/molecule-discovery-toolkit.md) |
 
 ## Operate
 
