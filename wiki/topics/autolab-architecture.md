@@ -6,11 +6,18 @@
 > (P1–P7); the **autonomous derby is stopped** — see [derby.md](../derby.md) for
 > live status. (Marked 2026-07-04.)
 
-**Status:** epic [#53]. Formalizes Jason's spec (2026-06-18) of a self-driving lab
-that treats the M5 Max as a mainframe. Supersedes the *framing* of #2 (three-tier
-queue) and folds in #19 (nonstop derby daemon) — same pieces, one cleaner spine.
-P1 (the ledger spine, #54) is **built + tested** (`gomoku/lab/ledger.py`); the rest
-is the phased plan below.
+**Settled outcome (2026-06-19).** All seven phases (P1–P7) were **built and ran
+unattended** — 6 real 9×9 slices then a full 15×15 lane, **0 failures** — crowning
+the first 9×9 champion (`9x9-champ-recipe@0`) *and* the first 15×15 champion
+(`15x15-wdl@0`, internal elo 1918). The loop has been **stopped** since (work moved
+to 15×15 training + VCT-science; live status on [derby.md](../derby.md)). This page
+is the design of record for what was built; the [phased plan](#phased-plan) table
+below carries each phase's result.
+
+**Lineage.** Epic [#53] formalized Jason's spec (2026-06-18) of a self-driving lab
+that treats the M5 Max as a mainframe — superseding the *framing* of #2 (three-tier
+queue) and folding in #19 (nonstop derby daemon): same pieces, one cleaner spine.
+It began from P1 (the ledger spine, #54, `gomoku/lab/ledger.py`) and phased outward.
 
 > **Historical / two explored approaches.** This launchd-daemon autolab and the
 > Claude-workflow composite ([workflow-orchestration.md](workflow-orchestration.md),
@@ -19,9 +26,10 @@ is the phased plan below.
 > supersedes the other. The autonomous derby is **stopped** (see [derby.md](../derby.md)
 > for status); both remain as design records.
 
-## Thesis (the ~80%-there finding)
+## Thesis (the ~80%-there finding that launched the build)
 
-The repo already has every load-bearing mechanism:
+The build started from the observation that the repo already had every
+load-bearing mechanism:
 
 - a resumable, wall-capped trainer — `train.py --max-wall-secs` self-caps at the
   epoch boundary and force-saves a **buffer-embedded** `latest.pt`; `--resume`
@@ -41,8 +49,8 @@ append-only, financial-correction ledger that all loops read to pick first-prior
 work and append results to. Today the "ledger" is smeared across five surfaces
 (git-tracked `experiment-ledger.md`/`events.jsonl`, in-place-mutated
 `derby_state.json`, per-version `derby_vN_board.json`, GitHub issues,
-`verdicts.jsonl`). Build the spine first; then trainer/arena/research/worker
-collapse into one shared shape. Everything else is wiring, not invention.
+`verdicts.jsonl`). The spine was built first; then trainer/arena/research/worker
+collapsed into one shared shape. Everything else was wiring, not invention.
 
 ## The spine: the ledger (`gomoku/lab/ledger.py`)
 
@@ -220,10 +228,14 @@ non-gating absolute readout.
 
 - **Research** — not a daemon; a Claude workflow on a long `ScheduleWakeup`/cron.
   Reads the folded ledger + W&B + HF, ideates, appends `experiment` rows **with
-  priorities** (priority is how ideation steers the singleton), then **waits
-  hours**, wakes, reads new `result` rows, writes wiki/issues, enqueues
-  follow-ups. Until the wall-clock-to-elo gate (P5) exists it must declare it
-  ranks on proxies it knows lie (the LF1 +152% throughput-runaway is the warning).
+  priorities** (priority is how ideation steers the singleton), then **exits** — it
+  does **not** hold a blocked thread. It is **resumed by evidence**: a new `result`
+  row is what re-triggers ideation, at which point it reads the result, writes
+  wiki/issues, and enqueues follow-ups. (The earlier "waits hours, wakes" framing is
+  retired — see [autolab-doctrine.md](autolab-doctrine.md) §4, *"'waits' is deleted —
+  resume on evidence, not a blocked thread"*.) Until the wall-clock-to-elo gate (P5)
+  exists it must declare it ranks on proxies it knows lie (the LF1 +152%
+  throughput-runaway is the warning).
 - **Worker** — GitHub issues stay the human-facing intake; the existing
   `gh_worktree.py`/`gh_prime.sh` flow pulls ready issues into worktrees, merges
   `--no-ff`, pushes. Worker claim/close mirror into the ledger so the cockpit sees
