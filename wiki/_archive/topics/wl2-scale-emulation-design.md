@@ -1,10 +1,12 @@
 # WL2 — Scale-Emulation Design
 
+> **ARCHIVED — HISTORICAL (WL2, 2026-05-20/21).** Implemented (`9wng4yu9`); smoothed the early trajectory + raised the la4 peak but did NOT solve retention; superseded by WL4/WL5. Index + what-survived: [WL-era](../../topics/wl-era.md).
+
 Status note (2026-05-21): implemented and launched as WL2 (`9wng4yu9`).
 The four-lever stack smoothed the early trajectory and raised the la4 peak,
 but did not solve retention. Treat this page as the preserved WL2 design
-record; read [training-run-lineage.md](training-run-lineage.md) and the WL2
-run-end section in [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) for the
+record; read [training-run-lineage.md](../../topics/training-run-lineage.md) and the WL2
+run-end section in [../../TRAINING_WIKI.md](../../../TRAINING_WIKI.md) for the
 result.
 
 Design recorded 2026-05-20 by Jason and assistant after `WL1` (wandb
@@ -16,11 +18,11 @@ has by default, and that diversity is what stabilizes large-batch SGD on
 self-play data.**
 
 Cross-refs:
-- [wave-of-lockstep-design.md](wave-of-lockstep-design.md) — the per-version
+- [wave-of-lockstep-design.md](../../topics/wave-of-lockstep-design.md) — the per-version
   uniformity hypothesis WL1 tested.
-- [az-at-scale-vs-laptop.md](az-at-scale-vs-laptop.md) — the framing this
+- [az-at-scale-vs-laptop.md](../../topics/az-at-scale-vs-laptop.md) — the framing this
   design extends with concrete laptop-side emulations.
-- [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) "WL1 live run log" —
+- [../../TRAINING_WIKI.md](../../../TRAINING_WIKI.md) "WL1 live run log" —
   the run end summary that motivated this design.
 
 ## What WL1 told us
@@ -275,7 +277,7 @@ Then full WL2 launch.
 
 This page is the design for the next run after `WL1`. It assumes:
 - Wave-of-lockstep barrier from
-  [wave-of-lockstep-design.md](wave-of-lockstep-design.md) stays
+  [wave-of-lockstep-design.md](../../topics/wave-of-lockstep-design.md) stays
 - Native MCTS from `gomoku/_mcts_native.c` (commit `0ab3d9d`) stays
 - Worker race-drop fix from commit `0d2c106` stays
 - Cell name in `scripts/run_sweep.py` should be `WL2`

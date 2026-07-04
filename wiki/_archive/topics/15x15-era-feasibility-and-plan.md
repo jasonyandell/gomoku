@@ -1,5 +1,7 @@
 # The 15×15 Era: Feasibility And Plan
 
+> **ARCHIVED — HISTORICAL (2026-06-12 era).** Merged into the live [15×15 era page](../../topics/15x15-training-campaign.md), which hoists the durable lessons (dispatch-bound finding, 9×9-close Rapfi cert). Preserved here verbatim for full phase-by-phase detail.
+
 **Date:** 2026-06-12. **Status:** proposal + measured feasibility evidence; no
 port work started. **One-line thesis:** the 9×9 perf ceiling is a
 *dispatch-bound small-model* ceiling, not a hardware ceiling — a 15×15 board
@@ -8,17 +10,17 @@ size, so the M5 Max can train a 15×15 player in week-scale wall-clock, and
 most of the perf levers that rejected at 9×9 were predicted to pay in exactly
 this heavier regime.
 
-Companion pages: [mcts-perf-ceiling.md](mcts-perf-ceiling.md),
-[m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md),
-[m5-max-cross-engine-coupling.md](m5-max-cross-engine-coupling.md),
-[external-engine-baselines.md](external-engine-baselines.md),
-[../sources/gomocup-az-techniques-2026-05-27.md](../sources/gomocup-az-techniques-2026-05-27.md),
-[../ops/research-board.md](../ops/research-board.md).
+Companion pages: [mcts-perf-ceiling.md](../../topics/mcts-perf-ceiling.md),
+[m5-max-fp16-and-throughput-regimes.md](../../topics/m5-max-fp16-and-throughput-regimes.md),
+[m5-max-cross-engine-coupling.md](../../topics/m5-max-cross-engine-coupling.md),
+[external-engine-baselines.md](../../topics/external-engine-baselines.md),
+[../sources/gomocup-az-techniques-2026-05-27.md](../../sources/gomocup-az-techniques-2026-05-27.md),
+[../ops/research-board.md](../../ops/research-board.md).
 
 ## 1. Why now: the 9×9 strength frontier is closing
 
-Evidence as of 2026-06-12 (see [../ops/research-board.md](../ops/research-board.md)
-and [training-run-lineage.md](training-run-lineage.md)):
+Evidence as of 2026-06-12 (see [../ops/research-board.md](../../ops/research-board.md)
+and [training-run-lineage.md](../../topics/training-run-lineage.md)):
 
 - **The ladder is swept.** The v8 champion
   (`sweep_runs/derby_v8/_peaks/mate-discount/peak.pt`, 64ch×4blk,
@@ -35,7 +37,7 @@ and [training-run-lineage.md](training-run-lineage.md)):
   More compute poured into 9×9 buys little Δelo — the constraint is the
   board, not aug/s.
 
-Meanwhile the stated goal (memory + [m5-max-as-mainframe.md](m5-max-as-mainframe.md))
+Meanwhile the stated goal (memory + [m5-max-as-mainframe.md](../../topics/m5-max-as-mainframe.md))
 has always been: 9×9 is the proving ground; the destination is 15×15 and
 Gomocup-class opposition. The blocker was the assumption that the Mac maxed
 out at 9×9. Section 2 tests that assumption directly.
@@ -62,9 +64,9 @@ Readings:
    *nothing* — 0.67 ms/wave either way. The GPU has been idling through the
    9×9 era; per-kernel launch overhead, not arithmetic, sets the floor.
    This is the same mechanism behind
-   [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md)
+   [m5-max-fp16-and-throughput-regimes.md](../../topics/m5-max-fp16-and-throughput-regimes.md)
    Finding 1 and the ~1.9–2.1 ms MPS forward latency in
-   [mcts-perf-ceiling.md](mcts-perf-ceiling.md).
+   [mcts-perf-ceiling.md](../../topics/mcts-perf-ceiling.md).
 2. **A serious 15×15 net is affordable at the training wave size.** 96×8
    (4.6× params on 2.8× board area) costs 2.32× vs today's production eval.
    Even 128×10 is only 4.62×.
@@ -80,7 +82,7 @@ Readings:
 ## 3. Feasibility envelope (back-of-envelope, to be validated by smoke)
 
 Production 9×9 reference: R-TRAIN-WL5 live training = 3,297.6 aug/s =
-14.07 games/s ([../ops/best-cells.md](../ops/best-cells.md)).
+14.07 games/s ([../ops/best-cells.md](../../ops/best-cells.md)).
 
 For a 96×8 net at 15×15, the multiplicative guesses:
 
@@ -97,15 +99,15 @@ that. These are planning numbers, not commitments.
 
 **Why this bench must not be over-trusted** (the repo's own scars):
 
-- [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md):
+- [perf-bench-vs-real-training-cost.md](../../topics/perf-bench-vs-real-training-cost.md):
   a +152.9% bench (R-TRAIN-LEAN) turned into an unbounded runaway in the real
   loop. Cold/eval-only benches miss equilibrium dynamics.
 - Ingest-flooding lesson (memory + TRAINING_WIKI): CPU-scale tests passed 3×,
   failed live flood 3×. **The go/no-go gate is a live `run_sweep` smoke
   slice at 15×15, not this table.**
 - Contention tax: live training pays ~30.8% vs pure-gen at 9×9
-  ([../ops/best-cells.md](../ops/best-cells.md)), and the Lpwr2b finding
-  ([m5-max-cross-engine-coupling.md](m5-max-cross-engine-coupling.md)) says
+  ([../ops/best-cells.md](../../ops/best-cells.md)), and the Lpwr2b finding
+  ([m5-max-cross-engine-coupling.md](../../topics/m5-max-cross-engine-coupling.md)) says
   throttle scales with the GPU trainer's *memory working-set* — a bigger
   15×15 trainer will throttle workers harder. Unmeasured at 15×15.
 - Native-MCTS tree cost at 225 actions (selection, expansion, D4 symmetry
@@ -115,7 +117,7 @@ that. These are planning numbers, not commitments.
 ~2.8× a 9×9 one (~15 KB/pos unpacked at current encoding); a 3M-position
 buffer (the [[project-buffer-undersized]] recommendation) would be ~45 GB
 unpacked. The bit-packing plan
-([buffer-bit-packing.md](buffer-bit-packing.md), ~17× → ~1 KB/pos at 15×15)
+([buffer-bit-packing.md](../../topics/buffer-bit-packing.md), ~17× → ~1 KB/pos at 15×15)
 turns that into ~3 GB. What was an optional 9×9 lever is a prerequisite here.
 
 **Perf levers that rejected at 9×9 and were predicted to flip in this regime**
@@ -124,18 +126,18 @@ turns that into ~3 GB. What was an optional 9×9 lever is a prerequisite here.
 1. **fp16 trainer + worker everywhere** — Finding 1 territory; never measured
    for training forward+backward.
 2. **ANE/Core ML workers under a heavy GPU trainer** — the un-run
-   `L09i-fix-load` lane ([coreml-design-envelope-and-our-fit.md](coreml-design-envelope-and-our-fit.md));
+   `L09i-fix-load` lane ([coreml-design-envelope-and-our-fit.md](../../topics/coreml-design-envelope-and-our-fit.md));
    ANE's contention-immunity only pays when the GPU trainer is actually
    heavy, which a 96×8/128×10 15×15 trainer finally is.
 3. **Bit-packed buffer** — prerequisite, see above.
 4. **Batched `state.apply` on GPU** (the deferred "next 2×",
-   [mcts-perf-ceiling.md](mcts-perf-ceiling.md)) — bigger boards raise the
+   [mcts-perf-ceiling.md](../../topics/mcts-perf-ceiling.md)) — bigger boards raise the
    payoff of moving state ops off the CPU.
 
 ## 4. The plan
 
 Phases are ordered; each has a gate. GPU-required items go through the lab's
-GPU queue ([../ops/gpu-queue.md](../ops/gpu-queue.md)); code-only items are
+GPU queue ([../ops/gpu-queue.md](../../ops/gpu-queue.md)); code-only items are
 normal worktree work. Effort in Opus-minutes per the conventions page.
 
 ### Phase 0 — Certify the 9×9 champion externally (GPU, ~30 Opus-min)
@@ -158,7 +160,7 @@ wrong target. Options:
 | **Free-style + swap2 opening** | Game logic unchanged (only opening protocol); Gomocup freestyle is played this way | Swap2 changes the training distribution (must train both colors from swapped openings); protocol work in match/eval |
 | **Standard gomoku (exactly-5)** | Small rule delta (overlines don't win) | Still black-favored without an opening rule |
 
-The survey pages lean renju ([m5-max-as-mainframe.md](m5-max-as-mainframe.md)
+The survey pages lean renju ([m5-max-as-mainframe.md](../../topics/m5-max-as-mainframe.md)
 line ~156); swap2-freestyle is the cheaper first step and matches Rapfi's
 strongest table (2625 elo is its *freestyle* rating). **Recommendation:
 free-style + swap2 first** (cheapest path to playing Rapfi on its rated
@@ -204,11 +206,11 @@ re-open the perf levers (§3 list) *before* committing to long runs.
   value-discount + gumbel; FPU 0.45 as eval config).
 - **Add the WDL value head as the first new contestant** — the keystone
   untried lever per
-  [../sources/gomocup-az-techniques-2026-05-27.md](../sources/gomocup-az-techniques-2026-05-27.md);
+  [../sources/gomocup-az-techniques-2026-05-27.md](../../sources/gomocup-az-techniques-2026-05-27.md);
   draw/contempt structure matters more once swap2/renju balance the game.
 - Buffer: 3M+ positions ⇒ bit-packing lands first (Phase 3.5, code-only,
   has an existing cheap-test gate in
-  [buffer-bit-packing.md](buffer-bit-packing.md)).
+  [buffer-bit-packing.md](../../topics/buffer-bit-packing.md)).
 - Net-growth curriculum: start 64×4 (free at 15×15), grow to 96×8 when
   self-play plateaus (net2net-style widen/deepen or fresh-train from the
   archive — decide then; 9×9's "bigger nets lose" verdict does NOT carry
@@ -218,7 +220,7 @@ re-open the perf levers (§3 list) *before* committing to long runs.
   (2625). Lookahead-N stays as a cheap smoke probe.
 
 **Gate:** Δelo/Δt vs the external ladder, measured per
-[wall-clock-to-elo-metric.md](wall-clock-to-elo-metric.md).
+[wall-clock-to-elo-metric.md](../../topics/wall-clock-to-elo-metric.md).
 
 ### Phase 5 — Derby at 15×15 + perf-lab reopen (ongoing)
 
@@ -226,7 +228,7 @@ re-open the perf levers (§3 list) *before* committing to long runs.
   ANE `L09i-fix-load` first — it was explicitly parked waiting for a heavy
   trainer).
 - Derby vNext on the 15×15 board: same operating model
-  ([../topics/research-loop.md](research-loop.md), derby skills), contestants
+  ([../topics/research-loop.md](../../topics/research-loop.md), derby skills), contestants
   from the AZ-techniques survey backlog (LCB root, variance-PUCT, moves-left
   head, in-search VCF).
 
@@ -284,7 +286,7 @@ expected one: more Rapfi thinking time pulls wins toward draws (70% → 62%),
 but even at 1000 ms/move the champion stays ahead and is never blown out. This
 is the formal close of the 9×9 strength era: the board is exhausted, exactly
 as §1 argued. (Caveat per
-[external-engine-baselines.md](external-engine-baselines.md): 9×9 freestyle is
+[external-engine-baselines.md](../../topics/external-engine-baselines.md): 9×9 freestyle is
 intrinsically drawish and the 2625 is a 15×15/20×20 rating — treat as a
 yardstick, not a 9×9 Elo label. The point stands: there is no headroom left to
 chase here.)

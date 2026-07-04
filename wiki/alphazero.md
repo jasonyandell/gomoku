@@ -50,7 +50,7 @@ reckoning, since fixed). See
 | Cross-board warm-start + the 9→11→13→15 ladder | [board-size-transfer-and-warm-start.md](topics/board-size-transfer-and-warm-start.md) |
 | The sound-world recipe (current frontier) | [sound-world-recipe.md](topics/sound-world-recipe.md) |
 | Every knob & switch to launch/tune a run | [training-run-reference.md](topics/training-run-reference.md) |
-| Run designs (preserved records) | [WL1](topics/wave-of-lockstep-design.md) · [WL2](topics/wl2-scale-emulation-design.md) · [WL5](topics/wl5-diagnostics-archive-start-design.md) |
+| Run designs (preserved records) | [WL1](topics/wave-of-lockstep-design.md) · [WL2+WL5 index](topics/wl-era.md) |
 
 ## What worked
 
@@ -101,9 +101,8 @@ principled fixes confirmed at the data level (strength-vs-champion still open):
 
 | Page | Note |
 |---|---|
-| [alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) | 1255-line essay; split into capacity-vs-search / eval-yardstick / white-defense leaves later |
-| [15x15-training-campaign.md](topics/15x15-training-campaign.md) | campaign log; overlaps feasibility |
-| [15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md) | feasibility+phased plan; cross-link m5 |
+| [alphazero-lessons-15x15-gomoku.md](topics/alphazero-lessons-15x15-gomoku.md) | the learning artifact; settled-verdicts-first (restructured 2026-07-04) |
+| [15x15-training-campaign.md](topics/15x15-training-campaign.md) | the 15×15 era (feasibility merged in 2026-07-04) |
 | [training-run-lineage.md](topics/training-run-lineage.md) |  |
 | [training-run-reference.md](topics/training-run-reference.md) | also on workflow-train |
 | [launch-sequence-runbook.md](topics/launch-sequence-runbook.md) | launch runbook; also workflow-train |
@@ -118,8 +117,7 @@ principled fixes confirmed at the data level (strength-vs-champion still open):
 | [eval-teacher-sensei.md](topics/eval-teacher-sensei.md) | teacher distillation; cross reference |
 | [rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |  |
 | [wave-of-lockstep-design.md](topics/wave-of-lockstep-design.md) | run design WL1 |
-| [wl2-scale-emulation-design.md](topics/wl2-scale-emulation-design.md) |  |
-| [wl5-diagnostics-archive-start-design.md](topics/wl5-diagnostics-archive-start-design.md) |  |
+| [wl-era.md](topics/wl-era.md) | WL2/WL5 index (designs archived 2026-07-04) |
 | [vct-terminus-selfplay-result.md](topics/vct-terminus-selfplay-result.md) | training result; bridges seek-vct |
 | [vct-defense-aux-head-result.md](topics/vct-defense-aux-head-result.md) | training result; bridges seek-vct |
 | [cross-game-value-sidecar.md](topics/cross-game-value-sidecar.md) | derby lever; meta-lesson |

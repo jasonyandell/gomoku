@@ -1,16 +1,18 @@
 # WL5 — Diagnostics + Archive-Start Design
 
+> **ARCHIVED — HISTORICAL (WL5, 2026-05-21).** Launched (`o6cbjfnr`); validated the diagnostics + archive-start pipeline without collapse but did NOT beat WL4's ATH; superseded. Index + what-survived: [WL-era](../../topics/wl-era.md).
+
 Status note (2026-05-21): implemented and launched as WL5 (`o6cbjfnr`).
 Phase 1 (e4001-e5051) validated the diagnostic streams and archive-start
 pipeline without NaN, worker death, or fast-attack collapse, but did not beat
 WL4's ATH. Phase 2 is the same run after self-play workers were hot-restarted
 with Conv+BN-fused inference. Treat this page as the preserved WL5 design
-record; read [training-run-lineage.md](training-run-lineage.md) and the WL5
-tail of [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) for current status.
+record; read [training-run-lineage.md](../../topics/training-run-lineage.md) and the WL5
+tail of [../../TRAINING_WIKI.md](../../../TRAINING_WIKI.md) for current status.
 
 Design recorded 2026-05-21 by Jason and assistant after WL4 reached the
 "healthy lower-floor-bouncing" plateau described in
-[loss-floor-bouncing.md](loss-floor-bouncing.md). WL4 produced the best
+[loss-floor-bouncing.md](../../topics/loss-floor-bouncing.md). WL4 produced the best
 WL-series outcome to date (elo 1841 ATH, la4=100%, plies past Z's
 endpoint) but plateaued without further breakthrough.
 
@@ -20,13 +22,13 @@ to running both in a **single WL5 cell** that **resumes from WL4 e4024**
 and uses a **static archive mined from WL4 artifacts**.
 
 Cross-refs:
-- [loss-floor-bouncing.md](loss-floor-bouncing.md) — the article driving
+- [loss-floor-bouncing.md](../../topics/loss-floor-bouncing.md) — the article driving
   this design; "Candidate Next-Run Shape" + "Next-Run Lessons From The
   Sources" sections are the proximate spec.
 - [wl2-scale-emulation-design.md](wl2-scale-emulation-design.md) — the
   template this design follows in structure.
-- [wave-of-lockstep-design.md](wave-of-lockstep-design.md) — WL1 design.
-- [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) "WL4 plateau-end" entry —
+- [wave-of-lockstep-design.md](../../topics/wave-of-lockstep-design.md) — WL1 design.
+- [../../TRAINING_WIKI.md](../../../TRAINING_WIKI.md) "WL4 plateau-end" entry —
   evidence trail for the plateau being healthy and the next-lever rationale.
 
 ## Hypothesis
@@ -342,8 +344,8 @@ Standard WL-series smoke pattern:
 
 ## References
 
-- [loss-floor-bouncing.md](loss-floor-bouncing.md) — the article driving this
-- [TRAINING_WIKI.md WL4 plateau-end](../../TRAINING_WIKI.md) — evidence
+- [loss-floor-bouncing.md](../../topics/loss-floor-bouncing.md) — the article driving this
+- [TRAINING_WIKI.md WL4 plateau-end](../../../TRAINING_WIKI.md) — evidence
 - [Trudeau & Bowling 2023, Go-Exploit](https://arxiv.org/abs/2302.12359)
   — the explicit prior for archive-start
 - [Wu 2020, KataGo](https://arxiv.org/abs/1902.10565) — playout cap
