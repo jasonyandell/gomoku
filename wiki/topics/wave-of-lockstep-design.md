@@ -1,6 +1,7 @@
 # Wave-of-Lockstep Design — Next Run
 
-Status note (2026-05-21): implemented and launched as WL1 (`l8mbntcm`).
+**Status: HISTORICAL** (note dated 2026-05-21; banner added 2026-07-04): implemented and
+launched as WL1 (`l8mbntcm`).
 The barrier and greedy-fill mechanics worked, but the run replaced Z's slow
 explore/consolidate arcs with high-frequency strength oscillation. Treat this
 page as the preserved WL1 design record; read

@@ -1,6 +1,7 @@
 # VCT-terminus self-play — the 9×9 A/B result (#100)
 
-> **RESULT (2026-06-30): VCT-terminus self-play is a THROUGHPUT WIN but a ROBUSTNESS LOSS.**
+> **Status: HISTORICAL — RESULT (2026-06-30): VCT-terminus self-play is a THROUGHPUT WIN
+> but a ROBUSTNESS LOSS.**
 > A net trained to end each self-play game at the first cap50 VCT (idea-pile #11, built #98/#99)
 > reaches the **same fixed-baseline strength** as a play-to-five control at **~45% of the wall-clock** —
 > but **loses head-to-head to that control 75–25 (0 wins in 120 games, every config)** and **0–40** to

@@ -95,11 +95,18 @@ already worked.
 
 - **log.md / any ops journal**: rotate months belonging to a *closed era* to
   `_archive/log-YYYY-MM.md`, leave the pointer (~60 KB is the smell threshold,
-  not a hard cap — keep the live era readable in place). **Split by date-prefix with a
-  script, not by hand, and reconcile before/after** — count entries and sum bytes
-  across (live + archive) and confirm both equal the pre-rotation totals. A
-  freehand rotation on 2026-07-04 silently dropped 21 entries and had to be redone
-  from git; a two-line count/byte check would have caught it.
+  not a hard cap — keep the live era readable in place). **Use the hardened tool,
+  never rotate by hand:**
+  ```bash
+  uv run python scripts/wiki_rotate.py wiki/log.md \
+      --before YYYY-MM --archive wiki/_archive/log-YYYY-MM.md [--dry-run]
+  ```
+  It splits on the date-prefix and **refuses to write unless entry counts + byte
+  totals across (live + archive) reconcile to the pre-rotation totals**, then
+  re-verifies after writing. Name the archive for the era it *contains*
+  (`log-2026-06.md` holds June). A freehand rotation on 2026-07-04 silently
+  dropped 21 entries and had to be redone from git — that incident is why the
+  reconcile check lives in the tool, not in vigilance.
 - **Queue/board files**: when a race/era concludes, move its closed verdicts
   to `_archive/`, keep durable synthesis + open intake live.
 - **Topic pages** > ~25 KB: run the chronicle-itis *check* (a trigger, not a
@@ -110,6 +117,14 @@ already worked.
   verdict-first synthesis pages whose length is evidence density.
 
 ## Lint (run one of these passes when curating broadly)
+
+**The mechanized half is a script — run it first, at the end of any curation
+session:** `uv run python scripts/wiki_lint.py` (add `--json` for machine
+output; exit 1 on errors). It checks banners (presence + date), broken relative
+links (live pages; `_archive/` exempt), topic orphans, rotation smells
+(>60 KB journals without an ARCHIVED/FROZEN head marker), chronicle-itis
+triggers (>25 KB topics), and index § You-are-here staleness vs log.md. The
+judgment-tier checks below can't be scripted — do them by reading:
 
 - Banners: does every topics/ page have a current status line? (`head -5`)
 - Links: script-extract all relative `.md` links → any broken? any topics/

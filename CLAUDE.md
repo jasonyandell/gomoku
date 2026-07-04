@@ -20,6 +20,11 @@ agent-instruction files.
 General read order: wiki → `TRAINING_WIKI.md` → W&B/logs/checkpoints → code
 (dynamics are subtle; code inspection alone usually misleads).
 
+**Remembering / curating anything into the wiki?** `wiki/curation.md` is the
+whole instruction: the routing table (where each input class lands) + the
+query rule (answers synthesized from 2+ pages get filed back) + rotation and
+lint. Don't improvise structure — read it first.
+
 ## Repo shape
 - `gomoku/`: `game.py` (9×9 state, D4 aug), `model.py` (residual policy/value +
   checkpoint format), `mcts.py` (PUCT, wave-batched eval), `self_play.py` /

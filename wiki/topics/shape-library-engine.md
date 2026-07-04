@@ -1,6 +1,6 @@
 # The Shape-Library Engine — the gomoku AI: steer toward proven winning shapes, deny the opponent theirs
 
-> **Status coda (dated 2026-07-04) — read first.**
+> **Status (2026-07-04): DORMANT (paused, not dead) — coda below, read first.**
 > - **L0 (exact GPU VCT solver): BUILT + measured** — [mega-vct-solver.md](mega-vct-solver.md).
 > - **L1 (md-invariant stencil miner/minimizer): BUILT + measured** — `md_minimize.py`;
 >   the md-extraction prerequisite that once *blocked* L1 is **DONE** (2026-06-28, #91:

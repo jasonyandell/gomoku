@@ -19,6 +19,10 @@ training works or fails. It is append-oriented: don't rewrite old conclusions;
 add a dated entry that explains the correction and points to the evidence.
 
 ## Wiki architecture
+**Remembering / curating anything into the wiki?** `wiki/curation.md` is the
+whole instruction: the routing table (where each input class lands) + the
+query rule (answers synthesized from 2+ pages get filed back) + rotation and
+lint. Don't improvise structure — read it first.
 - `wiki/index.md` — content entry point; keep current when durable pages appear.
 - `wiki/log.md` — chronological maintenance log; append on structure/synthesis changes.
 - `wiki/sources/` — stable source records for external references/evidence.

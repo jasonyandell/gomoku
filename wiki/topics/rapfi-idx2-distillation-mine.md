@@ -1,6 +1,6 @@
 # Rapfi idx-2 distillation mine — the "Bruce Lee one-position" experiment
 
-**Status: BANKED — successful infra/tooling run (2026-06-25).** Full pipeline ran
+**Status: DORMANT — banked, successful infra/tooling run (2026-06-25), reactivatable.** Full pipeline ran
 end-to-end and is preserved in this worktree; training stopped by choice at AZ
 epoch 250 (a new experiment follows). The deliverable here was the *infrastructure*,
 and it all works. This page is the synthesis; raw run detail goes to `TRAINING_WIKI.md`.

@@ -1,6 +1,6 @@
 # Board-size transfer, warm-start & the auto-graduating ladder — the proven curriculum
 
-**Status (updated 2026-07-02):** PROVEN, TESTED, READY. This is THE reference for two things:
+**Status (updated 2026-07-02): LIVE** — PROVEN, TESTED, READY. This is THE reference for two things:
 (a) the **cross-board warm-start / graduation mechanics** (partial-load a smaller-board champion
 into a fresh bigger-board net) and (b) the **auto-graduating 9→11→13→15 ladder** that chains
 warm-starts to milk cheap native epochs at each rung. The mechanism existed

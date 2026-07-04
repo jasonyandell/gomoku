@@ -1,7 +1,7 @@
 # Engine-Panel-Anchored Derby — Calibrated Strength Yardstick
 
-> **Status (2026-07-04): CHAPTER CLOSED — calibration never achieved; the failure
-> is the durable finding.** Tooling was built and a first run happened, but the
+> **Status (2026-07-04): DEAD-END (lesson kept) — chapter closed; calibration never
+> achieved; the failure is the durable finding.** Tooling was built and a first run happened, but the
 > calibrated yardstick this design aimed at was **never delivered**: calibration
 > stayed BLOCKED on engine reliability + anchor validity (#35), and the Derby has
 > since stopped (see [../derby.md](../derby.md)). What survives as load-bearing

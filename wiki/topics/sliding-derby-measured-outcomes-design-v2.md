@@ -1,6 +1,6 @@
 # Design RFC v2 — Measured-Outcome Sliding Derby (composite workflow)
 
-> **Status (2026-07-04): DESIGN OF RECORD / Derby STOPPED — never fully shipped.**
+> **Status (2026-07-04): DORMANT — design of record / Derby STOPPED — never fully shipped.**
 > This is the canonical sliding-derby design, but the **autonomous Derby it targets
 > has stopped** (see [../derby.md](../derby.md)) and the composite workflow described
 > in CHANGE 4 was **never stood up end-to-end**. What *was* built: the gate primitive
