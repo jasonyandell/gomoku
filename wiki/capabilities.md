@@ -65,7 +65,7 @@ here supersedes those. **NEW** = added in the 2026-06-25 idx-2 distillation run
 |---|---|---|
 | **uv-native dev loop** (one per-worktree `.venv`, uv.lock-pinned; never `source activate`) | `uv sync --extra dev`, `uv run …` | [topics/conventions.md](topics/conventions.md) |
 | **One-worktree-per-task workflow** (off `main` → `feat/<slug>` → `merge --no-ff` → push; cleanup is MANUAL — janitor retired 2026-07-01) | `scripts/gh_worktree.py <N>` | [topics/worktree-hygiene.md](topics/worktree-hygiene.md) |
-| **Self-driving autolab** (out-of-git ledger spine + trainer/arena/research/worker loops; crowns champions unattended) | `gomoku/lab/`, `autolab up`/`down` | [topics/autolab-architecture.md](topics/autolab-architecture.md) |
+| **Self-driving autolab *(dormant — derby stopped)*** (out-of-git ledger spine + trainer/arena/research/worker loops; crowns champions unattended) | `gomoku/lab/`, `autolab up`/`down` | [topics/autolab-architecture.md](topics/autolab-architecture.md) |
 | **Play a checkpoint** (local web UI / live SPA) | `uv run gomoku-web`, `uv run gomoku-play --checkpoint <pt>` | [topics/playing-the-model.md](topics/playing-the-model.md) |
 | **W&B run overlays** (workspaces for comparison sets) | `scripts/wandb_workspace.py` | [topics/external-engine-baselines.md](topics/external-engine-baselines.md) |
 

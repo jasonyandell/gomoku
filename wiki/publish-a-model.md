@@ -42,7 +42,7 @@ net = load_checkpoint(p)
 Training warm-start takes `base: "hf://owner/repo@rev"` — the HF copy has no
 buffer, so a resume pays a one-time buffer re-warm.
 
-### How the autolab publishes (the flywheel)
+### How the autolab published (the flywheel — autolab STOPPED, kept as the mechanism of record)
 
 Each ~1 h slice → eval → **`push_slice`** creates a per-slice HF **branch =
 revision** (named `lane-rowid`) → the arena gates it vs the champion → on PROMOTE

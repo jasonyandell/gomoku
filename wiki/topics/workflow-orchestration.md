@@ -5,7 +5,7 @@ orchestration, where it fits, and — just as important — where it does **not*
 The first real workflow lives at
 [`.claude/workflows/reviewer-gated-fanout.js`](../../.claude/workflows/reviewer-gated-fanout.js).
 
-> **Historical / two explored approaches.** This Claude-workflow composite and the
+> **Status: HISTORICAL / two explored approaches** *(dated 2026-07-04)*. This Claude-workflow composite and the
 > launchd-daemon autolab ([autolab-architecture.md](autolab-architecture.md)) are
 > **two explored design approaches to the same autonomous-derby goal** — neither
 > supersedes the other. The autonomous derby is **stopped** (see

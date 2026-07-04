@@ -1,6 +1,6 @@
 # Mining Validation Archives
 
-> **Status:** LIVE operational how-to (training-diagnostics / archive-mining
+> **Status: LIVE** *(2026-07-04)* operational how-to (training-diagnostics / archive-mining
 > cluster). Despite the name, this is **NOT part of the seek-VCT program** — "mining"
 > here means mining a checkpoint for a *validation-archive* of positions, unrelated to
 > VCT solving.

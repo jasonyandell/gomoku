@@ -1,6 +1,6 @@
 # Launch Sequence Runbook
 
-> ✅ **LIVE — the procedure is current.** The worked *examples* are WL-era
+> ✅ **Status: LIVE** *(2026-07-04)* — **the procedure is current.** The worked *examples* are WL-era
 > (era-1, 9×9 May 2026): cell names, wandb ids, and reference metrics below are
 > illustrative of the era they were distilled from. For the **current era's** cell
 > surface and recipe, use [training-run-reference.md](training-run-reference.md)

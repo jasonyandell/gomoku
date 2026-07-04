@@ -1,5 +1,7 @@
 # The eval suite — how to measure a checkpoint's strength
 
+> **Status: LIVE** *(2026-07-04)* — the how-to for evaluating a checkpoint (doctrine sibling: [reliable-eval-set.md](reliable-eval-set.md)).
+
 **THE how-to for evaluating a checkpoint.** Every reliable tool, copy-paste
 commands, and the gotchas that have burned us. Doctrine (what counts as
 reliable, and why wine engines are shelved) lives in

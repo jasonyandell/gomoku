@@ -42,7 +42,7 @@ frontier went quiet late May while work moved to 15×15 + VCT-science.
 
 ## The operating model (how these fit together)
 
-Run work through the **[Derby](derby.md)**: propose a lane → run a GPU slice →
+*(Historical operating model — the autonomous derby is **stopped**; the gate/promotion doctrine below is retained for the next loop.)* Run work through the **[Derby](derby.md)**: propose a lane → run a GPU slice →
 gate it. The gate is the `experiment-ledger` TQ rule + the `test-ledger` Standard
 Gates; promotion updates `best-cells`; the derby verdicts live on
 `research-board`. The doctrine pages ([research-lab-charter](topics/research-lab-charter.md),

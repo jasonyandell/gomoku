@@ -10,12 +10,12 @@ a habit disagree, this page wins.
 
 | Layer | Files | What belongs there |
 |---|---|---|
-| **Doorway** | [index.md](index.md) | One screen: you-are-here + the doors. Never prose. |
-| **Story** | [story.md](story.md) | The narrative arc. Updated at **era boundaries only**. |
-| **Hubs** | [alphazero](alphazero.md) · [experiments](experiments.md) · [derby](derby.md) · [m5-mainframe](m5-mainframe.md) · [reference](reference.md) · [ops](ops.md) (+[seek-vct](seek-vct.md) sub-hub) | One-fetch tables: started → now → learned + links. **No prose bodies.** |
+| **Doorways** | [index.md](index.md) · [capabilities.md](capabilities.md) | One screen each: you-are-here / capability map + the doors. No leaf content. |
+| **Story** | [story.md](story.md) · [training-timeline.md](training-timeline.md) | The narrative arc + the milestone index. Updated at **era boundaries**. |
+| **Hubs** | [alphazero](alphazero.md) · [experiments](experiments.md) · [derby](derby.md) · [m5-mainframe](m5-mainframe.md) · [reference](reference.md) · [ops](ops.md) (+[seek-vct](seek-vct.md) sub-hub) | One fetch: tables + short status bullets. Essay prose lives in leaves. |
 | **Workflows** | [train-](train-a-model.md)/[eval-](eval-a-model.md)/[publish-a-model](publish-a-model.md) | Pinned "just get me going" pages. |
-| **Topics** | `topics/*.md` | Maintained synthesis, one subject each, ~10 KB target. |
-| **Evidence** | `ops/*` ledgers/logs, [TRAINING_WIKI.md](../TRAINING_WIKI.md), W&B, checkpoints | Append-only; dated corrections, never rewrites. |
+| **Topics** | `topics/*.md` | Maintained synthesis, one subject each (~10 KB median; >25 KB triggers the chronicle-itis check below). |
+| **Evidence** | `ops/*` ledgers/logs, [TRAINING_WIKI.md](../TRAINING_WIKI.md), `sources/` (verbatim external), `cards/` (era model-card artifacts), W&B, checkpoints | Append-only; dated corrections, never rewrites. |
 | **Archive** | `_archive/` | Full-fidelity history rotated out of live pages. Nothing is deleted. |
 
 ## The five hard rules
@@ -64,18 +64,21 @@ a habit disagree, this page wins.
 
 ## Rotation thresholds (the giants stay caged)
 
-- **log.md / any ops journal** > ~60 KB or an era old → rotate closed months
-  to `_archive/log-YYYY-MM.md`, leave the pointer. **Split by date-prefix with a
+- **log.md / any ops journal**: rotate months belonging to a *closed era* to
+  `_archive/log-YYYY-MM.md`, leave the pointer (~60 KB is the smell threshold,
+  not a hard cap — keep the live era readable in place). **Split by date-prefix with a
   script, not by hand, and reconcile before/after** — count entries and sum bytes
   across (live + archive) and confirm both equal the pre-rotation totals. A
   freehand rotation on 2026-07-04 silently dropped 21 entries and had to be redone
   from git; a two-line count/byte check would have caught it.
 - **Queue/board files**: when a race/era concludes, move its closed verdicts
   to `_archive/`, keep durable synthesis + open intake live.
-- **Topic pages** > ~25 KB: check for chronicle-itis — hoist verdict, compress
-  superseded sections to summaries, archive the cut text. (Reference
-  dictionaries like [training-run-reference](topics/training-run-reference.md)
-  are exempt — length is their job.)
+- **Topic pages** > ~25 KB: run the chronicle-itis *check* (a trigger, not a
+  violation) — hoist verdict, compress superseded sections to summaries,
+  archive the cut text. Pages that pass the check stay big legitimately:
+  reference dictionaries ([training-run-reference](topics/training-run-reference.md)),
+  API contracts ([mega-vct-solver](topics/mega-vct-solver.md)), and
+  verdict-first synthesis pages whose length is evidence density.
 
 ## Lint (run one of these passes when curating broadly)
 
