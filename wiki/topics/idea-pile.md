@@ -5,8 +5,9 @@
 > treating Rapfi-at-full-strength as a fixed wall to imitate"*, 2026-06-25) predates
 > the **closed 9×9 chapter** and the **sound-world recipe** — read the Rapfi-wall
 > ideas (#1/#3/#4/#7) as *historically motivated*, not the current front. Three ideas
-> have **graduated** and are now one-line stubs + verdicts (full narratives moved to
-> [_archive/topics/idea-pile-graduated-results.md](../_archive/topics/idea-pile-graduated-results.md)):
+> have **graduated** and are now one-line stubs + verdicts (full narratives were
+> moved to a separate page and have since been removed *(2026-07-04; recover:
+> `git show ca76350:wiki/_archive/topics/idea-pile-graduated-results.md`)*):
 > **#9** batch-VCF → BUILT (GPU-VCF/VCT oracle, real-time); **#10** threat-molecules →
 > thesis alive but first probe NEGATIVE, big swing un-built; **#11** VCT-terminus →
 > throughput-win/robustness-loss, **superseded by [sound-world-recipe.md](sound-world-recipe.md)**.
@@ -151,7 +152,7 @@ agreement** over ~5,900 positions (plain VCF is pure OR/reachability → batchab
 generalized to the full AND/OR **GPU VCT oracle** `solve_vct_mega_bb`. VCF/VCT tactical truth
 is now real-time. Full living record: [gpu-vct-feasibility.md](gpu-vct-feasibility.md) +
 [mega-vct-solver.md](mega-vct-solver.md). Full original narrative:
-[_archive/topics/idea-pile-graduated-results.md](../_archive/topics/idea-pile-graduated-results.md) #9.
+idea-pile-graduated-results.md #9 *(removed; see note above)*.
 
 ### 10. Represent the board as threat-molecules, not stone-atoms — ⭐⭐ PARTLY GRADUATED
 **Idea (one line):** represent *relations* (a molecule ⊋ a line), not the 4 line directions —
@@ -169,7 +170,7 @@ The threat-graph + attention architecture is still a moonshot seed. Living homes
 the recommended next stabs), [the-claw.md](the-claw.md) (the worked defense-axis example),
 [shape-library-engine.md](shape-library-engine.md) (the "molecule ⊋ line" program realized).
 Full original narrative + the claw-rediscovery v0 result:
-[_archive/topics/idea-pile-graduated-results.md](../_archive/topics/idea-pile-graduated-results.md) #10.
+idea-pile-graduated-results.md #10 *(removed; see note above)*.
 
 ### 11. Play self-play games TO the first VCT, not to five-in-a-row — ⭐⭐ GRADUATED
 **Idea (one line):** end self-play at the first oracle-proven VCT (median ply ~19–20, cap50/cap25
@@ -183,7 +184,7 @@ defense half was solved instead by **oracle-in-the-environment** — see
 [sound-world-recipe.md](sound-world-recipe.md). Living records:
 [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) +
 [vct-defense-aux-head-result.md](vct-defense-aux-head-result.md). Full original narrative:
-[_archive/topics/idea-pile-graduated-results.md](../_archive/topics/idea-pile-graduated-results.md) #11.
+idea-pile-graduated-results.md #11 *(removed; see note above)*.
 
 ---
 

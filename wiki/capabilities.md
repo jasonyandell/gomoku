@@ -30,7 +30,7 @@ here supersedes those. **NEW** = added in the 2026-06-25 idx-2 distillation run
 | **Fixed-fair-openings training** (every game starts from a known-fair Rapfi opening; sidesteps the unfair-opener black edge) — the live 15×15 recipe | cell `G15-fixed-openings` (+ the `G{9,11,13}` ladder) | [cards/gomoku-15x15-fixed-fair-openings.md](cards/gomoku-15x15-fixed-fair-openings.md) |
 | **swap2 opening protocol** (rebalances the GAME so white becomes winnable; the principled white fix) | swap2 cells | [topics/swap2-opening-protocol.md](topics/swap2-opening-protocol.md) |
 | **Single-opening over-specialization** ("Bruce Lee one position": restrict self-play to one opening) **NEW** | `GOMOKU_DROP_OPENERS=…` (drop all but the target index) | [topics/rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |
-| **Cross-board warm-start** (seed a 15×15 net from a 9×9 champion's shared conv tower) | `scripts/warmstart_15x15.py` | [topics/15x15-era-feasibility-and-plan.md](_archive/topics/15x15-era-feasibility-and-plan.md) |
+| **Cross-board warm-start** (seed a 15×15 net from a 9×9 champion's shared conv tower) | `scripts/warmstart_15x15.py` | 15x15-era-feasibility-and-plan.md *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/15x15-era-feasibility-and-plan.md`)* |
 | **Bit-packed replay buffer** (1M positions ≈ 1.3 GB; `--pack-buffer`, recency sampling) | cell flag `--pack-buffer --buffer-recency-frac` | [topics/buffer-bit-packing.md](topics/buffer-bit-packing.md) |
 
 ## Evaluate strength

@@ -3,8 +3,8 @@
 > **Status: HISTORICAL / SUPERSEDED-BY [swap2-opening-protocol.md](swap2-opening-protocol.md) (concluded 2026-06-20).**
 > This page is the compressed synthesis of a full day's white-side-defense
 > investigation (2026-06-15 → 2026-06-20). The full verbatim chronicle — every dated
-> UPDATE banner, table, probe result, and file:line code audit — is preserved at
-> [_archive/topics/white-side-defense-plan-full.md](../_archive/topics/white-side-defense-plan-full.md).
+> UPDATE banner, table, probe result, and file:line code audit — was preserved
+> verbatim and has since been removed *(2026-07-04; recover: `git show ca76350:wiki/_archive/topics/white-side-defense-plan-full.md`)*.
 > The canonical statement of the theorem this investigation discovered is
 > [alphazero-lessons-15x15-gomoku.md](alphazero-lessons-15x15-gomoku.md) §15.
 
@@ -71,7 +71,7 @@ H4/H5 (opening/covariate-shift brittleness) plausible framing. Intervention rank
 I0 (falsified) → I1/I2 (defense teacher, value then policy) → I3 (loss-side upweighting)
 → I4 (balanced openings) → I5 (eval compensators). All detail — the file:line ground-truth
 audit of the training loop, the H1-H5 evidence, the I0-I5 leverage÷cost ranking, the
-eval-cadence-fit plan — is in the [full archive](../_archive/topics/white-side-defense-plan-full.md).
+eval-cadence-fit plan — was in the full archive *(removed; see note above)*.
 
 ## Why this matters / where it went
 

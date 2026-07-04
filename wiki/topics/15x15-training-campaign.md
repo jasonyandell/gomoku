@@ -1,8 +1,8 @@
 # The 15×15 era — feasibility, port, and training campaign
 
 **Status: HISTORICAL (2026-06-12 → 06-19).** This is the merged record of the
-15×15 era: the feasibility case + board-size port (formerly a separate page, now
-[archived verbatim](../_archive/topics/15x15-era-feasibility-and-plan.md)) and the
+15×15 era: the feasibility case + board-size port (formerly a separate page,
+archived verbatim and since removed *(2026-07-04; recover: `git show ca76350:wiki/_archive/topics/15x15-era-feasibility-and-plan.md`)*) and the
 autonomous training campaign that ran on top of it. The era is **superseded by the
 sound-world line** ([sound-world-recipe.md](sound-world-recipe.md)); its durable
 findings are hoisted below. Epic: GitHub #21.
@@ -92,7 +92,7 @@ loop is the continuity mechanism.**
 
 ## Feasibility & board-size port (merged — full detail archived)
 
-The [archived feasibility page](../_archive/topics/15x15-era-feasibility-and-plan.md)
+The archived feasibility page *(removed; see note above)*
 holds the measured scaling bench (`scripts/bench_board_scaling.py`), the phased plan,
 and the one-shot execution of Phases 0–3 (2026-06-12). Headlines that survive:
 

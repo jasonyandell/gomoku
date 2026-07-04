@@ -6,8 +6,9 @@
 > reuse-vs-net-new ledger (Appendix) — per its own original "keep as the
 > reuse-ledger" instruction. The full v1 design (§§1–7: architecture, the
 > frozen-reference gate, GPU-contention model, priority engine, state/resumability,
-> the adversarial wedge-check, and the MVP checklist) is preserved **verbatim** at
-> [../_archive/topics/sliding-derby-design-v1-full.md](../_archive/topics/sliding-derby-design-v1-full.md).
+> the adversarial wedge-check, and the MVP checklist) was preserved verbatim and
+> is now recoverable from git history, not a parallel directory *(removed
+> 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/sliding-derby-design-v1-full.md`)*.
 > The autonomous Derby is stopped (see [../derby.md](../derby.md)).
 
 > **One-line thesis (retained):** the Sliding Derby is `delo_derby.py`'s DNA
@@ -48,8 +49,7 @@ until #35 is fixed.
 > frozen-reference gate (the promotion rule + why it makes silent regression
 > un-shippable), the GPU-contention model, the ELPL priority engine, the
 > state/resumability contract, the adversarial 5-wedge check, and the MVP checklist
-> — is preserved verbatim at
-> [../_archive/topics/sliding-derby-design-v1-full.md](../_archive/topics/sliding-derby-design-v1-full.md).
+> — was preserved verbatim *(removed; see note above)*.
 > The gate mechanics that survived into the build are re-specified in
 > [sliding-derby-measured-outcomes-design-v2.md](sliding-derby-measured-outcomes-design-v2.md).
 

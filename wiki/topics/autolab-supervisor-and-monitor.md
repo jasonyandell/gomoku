@@ -6,8 +6,8 @@
 > canonical [autolab-architecture.md](autolab-architecture.md); it describes how to bring
 > a **currently-not-running** lab up/down. Read it as a build+runbook record, not a live
 > procedure — the forward-looking "tonight / the overnight run" phrasing below is
-> historical (2026-06-19). The literal launchd plist XML has been moved to
-> [_archive/topics/autolab-launchd-plists.md](../_archive/topics/autolab-launchd-plists.md).
+> historical (2026-06-19). The literal launchd plist XML was moved to a separate
+> page and has since been removed *(2026-07-04; recover: `git show ca76350:wiki/_archive/topics/autolab-launchd-plists.md`)*.
 > (Marked 2026-07-04.)
 
 **What this is.** The contract that turns the tested autolab *library*
@@ -151,11 +151,11 @@ install). The trainer computes `repo_root = Path(__file__).resolve().parents[2]`
 (trainer.py:41) independent of cwd, so `git worktree add` targets the right repo
 regardless; setting cwd to main just avoids relative-path surprises.
 
-### Literal plists — moved to archive
+### Literal plists — removed
 
 The four literal LaunchAgents plist XML blocks (train/arena/monitor/research) and the
-arena/monitor/research per-plist deltas are archival for this **DORMANT** lab and live
-verbatim in [_archive/topics/autolab-launchd-plists.md](../_archive/topics/autolab-launchd-plists.md).
+arena/monitor/research per-plist deltas were archival for this **DORMANT** lab and have
+since been removed *(see note above)*.
 Key shape: two KeepAlive={SuccessfulExit:false} daemons (train/arena) + two StartInterval
 one-shots (monitor 600s / research 1800s); env (AUTOLAB_HOME/HOME/PATH/MPS+W&B vars) per the
 table above; WorkingDirectory = /Users/jason/code/gomoku.

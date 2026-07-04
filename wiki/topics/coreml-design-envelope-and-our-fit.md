@@ -1,6 +1,6 @@
 # Core ML / ANE design envelope and where our workload fits
 
-**Status: DORMANT** (as of 2026-07-04). The ANE/Core ML strand has been paused since May 2026; this page is a **snapshot, not a verdict** — every empirical claim is time-stamped to that stack (Core ML version + evaluator pipeline + model-arch family of the day). The design-envelope framing and the L09i residency finding are durable; the detailed research-lane catalog has been archived to [_archive/topics/coreml-research-lanes.md](../_archive/topics/coreml-research-lanes.md) (reactivatable on the re-measurement triggers below).
+**Status: DORMANT** (as of 2026-07-04). The ANE/Core ML strand has been paused since May 2026; this page is a **snapshot, not a verdict** — every empirical claim is time-stamped to that stack (Core ML version + evaluator pipeline + model-arch family of the day). The design-envelope framing and the L09i residency finding are durable; the detailed research-lane catalog was cut from this page *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/coreml-research-lanes.md`)* (reactivatable on the re-measurement triggers below).
 
 **This is the canonical entry point for the ANE research strand.** Read here first; the other ANE pages are scoped narrower:
 
@@ -200,7 +200,7 @@ Concretely, we expect three things to be measurable:
 
 ## Research lanes — archived (dormant, reactivatable)
 
-The full L09-family research-lane catalog (L09 / L09c / L09c-V512 / L09d / L09e / L09e' / L09c-ALL / L09i / L09i-fix / L09i-fix-load / L09i-fix-c / L09-ANE-resident-reopen / L09f / L09g / L09h / L09d') and the inbound-research landing zone have been moved verbatim to **[_archive/topics/coreml-research-lanes.md](../_archive/topics/coreml-research-lanes.md)** to keep this page at synthesis altitude.
+The full L09-family research-lane catalog (L09 / L09c / L09c-V512 / L09d / L09e / L09e' / L09c-ALL / L09i / L09i-fix / L09i-fix-load / L09i-fix-c / L09-ANE-resident-reopen / L09f / L09g / L09h / L09d') and the inbound-research landing zone were cut from this page to keep it at synthesis altitude *(removed; see note above)*.
 
 Those lanes are **DORMANT but reactivatable** — the strand has been paused since May 2026. Re-measurement triggers that should move a lane back up in priority (from the archive):
 

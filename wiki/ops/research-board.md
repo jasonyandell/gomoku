@@ -3,8 +3,8 @@
 > **📦 BOARD FROZEN at v9 (2026-05-27; banner 2026-07-04).** The classic 9×9
 > `delo_derby` concluded at v9; June's `G15-*` (15×15) and `vctsci-*`
 > (VCT-science) work moved off this board. The durable verdicts + the **Open
-> candidates** intake below remain valid; the closed v1–v6 era verdicts live in
-> [the archive](../_archive/research-board-v1-v6-verdicts.md).
+> candidates** intake below remain valid; the closed v1–v6 era verdicts were
+> removed 2026-07-04 *(recover: `git show ca76350:wiki/_archive/research-board-v1-v6-verdicts.md`)*.
 
 A race between 8 fresh-start self-play training recipes ("ideas") to a fixed
 **140-epoch budget**, run in **10-epoch chunks**, scored by the model's
@@ -799,7 +799,7 @@ a headroom parent exists.
 
 ## Historical Verdicts — v1 to v6
 
-**ARCHIVED 2026-07-04.** The closed v1–v6 verdicts (2026-05-24→26) have been moved to a separate file for clarity: [_archive/research-board-v1-v6-verdicts.md](../_archive/research-board-v1-v6-verdicts.md). That archive includes:
+**REMOVED 2026-07-04.** The closed v1–v6 verdicts (2026-05-24→26) were cut from this file; they are preserved in git history, not a parallel directory *(recover: `git show ca76350:wiki/_archive/research-board-v1-v6-verdicts.md`)*. That page included:
 - v1 FINAL (exploration vs compute), v2 plan
 - v3 UNIFIED prior-art race, v3 FINAL verdict
 - v4 best-shot combinations, v4 FINAL verdict

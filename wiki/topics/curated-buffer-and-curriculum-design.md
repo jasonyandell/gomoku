@@ -135,4 +135,4 @@ separate and smaller; with curation, its *width* is secondary to its
 - [[project-buffer-undersized]] — buffer *width* (the old axis; orthogonal to this).
 - [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md) — the runaway this fixes.
 - [[feedback-self-play-eta]] — why throughput proxies mislead training ETA.
-- WL5 archive-start lever (`wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`) — the seed-from-curated-positions precedent this generalizes.
+- WL5 archive-start lever (wl5-diagnostics-archive-start-design.md, *removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`*) — the seed-from-curated-positions precedent this generalizes.

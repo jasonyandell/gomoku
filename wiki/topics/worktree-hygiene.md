@@ -4,8 +4,8 @@
 > Before removing any worktree, `ps aux | grep <path>` for live tenants. The
 > `reclaim_worktrees.py` / `session_janitor.sh` auto-janitor was removed after it
 > reclaimed a worktree a live training run was executing from; its full retired
-> design is preserved verbatim in
-> [_archive/topics/worktree-janitor-retired.md](../_archive/topics/worktree-janitor-retired.md).
+> design is preserved in git history, not a parallel directory *(removed
+> 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/worktree-janitor-retired.md`)*.
 
 The overall branch/worktree workflow lives in
 [branch-and-worktree-workflow.md](branch-and-worktree-workflow.md); this page is
@@ -104,8 +104,8 @@ import away from crashing. Verdict: not as safe as believed, value minimal.
 Cleanup is manual again (see the top of this page).
 
 The full retired design — the reclaim/gauge/wiring internals, the 15s gauge
-budget, and the 2026-05-25 forensic snapshot — is preserved verbatim in
-[_archive/topics/worktree-janitor-retired.md](../_archive/topics/worktree-janitor-retired.md).
+budget, and the 2026-05-25 forensic snapshot — is gone from this repo *(removed;
+see note above)*.
 
 ## The standing rule (generalizes beyond worktrees — with the janitor caveat)
 

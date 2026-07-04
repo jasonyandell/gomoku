@@ -19,8 +19,8 @@ behind that sentence.
 The 15×15 campaign's headline story is a **self-correction**: a broken measurement inverted
 our rankings, we caught it with direct head-to-head, and the corrected conclusions below are
 what stand. The blow-by-blow that produced them (the full §2/§2a/§8/§9/§10/§11 chronicle —
-every table, retraction, and mechanistic guess) is preserved verbatim in
-[_archive/topics/alphazero-lessons-yardstick-saga.md](../_archive/topics/alphazero-lessons-yardstick-saga.md).
+every table, retraction, and mechanistic guess) was preserved verbatim but has since been
+removed *(2026-07-04; recover: `git show ca76350:wiki/_archive/topics/alphazero-lessons-yardstick-saga.md`)*.
 The compressed forward-reading version is §2 and "the yardstick reckoning" below.
 
 1. **`128×10+bigbuf` is the strongest preserved 15×15 net** — it beats the once-crowned
@@ -88,8 +88,7 @@ at 15×15, not a bug; warm-start is the remedy (see
 
 > **This section is compressed.** The original §2/§2a carried a live-updating capacity ladder
 > with a chain of retractions (a "reversal at depth" that turned out to be the broken yardstick,
-> §8C) — preserved verbatim in
-> [_archive/topics/alphazero-lessons-yardstick-saga.md](../_archive/topics/alphazero-lessons-yardstick-saga.md).
+> §8C) *(removed; see note above)*.
 > The settled conclusion, confirmed yardstick-free in §11, is below.
 
 We climbed a capacity ladder (64×4 → 96×8 → 128×10) via **function-preserving net2net** growth
@@ -219,8 +218,7 @@ board, how AlphaZero teaches itself to defend — and how to grow that skill.**
 
 > **This is the compressed, forward-reading version of the original §8/§9/§10/§11.** The full
 > blow-by-blow (8A-8H sub-findings, every table, the mechanistic guesses, the INCONCLUSIVE
-> re-test) is preserved verbatim in
-> [_archive/topics/alphazero-lessons-yardstick-saga.md](../_archive/topics/alphazero-lessons-yardstick-saga.md).
+> re-test) *(removed; see note above)*.
 > Read it forward as one story:
 
 **§7 flagged the yardstick as a soft spot; pulling that thread unravelled the campaign's

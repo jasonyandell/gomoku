@@ -331,7 +331,7 @@ The INT8 path remains a future-research lane: it would only become load-bearing 
   throughput ceiling table; INT8 path is the next addition.
 - [activity-monitor-perf-runbook.md](activity-monitor-perf-runbook.md)
   — practical perf experiment knobs.
-- [wl5-diagnostics-archive-start-design.md](../_archive/topics/wl5-diagnostics-archive-start-design.md)
+- wl5-diagnostics-archive-start-design.md *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`)*
   — where the calibration archive came from.
 - `scripts/export_onnx.py` — existing PyTorch → ONNX path for the live
   SPA; calibration data path will look similar.

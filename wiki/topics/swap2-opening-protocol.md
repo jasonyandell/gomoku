@@ -278,8 +278,9 @@ also seeds the always-running-arena model registry.
 
 The era-1 "what to try next" menu (let v1 run and read the H2H trend; learned negotiation via
 the choice head into the loss; train opening placements for fairness; more warm-started time;
-bigger gates) is **superseded by §9** (era-2 basin-escape) and preserved verbatim in
-[_archive/topics/swap2-superseded-sections.md](../_archive/topics/swap2-superseded-sections.md).
+bigger gates) is **superseded by §9** (era-2 basin-escape); the era-1 menu was
+preserved verbatim but has since been removed *(2026-07-04; recover:
+`git show ca76350:wiki/_archive/topics/swap2-superseded-sections.md`)*.
 Its two ideas that carried forward — **learned choice head (v2a→v2b)** and **train the opener
 for fairness** — reappear as the §10 fairness fix (Option A/C).
 
@@ -294,8 +295,7 @@ with board size**. So 9×9 vets the *plumbing* (does negotiation run, does a cho
 but tells you NOTHING about whether white got better at defending. (13×13 has the signal at
 ~2× the speed of 15×15, but the native MCTS ext is only compiled for 9/15.) The scale / Modal
 "thousands-of-epochs" discussion (the M5 Δelo/hr ceiling is CPU-bound self-play GEN → the
-cloud unlock is *parallel gen*, not a bigger GPU) is preserved verbatim in the
-[archive](../_archive/topics/swap2-superseded-sections.md).
+cloud unlock is *parallel gen*, not a bigger GPU) *(removed; see note above)*.
 
 ## 6.6 Crowning a new champion — the bar (approved 2026-06-20)
 
@@ -341,8 +341,8 @@ The full "if/when a gate says it stalled" decision tree (triage RECIPE / OPTIMIZ
 OPERATIONAL; A. PLATEAU → crown-if-above-bar else escalate levers P1-P4; B. REGRESSION → roll
 back + lower LR; C. DYNAMICS DEATH-TELL → `vl`<0.08 poisoning / plies-fall collapse / `pl`
 runaway; D. DATA-STUCK → learned negotiation; E. OPERATIONAL → resumable/automate) is planning
-scaffolding for a run that has since concluded — preserved verbatim in
-[_archive/topics/swap2-superseded-sections.md](../_archive/topics/swap2-superseded-sections.md).
+scaffolding for a run that has since concluded — was preserved verbatim,
+now removed *(see note above)*.
 The durable death-tell thresholds it references live in `loss-floor-bouncing.md` and
 `az-at-scale-vs-laptop.md`.
 

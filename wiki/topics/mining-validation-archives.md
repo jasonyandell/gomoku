@@ -14,7 +14,8 @@ for two things:
    per-bucket variants. Separates *target-distribution noise* from *learning
    gap* in the policy loss. See
    [loss-floor-bouncing.md](loss-floor-bouncing.md) and
-   [wl5-diagnostics-archive-start-design.md](../_archive/topics/wl5-diagnostics-archive-start-design.md).
+   wl5-diagnostics-archive-start-design.md *(removed 2026-07-04; recover:
+   `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`)*.
 2. **Behavioral lever** — workers seed a fraction of self-play games from
    the archive (Go-Exploit pattern) instead of empty board.
 
@@ -176,7 +177,7 @@ same file or differ.
 
 ## Cross-refs
 
-- [wl5-diagnostics-archive-start-design.md](../_archive/topics/wl5-diagnostics-archive-start-design.md) —
+- wl5-diagnostics-archive-start-design.md *(removed; see note above)* —
   why the archive exists and how WL5 uses it.
 - [loss-floor-bouncing.md](loss-floor-bouncing.md) — the article that
   motivated the diagnostic side of the archive.

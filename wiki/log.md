@@ -3,7 +3,24 @@
 Chronological record of wiki maintenance. Keep entries append-only and use a
 consistent heading so future sessions can scan recent changes with simple tools.
 
-Older eras: [2026-05 archive](_archive/log-2026-05.md), [log-2026-06](_archive/log-2026-06.md) (rotated out 2026-07-04).
+Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
+recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
+
+## [2026-07-04] `_archive/` audited and DELETED — git history is the archive now
+
+`wiki/_archive/` (528 KB, 17 files) was a safe side-by-side for the curation
+pass, never long-term storage. An Opus audit (4 adversarial sub-auditors,
+spot-checks incl. random mid-file entries) confirmed **every file
+SAFE-TO-DELETE — zero lost knowledge**; three low-severity archive-only details
+were hoisted to live pages first (v4 derby verdict → perf-log's v3→v5 gap;
+claw-rediscovery v0 numbers + mod-5 probe nuance → idea-pile #10; raw 15×15
+scaling-bench table → 15x15-training-campaign). Doctrine updated in
+[curation.md](curation.md): rule 5 is now **"Cut, never lose — git is the
+archive"** (no parallel archive tree; live pages carry dated tombstones naming
+the recovery commit), and rotation is a three-step ritual (rotate with
+reconcile → commit → drop staging). All ~70 inbound `_archive` references
+across ~23 pages converted to tombstones. **Recovery commit for everything
+deleted: `ca76350`** (`git show ca76350:wiki/_archive/<path>`).
 
 ## [2026-07-04] Extracted the TQ Promotion Gate out of the experiment-ledger into its own live page
 
@@ -50,7 +67,7 @@ The two curation mechanisms are now scripts, not vigilance
   built in (refuses to write unless entry counts + bytes across live+archive
   equal pre-rotation totals; atomic writes; post-write re-verify; dry-run).
   8 pytest cases. First real use: **June rotated out of log.md** (27 entries,
-  46,777 bytes → [_archive/log-2026-06.md](_archive/log-2026-06.md),
+  46,777 bytes → `_archive/log-2026-06.md` *(since removed; recover via `ca76350`)*,
   reconciled 40 = 13 + 27; live log 70 KB → 23 KB).
 - **`scripts/wiki_lint.py`** — the mechanized lint: banner presence+date on
   every topics/ page, broken relative links (live pages), topic orphans,
@@ -112,7 +129,7 @@ Whole-wiki curation pass (worktree `feat/wiki-curation`, 14-agent inventory +
   LIVE / HISTORICAL / SUPERSEDED-BY / DORMANT / DESIGN-NEVER-BUILT /
   DEAD-END(lesson kept), dated. Missing stopped-derby banners added (charter,
   session-runbook, sliding-v2, engine-panel, autolab pages).
-- **Rotations**: log.md May era → [_archive/log-2026-05.md](_archive/log-2026-05.md);
+- **Rotations**: log.md May era → `_archive/log-2026-05.md` *(since removed; recover via `ca76350`)*;
   research-board v1–v6 verdicts → _archive; gpu-queue completed ledger →
   _archive; perf-log ARCHIVED-IN-PLACE banner; open-notes linked from
   experiment-ledger (orphan fix).

@@ -14,19 +14,21 @@ compact map; the individual designs live below.
 | run | design page | one-line result |
 |---|---|---|
 | **WL1** | [wave-of-lockstep-design.md](wave-of-lockstep-design.md) — **LIVE** (canonical definition of wave mode) | validated per-version tile uniformity + the wave barrier; then broke into high-frequency chaotic elo oscillation (620↔1281). |
-| **WL2** | [_archive: wl2-scale-emulation-design.md](../_archive/topics/wl2-scale-emulation-design.md) — **ARCHIVED** | four scale-emulation levers (EMA self-play weights, past-checkpoint mix, worker poll jitter, grad-accum 4×) to emulate AZ-at-scale in-flight version diversity. Implemented (`9wng4yu9`); smoothed the early trajectory + raised the la4 peak, **did NOT solve retention**. |
+| **WL2** | wl2-scale-emulation-design.md — **REMOVED 2026-07-04** *(recover: `git show ca76350:wiki/_archive/topics/wl2-scale-emulation-design.md`)* | four scale-emulation levers (EMA self-play weights, past-checkpoint mix, worker poll jitter, grad-accum 4×) to emulate AZ-at-scale in-flight version diversity. Implemented (`9wng4yu9`); smoothed the early trajectory + raised the la4 peak, **did NOT solve retention**. |
 | WL3 / WL3.1 | (see [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md)) | capacity/opening-diversity iterations; WL3.1→WL4 dropped `random_opening_moves` at e1537. |
 | **WL4** | (see [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md); dynamics in [loss-floor-bouncing.md](loss-floor-bouncing.md)) | best WL outcome — **elo 1841 ATH, la4=100%**, then a healthy lower-floor-bouncing plateau. |
-| **WL5** | [_archive: wl5-diagnostics-archive-start-design.md](../_archive/topics/wl5-diagnostics-archive-start-design.md) — **ARCHIVED** | 3 always-on diagnostic streams + the Go-Exploit-style archive-start lever, resumed from WL4 e4024 (`o6cbjfnr`). Validated the pipeline without collapse but **did NOT beat WL4's ATH**. |
+| **WL5** | wl5-diagnostics-archive-start-design.md — **REMOVED 2026-07-04** *(recover: `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`)* | 3 always-on diagnostic streams + the Go-Exploit-style archive-start lever, resumed from WL4 e4024 (`o6cbjfnr`). Validated the pipeline without collapse but **did NOT beat WL4's ATH**. |
 
-## Why WL2 and WL5 are archived, not deleted
+## Why WL2 and WL5 were archived, then removed
 
 Both were **launched and measured** — real evidence, not scrapped designs. WL2's
 diversity stack didn't cure oscillation (diversity wasn't the binding constraint);
 WL5's archive-start didn't move the floor below WL4. The full design docs (levers,
-knobs, implementation plans, hypotheses + refutation criteria) are preserved
-verbatim in `_archive/topics/`. Read them for the *reasoning*; read
-[../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) for the run-end numbers.
+knobs, implementation plans, hypotheses + refutation criteria) were preserved
+verbatim for a while, then removed 2026-07-04 — recoverable from git history, not
+a parallel directory (`git show ca76350:wiki/_archive/topics/<file>.md`). Read them
+for the *reasoning*; read [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md) for the
+run-end numbers.
 
 ## What survived (these levers outlived the WL runs)
 

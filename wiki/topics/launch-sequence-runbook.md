@@ -19,7 +19,9 @@ This page is what a future session should follow when the user says
 ## Phase 0 — Pre-launch (the cell must exist)
 
 1. **Read the wiki first** — `wiki/index.md`, then the relevant design doc
-   (e.g. `topics/wave-of-lockstep-design.md`, `_archive/topics/wl2-scale-emulation-design.md`),
+   (e.g. `topics/wave-of-lockstep-design.md`; older design pages like WL2's
+   have since been rotated out — preserved in git history, not a parallel
+   directory),
    then the previous run's "live run log" in `TRAINING_WIKI.md`. This
    project's design-then-implementation gap is short; the next-run
    design is usually already written.
@@ -628,8 +630,8 @@ to know before touching a paused or crashed run.
 ## Cross-refs
 
 - `wiki/topics/wave-of-lockstep-design.md` — WL1 design
-- `wiki/_archive/topics/wl2-scale-emulation-design.md` — WL2 design (the model
-  for future next-run design pages)
+- wl2-scale-emulation-design.md — WL2 design (the model for future next-run
+  design pages) *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl2-scale-emulation-design.md`)*
 - `TRAINING_WIKI.md` — live run logs for all runs in the WL series
 - `scripts/run_sweep.py` — Cell definitions; CELLS dict is canonical
 - `scripts/wandb_workspace.py` — workspace generator

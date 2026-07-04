@@ -258,7 +258,7 @@ refactor.
   for the next run" #3 lists `careful replay size/age` as a
   scale-substitute. Wider buffer reduces the need for EMA + past-mix
   workarounds.
-- [wl2-scale-emulation-design.md](../_archive/topics/wl2-scale-emulation-design.md) — EMA
+- wl2-scale-emulation-design.md *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl2-scale-emulation-design.md`)* — EMA
   and past-checkpoint mix were introduced because the buffer was
   narrow. A 16× wider buffer might let us simplify back.
 - [ane-int8-inference.md](ane-int8-inference.md) — independent

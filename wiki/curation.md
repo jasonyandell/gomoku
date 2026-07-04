@@ -16,13 +16,14 @@ a habit disagree, this page wins.
 | **Workflows** | [train-](train-a-model.md)/[eval-](eval-a-model.md)/[publish-a-model](publish-a-model.md) | Pinned "just get me going" pages. |
 | **Topics** | `topics/*.md` | Maintained synthesis, one subject each (~10 KB median; >25 KB triggers the chronicle-itis check below). |
 | **Evidence** | `ops/*` ledgers/logs, [TRAINING_WIKI.md](../TRAINING_WIKI.md), `sources/` (verbatim external), `cards/` (era model-card artifacts), W&B, checkpoints | Append-only; dated corrections, never rewrites. |
-| **Archive** | `_archive/` | Full-fidelity history rotated out of live pages. Nothing is deleted. |
+| **Archive** | **git history** (no directory) | Cut/rotated content is preserved by the version control, not a parallel tree. Live pages carry a dated tombstone naming the recovery commit (`git show <sha>:<path>`). The old `wiki/_archive/` side-by-side was audited (zero lost facts) and deleted 2026-07-04; recover via `ca76350`. |
 
 ## The five hard rules
 
 1. **Settled-verdict-first.** Every topic page leads with its conclusion as of
-   a date. The chronicle/trail lives below it or in `_archive/`. A reader must
-   never parse a retraction stack bottom-up to learn what's true.
+   a date. The chronicle/trail lives below it, compressed — or is cut with a
+   tombstone (git preserves it). A reader must never parse a retraction stack
+   bottom-up to learn what's true.
 2. **Status banner on every topic page.** First line under the title, dated:
    `**LIVE**` · `**HISTORICAL**` (correct record, closed era) ·
    `**SUPERSEDED-BY(page)**` · `**DORMANT**` (paused, reactivatable) ·
@@ -33,11 +34,15 @@ a habit disagree, this page wins.
    [alphazero-lessons](topics/alphazero-lessons-15x15-gomoku.md); swap2 and
    the defense plan just point at it.)
 4. **Evidence vs synthesis is a hard split.** Dated lane catalogs, receipts,
-   run logs, launchd plists → ledgers/`_archive/`. Topics carry the maintained
-   conclusion plus pointers. Don't let a synthesis page grow a queue.
-5. **Archive, never delete.** Superseded bulk moves verbatim to `_archive/`
-   with a pointer from the live page; update inbound links when you move
-   anything (`grep -rn 'filename' wiki/`).
+   run logs, launchd plists → ledgers, or cut-with-tombstone (git preserves).
+   Topics carry the maintained conclusion plus pointers. Don't let a synthesis
+   page grow a queue.
+5. **Cut, never lose — git is the archive.** Superseded bulk is REMOVED from
+   live pages; git history preserves every byte. The live page keeps a dated
+   tombstone naming the recovery commit
+   (`*(removed YYYY-MM-DD; recover: git show <sha>:<path>)*`). Never maintain
+   a parallel archive tree — it competes with git and rots. Update inbound
+   links whenever you move or remove anything (`grep -rn '<name>' wiki/`).
 
 ## Ingest — "curate this info into the wiki"
 
@@ -93,22 +98,28 @@ already worked.
 
 ## Rotation thresholds (the giants stay caged)
 
-- **log.md / any ops journal**: rotate months belonging to a *closed era* to
-  `_archive/log-YYYY-MM.md`, leave the pointer (~60 KB is the smell threshold,
-  not a hard cap — keep the live era readable in place). **Use the hardened tool,
-  never rotate by hand:**
+- **log.md / any ops journal**: rotate months belonging to a *closed era* out
+  of the live file (~60 KB is the smell threshold, not a hard cap — keep the
+  live era readable in place). **Use the hardened tool, never rotate by hand,
+  and let git be the archive — the three-step ritual:**
   ```bash
+  # 1. split with the reconcile guarantee (archive named for the era it contains)
   uv run python scripts/wiki_rotate.py wiki/log.md \
       --before YYYY-MM --archive wiki/_archive/log-YYYY-MM.md [--dry-run]
+  git add -A && git commit -m "rotate <journal> <era>"   # 2. verbatim split enters git
+  git rm -r wiki/_archive && git commit -m "drop rotation staging"  # 3. git keeps it
   ```
-  It splits on the date-prefix and **refuses to write unless entry counts + byte
-  totals across (live + archive) reconcile to the pre-rotation totals**, then
-  re-verifies after writing. Name the archive for the era it *contains*
-  (`log-2026-06.md` holds June). A freehand rotation on 2026-07-04 silently
-  dropped 21 entries and had to be redone from git — that incident is why the
-  reconcile check lives in the tool, not in vigilance.
-- **Queue/board files**: when a race/era concludes, move its closed verdicts
-  to `_archive/`, keep durable synthesis + open intake live.
+  Then rewrite the journal's "Older eras" pointer as a tombstone naming the
+  step-2 commit (`recover: git show <sha>:wiki/_archive/log-YYYY-MM.md`).
+  The tool **refuses to write unless entry counts + byte totals across
+  (live + archive) reconcile to the pre-rotation totals**, then re-verifies
+  after writing — a freehand rotation on 2026-07-04 silently dropped 21
+  entries and had to be redone from git; the reconcile check lives in the
+  tool, not in vigilance. `wiki/_archive/` exists only transiently between
+  steps 2 and 3; never let it accumulate.
+- **Queue/board files**: when a race/era concludes, cut its closed verdicts
+  with a tombstone (same three-step ritual); keep durable synthesis + open
+  intake live.
 - **Topic pages** > ~25 KB: run the chronicle-itis *check* (a trigger, not a
   violation) — hoist verdict, compress superseded sections to summaries,
   archive the cut text. Pages that pass the check stay big legitimately:

@@ -75,8 +75,8 @@ starting point for future sessions.
 
 - WL series index: [wl-era.md](wl-era.md) (WL1–WL5 map + what survived)
 - WL1 design: [wave-of-lockstep-design.md](wave-of-lockstep-design.md)
-- WL2 design: [_archive: wl2-scale-emulation-design.md](../_archive/topics/wl2-scale-emulation-design.md)
-- WL5 design: [_archive: wl5-diagnostics-archive-start-design.md](../_archive/topics/wl5-diagnostics-archive-start-design.md)
+- WL2 design: wl2-scale-emulation-design.md *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl2-scale-emulation-design.md`)*
+- WL5 design: wl5-diagnostics-archive-start-design.md *(removed 2026-07-04; recover: `git show ca76350:wiki/_archive/topics/wl5-diagnostics-archive-start-design.md`)*
 - Sound-world era: [sound-world-recipe.md](sound-world-recipe.md)
 - Launch and monitoring procedure: [launch-sequence-runbook.md](launch-sequence-runbook.md)
 - Archive mining procedure: [mining-validation-archives.md](mining-validation-archives.md)
