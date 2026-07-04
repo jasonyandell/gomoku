@@ -135,7 +135,7 @@ tier: 1
 hypothesis: L11 showed V=512 hurts at trainer level because the buffer fills 2.4× faster and fixed sgd_per_position=0.0025 then produces 3.36× more SGD steps per epoch, monopolizing MPS. If sgd_per_position is scaled DOWN to match V=64's SGD work per second (~0.001), the trainer's per-epoch SGD time stays bounded and V=512's pure-gen win can finally shine through at the trainer level.
 references_affected: R-TRAIN-LEAN (re-attempt with knob); R-TRAIN-WL5 (comparison)
 code_change: false (--sgd-per-position already in L12 CLI)
-depends_on: [[L10](_archive/gpu-queue-completed-2026-05.md#L10-trainer-step-bench), [L11](_archive/gpu-queue-completed-2026-05.md#L11-end-to-end-cell)]
+depends_on: [[L10](../_archive/gpu-queue-completed-2026-05.md#L10-trainer-step-bench), [L11](../_archive/gpu-queue-completed-2026-05.md#L11-end-to-end-cell)]
 prep_cells: none
 measurement_cells:
   - R-TRAIN-LEAN-b: full WL5 recipe but --wave-size 512 --sgd-per-position 0.001 (2.5× lower than default to compensate for 2.4× buffer-fill speedup); 30s warmup + 120s measure
@@ -177,7 +177,7 @@ tier: 1
 hypothesis: The V=512 promote (from L01) compounds at the trainer level — full end-to-end recipe with V=512 beats R-TRAIN-WL5 on epochs/sec OR games/sec.
 references_affected: R-TRAIN-LEAN (new); R-TRAIN-WL5 (comparison)
 code_change: false
-depends_on: [[L10](_archive/gpu-queue-completed-2026-05.md#L10-trainer-step-bench)]
+depends_on: [[L10](../_archive/gpu-queue-completed-2026-05.md#L10-trainer-step-bench)]
 prep_cells:
   - R-TRAIN-LEAN warmup: full WL5 recipe but --wave-size 512, 30s window, cell_status=warmup
 measurement_cells:

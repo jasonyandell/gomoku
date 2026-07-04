@@ -5,6 +5,42 @@ consistent heading so future sessions can scan recent changes with simple tools.
 
 Older eras: [2026-05 archive](_archive/log-2026-05.md) (rotated out 2026-07-04).
 
+## [2026-07-04] The great curation: story layer + curation playbook + settled-verdicts-first sweep
+
+Whole-wiki curation pass (worktree `feat/wiki-curation`, 14-agent inventory +
+10 execution work-packages). What changed structurally:
+
+- **New layer: [story.md](story.md)** — the narrative arc (prologue → 9 chapters
+  → epilogue), above the timeline, below the index. Update at era boundaries.
+- **New playbook: [curation.md](curation.md)** — THE curation instructions
+  (layer map, status-banner vocabulary, settled-verdict-first, tell-once,
+  rotation thresholds, lint). "Curate this into the wiki" = follow that page.
+- **Settled-verdicts-first restructures** of the big chronicles:
+  alphazero-lessons (1256→741 lines, verbatim yardstick saga → archive),
+  white-side-defense-plan (695→83, full chronicle → archive), swap2 (durable
+  syntheses hoisted, superseded §6.x → archive), coreml-design-envelope
+  (DORMANT, lane catalog → archive), idea-pile (graduated ideas → verdict+link).
+  The white-defense theorem is now told ONCE (lessons §15) + two pointers.
+- **Status banners everywhere**: every touched topic page now opens with
+  LIVE / HISTORICAL / SUPERSEDED-BY / DORMANT / DESIGN-NEVER-BUILT /
+  DEAD-END(lesson kept), dated. Missing stopped-derby banners added (charter,
+  session-runbook, sliding-v2, engine-panel, autolab pages).
+- **Rotations**: log.md May era → [_archive/log-2026-05.md](_archive/log-2026-05.md);
+  research-board v1–v6 verdicts → _archive; gpu-queue completed ledger →
+  _archive; perf-log ARCHIVED-IN-PLACE banner; open-notes linked from
+  experiment-ledger (orphan fix).
+- **Merges/archives**: 15x15-era-feasibility → merged into
+  15x15-training-campaign; wl2/wl5 designs → _archive with new
+  [wl-era.md](topics/wl-era.md) index; sliding-derby v1 → reuse-ledger only.
+- **Safety fix**: worktree-hygiene no longer documents the retired janitor in
+  present tense (re-summon hazard closed; full design archived).
+- **Link/integration fixes**: batched-eval-arena wired in (was zero-linked),
+  m5/capabilities/experiments hub rows, broken links fixed, lineage extended to
+  the sound-world era, playing-the-model → `uv run gomoku-web`.
+
+Nothing was deleted: every cut moved verbatim to `_archive/` with pointers both
+ways. Live wiki (ex-archive) ~1.99 MB; archive ~480 KB.
+
 ## [2026-07-03] Perf-blitz findings integrated into the restructured wiki + cap25 DECISION landed
 
 Folded the 2026-07-01→03 perf blitz (#112 / #109 / #114 / #115) into the
@@ -415,7 +451,7 @@ New/updated synthesis:
 
 ## [2026-06-12] topics | Added 15x15-era-feasibility-and-plan: the perf ceiling was the small model, not the Mac
 
-Filed [topics/15x15-era-feasibility-and-plan.md](topics/15x15-era-feasibility-and-plan.md)
+Filed [topics/15x15-era-feasibility-and-plan.md](_archive/topics/15x15-era-feasibility-and-plan.md) *(2026-07-04: merged into [15x15-training-campaign.md](topics/15x15-training-campaign.md); link repointed to archive)*
 plus the evidence cell `scripts/bench_board_scaling.py`. Measured on the idle
 M5 Max (torch 2.12.0, fp16, MPS): at the production wave=64 the champion arch
 runs 15×15 for **free** (0.98×), a 96×8/1.45M-param 15×15 net costs only
