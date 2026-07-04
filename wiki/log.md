@@ -5,6 +5,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
 
 Older eras: [2026-05 archive](_archive/log-2026-05.md), [log-2026-06](_archive/log-2026-06.md) (rotated out 2026-07-04).
 
+## [2026-07-04] First Query-loop filing: white-VCT rail redux → idea-pile addendum
+
+First real use of the new [curation.md](curation.md) § Query rule. Jason
+proposed a 15×15 Bruce-Lee-opener run with a white "lookahead-2 VCT" rail; two
+independent Opus agents (one wiki-guided, one flat-footed) answered from the
+wiki and converged on the same verdict with the same run IDs — the proposal ≡
+rails-v0 (`vraf0b6e`, #116), already run, failed by value-poisoning on
+black-tilted idx-2. The synthesis (the lookahead-2-vs-oracle-solve ambiguity,
+the idx-2 holdability probe as cheap falsifier, the untried inference-time
+actuator seed) is filed as a dated addendum in
+[idea-pile.md](topics/idea-pile.md) rather than left in chat. Side-note for
+the operating model: the flat-footed agent self-routed via CLAUDE.md → wiki
+and matched the guided one's conclusions — the knowledge base, not the prompt
+scaffolding, carried the answer.
+
 ## [2026-07-04] Hardened tooling: wiki_rotate.py + wiki_lint.py; June rotated; 9 banners canonicalized
 
 The two curation mechanisms are now scripts, not vigilance

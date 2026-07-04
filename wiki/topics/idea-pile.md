@@ -181,3 +181,40 @@ defense half was solved instead by **oracle-in-the-environment** — see
 [vct-terminus-selfplay-result.md](vct-terminus-selfplay-result.md) +
 [vct-defense-aux-head-result.md](vct-defense-aux-head-result.md). Full original narrative:
 [_archive/topics/idea-pile-graduated-results.md](../_archive/topics/idea-pile-graduated-results.md) #11.
+
+---
+
+## 2026-07-04 addendum — white-VCT rail redux (query-loop filing: two independent Opus reads)
+
+**Provenance:** Jason proposed (verbatim intent): new 15×15 net on the Bruce-Lee opener with a
+"lookahead-2 for VCT" for white @25 nodes — never allow an opponent VCT unless forced, always
+stay on a VCT once held. Two independent Opus agents (one wiki-guided, one flat-footed) answered
+from the wiki and **converged**; filed per [curation.md](../curation.md) § Query.
+
+**Settled mapping (both agents, independently):** the proposal ≡ **rails-v0** —
+`--oracle-veto` ("never allow a VCT unless forced") + `--attacker-preserve` ("stay on a VCT") at
+cap25 (#114), which **already ran on this exact board** (#116, wandb `vraf0b6e`, 234k games,
+2026-07-03): starvation cured, then **value-poisoning re-collapse** (white-share ~0.015,
+`loss/value` 0.052 < the 0.08 death-tell) because idx-2 plays black-tilted — a soundness filter
+can't invent a defense the position doesn't contain. See
+[sound-world-recipe.md](sound-world-recipe.md) § rails.
+
+**Live distinctions + seeds worth keeping:**
+- **"Lookahead-2" is ambiguous and the ambiguity is load-bearing:** a 2-ply net-leaf lookahead is
+  a *soft wall* that leaks on deep forcing chains (the K-cap ablation says shallow guards
+  re-admit the fast-attack attractor); a cap25-bounded **oracle solve** is sound and already
+  landed. Any spec must say which it is.
+- **Seed A — idx-2 holdability probe (cheap falsifier):** ~90 min of mega-VCT oracle aimed at
+  idx-2 white-to-move ("is this holdable at all?") before ANY training run; if idx-2 is a
+  forced/heavy black win, every white-soundness recipe on it re-poisons by construction.
+  Re-aim the [idx2-vct-frontier-map](idx2-vct-frontier-map.md) machinery as a fairness verdict.
+- **Seed B — the inference-time actuator (untried):** prune white's MCTS **root moves at
+  inference** with a bounded white-VCT check (never expand a move that hands black a tactic;
+  keep white's own live threat). #103 proved we have the sensor and lack the actuator; this is
+  an actuator, and nobody has run it.
+- **If re-running the rail on idx-2:** ONE lever on the rails-v0 cell — pair with
+  `--tail-subsample` (#118, built, Jason-gated) — and pre-state the bet: plies RISE + white H2H
+  climbs off 0 past e2000 with vl staying ≥0.10, the signature no prior attempt produced.
+  Do not stack a new net shape onto the same run (confound; the 96×8 trained-backwards incident).
+
+**Cost:** Seed A ≈ one oracle session, no training. Seed B = code-heavy (derby-idea sized).
