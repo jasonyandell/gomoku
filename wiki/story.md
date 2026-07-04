@@ -76,7 +76,8 @@ that stuck: when anchored elo saturates, **the ruler is the problem**, so
 "distance to 100%" replaced elo as the local north star
 ([research-board](ops/research-board.md)). The autonomous loop itself worked:
 the autolab later ran unattended overnight, crowned champions, and had zero
-failures before it was deliberately stopped.
+failures before it was stopped (the stop itself went unrecorded — work simply
+moved on to 15×15 and VCT-science).
 
 ## Chapter 5 — 15×15 and the wound (Jun 12–19)
 
@@ -85,15 +86,17 @@ off a 2625-elo Rapfi config — and the codebase went board-size-parametric
 (15×15 was nearly free on MPS; the old ceiling was dispatch-bound, not the
 Mac). Then came the project's most instructive failure: **the yardstick
 reckoning**. A broken Rapfi build (weightless, mis-clocked, wrong device)
-silently inverted our rankings — we crowned the weakest net and discarded the
-strongest. Days of conclusions had to be retracted and re-derived; "**audit
+silently inverted our rankings — we crowned the weakest net and abandoned a
+tied-strongest one. Days of conclusions had to be retracted and re-derived; "**audit
 the yardstick before believing any result**" became bedrock
 ([alphazero-lessons](topics/alphazero-lessons-15x15-gomoku.md)).
 
-Out of the wreckage came ["Bruce Lee"](topics/bruce-lee-model.md) — a 128×10
-net trained on one opening ten thousand times — and the first honest contact
-with real opposition: **black won 42% of games vs Rapfi; white won zero of
-twelve.** The entire deficit was one-sided. We had found the wound.
+Out of the wreckage came the corrected champion — the 128×10 bigbuf net — and
+with it the first honest contact with real opposition (2026-06-18): **black won
+42% of games vs Rapfi; white won zero of twelve.** The entire deficit was
+one-sided. We had found the wound. Four days later that lineage was
+re-specialized as ["Bruce Lee"](topics/bruce-lee-model.md) — the
+one-opening-ten-thousand-times bet (idx-2 only) that defined the next era.
 
 ## Chapter 6 — The theorem (Jun 20–25)
 
@@ -102,8 +105,8 @@ white against itself loses ~90% of the time: freestyle gomoku's first player
 simply wins. **White-side weakness is a theorem, not a bug** — so "fix white"
 means fixing the *game*, not the net. [Swap2](topics/swap2-opening-protocol.md)
 rebalanced the opening and confirmed its core bet at the data level (white
-went from ~0% to ~27–40% of decisive self-play games — white became
-*trainable*), while absolute strength stayed flat against a saturated ruler.
+went from ~0% to ~27% of self-play games (~30–40% of decisive ones) — white
+became *trainable*), while absolute strength stayed flat against a saturated ruler.
 
 The same weeks exhausted the teacher fantasy:
 [one-hot Rapfi distillation was catastrophic](topics/eval-teacher-sensei.md)
@@ -134,7 +137,7 @@ rediscovered [the claw](topics/the-claw.md), a mod-5 defensive lattice that
 is provably optimal and provably invisible to line-organized evaluation — a
 hint about representation that still shapes the architecture debate.
 
-## Chapter 8 — The sound world (Jun 30 – Jul 2)
+## Chapter 8 — The sound world (Jun 30 – Jul 3)
 
 First attempt to cash the thesis in training:
 [VCT-terminus self-play](topics/vct-terminus-selfplay-result.md) (end every

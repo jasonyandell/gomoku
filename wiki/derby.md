@@ -10,8 +10,8 @@ Reviewer gate audits every lane.
 > [derby-registration.md](topics/derby-registration.md).
 > **AUTOLAB** (~1-hour slices, launchd-supervised): went **live 2026-06-19**, ran
 > 6 real 9×9 slices + a full 15×15 lane unattended (0 failures), crowned the
-> first 9×9 + 15×15 champions, then was **deliberately stopped** (exact stop
-> date unrecorded in the wiki; work moved to 15×15 training + VCT-science).
+> first 9×9 + 15×15 champions, then was **stopped** (the stop itself went
+> unrecorded in the wiki; work moved to 15×15 training + VCT-science).
 
 > **← Hubs:** [index](index.md) · sibling hubs: [AlphaZero](alphazero.md) ·
 > [Experiments](experiments.md) · [M5-as-Mainframe](m5-mainframe.md) ·
@@ -31,7 +31,7 @@ Reviewer gate audits every lane.
   agent fan-out) drove the CLASSIC derby, v1→v9 in four days (2026-05-24→27).
 - **Then (June):** the **autolab** went **LIVE 2026-06-19** — ran 6 real 9×9
   slices then a full 15×15 lane unattended, crowned the first 9×9 + 15×15
-  champions, 0 failures — and was then deliberately stopped.
+  champions, 0 failures — and then stopped (unrecorded; work moved on).
 - **Where the record stops:** the recorded derby verdicts run to **v9** (concluded
   2026-05-27, on [ops/research-board.md](ops/research-board.md)) — the durable
   levers were a matured champion + `--fpu-reduction-c 0.45` sweeping the
