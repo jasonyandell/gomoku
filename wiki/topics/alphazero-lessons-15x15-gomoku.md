@@ -1,4 +1,5 @@
 # What We Learned About AlphaZero on 15×15 Gomoku
+> **Status: LIVE synthesis** *(2026-07-04)* — settled verdicts first; the 15×15 campaign it distills is historical.
 
 **Date:** 2026-06-13. **Why this page exists:** the goal of this project was
 never a Gomocup ranking — it was *learning AlphaZero deeply* on a game Jason

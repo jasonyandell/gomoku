@@ -1,4 +1,5 @@
 # The sound-world recipe (#107) — oracle in the environment, not the loss
+> **Status: LIVE** *(2026-07-04)* — the current frontier recipe (9×9 closed with it; 13×13 open).
 
 **One-line:** self-play where the GPU oracle makes blunders unplayable (veto) and both game-ends
 exact (attacker VCT terminus + defender all-moves-lose terminus) — the punisher the plain self-play

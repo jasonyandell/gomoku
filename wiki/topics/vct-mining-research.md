@@ -1,5 +1,7 @@
 # VCT-mining research — the synthesis hub for the "seek-VCT" program
 
+> **Status: LIVE** *(2026-07-04)* — the seek-VCT strand's synthesis hub.
+
 **What this page is.** A navigable map of the whole research program that mines
 **VCT (Victory-by-Continuous-Threats) structure** out of the game corpus and the GPU
 oracle, and turns it into a learnable, sound gomoku AI. Many threads have accumulated

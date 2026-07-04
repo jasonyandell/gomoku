@@ -1,5 +1,7 @@
 # GPU/MPS-batched VCT solver — feasibility spike (v0 CPU-bound; §8 overturns → ~1600× on-device)
 
+> **Status: LIVE** *(2026-07-04)* — §8 megakernel is the enabling foundation; §1–§7 are the historical build narrative.
+
 > ## ⚡ THE CALL-COST LAW — read this before you call `solve_vct_mega_bb`
 >
 > **One call costs one _tail_: the wall is set by the single hardest board in the batch, and

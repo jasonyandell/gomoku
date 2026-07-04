@@ -1,5 +1,7 @@
 # idx-2 forward VCT frontier + danger map — "solve the Bruce-Lee board for black"
 
+> **Status: HISTORICAL** *(2026-07-04)* — 2026-06-28 run record (run-a complete; deeper run unbuilt).
+
 **One-line idea.** Forward-expand the idx-2 opening (15×15, 3-stone fair opener,
 **white to move**) as an AND/OR frontier where **Rapfi's top-8 generates the moves
 for both sides** and the **mega GPU VCT solver is the only oracle**, run on every

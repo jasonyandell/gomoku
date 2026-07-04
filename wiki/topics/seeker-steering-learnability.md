@@ -1,5 +1,7 @@
 # Seeker steering learnability — can a net *imitate* how a winner steers toward a VCT?
 
+> **Status: LIVE** *(2026-07-04)* — feasibility result (trilogy 2/3).
+
 **One-line finding.** A net **can** behaviorally-clone the **quiet-phase (pre-onset) moves of the
 side that reaches the first forced VCT**, and it **generalizes to unseen games**: on a held-out,
 shard-disjoint test set it matches the *exact* move the seeker played at **top-1 0.386 / top-5

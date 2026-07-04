@@ -1,4 +1,5 @@
 # The perf bench measured generation; real training has an unbounded per-epoch runaway
+> **Status: LIVE lesson** *(2026-07-04)* — May 2026 evidence; the runaway trap.
 
 *Finding from the gomoku AlphaZero perf lab on 2026-05-23. Hardware: MacBook Pro Mac17,6, Apple M5 Max, 48 GB, macOS 26.4.1, PyTorch 2.11.0. Workload: ResNet-style policy/value network (~325k params), MCTS-driven self-play with a wave-mode trainer in this repo's `gomoku` module. Run LF1, wandb run `h9al2e0k`.*
 

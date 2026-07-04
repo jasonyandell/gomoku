@@ -1,5 +1,7 @@
 # The Rapfi engine pool — the strength yardstick + teacher, warm
 
+> **Status: LIVE infrastructure** *(2026-07-04)* — provisioning + warm pool.
+
 **Rapfi** is the Gomocup-winning NNUE gomoku engine (Gomocup 2024 **and** 2025
 first place; freestyle Elo ~2625). In this project it plays two roles: the
 **strength yardstick** (the first honest reference past the ~1700 pure-baseline

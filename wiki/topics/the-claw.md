@@ -1,5 +1,7 @@
 # The Claw — a line-decorrelated defensive crystal (and a representational lever)
 
+> **Status: LIVE** *(2026-07-04)* — timeless finding (proven lattice; representation lesson).
+
 **Provenance & credit.** "The claw" is **Jason's name** for a defensive pattern he found
 **independently, by hand, through play, in the 1990s** — long before this project. The underlying
 *object* is known to combinatorial game theory — periodic blocking/pairing tilings of Z² for

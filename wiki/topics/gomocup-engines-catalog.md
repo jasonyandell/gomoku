@@ -1,5 +1,7 @@
 # Gomocup Engines Catalog — what's open source, what we can run
 
+> **Status: LIVE reference** *(2026-07-04)* — snapshot 2026-06-15/16 (wine shelved; Rapfi the usable one).
+
 Catalog of competitor engines from the **Gomocup** gomoku/renju AI tournament
 ([gomocup.org](https://gomocup.org/)), focused on the one question that matters
 for us: **which engines have PUBLIC SOURCE CODE** so they could be studied,

@@ -1,5 +1,7 @@
 # Allis's threat theory — the gomoku threat formalism (reference)
 
+> **Status: LIVE reference** *(2026-07-04)* — timeless external theory.
+
 Tight, citation-backed reference for Victor Allis's formal theory of go-moku threats: the
 taxonomy, the **gain / cost / rest** square formalism, the **dependency vs conflict** relations
 between threats, the winning-combination condition, and the **VCF (OR-only) vs VCT (AND/OR)**

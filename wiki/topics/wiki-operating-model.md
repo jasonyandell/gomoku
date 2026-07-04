@@ -1,4 +1,5 @@
 # Wiki Operating Model
+> **Status: LIVE** *(2026-07-04)* — the philosophy; the concrete playbook is [../curation.md](../curation.md).
 
 This repo's wiki should behave like a maintained codebase for knowledge. The
 goal is not to make a nicer pile of notes; it is to compile experiment evidence

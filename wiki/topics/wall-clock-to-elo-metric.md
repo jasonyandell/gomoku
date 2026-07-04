@@ -1,4 +1,5 @@
 # Wall-clock-to-elo as a first-class metric family (LF1-followup #4)
+> **Status: DESIGN-NEVER-BUILT** *(2026-07-04)* — 2026-05-23 spec; MTTE/EPWH family unimplemented.
 
 *Design document. Drafted 2026-05-23 in worktree `feat/perf-LF1-metric-design`,
 as LF1-followup lane #4 from

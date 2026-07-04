@@ -1,5 +1,7 @@
 # Rapfi `mix9svq` — exact NNUE architecture (the engine that made our corpus)
 
+> **Status: LIVE reference** *(2026-07-04)* — grounds net-steers/oracle-finishes.
+
 **What this is.** A source-grounded teardown of the evaluator inside the
 `pbrain-rapfi` binary we run as the native NNUE yardstick and as the self-play
 generator behind `~/data/games_raphi` (the ~1.19M-game Rapfi-vs-Rapfi corpus).

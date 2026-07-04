@@ -1,5 +1,7 @@
 # The "Bruce Lee" model — the 15×15 single-opener champion
 
+> **Status: LIVE** *(2026-07-04)* — the current 15×15 champion subject page.
+
 > **What it is.** *Bruce* (a.k.a. Bruce-1) is the 15×15 free-style AlphaZero
 > champion of the **swap2 / single-opener era**: a **128×10** residual net,
 > self-play-only, trained from **one** fair opening (idx-2) and *nothing else*.

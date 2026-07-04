@@ -1,5 +1,7 @@
 # Is-VCT recognition learnability — can a net *see* "you have a forced VCT"?
 
+> **Status: LIVE** *(2026-07-04)* — feasibility result (trilogy 1/3).
+
 **One-line finding.** A neural net **can** classify "does the side-to-move have a
 forced VCT win?" straight from the raw 15×15 board and **generalize to games it has
 never seen** (held-out, shard-disjoint, AUROC ≥ 0.92 — honest, not leakage). But for
