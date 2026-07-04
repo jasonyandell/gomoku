@@ -6,6 +6,33 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Curated the autolab topic *bodies* (the fold-in only added banners)
+
+The [fold-in](#2026-07-04-the-autolab-is-now-a-headline-hub-6th-hub--featautolab-sim-fold-in)
+gave the six autolab topic pages status banners but left their **bodies** in
+old-wiki style. This pass applied the [five hard rules](curation.md) to the bodies
+(in `feat/autolab-sim`):
+- **[architecture](topics/autolab-architecture.md)** (CANONICAL) — hoisted the
+  settled P1–P7 outcome above the old forward-looking `**Status:**` block; **fixed a
+  direct contradiction** where the research lane said it *"waits hours"* while
+  [doctrine §4](topics/autolab-doctrine.md) titles itself *"'waits' is deleted"*;
+  flipped the thesis from build-plan to past tense.
+- **[supervisor](topics/autolab-supervisor-and-monitor.md)** — cut the
+  build-handoff task list + file-inventory table + full `uv run pytest` command
+  (implementation receipts for shipped PR #64, not operating contract) to a git
+  tombstone; 36 KB → 31.7 KB.
+- **[doctrine](topics/autolab-doctrine.md)** — fixed broken section numbering
+  (§5b landed after §6 → renumbered §7); compressed the ~40-line uv dev-diary and
+  the dated build-state Status to the doctrine-relevant core.
+- **[arena](topics/autolab-arena-eval-lane.md)** — banner now disambiguates the
+  **live H2H gate** (P4 #59, ran + crowned champions) from the **unbuilt
+  panel/gamut** this page specifies (the old banner conflated them).
+- **[researcher-contract](topics/autolab-researcher-contract.md)** — hoisted the
+  shipped safety-core verdict under the banner instead of burying it two-thirds
+  down.
+- **[dr-tabletop](topics/autolab-dr-tabletop.md)** — left as-is (already
+  verdict-first). Lint clean (0 errors); tombstones recover via `git show 7c82b7d`.
+
 ## [2026-07-04] The Autolab is now a headline hub (6th hub) — feat/autolab-sim fold-in
 
 Merged `main` (the great wiki curation, 360 commits) into `feat/autolab-sim`,
