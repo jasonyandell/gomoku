@@ -28,11 +28,15 @@ index: [training-timeline.md](training-timeline.md))*
   perf blitz landed the solver levers — cap25 gen budget (#114) + `lanes=K` kernel
   (#114) + one-worker refill (#112) — closing the gen-loop thread; see
   [M5-as-Mainframe](m5-mainframe.md).)*
-- **Next (untried)**: role-invariant symmetric **rails** (drop the terminus, cure
-  white-starvation on-policy) + attacker-preserve closing; and the pivotal open
-  question — **is 13×13 a forced black win?** (15×15 proven / 9×9 drawish / 13×13
-  unknown — probe with the mega-VCT oracle). See the [AlphaZero hub →
-  open wound](alphazero.md) and [sound-world-recipe.md](topics/sound-world-recipe.md).
+- **Next** *(2026-07-04)*: **rails-v0 was TRIED** (2026-07-03, #116, `vraf0b6e`) —
+  the terminus cure worked but a **new failure mode emerged**: on the black-tilted
+  idx-2 opener, forced-win tails poison value (vl→0.03) and white re-collapses.
+  Next levers, in order: **tail subsampling** (`--tail-subsample`, #118, staged +
+  Jason-gated) and a **fairer opening**; plus the pivotal open question — **is
+  13×13 a forced black win?** (15×15 proven / 9×9 drawish between sound players,
+  a fast *black win within the oracle's cap50 horizon* / 13×13 unknown — probe
+  with the mega-VCT oracle). See the [AlphaZero hub → open wound](alphazero.md)
+  and [sound-world-recipe.md](topics/sound-world-recipe.md).
 - **Learned (headlines)** — the durable, era-independent lessons:
   - **Fast-attack collapse** is the recurring failure mode (policy sharpens on
     attack, self-play never punishes missing defense). Watch `selfplay/plies_mean`.

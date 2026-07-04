@@ -86,13 +86,19 @@ principled fixes confirmed at the data level (strength-vs-champion still open):
 **swap2** ([swap2-opening-protocol.md](topics/swap2-opening-protocol.md)) and
 **fixed-fair-openings** ([card](cards/gomoku-15x15-fixed-fair-openings.md)).
 
-**Live "what next" (untried, after the 13×13 negative):**
-- **Role-invariant symmetric rails** — drop the terminus, cure white-starvation
-  on-policy (the terminus ejects white before it ever learns defense).
-- **Attacker-preserve closing** on top of rails.
+**Live "what next" (updated 2026-07-04, after the 13×13 negative):**
+- **Rails-v0 TRIED** (2026-07-03, #116, wandb `vraf0b6e`, 15×15 idx-2) — partial:
+  dropping the terminus + attacker-preserve DID record white positions (the cure
+  worked), but on the black-tilted idx-2 opener white re-collapsed and the
+  forced-win tails **poisoned value** (vl→0.03, death-tell tripped); closed at
+  e5524. Removing the terminus is necessary but NOT sufficient on a side-favored
+  opening. [sound-world-recipe.md](topics/sound-world-recipe.md) § rails-v0.
+- **Next levers, in order:** (1) **tail subsampling** (`--tail-subsample`, #118 —
+  staged, byte-identical off, Jason-gated); (2) a **fairer opening** (swap2 / a
+  less black-favored opener than idx-2).
 - **The pivotal unknown: is 13×13 a forced black win?** 15×15 is proven, 9×9 is
-  drawish, **13×13 is UNKNOWN** — probe it with the mega-VCT oracle. Rails alone
-  if drawish; rails + fair openings (swap2/idx-2) if black-win. Full analysis:
+  drawish between sound players (a fast black win within cap50), **13×13 is
+  UNKNOWN** — probe it with the mega-VCT oracle. Full analysis:
   [sound-world-recipe.md](topics/sound-world-recipe.md) § new directions.
 
 ## Full page index — every page in this hub

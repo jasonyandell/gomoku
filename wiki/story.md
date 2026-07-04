@@ -150,7 +150,9 @@ training game may contain an unpunished blunder) plus terminus plus line
 planes — structurally killed the 9–10-ply attractor. On 2026-07-02 the **9×9
 chapter closed**: the sound-world net drew the old champion 0-0-40, the
 net+finisher hybrid took 95% off the heuristic, and the oracle settled the
-game itself — 9×9 freestyle within cap50 is a fast **black win**.
+game itself — 9×9 freestyle is drawish between sound players, but a fast
+**black win within the cap50 horizon**
+([sound-world-recipe](topics/sound-world-recipe.md) §idea 3).
 
 Graduation to 13×13 then failed **structurally** (#113): warm-start and
 from-scratch both produced attack-only specialists — white 0/20. The recipe
@@ -161,11 +163,17 @@ thread ([mcts-perf-ceiling](topics/mcts-perf-ceiling.md)).
 
 ## Chapter 9 — Now (Jul 2026): the open question
 
-Untried and next: **role-invariant symmetric rails** (drop the terminus, cure
-white-starvation on-policy) with attacker-preserve closing. And the pivotal
-unknown the whole arc has been narrowing toward: **is 13×13 a forced black
-win?** 15×15 is proven (Allis), 9×9 is a cap50 black win by our own oracle,
-13×13 is open — and we own a ~1600× solver to probe it with. See the
+The first rebuild was tried immediately: **rails-v0** (2026-07-03, #116) dropped
+the terminus and kept both sides oracle-sound — and the cure *worked* (white
+positions finally get recorded) while exposing the next layer of the onion: on
+the black-tilted idx-2 opener, black's forced-win tails **poison the value
+head** (vl→0.03, the death-tell tripped) and white re-collapses. Removing the
+terminus is necessary but not sufficient on an unfair opening. Next levers, in
+order: **tail subsampling** (#118, staged and gated) and a **fairer opening**.
+And the pivotal unknown the whole arc has been narrowing toward: **is 13×13 a
+forced black win?** 15×15 is proven (Allis), 9×9 is drawish between sound
+players (a fast black win within the oracle's cap50 horizon), 13×13 is open —
+and we own a ~1600× solver to probe it with. See the
 [AlphaZero hub](alphazero.md) and [sound-world-recipe](topics/sound-world-recipe.md)
 §next.
 
