@@ -4,7 +4,8 @@ Not a narrative arc — a catalog. The Training-wiki broken into topics, **all o
 evals** (including forgotten ones), the **tools**, and cross-cutting conventions.
 
 > **← Hubs:** [index](index.md) · sibling hubs: [AlphaZero](alphazero.md) ·
-> [Experiments](experiments.md) · [Derby](derby.md) · [M5-as-Mainframe](m5-mainframe.md)
+> [Experiments](experiments.md) · [Derby](derby.md) · [Autolab](autolab.md) ·
+> [M5-as-Mainframe](m5-mainframe.md)
 
 ## Capabilities & conventions
 

@@ -5,7 +5,8 @@ including the negatives, **reconstructed from the logs** where we didn't record
 it cleanly. The largest by far is the **seek-VCT program** — it gets its own hub.
 
 > **← Hubs:** [index](index.md) · sibling hubs: [AlphaZero](alphazero.md) ·
-> [Derby](derby.md) · [M5-as-Mainframe](m5-mainframe.md) · [Reference](reference.md)
+> [Derby](derby.md) · [Autolab](autolab.md) · [M5-as-Mainframe](m5-mainframe.md) ·
+> [Reference](reference.md)
 
 ## The big one
 

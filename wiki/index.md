@@ -61,13 +61,14 @@ the live surfaces you touch to run and promote work. The three you'll want most:
 | **Publish / play a model** (HuggingFace, the web UI, how it works) | [publish-a-model.md](publish-a-model.md) |
 | **Operate the lab** (GPU queue, bests registry, promotion gate, benchmark cookbook) | [ops.md](ops.md) |
 
-## The map — 5 hubs
+## The map — 6 hubs
 
 | Hub | What's inside |
 |---|---|
 | **[AlphaZero](alphazero.md)** | The training arc: **best performance first**, headline facts, and curated **what-worked / what-didn't**. The core learning artifact. |
 | **[Experiments](experiments.md)** *(hub of hubs)* | Every research thread. The huge one is the **[seek-VCT program](seek-vct.md)** (the net steers / the oracle finishes); plus each side-quest, reconstructed from the logs as honestly as we can. |
 | **[The Derby](derby.md)** | The Δelo/Δt engine: **1-hour training slices, 3 roles** (researcher · trainer · runner), receipts + Reviewer audits. Where it started → where it stopped. |
+| **[The Autolab](autolab.md)** | The self-driving lab: one out-of-git **ledger spine** read by **trainer · arena · researcher · worker** loops under launchd. **Hard walls around a sandbox.** Ran unattended 2026-06-19, crowned the first 9×9 + 15×15 champions; now dormant. |
 | **[M5 as Mainframe](m5-mainframe.md)** | How we learned to push this Mac — the perf topics we explored (MCTS ceiling, ANE/Core ML, cross-engine coupling, bit-packing). |
 | **[Reference](reference.md)** | Look-things-up shelf: the **Training-wiki** broken into topics, **all our evals** (including forgotten ones), **tools** (Rapfi pool, arena, …), and cross-cutting conventions + ops. |
 

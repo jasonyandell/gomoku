@@ -1,5 +1,9 @@
 # The Arena Eval Lane — register a model, run the gamut, read a relative Elo
 
+> **Status: DORMANT** *(2026-07-04)* — design-of-record for the measurement leg;
+> the arena lane ran live 2026-06-19 (crowned the first champions), autolab
+> stopped. Under the [Autolab hub](../autolab.md).
+
 **What this is.** The design note for the autolab's *measurement leg* — the third
 member of the **trainer trains · researcher researches · arena evals** triad. It
 answers, in the autolab's own idiom: *what does it take to hand the arena a model

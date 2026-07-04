@@ -14,8 +14,13 @@ Reviewer gate audits every lane.
 > unrecorded in the wiki; work moved to 15×15 training + VCT-science).
 
 > **← Hubs:** [index](index.md) · sibling hubs: [AlphaZero](alphazero.md) ·
-> [Experiments](experiments.md) · [M5-as-Mainframe](m5-mainframe.md) ·
-> [Reference](reference.md)
+> [Experiments](experiments.md) · [Autolab](autolab.md) ·
+> [M5-as-Mainframe](m5-mainframe.md) · [Reference](reference.md)
+
+> **The self-driving machine that ran this charter unattended is now its own
+> hub → [The Autolab](autolab.md)** (ledger spine + trainer/arena/researcher/
+> worker loops, the doctrine, the DR tabletop). This hub is the *charter*; the
+> Autolab hub is the *autopilot*.
 
 ## The three roles
 

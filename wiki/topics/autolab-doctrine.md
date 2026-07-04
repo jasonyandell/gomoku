@@ -1,5 +1,8 @@
 # The Autolab Doctrine — hard walls around a sandbox
 
+> **Status: LIVE** *(2026-07-04)* — the era-independent thesis under the
+> [Autolab hub](../autolab.md); the *why* that decides whether a change belongs.
+
 **What this is.** The *why* under the autolab, distilled in a vision session
 (2026-06, weekend). [autolab-architecture.md](autolab-architecture.md) is the
 *what* (the pieces); this is the *thesis* that makes the pieces cohere and tells

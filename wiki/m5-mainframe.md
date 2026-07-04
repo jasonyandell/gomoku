@@ -5,7 +5,8 @@ mainframe and get everything out of it. This hub collects what we explored and
 learned about *this machine*.
 
 > **← Hubs:** [index](index.md) · sibling hubs: [AlphaZero](alphazero.md) ·
-> [Experiments](experiments.md) · [Derby](derby.md) · [Reference](reference.md)
+> [Experiments](experiments.md) · [Derby](derby.md) · [Autolab](autolab.md) ·
+> [Reference](reference.md)
 
 ## The guiding lens
 

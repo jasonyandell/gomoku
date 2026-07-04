@@ -1,5 +1,9 @@
 # The Researcher-Claude Contract — evidence in, typed intent out
 
+> **Status: DORMANT** *(2026-07-04)* — design-of-record for the smart lane
+> (#61); core pieces shipped (`actionable()`, research resume-on-evidence),
+> autolab stopped. Under the [Autolab hub](../autolab.md).
+
 **What this is.** The design note for the autolab's *smart lane* (issue **#61**):
 what researcher-Claude is **handed**, what it is **allowed to emit**, and the
 deterministic walls between the two. It is the concrete realization of the

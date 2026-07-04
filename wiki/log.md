@@ -6,6 +6,30 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] The Autolab is now a headline hub (6th hub) — feat/autolab-sim fold-in
+
+Merged `main` (the great wiki curation, 360 commits) into `feat/autolab-sim`,
+then folded the branch's autolab work into the new hub-of-hubs as **new content**
+rather than old-format table rows (the merge dropped the pre-curation index/log
+entries; the topic pages themselves never left the tree). **The autolab is now a
+headline hub, peer of the Derby:** new [autolab.md](autolab.md) gathers all seven
+pages —
+[doctrine](topics/autolab-doctrine.md) (the why),
+[architecture](topics/autolab-architecture.md) (CANONICAL, the ledger spine),
+[supervisor-and-monitor](topics/autolab-supervisor-and-monitor.md) (operating
+appendix),
+[researcher-contract](topics/autolab-researcher-contract.md) (#61 smart lane),
+[arena-eval-lane](topics/autolab-arena-eval-lane.md) (measurement leg),
+[dr-tabletop](topics/autolab-dr-tabletop.md) (survive-weeks DR),
+[cockpit-vs-autopilot](topics/cockpit-vs-autopilot.md) (operating lens) —
+under the **trainer · arena · researcher · worker** triad framing. Wired into
+[index.md](index.md) (5→6 hubs) and the sibling-hub nav on all five other hubs;
+[derby.md](derby.md) now points to the autolab as "the autopilot that ran the
+charter unattended." Added the four missing dated status banners
+(doctrine=LIVE; researcher-contract/arena/dr=DORMANT). Nothing lost — the fold-in
+is purely discoverability + banners; the 2098 lines of autolab topic content came
+through the merge intact.
+
 ## [2026-07-04] New topic: wiki-curation-lessons — the portable meta
 
 Closing synthesis of the whole curation effort, written for export to Jason's

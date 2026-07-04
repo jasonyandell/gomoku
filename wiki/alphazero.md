@@ -9,7 +9,8 @@ sequence is [training-run-lineage.md](topics/training-run-lineage.md), and the
 into the notebook (era-grouped, with run ids).
 
 > **← Hubs:** [index](index.md) · sibling hubs: [Experiments](experiments.md) ·
-> [Derby](derby.md) · [M5-as-Mainframe](m5-mainframe.md) · [Reference](reference.md)
+> [Derby](derby.md) · [Autolab](autolab.md) · [M5-as-Mainframe](m5-mainframe.md) ·
+> [Reference](reference.md)
 
 ## Start → Now → Learned
 

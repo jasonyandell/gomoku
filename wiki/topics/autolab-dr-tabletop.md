@@ -1,5 +1,9 @@
 # The Autolab DR Tabletop — pull the power at each table, see who survives
 
+> **Status: DORMANT** *(2026-07-04)* — tabletop conducted 2026-06-24; the
+> torn-line tail-guard + `triad_resume_under_crash` scenario shipped, #83/#84/#85
+> filed for the rest; autolab stopped. Under the [Autolab hub](../autolab.md).
+
 **What this is.** A disaster-recovery tabletop for the self-driving lab — the
 failure-mode map for a loop that must run **weeks unattended on a laptop**. It
 walks the triad one table at a time, yanks the cord at each, and asks the only
