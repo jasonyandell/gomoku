@@ -34,4 +34,11 @@ page records how the idea applies locally without duplicating the full text.
   scripts, command output, and records in this directory.
 - Wiki synthesis: [../index.md](../index.md), [../topics/](../topics/), and
   [../../TRAINING_WIKI.md](../../TRAINING_WIKI.md).
-- Schema: [../../AGENTS.md](../../AGENTS.md).
+- Schema: [../../AGENTS.md](../../AGENTS.md) + [../curation.md](../curation.md)
+  (the in-wiki playbook — self-hosted schema, found unaided by a cold agent in
+  the 2026-07-04 instruction test).
+- **The self-reinforcing loop, adopted 2026-07-04:** in the source, *query is
+  a write operation* — answers synthesized from the wiki are filed back, so
+  the wiki compounds from use, not only from deliberate ingestion. Locally:
+  [../curation.md](../curation.md) § Query. This was the last of the source's
+  three operations (ingest / query / lint) we adopted structurally.

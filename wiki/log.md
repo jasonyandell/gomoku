@@ -5,6 +5,22 @@ consistent heading so future sessions can scan recent changes with simple tools.
 
 Older eras: [2026-05 archive](_archive/log-2026-05.md) (rotated out 2026-07-04).
 
+## [2026-07-04] Curation playbook: routing table + the Query write path
+
+Two gap-closes in [curation.md](curation.md), from re-reading the
+[Karpathy source](sources/karpathy-llm-wiki.md) against our adaptation:
+(1) the ingest classify step is now a **routing table** — every input class
+(run, perf receipt, eval, idea, external material, decision, machine fact) has
+an explicit evidence home + synthesis home; perf receipts route to
+[experiment-ledger](ops/experiment-ledger.md) under new era headers now that
+perf-log is archived-in-place. (2) A new **Query section**: answering a
+question that took 2+ pages or raw evidence is itself curation input — file
+the answer back (verdict update, hub row, or the missing topic). This was the
+source's subtle self-reinforcing loop we hadn't adopted structurally: the wiki
+compounds from *use*, not only deliberate ingestion. Recurring >1-fetch
+questions added to the lint list as structural-gap findings. Source page's
+Local Mapping updated to record the adoption.
+
 ## [2026-07-04] Rotation hygiene: reconcile counts + bytes before/after
 
 Hardened the [curation.md](curation.md) rotation rule with the "how" learned the

@@ -41,16 +41,22 @@ a habit disagree, this page wins.
 
 ## Ingest — "curate this info into the wiki"
 
-1. **Classify it.** New result/run/decision → which layer?
-   - A dated event or receipt → [TRAINING_WIKI.md](../TRAINING_WIKI.md) (training
-     evidence) or the relevant ops ledger. Append-only, dated.
-   - A durable conclusion → the owning **topic page** (update its settled
-     verdict + date; push displaced detail down or to archive). Search for an
-     existing page before creating one (`grep -ril <keyword> wiki/topics/`).
-   - A new subject with no home → new `topics/<kebab-slug>.md` **with a status
-     banner**, linked from its owning hub the same edit.
-   - Verbatim external material → `sources/` (never rewrite it; add a dated
-     provenance note + reaction separately).
+1. **Classify it — the routing table.** Whatever the input, it has one
+   evidence home (append-only, dated) and one synthesis home (the maintained
+   conclusion). Search for an existing page before creating one
+   (`grep -ril <keyword> wiki/topics/`).
+
+   | You have… | Evidence home (append, dated) | Synthesis home |
+   |---|---|---|
+   | Training run / result | [TRAINING_WIKI.md](../TRAINING_WIKI.md) | owning topic verdict + [alphazero](alphazero.md) hub row |
+   | Perf / benchmark receipt | [ops/experiment-ledger.md](ops/experiment-ledger.md) (new dated **era header**, don't interleave with May receipts) | owning M5 topic + [m5-mainframe](m5-mainframe.md) hub row |
+   | Eval / match outcome | [TRAINING_WIKI.md](../TRAINING_WIKI.md) (cmd, checkpoint, n, result) | [eval-suite](topics/eval-suite.md) or owning topic |
+   | Idea / hunch (un-run) | [idea-pile](topics/idea-pile.md) (dated seed) | graduates to its own topic when run |
+   | External material (paper, post, engine, chat) | `sources/` verbatim + dated provenance note | reaction/synthesis in the owning topic, never in the source file |
+   | Decision / pivot / era turn | [log.md](log.md) + a [training-timeline](training-timeline.md) row | [index § You are here](index.md) + a [story.md](story.md) paragraph |
+   | New subject with no home | — | new `topics/<kebab-slug>.md` **with status banner**, hub-linked in the same edit |
+   | This-Mac / working-with-Jason fact | **not the wiki** → `~/.claude/.../memory/` | ([conventions](topics/conventions.md) § memory-vs-wiki) |
+   | An answer you synthesized from the wiki | — | see **Query** below — file it back |
 2. **Update the owning hub row** (the "now"/finding column) if the headline
    changed. Hubs stay tables.
 3. **Check the blast radius.** Does this supersede/kill another page's claim?
@@ -61,6 +67,29 @@ a habit disagree, this page wins.
    (one milestone row), and [story.md](story.md) (a paragraph, not a rewrite).
 5. **Log it:** dated entry in [log.md](log.md) (structure/synthesis changes)
    — and TRAINING_WIKI if the training story changed.
+
+## Query — answering from the wiki files back
+
+The wiki's second write path, and the loop that makes it self-reinforcing
+(per the [Karpathy source](sources/karpathy-llm-wiki.md): answers filed back
+"compound in the knowledge base just like ingested sources do"). Ingest feeds
+the wiki when someone remembers to curate; **query feeds it every time the
+wiki is used** — asking is writing.
+
+**Trigger:** you answered a question and it took synthesizing across 2+ pages
+or reading raw evidence (W&B, logs, checkpoints, git). That assembly work IS
+the signal a page is missing or stale. Before the session ends, file it:
+
+- The answer **refined a settled verdict** → update the owning topic's
+  verdict + date.
+- The answer **exposed a missing hub row or link** → add it.
+- The question had **no one-fetch home** → create the topic that should have
+  existed (banner + hub link), so next time it *is* one fetch.
+- A question that recurs at >1 fetch is a **lint finding** — a structural
+  gap, not a retrieval failure.
+
+A clean one-fetch answer (read one page, answered) files nothing — the wiki
+already worked.
 
 ## Rotation thresholds (the giants stay caged)
 
@@ -90,6 +119,8 @@ a habit disagree, this page wins.
   WILL get re-summoned).
 - Duplication: the same finding narrated in 2+ pages → consolidate per rule 3.
 - Index honesty: does § You are here match the newest evidence?
+- Query gaps: questions that recurred at >1 fetch (see **Query**) → the page
+  that would make them one fetch doesn't exist yet.
 
 ## Style
 
