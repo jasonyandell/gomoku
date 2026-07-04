@@ -61,7 +61,11 @@ blocks clean merges). Never rebase, fast-forward, or squash. Start a worktree
 with `python scripts/worktree_session.py add <slug>` — it creates
 `~/code/gomoku-<slug>` on `feat/<slug>` and records the owning session so its
 logs are findable later via `claude --resume <id>` (`worktree_session.py log`
-survives teardown).
+survives teardown). **Then actively `EnterWorktree` (path = the worktree)** —
+subagents and shell calls inherit the SESSION's cwd, not the conversational
+"current worktree"; a subagent spawned without absolute paths will silently act
+on the main checkout (confirmed 2026-07-04). EnterWorktree pins the session so
+everything inherits the worktree by default — mechanism, not vigilance.
 
 **Worktree cleanup is MANUAL and careful.** The auto-janitor
 (`reclaim_worktrees.py`) is retired (2026-07-01): it removed a worktree a LIVE
