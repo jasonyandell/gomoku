@@ -35,6 +35,19 @@ Perf changes that touch training behavior, inference outputs, MCTS/search behavi
 4. **Reproducibility IDs.** Behavior-changing perf receipts must include checkpoint path(s), W&B run ID(s) or explicit `wandb: disabled`, commit hash, seed policy, and env/backend flags such as `GOMOKU_DISABLE_NATIVE_MCTS`, `GOMOKU_DISABLE_NATIVE_STATE_OPS`, `PYTORCH_ENABLE_MPS_FALLBACK`, device, model size, stem padding, sims, wave size, workers, and evaluator backend.
 5. **Explicit decision.** Every receipt ends with `decision: promote | reject | blocked | needs_repeat`. Throughput-only wins that lack the selected quality gate, plies/game-shape read, or reproducibility IDs are not promotions; mark them `blocked` if the harness/artifact is missing or `needs_repeat` if the evidence is merely noisy/short.
 
+## Open Notes (Worker Receipts)
+
+Worker-specific receipts and detailed lane notes live under `wiki/ops/open-notes/` (timestamped). Quick reference:
+
+| File | Date | Finding |
+|---|---|---|
+| [20260522T054739Z-01-baseline-receipts.md](open-notes/20260522T054739Z-01-baseline-receipts.md) | 2026-05-22 | Native MCTS 3.7× faster than Python fallback on MPS under contention |
+| [20260522T054739Z-02-production-contour-sweep.md](open-notes/20260522T054739Z-02-production-contour-sweep.md) | 2026-05-22 | Native 8w8g wave64 confirmed production optimum; sims/tiny untested for quality |
+| [20260522T054739Z-03-ane-residency-rail-proof.md](open-notes/20260522T054739Z-03-ane-residency-rail-proof.md) | 2026-05-22 | ANE residency requires same-window powermetrics; blocked on passwordless sudo |
+| [20260522T054739Z-04-quality-promotion-gates.md](open-notes/20260522T054739Z-04-quality-promotion-gates.md) | 2026-05-22 | Training-Quality Promotion Gate codified (behavior-touching perf needs explicit gates) |
+| [20260522T054739Z-05-control-room-curation.md](open-notes/20260522T054739Z-05-control-room-curation.md) | 2026-05-22 | Synced ops pages with disk evidence; 934b ANE candidates still detached |
+| [20260522T061713Z-01-outer-loop-python-profile.md](open-notes/20260522T061713Z-01-outer-loop-python-profile.md) | 2026-05-22 | Post-search Python is ~5% of wall-clock; evaluator+search owns 95% (no major lever) |
+
 ## Receipts
 
 ### 2026-05-24 — Δelo Derby v3 (UNIFIED prior-art race) — CALLED as-is; Gumbel@100 dominates; fixed-step co-equal with wave (structural wins, NOT a rate separation)

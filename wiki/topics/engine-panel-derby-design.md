@@ -1,5 +1,17 @@
 # Engine-Panel-Anchored Derby — Calibrated Strength Yardstick
 
+> **Status (2026-07-04): CHAPTER CLOSED — calibration never achieved; the failure
+> is the durable finding.** Tooling was built and a first run happened, but the
+> calibrated yardstick this design aimed at was **never delivered**: calibration
+> stayed BLOCKED on engine reliability + anchor validity (#35), and the Derby has
+> since stopped (see [../derby.md](../derby.md)). What survives as load-bearing
+> knowledge: **published Gomocup Elos are invalid anchors under our
+> wine/single-thread/10s harness** (negative-slope fit; yixin18 ~2310-published went
+> 0–30), so a calibrated absolute scale was unsupportable — and the run surfaced the
+> **white-side defense gap** (champion 94% black / 50% white) that became the driver
+> of the Bruce era ([bruce-lee-model.md](bruce-lee-model.md)). Read as design +
+> lesson, not an active build.
+
 **Issue:** [#30](https://github.com/jasonyandell/gomoku/issues/30).
 **Status:** Design → tooling BUILT → **first run DONE (2026-06-15); calibration
 BLOCKED on engine reliability + anchor validity ([#35](https://github.com/jasonyandell/gomoku/issues/35)).**

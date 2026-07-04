@@ -1,5 +1,7 @@
 # ML Perf Lab Log
 
+> ⚠️ **ARCHIVED-IN-PLACE 2026-07-04 — append-only narrative journal of the May 2026 perf era (last entry 2026-05-26), correctly frozen.** The formal receipts live in [experiment-ledger.md](experiment-ledger.md); the durable syntheses live in the M5-as-Mainframe hub topics ([m5-max-fp16-and-throughput-regimes.md](../topics/m5-max-fp16-and-throughput-regimes.md), [m5-max-cross-engine-coupling.md](../topics/m5-max-cross-engine-coupling.md), [mcts-perf-ceiling.md](../topics/mcts-perf-ceiling.md)). Read as history, not status.
+
 Narrative timeline for the M5 Max perf era. Sibling to
 [experiment-ledger.md](experiment-ledger.md) (formal receipts) and
 [status.md](status.md) (control-room summary). This page is for the

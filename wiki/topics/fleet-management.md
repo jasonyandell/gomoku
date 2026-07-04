@@ -1,5 +1,11 @@
 # Fleet Management — the agent-management toolchain
 
+> **Status (2026-07-04): DESIGN-NEVER-BUILT.** North-star / roadmap only — none of
+> the named scripts (`session_db.py`, `postoffice.py`, `agent_fleet.py`,
+> `session_mindmap.py`) exist in `scripts/` (verified absent 2026-07-04). Kept as
+> the design of record for the cockpit/attention-layer toolchain; treat as roadmap
+> until landed.
+
 **Role:** The north-star design for landing the *too-many-sessions* problem.
 Jason runs many concurrent Claude sessions across many topics; they meander,
 overlap, and stall. The **agent-management toolchain** exists to *land that work*
@@ -10,7 +16,7 @@ for the too-many-sessions problem*, built on the path a Claude Code author laid
 out. Attention is the scarce resource; this is cockpit, not more autopilot.
 
 > Status: north-star / design. The scripts named below are the intended surface;
-> they are **not** present in `scripts/` as of this writing — treat as roadmap
+> they are **not** present in `scripts/` (verified absent 2026-07-04) — treat as roadmap
 > until landed.
 
 ## Three capabilities, one purpose each
