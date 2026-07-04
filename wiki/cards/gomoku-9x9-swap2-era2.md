@@ -17,6 +17,11 @@ model-index:
 
 # gomoku-9×9-swap2 · era-2 (Path-A curriculum, phase 1)
 
+> **Era snapshot.** This card is an **IN-TRAINING snapshot (2026-06-20, e47)**; the
+> run has since concluded. Read it as a point-in-time model card, not live status —
+> the curriculum it seeds continues in [[board-size-transfer-and-warm-start]] and
+> [[swap2-opening-protocol]].
+
 **Status (2026-06-20): IN TRAINING.** A research checkpoint, not a finished player.
 This is the *bootstrap* of the era-2 curriculum: train an aggressive, **not-doomed**
 white cheaply on the native 9×9 board, then warm-start it up to 15×15

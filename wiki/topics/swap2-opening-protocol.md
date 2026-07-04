@@ -1,5 +1,53 @@
 # Swap2 opening protocol (#72) — the real fix for white
 
+> **Status: HISTORICAL as of 2026-07-04.** The swap2 / fixed-fair-opening ladder described
+> below has concluded. The broader 9×9 chapter is CLOSED (via the sound-world recipe) and
+> the 13×13 graduation failed structurally; the mega-VCT GPU oracle is the current lever.
+> **What stands from this strand is the bootstrap finding** (swap2 makes white *trainable* —
+> an imbalanced game can't bootstrap; swap2 rebalances the *game* so self-play generates
+> winnable white positions). The dated "LIVE / Live" run-status blocks below are era
+> snapshots, not the current state. The crowning-bar (§6.6) remains the live gate spec.
+
+## Durable syntheses (read this first)
+
+- **The bootstrap mechanism (§2).** An imbalanced game *cannot* bootstrap: when one side is
+  hopeless, every self-play game is a first-player win, so the value head only ever sees
+  "second-player = lost" and the policy gets **zero gradient on winnable second-player
+  positions** — there are none in its own data. **Swap2 rebalances the GAME** (the responder
+  is never forced onto the lost side) → self-play generates ~50/50 data → white positions
+  become winnable in the training set. This is the mechanism, not merely an honest yardstick,
+  and it is **confirmed at the data level** (§5.1: white 27% of self-play wins vs ~0% on an
+  empty board). Generalizes to any imbalanced-role bootstrap problem.
+- **The "saturated ruler" lesson (§5.7).** Era-1 beat its own frozen weak ancestor ~70% while
+  scoring a **flat ~10% vs a real engine** (white 0% vs Rapfi) — relative progress, **zero
+  absolute strength**. A relative gate against a weak preserved reference *saturates*; future
+  relative gates must re-anchor to a *recent* self-checkpoint, and absolute reads need a real
+  external engine. (Swap2's job was the bootstrap — unblock white's gradient — not the
+  strength climb; those need different levers.)
+- **Fairness is UPSTREAM of white engagement (§10).** The white-0% story was partly a *rigged
+  game*, not just a training gap: the **opener** is the broken half (it samples opening
+  placements with no fairness gradient, so it keeps offering openings black wants → responder
+  always swaps to black → stuck ~69/27). The responder is fine. A rigged ~-EV seat can't be
+  trained to win; fix fairness (opener composes ~50/50 openings, or hand it known-fair boards)
+  *before* judging white skill.
+- **recency-frac is a MUTATION-RATE knob (§13).** With a FIFO ring buffer, `buffer_size` is
+  the *window length* and `recency_frac` is whether sampling *tracks the live policy*. A big
+  flat buffer sampled uniformly makes the training distribution **stationary** → the loss goes
+  *dead* (converges to a fixed point, stops chasing the improving policy). recency-0.5
+  **perturbs** (adds variance/"mutation") but alone only churns in place — **perturbation pays
+  only with a SELECTION mechanism** (self-play win-reinforcement is the weak one; a derby is
+  the strong one). Perturbation + selection = evolution; perturbation alone = drift. Also
+  distinct from **reuse** (consumed/ingested, set by `n_workers`; target ~1-4, <1 is gen-flood
+  self-sabotage, §12).
+
+**The first-player-win theorem** that motivated swap2 is stated canonically in
+[alphazero-lessons-15x15-gomoku.md](alphazero-lessons-15x15-gomoku.md) §15; the operational
+investigation that discovered it is [white-side-defense-plan.md](white-side-defense-plan.md).
+
+---
+
+### Era snapshots (historical run-status, kept for the trail)
+
 **Status (2026-06-20) — ERA 1 DONE, PIVOTING TO ERA 2.** Swap2 era-1 (warm-started from the
 pre-swap2 champion) achieved its actual job — **the bootstrap fix is CONFIRMED**: swap2
 self-play makes white *trainable* (white ~30–40% of decisive self-play games vs ~0% on an
@@ -49,22 +97,15 @@ Branch: `feat/swap2-opening-protocol` (worktree, **unmerged** by request). Era-1
 
 ## 1. Why swap2 (the road here)
 
-The 2026-06-20 white-defense investigation closed a long arc: 15×15 freestyle
-white-side "defense weakness" is **not a net flaw — it is the first-player-win
-theorem.** Evidence (full chain in white-side-defense-plan.md):
-
-- Three policy/value teachers ALL flattened (value-only #42 poisoned the value head;
-  sparse-VCF #43 and dense-conv left white at 0-2/20 vs Rapfi).
-- The diagnostic showed white **retreats competently to a forced loss** — it blocks
-  fours ~perfectly, has initiative on 1 ply / 30 games, is forced into an unstoppable
-  double-four in 28/30. There is no tactical error to correct.
-- **Clincher:** Rapfi(1s) vs Rapfi(1s) from 4-stone openings → white 1-9. Even the #1
-  engine playing itself is crushed as the second player.
-
-So no teacher can make a (near-)solved-lost role win. **The fix is to delete the
-forced role: swap2** — Gomocup's balancing protocol, where a player is never *forced*
-onto the lost side. That also makes the Rapfi yardstick honest (Rapfi is a swap2
-engine).
+The 2026-06-20 white-defense investigation concluded that 15×15 freestyle white-side
+"defense weakness" is **not a net flaw — it is the first-player-win theorem**: from an
+empty/random opening white is a (near-)solved-lost role, so no policy/value teacher can make
+it win (three teachers all flattened; clincher: Rapfi-vs-Rapfi from 4-stone openings → white
+1-9 — even the #1 engine is crushed as the second player). **The fix is to delete the
+forced-lost role: swap2**, which also makes the Rapfi yardstick honest (Rapfi is a swap2
+engine). Full theorem statement + evidence:
+[alphazero-lessons-15x15-gomoku.md](alphazero-lessons-15x15-gomoku.md) §15; the operational
+chronicle: [white-side-defense-plan.md](white-side-defense-plan.md).
 
 ## 2. The ML thesis (why this is a bootstrap fix, not just a yardstick fix)
 
@@ -233,58 +274,28 @@ frozen-e455), not the ancient champ. Era-1's checkpoints were lost to `keep_last
 pruning — going forward, capture intermediates via **HuggingFace push** (not `cp`), which
 also seeds the always-running-arena model registry.
 
-## 6. What to try next (ranked) — SUPERSEDED by §9 (kept for the era-1 reasoning trail)
+## 6. What to try next (ranked) — SUPERSEDED by §9
 
-1. **Let v1 run and read the H2H trend first.** Don't add machinery ahead of the
-   measurement (the exact lesson the teacher era taught). Gate trained-latest vs the
-   frozen champ each cap. **As of e181 this has fired positive** — H2H past 60% with white
-   12%→41%, so v1 (balanced data alone) is *already* showing it works; the job now is to
-   CONFIRM the trend across more independent checkpoints (n=128 gates) before declaring a
-   result. If it stalls, escalate to #2; if it holds, v1 is the win and #2/#3 become the
-   "push 27%→50% and go further" lever rather than a rescue.
-2. **Learned negotiation = the choice head into the loss (the deferred v2).** The choice
-   head exists and the negotiator already emits `choice_records`, but those targets are
-   **not yet in the trainer loss** — v1 negotiates by a one-ply value lookup. Wiring them
-   in lets the net *learn* to negotiate. Risk surface: the record format + a choice-head
-   loss term; build/test in isolation, deploy as a NEW cell (do not mutate a live run).
-3. **Train opening PLACEMENTS for fairness.** v1 samples placements (untrained), so the
-   opener can't learn a fair opening → the responder keeps the black edge (data stuck at
-   69/27, not 50/50). Recording + training the opener's placement policy (punished when
-   the responder profitably swaps) should push the data toward 50/50 and let white-side
-   strength actually climb. Pairs naturally with #2.
-4. **More warm-started training time.** 2h is short. The balanced data is in the buffer
-   now; the value head is already fitting it (vl ↓ to ~0.14). Patience may convert
-   balanced data into strength without new code.
-5. **Bigger/sharper gates once a candidate looks real.** H2H n=128+ and a multi-seed
-   Rapfi anchor at the strong tiers to put an absolute number on a confirmed H2H gain.
+The era-1 "what to try next" menu (let v1 run and read the H2H trend; learned negotiation via
+the choice head into the loss; train opening placements for fairness; more warm-started time;
+bigger gates) is **superseded by §9** (era-2 basin-escape) and preserved verbatim in
+[_archive/topics/swap2-superseded-sections.md](../_archive/topics/swap2-superseded-sections.md).
+Its two ideas that carried forward — **learned choice head (v2a→v2b)** and **train the opener
+for fairness** — reappear as the §10 fairness fix (Option A/C).
 
 ## 6.5 Why not vet this faster on 9×9? + the scale (Modal) era
 
-**9×9 cannot carry the white-defense signal — it is qualitatively absent, not just
-smaller (Jason, 2026-06-20).** On a small board the *edge is free defensive structure*:
-white runs the attacker into a wall and the geometry does the defending, so white doesn't
-have to be clever (the 9×9 champion already defends near-perfectly, white-loss ≤5%). The
-signal exists only where there's enough open space for a competent attacker to force
-unstoppable double-threats — i.e. it **scales with board size**. So 9×9 vets the
-*plumbing* (does the negotiation run, does a learned choice head train) but tells you
-NOTHING about whether white got better at defending — measuring a thermometer in a room
-with no temperature gradient. **The white-strength question must be answered on a big
-board.** (Middle ground: 13×13 has enough space for the signal at ~2× the speed of 15×15,
-but the native MCTS ext is only compiled for 9/15 — 13 falls back to slow pure-Python gen,
-eating the speedup unless you build a 13 ext. Buildable, not free.)
-
-**Scale / "thousands of epochs" era (Modal, deferred).** The M5 Δelo/hour ceiling is
-self-play GEN (CPU-bound; the trainer barely touches MPS at ~6% CPU) — an A100 trains
-faster than this box can feed it. So the cloud unlock is **parallel gen** (fan self-play
-across many cheap CPU workers + a shared GPU evaluator), not a bigger GPU per se. Port
-friction is bounded to two things: (a) the native MCTS ext is compiled per-arch — needs a
-CUDA/Linux build or it falls to slow pure-Python; (b) `run_sweep`'s local-subprocess
-orchestration → cloud functions. The torch training loop itself is portable (mps→cuda is
-trivial). Staging: **validate the recipe on the M5 first** (does swap2 + the learned
-choice head actually move white — the current run), **then** pay the port tax for the
-serious thousands-of-epochs run where parallel gen is the point. See the
-[containerize-training-runs](containerize-training-runs.md) seam (already flagged: "no
-MPS in Docker on macOS → targets off-Mac/at-scale").
+**Durable point (kept):** **9×9 cannot carry the white-defense signal — it is qualitatively
+absent, not just smaller.** On a small board the edge is *free defensive structure* (white
+runs the attacker into a wall; geometry does the defending), so the 9×9 champion already
+defends near-perfectly (white-loss ≤5%). The white-strength signal exists only where there's
+enough open space for a competent attacker to force unstoppable double-threats — it **scales
+with board size**. So 9×9 vets the *plumbing* (does negotiation run, does a choice head train)
+but tells you NOTHING about whether white got better at defending. (13×13 has the signal at
+~2× the speed of 15×15, but the native MCTS ext is only compiled for 9/15.) The scale / Modal
+"thousands-of-epochs" discussion (the M5 Δelo/hr ceiling is CPU-bound self-play GEN → the
+cloud unlock is *parallel gen*, not a bigger GPU) is preserved verbatim in the
+[archive](../_archive/topics/swap2-superseded-sections.md).
 
 ## 6.6 Crowning a new champion — the bar (approved 2026-06-20)
 
@@ -324,52 +335,16 @@ daemon's pull-checkpoint/schedule/append loop. The upgrade swap2 brings is **hon
 (the old forced-color panel was broken for white; see the 2026-06-15 reckoning). This is
 the post-validation era — validate the recipe on the M5 first, then build the arena.
 
-## 6.7 Contingency plan — "if it stops working" (decision tree)
+## 6.7 Contingency plan — "if it stops working" (decision tree) — SUPERSEDED
 
-Standing directive (2026-06-20): **don't stop what's working** — keep the live run on its
-current recipe + cadence. This menu is for *if/when* a gate says it stalled. Every option
-deploys as a NEW cell (never mutate the live run), validated in isolation, gated vs the
-frozen champion. First, triage: is it RECIPE, OPTIMIZATION, or OPERATIONAL?
-
-**A. PLATEAU** (most likely "stops working") — H2H flat / white-loss stops falling across
-≥2 consecutive **n=128** gates. First ask: plateaued ABOVE or BELOW the crowning bar
-(§6.6)?
-- **Above the bar → not a failure: CROWN it.** v1 is the win; freeze it, move to the
-  arena/Modal era.
-- **Below the bar → escalate the lever (in order):**
-  - **(P1) Learned choice head into the loss** — wire `choice_records` into the trainer so
-    the net *learns* to negotiate instead of the v1 value-lookup. Pushes self-play balance
-    past 69/27 → raises the white ceiling. The pre-identified #1 escalation.
-  - **(P2) Train opening placements for fairness** (pairs with P1; the opener learns fair
-    3-stone openings so the responder can't always swap to a black edge).
-  - **(P3) Stronger self-play** — more sims / a VCT/VCF attack teacher on top → better data.
-  - **(P4) Capacity** — if 128×10 saturates on balanced data, grow the net (net2net).
-
-**B. REGRESSION** — H2H / white-loss *worsens* beyond noise. FIRST confirm it's real at
-n=128 (we were burned by n=64 noise — the e181 64% overshoot). If real: roll back to the
-best epoch checkpoint; suspect **LR too high** (the value-target shift from balanced data
-wrecking the policy → #44: lower LR / freeze-value-head warmup); check buffer composition.
-
-**C. DYNAMICS DEATH-TELL** (well-documented: `loss-floor-bouncing.md`,
-`az-at-scale-vs-laptop.md`) — `vl` → ~<0.08 = value poisoning; `plies` falling + concave
-buffer-fill = fast-attack collapse; `pl` runaway = policy corruption. Roll back to the last
-healthy checkpoint, lower LR, inspect labels/buffer. (So far ALL absent — vl bounces
-0.14-0.21, plies rose 30→42.)
-
-**D. DATA STUCK at ~27% white** — self-play white-win% flat, not trending toward 50%. This
-is the v1 ceiling (sampled, untrained openings cap balance), so it **converges on P1+P2**
-— the learned-negotiation lever is the fix for both plateau-below and data-stuck.
-
-**E. OPERATIONAL** — process death / OOM / disk / my-session-lapse. The run is restartable
-(`--resume latest.pt`, buffer embedded). For unattended resilience WITHOUT changing the
-recipe: a self-relaunching wrapper that does exactly cap→gate→relaunch automatically
-(removes the human as the single point of failure; honors "loops are cadence, not
-load-bearing"). Identical behavior to the current loop — just not dependent on a live
-session.
-
-Meta: A/D are RECIPE (escalate the lever), B/C are OPTIMIZATION (roll back + LR), E is
-OPERATIONAL (resume/automate). A plateau *above* the bar is the happy ending, not a
-failure.
+The full "if/when a gate says it stalled" decision tree (triage RECIPE / OPTIMIZATION /
+OPERATIONAL; A. PLATEAU → crown-if-above-bar else escalate levers P1-P4; B. REGRESSION → roll
+back + lower LR; C. DYNAMICS DEATH-TELL → `vl`<0.08 poisoning / plies-fall collapse / `pl`
+runaway; D. DATA-STUCK → learned negotiation; E. OPERATIONAL → resumable/automate) is planning
+scaffolding for a run that has since concluded — preserved verbatim in
+[_archive/topics/swap2-superseded-sections.md](../_archive/topics/swap2-superseded-sections.md).
+The durable death-tell thresholds it references live in `loss-floor-bouncing.md` and
+`az-at-scale-vs-laptop.md`.
 
 ## 7. Operational notes (durable gotchas)
 

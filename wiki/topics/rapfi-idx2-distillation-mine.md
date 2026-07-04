@@ -52,7 +52,8 @@ is not a virtue here; **depth on one position is**.
 
 A reusable, crash-robust, max-throughput harness to mine `(position, Rapfi soft
 policy+value)` pairs by BFS over a fixed opening. Built because the in-process
-`RapfiPool` could not feed many engines (see Throughput below).
+`RapfiPool` could not feed many engines (see Throughput below; the warm
+`RapfiPool` itself is documented in [rapfi-pool.md](rapfi-pool.md)).
 
 - **`canonical.py`** — D4-canonical state hashing. Stores ONE representative per
   symmetry class; the trainer's existing sample-time D4 augment recovers the 8×.

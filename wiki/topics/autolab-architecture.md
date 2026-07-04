@@ -1,5 +1,11 @@
 # The Autolab — ledger-spine architecture
 
+> **Status: HISTORICAL (design of record).** This is the **CANONICAL autolab page**
+> — the design of record; [autolab-supervisor-and-monitor.md](autolab-supervisor-and-monitor.md)
+> is its *operating appendix* (literal plists + runbook). Built + ran 2026-06-19
+> (P1–P7); the **autonomous derby is stopped** — see [derby.md](../derby.md) for
+> live status. (Marked 2026-07-04.)
+
 **Status:** epic [#53]. Formalizes Jason's spec (2026-06-18) of a self-driving lab
 that treats the M5 Max as a mainframe. Supersedes the *framing* of #2 (three-tier
 queue) and folds in #19 (nonstop derby daemon) — same pieces, one cleaner spine.

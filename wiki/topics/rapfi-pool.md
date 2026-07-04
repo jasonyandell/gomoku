@@ -13,7 +13,9 @@ the native-anchor bring-up, coord/config faithfulness audit),
 [reliable-eval-set.md](reliable-eval-set.md) (Rapfi as the sole native anchor in
 the no-wine reliable set), [eval-teacher-sensei.md](eval-teacher-sensei.md) (the
 always-on eval daemon + distillation teacher built on the pool),
-[eval-suite.md](eval-suite.md) (the broader eval surface).
+[eval-suite.md](eval-suite.md) (the broader eval surface),
+[rapfi-idx2-distillation-mine.md](rapfi-idx2-distillation-mine.md) (the idx-2
+mining harness that outgrew this in-process pool for multi-engine throughput).
 
 ## Provisioning — a pinned, sha256-verified HF binary
 
