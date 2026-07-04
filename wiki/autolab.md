@@ -56,19 +56,29 @@ Three lanes fold onto one ledger spine; a fourth (worker) does the GPU work.
   (gomocup-protocol contestant contract, anchor-pinned panel, two-layer
   determinism, cached O(panel) baseline).
 - **DR tabletop (2026-06-24):** pulled the power at each table of the
-  research→train→eval ring; the torn-line tail-guard was **FIXED** and an
-  end-to-end `triad_resume_under_crash` scenario **BUILT**; #83/#84/#85 filed
-  for the design-y remainder ([autolab-dr-tabletop.md](topics/autolab-dr-tabletop.md)).
-- **Now (DORMANT):** the loop is stopped; the design record is complete enough
-  to relight. The live-status source of truth for the racing it drove is the
+  research→train→eval ring; the torn-line tail-guard was **FIXED (read path** —
+  the 2026-07-04 review found the write-path sibling, [DR rows 7–8](topics/autolab-dr-tabletop.md)**)**
+  and an end-to-end `triad_resume_under_crash` scenario **BUILT**; #83/#84/#85
+  filed for the design-y remainder ([autolab-dr-tabletop.md](topics/autolab-dr-tabletop.md)).
+- **Primary design banked (2026-07-04):** the vision completed into a
+  [PRIMARY target design](topics/autolab-primary-design.md) — deterministic
+  OS-style scheduler (researcher-set priority **retired**; propose/park only),
+  the researcher packet promoted to cage-readiness, two ledger walls
+  (facts-not-commands; champion-tag-as-projection), the invocation shape — and
+  immediately [adversarially reviewed](topics/autolab-design-adversarial-review.md)
+  (12 attacks; v0 minimal cut + Δelo-honesty were the big outcomes).
+- **Now (DORMANT):** the loop is stopped; the primary design is the relight
+  plan. The live-status source of truth for the racing it drove is the
   [Derby hub](derby.md) + [Ops hub](ops.md).
 
 ## The pages
 
 | Page | Role |
 |---|---|
+| [autolab-primary-design.md](topics/autolab-primary-design.md) | **The PRIMARY design (start here)** — the 2026-07-04 target design: OS-style deterministic scheduler, the researcher packet, the two ledger walls, the invocation shape. Wins over any page it disagrees with. |
+| [autolab-design-adversarial-review.md](topics/autolab-design-adversarial-review.md) | **The red-team of the primary design** — 12 attacks, verdicts, what got fixed vs. scoped (A1–A12). |
 | [autolab-doctrine.md](topics/autolab-doctrine.md) | **The why** — the thesis that decides whether a change belongs (hard walls around a sandbox). |
-| [autolab-architecture.md](topics/autolab-architecture.md) | **The what (CANONICAL)** — the ledger-spine design of record; the four loops (P1–P7). |
+| [autolab-architecture.md](topics/autolab-architecture.md) | **The what as BUILT** — the ledger-spine record of P1–P7 (steered by the primary design where they differ). |
 | [autolab-supervisor-and-monitor.md](topics/autolab-supervisor-and-monitor.md) | **Operating appendix** — launchd plists, seed cell/cap, monitor digest, `autolab up`/`down` runbook. |
 | [autolab-researcher-contract.md](topics/autolab-researcher-contract.md) | **The smart lane (#61)** — evidence in, typed intent out; the epistemic WHEN + continuation policy. |
 | [autolab-arena-eval-lane.md](topics/autolab-arena-eval-lane.md) | **The measurement leg** — register a model, run the gamut, read a relative Elo. |

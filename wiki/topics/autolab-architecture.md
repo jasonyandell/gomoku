@@ -228,7 +228,11 @@ non-gating absolute readout.
 
 - **Research** — not a daemon; a Claude workflow on a long `ScheduleWakeup`/cron.
   Reads the folded ledger + W&B + HF, ideates, appends `experiment` rows **with
-  priorities** (priority is how ideation steers the singleton), then **exits** — it
+  priorities** (priority is how ideation steers the singleton) — *(**corrected
+  2026-07-04**: researcher-set priority is **OUT**; scheduling is a deterministic
+  function of the folded ledger and researchers get exactly two levers, propose +
+  park — see [autolab-primary-design.md](autolab-primary-design.md) §2. The text
+  here records the as-built P5 behavior)* — then **exits**; it
   does **not** hold a blocked thread. It is **resumed by evidence**: a new `result`
   row is what re-triggers ideation, at which point it reads the result, writes
   wiki/issues, and enqueues follow-ups. (The earlier "waits hours, wakes" framing is
@@ -282,6 +286,9 @@ Each loop ships three instruments before it runs unattended:
 - HF delivery: **per-slice revision + a moving `champion` tag** (arena bumps on
   PROMOTE).
 - Priority: keep Δelo/hr `pick_priority` + starvation floor (port in P5).
+  *(Superseded 2026-07-04 by the [primary design](autolab-primary-design.md) §2
+  scheduler — ladder + share + aging, verdict-denominated fairness;
+  researcher-written priority removed.)*
 - 1h hard cap is production; **MVP uses a 1-epoch cap**.
 - **Board size is a process-start constant (#65, 2026-06-19).** `board_config.py`
   resolves `GOMOKU_BOARD_SIZE` and it **must be set before any `import gomoku.*`**.

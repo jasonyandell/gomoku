@@ -6,6 +6,32 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Autolab PRIMARY DESIGN banked + adversarial review (design session)
+
+The fresh-eyes design session (Jason + Claude, working from the 2026-07-04
+vision corrections) produced and banked the autolab's target design:
+
+- **NEW [topics/autolab-primary-design.md](topics/autolab-primary-design.md)**
+  (LIVE, wins over pages it disagrees with): the one-breath version, the
+  OS-scheduler design (champion-as-idle-task, verdict-denominated fairness,
+  v0 minimal cut, Δelo-honesty), the two ledger walls (facts-not-commands;
+  champion-tag-as-projection), the researcher packet promoted to
+  cage-readiness, the invocation shape (OS-permissions wall), the five blessed
+  decisions of 2026-07-04, and the phase-1 finish line.
+- **NEW [topics/autolab-design-adversarial-review.md](topics/autolab-design-adversarial-review.md)**
+  (HISTORICAL): 12 attacks (A1–A12), 5 BROKE / 4 BENT / 3 HELD; accepted fixes
+  folded into the design page.
+- **Blast radius:** [autolab.md](autolab.md) hub re-pointed (primary design
+  first; architecture reframed "the what as BUILT");
+  [architecture](topics/autolab-architecture.md) got dated corrections retiring
+  researcher-set priority; [researcher-contract](topics/autolab-researcher-contract.md)
+  got the dossier-ranking reversal (cage-readiness, not presentation) + the Y4
+  `max_wall_secs` doc/code fix; [dr-tabletop](topics/autolab-dr-tabletop.md)
+  gained **two new REDs** (rows 7–8: append-side torn tail — where the naive
+  prepend-`\n` fix is provably wrong, truncate-under-flock is correct; the
+  multi-row-transaction class) + the 2026-07-04 review addendum (Y2/Y5–Y8),
+  fully banking the session's `/tmp/autolab-vision-and-gaps.md` capture.
+
 ## [2026-07-04] Curated the autolab topic *bodies* (the fold-in only added banners)
 
 The [fold-in](#2026-07-04-the-autolab-is-now-a-headline-hub-6th-hub--featautolab-sim-fold-in)

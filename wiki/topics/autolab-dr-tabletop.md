@@ -1,8 +1,11 @@
 # The Autolab DR Tabletop — pull the power at each table, see who survives
 
 > **Status: DORMANT** *(2026-07-04)* — tabletop conducted 2026-06-24; the
-> torn-line tail-guard + `triad_resume_under_crash` scenario shipped, #83/#84/#85
-> filed for the rest; autolab stopped. Under the [Autolab hub](../autolab.md).
+> torn-line tail-guard (read path) + `triad_resume_under_crash` scenario shipped,
+> #83/#84/#85 filed for the rest; autolab stopped. **2026-07-04 re-review added
+> two REDs** (rows 7–8: the append-side torn tail; the multi-row-transaction
+> class) — class fix = the [primary design](autolab-primary-design.md)'s two
+> ledger walls. Under the [Autolab hub](../autolab.md).
 
 **What this is.** A disaster-recovery tabletop for the self-driving lab — the
 failure-mode map for a loop that must run **weeks unattended on a laptop**. It
@@ -85,12 +88,14 @@ does it need a human?*
 
 | # | Sev | Kink | Fix | Where |
 |---|---|---|---|---|
-| 1 | ~~RED~~ **✅ FIXED 2026-06-24** | Ledger reader intolerant of a torn final line (`read_all`/`parse_line` raw `json.loads`) | `read_all` now tolerates **only** a truncated **trailing** line (the power-pull signature) and still **raises** on an *interior* malformed line — that's corruption, not a torn tail. Falsified RED-when-off + new `torn_ledger_line_tolerated` sim scenario | `ledger.py` reader |
+| 1 | ~~RED~~ **✅ FIXED 2026-06-24** *(read path only — see #7)* | Ledger reader intolerant of a torn final line (`read_all`/`parse_line` raw `json.loads`) | `read_all` now tolerates **only** a truncated **trailing** line (the power-pull signature) and still **raises** on an *interior* malformed line — that's corruption, not a torn tail. Falsified RED-when-off + new `torn_ledger_line_tolerated` sim scenario | `ledger.py` reader |
 | 2 | **RED** | `save_checkpoint` not atomic → power-pull mid-write tears `latest.pt` → stuck lane | **Already fixed on `main` (`f661fd4`)**; the full merge closes it | trainer / checkpoint |
 | 3 | **YELLOW** ([#83](https://github.com/jasonyandell/gomoku/issues/83)) | Arena moves the champion tag **before** the commit (T2) | Move the tag-set to **after** the `verdict` row is durable, **or** make resolve/re-eval idempotent | daemon/arena seam (design) |
 | 4 | ~~YELLOW~~ **✅ BUILT 2026-06-24** | No end-to-end **triad** scenario in the loop sim | New `triad_resume_under_crash` scenario drives propose → train → eval → decide as **one chain** with a power-pull injected at **both** the train and arena tables, each recovered by re-pick | `tests/test_lab_sim.py` |
 | 5 | **YELLOW** | The loop closes on the **gate**, not the **panel** | `EV_ARENA` ("arena-verdict") is satisfied by **any** DONE arena experiment — today the H2H-vs-champion gate, not "eval vs everyone → relative Elo." No `eval_kind` exists, so a contract can't require a **panel** specifically. Thread the [arena-eval-lane](autolab-arena-eval-lane.md) `eval_kind` discriminator into **both** the `eval` row and the `evidence_contract` | arena + researcher-contract seam |
 | 6 | **GREEN** | W&B run-id poisoning on SIGKILL — abandoned `running` runs accumulate (cost/bloat) | **Self-heals** on the next resume via the wandb "run in use" fallback; cosmetic for correctness | W&B resume path |
+| 7 | **RED** *(found 2026-07-04)* | **`append()` after a torn tail concatenates** the next committed row onto the fragment (`a+`, writes blind at EOF): while the mangled line is the tail, every fold **silently drops a committed, fsync'd row** *and* the next append **reuses its `seq`**; once any further row lands it's interior → the fold raises → full-lab brick. The write-path sibling of #1 — the read-path fix alone reopens the class. NB the obvious fix (prepend `\n` to seal the fragment) is **wrong**: it makes the fragment an interior malformed line, which the sim itself asserts must raise | Under the flock, if the file doesn't end in `\n`, **truncate back to the last `\n`** before writing — the fragment is provably uncommitted (`append` only returns after full-line+`\n` write **and** fsync). Plus a sim scenario that drives the **write** path (the existing torn scenario hand-seals with `\n`, stepping around this hole) | `ledger.py` append |
+| 8 | **RED** *(found 2026-07-04)* | **`research.resume` half-decides under a kill**: the watermark event is appended FIRST and ALWAYS, side-effect rows after — a SIGKILL between them records `covers_through_seq` but never applies e.g. the `keep` unblock → the continuation stays BLOCKED forever, the thread never re-fires, no FAILED row exists so `health.scan` never flags it. The docstring's "#1 property" (watermark-first) inverts into a silent permanent deadlock. Same class: the trainer's `result`→followups gap in `daemon.run_daemon` (a kill between them → DONE slice, no continuation, trainer idles invisibly) | **The facts-not-commands wall** ([primary design](autolab-primary-design.md) §1 Wall A): the decision/result row itself carries what it implies; the fold derives the unblock/followups — one fsync'd append IS the whole transaction. Sim invariant: *no multi-row transaction exists*, RED-when-off | `research.py` resume · `daemon.py` |
 
 **Genuinely handled — note it, don't fix it.** Wifi loss is graceful *end to
 end*: the HF push catches and falls back to `local://` + a retry, and the
@@ -107,7 +112,7 @@ for the DR question specifically.
 
 | | Covers (certified, RED-when-off) | Does **not** cover (gap) |
 |---|---|---|
-| **Crash** | true SIGKILL mid-slice (re-pick resumes from `latest.pt`); the **torn trailing line** (#1, fixed + sim-covered 2026-06-24); the **full triad ring** under a power-pull at each table (#4, new scenario 2026-06-24) | an **interior** corrupt ledger line (deliberately still raises — corruption ≠ a torn tail); the **arena tag-move-mid-crash** (#3) |
+| **Crash** | true SIGKILL mid-slice (re-pick resumes from `latest.pt`); the **torn trailing line, read path** (#1, fixed + sim-covered 2026-06-24); the **full triad ring** under a power-pull at each table (#4, new scenario 2026-06-24) | the **write path onto a torn tail** (#7 — the existing torn scenario hand-seals with `\n`); a **kill between the appends of one logical transaction** (#8 — `SimCrash` fires only inside `run_chunk`); an **interior** corrupt ledger line (deliberately still raises — corruption ≠ a torn tail); the **arena tag-move-mid-crash** (#3) |
 | **Network** | HF blip → deferred fallback (T1 kink b) | **real** HF latency / retry behavior |
 | **Resource** | foreign GPU tenant (preflight-deferred retry); the 1h cap; silent-stall detection | **disk-full (ENOSPC)** on append/save |
 | **Loop shape** | first-promotion gating; fold determinism; the era-cross (namespaced champion, no cross-era run) | the **full triad end-to-end in one run** (#4) |
@@ -142,6 +147,37 @@ loop *means* once it restarts — and are tracked as
 [#84](https://github.com/jasonyandell/gomoku/issues/84) (panel-as-distinct-evidence
 via `eval_kind`), and [#85](https://github.com/jasonyandell/gomoku/issues/85)
 (W&B poisoning).
+
+### 2026-07-04 addendum — the independent code review (fresh-eyes design session)
+
+A full independent review re-walked the tables and found **two new REDs** (rows
+7–8 above — the append-side torn tail; the multi-row-transaction class) plus
+these residual **YELLOWs**, banked here so the failure-mode map stays the one
+canonical list. Class fix for rows 3, 7, 8 = the two ledger walls in the
+[primary design](autolab-primary-design.md) §1; sim-coverage gaps are the
+chaos-coverage item of its phase-1 list.
+
+- **Y2 — park-while-running race**: an in-flight slice is still OPEN (no claim
+  rows, by design); a concurrent park appends SUPERSEDED corrections, but the
+  in-flight `result` folds after them, sets DONE, and the followups enqueue a
+  fresh continuation → **a parked lane resurrects** (≥1 wasted slice; with
+  `default_decide` a rising fork can be re-kept, fully undoing the park). Wall A
+  kills the resurrect (derived continuations honor the park at read time);
+  the ≤1-quantum in-flight waste is accepted (review A10).
+- **Y5** — `trainer._find_ckpt_dir` uses unordered `glob` → order-nondeterministic
+  checkpoint resume if a lane's cell ever changed (works today: one lane ≡ one cell).
+- **Y6** — `fuzz()` seeds only a train lane, so all five research invariants are
+  **vacuously green under fuzz**; they're exercised only in hand-built scenarios.
+- **Y7** — `scenario_fold_determinism` folds the same in-memory list twice
+  (trivially passes); no order-sensitivity, correction/result interleaving, or
+  disk-replay-vs-incremental check.
+- **Y8** — the intent wall is in-process convention for a real agentic model
+  (fix = the invocation shape, [primary design](autolab-primary-design.md) §3);
+  `validate_intent` also accepts an intent citing **zero** evidence.
+- Notes: `seq` counts comment/blank lines (harmless as ID, misleading as
+  documented); `append` fsyncs data but not the directory (first-append
+  durability); `rapfi_pool.pick` can surface a raw `queue.Empty` when the pool
+  shrank to zero.
 
 ---
 

@@ -11,8 +11,12 @@ WHEN* (`research.decision_due`), the **typed-intent wall** (`DecisionIntent` →
 decider return the identical type), and the **continuation policy** (exploratory
 forks born BLOCKED, so judgment precedes the next GPU hour). *The wall is built, so
 a Claude `decide=` is now safe to plug in — wiring the **live Claude trigger** is
-the one remaining #61 agent-lane task.* **Deferred** (presentation, not safety): the
-dossier briefing, the `research-lesson` system, the scouts/auditor roles. Full
+the one remaining #61 agent-lane task.* **Deferred**: the `research-lesson` system,
+the scouts/auditor roles. *(**Corrected 2026-07-04**: the dossier was deferred here
+as "presentation, not safety" — that ranking is **reversed**. A vague briefing is
+the one-model-guesses-one-way mess generator; the packet is the researcher's entire
+sensory input and is **cage-readiness** — see
+[autolab-primary-design.md](autolab-primary-design.md) §3.)* Full
 detail in the **Status** section below.
 
 **What this is.** The design note for the autolab's *smart lane* (issue **#61**):
@@ -65,7 +69,7 @@ list of evidence kinds + a budget + kill conditions. Confirmatory example:
   "question": "Does freezing the value head stabilize the teacher shift?",
   "expected_signal": "white loss improves without plies collapse",
   "falsifier": "no anchored improvement OR collapse detector fires",
-  "budget": { "max_slices": 2, "max_wall_seconds": 7200 },
+  "budget": { "max_slices": 2, "max_wall_secs": 7200 },
   "evidence_contract": {
     "required": [ {"kind":"train-result","count":2}, {"kind":"arena-verdict","artifact":"latest"} ],
     "optional": [ {"kind":"training-telemetry"}, {"kind":"external-anchor"} ],
@@ -278,9 +282,18 @@ The load-bearing core (1–3) shipped, each with a falsified sim invariant. Lab 
   `evidence_contract_epistemic_when`, `continuation_blocked_before_decision`,
   `intent_validation_wall`.
 
-**Still deferred** (unchanged from above): the `dossier_plan`/`hydrate` briefing
-assembly (presentation, not safety), the `research-lesson` system, scouts/auditor/
-reviewer-as-role, and the live Claude `decide=` trigger.
+**Still deferred**: the `research-lesson` system, scouts/auditor/
+reviewer-as-role, and the live Claude `decide=` trigger. The
+`dossier_plan`/`hydrate` briefing assembly was deferred here as "presentation,
+not safety" — *(**corrected 2026-07-04**: reversed; the packet is cage-readiness
+and phase-1 work, [autolab-primary-design.md](autolab-primary-design.md) §3)*.
+
+> **Doc/code scar fixed above (2026-07-04, was finding Y4):** this page's budget
+> example previously read `max_wall_seconds`, but `research.decision_due` reads
+> **`max_wall_secs`** — a budget written per the old doc was silently ignored and
+> the fork never wall-clock-parked. A perfect specimen of the vague-harness enemy;
+> the [primary design](autolab-primary-design.md)'s admission-time contract lint
+> (review A11) makes unknown keys fail loudly instead.
 
 ## The doctrine sentence, upgraded
 
