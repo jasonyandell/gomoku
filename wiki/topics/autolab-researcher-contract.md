@@ -4,6 +4,17 @@
 > (#61); core pieces shipped (`actionable()`, research resume-on-evidence),
 > autolab stopped. Under the [Autolab hub](../autolab.md).
 
+**Settled state (2026-06-21).** The load-bearing **safety core (walls 1–3)
+shipped**, each with a falsified sim invariant: the evidence-contract *epistemic
+WHEN* (`research.decision_due`), the **typed-intent wall** (`DecisionIntent` →
+`validate_intent` → `compile_intent`, the only row-builder — Claude and the dumb
+decider return the identical type), and the **continuation policy** (exploratory
+forks born BLOCKED, so judgment precedes the next GPU hour). *The wall is built, so
+a Claude `decide=` is now safe to plug in — wiring the **live Claude trigger** is
+the one remaining #61 agent-lane task.* **Deferred** (presentation, not safety): the
+dossier briefing, the `research-lesson` system, the scouts/auditor roles. Full
+detail in the **Status** section below.
+
 **What this is.** The design note for the autolab's *smart lane* (issue **#61**):
 what researcher-Claude is **handed**, what it is **allowed to emit**, and the
 deterministic walls between the two. It is the concrete realization of the

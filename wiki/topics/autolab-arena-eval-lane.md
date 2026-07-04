@@ -1,8 +1,11 @@
 # The Arena Eval Lane — register a model, run the gamut, read a relative Elo
 
-> **Status: DORMANT** *(2026-07-04)* — design-of-record for the measurement leg;
-> the arena lane ran live 2026-06-19 (crowned the first champions), autolab
-> stopped. Under the [Autolab hub](../autolab.md).
+> **Status: DORMANT** *(2026-07-04)* — design-of-record for the measurement leg.
+> **What ran live vs. what's designed:** the relative **H2H gate** (P4 #59) was
+> built and ran 2026-06-19, crowning the first champions; the **panel/gamut this
+> page specifies** (multi-anchor Rapfi readout + Bradley-Terry Elo fit) is
+> **unbuilt design-of-record** — composition of existing parts, never assembled.
+> Autolab stopped. Under the [Autolab hub](../autolab.md).
 
 **What this is.** The design note for the autolab's *measurement leg* — the third
 member of the **trainer trains · researcher researches · arena evals** triad. It
