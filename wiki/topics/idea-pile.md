@@ -159,8 +159,11 @@ threat "chemistry" (react / catalyze / quench / inhibit) as a learned representa
 VCF/VCT as the exactly-computable boundary; hunt non-line **offensive fields** a line-vocabulary
 is provably blind to.
 **VERDICT — THESIS ALIVE, first probe NEGATIVE, big swing UN-BUILT.** The "rediscover the claw"
-sandbox ran NEGATIVE (a plain CNN beat the relation-general transformer — the blocking task is
-itself a windowed *line*-convolution, so it never pressured non-line vision; pivot pre-approved).
+sandbox (`scripts/claw_rediscovery.py`) ran NEGATIVE (CNN **+10.2 SD** vs relation-model
+**+0.06 SD** — the blocking task is itself a windowed *line*-convolution, so it never pressured
+non-line vision; pivot pre-approved). Load-bearing nuance kept: a mod-5 linear probe hit **27%
+vs a 20% floor** — the relation substrate CAN hold mod-5 structure; the line-shaped task just
+never demanded it.
 The threat-graph + attention architecture is still a moonshot seed. Living homes:
 [molecule-discovery-toolkit.md](molecule-discovery-toolkit.md) (the training-free detectors —
 the recommended next stabs), [the-claw.md](the-claw.md) (the worked defense-axis example),

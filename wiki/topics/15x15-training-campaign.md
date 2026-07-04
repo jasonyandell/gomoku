@@ -21,8 +21,20 @@ findings are hoisted below. Epic: GitHub #21.
    size (wave=64), moving the *same* net from 9×9 → 15×15 (2.8× the spatial compute)
    costs **~nothing** (0.67 ms/wave either way) — per-kernel launch overhead sets
    the floor, and the GPU idled through the 9×9 era. A serious 15×15 net is
-   affordable: 96×8 costs 2.32×, 128×10 costs 4.62× vs 9×9 production eval. (Full
-   scaling table + method in the [archived feasibility page](../_archive/topics/15x15-era-feasibility-and-plan.md) §2.)
+   affordable: 96×8 costs 2.32×, 128×10 costs 4.62× vs 9×9 production eval.
+   The measured table (`scripts/bench_board_scaling.py`, 2026-06-12, torch 2.12.0
+   MPS fp16, idle M5 Max, two runs stable within ~1%):
+
+   | Net @ board | Params | Wave=64 (training regime) | Wave=512 (pure-gen regime) |
+   |---|---|---|---|
+   | 64×4 @ 9×9 (champ arch) | 317k | 94.2k evals/s (0.68 ms/wave) | 426k evals/s (1.20 ms/wave) |
+   | 64×4 @ 15×15 | 415k | 95.7k evals/s — **0.98× (free)** | 191k evals/s (2.24×) |
+   | 96×8 @ 15×15 | 1.45M | 40.6k evals/s (**2.32×**) | 51.1k evals/s (8.34×) |
+   | 128×10 @ 15×15 | 3.08M | 20.4k evals/s (**4.62×**) | 22.5k evals/s (18.9×) |
+
+   Wave=512 ratios are much worse (8.3×/18.9×): big-batch gen leaves
+   dispatch-bound territory and pays real FLOP cost — the optimal wave size
+   must be re-swept per board size; the 9×9 answer doesn't carry over.
 2. **The 9×9 strength era is formally CLOSED.** The v8 champion + `--fpu-reduction-c
    0.45` went **43W-3L-74D over 120 games vs Rapfi** (Gomocup freestyle 2625) across
    100/500/1000 ms tiers — 3 losses total, never blown out. 9×9 freestyle is

@@ -56,6 +56,17 @@ Pairwise (row beats column, +Δelo): control loses all three (−95 vs signal, �
 
 **Next = v6.** vcf-wholeboard (vcf + global-pool) is the new base to beat. Open: does a *fourth* lever (vcf + global-pool + aux) stack cleanly or do the two KataGo levers overlap? A longer, restart-free rerun would settle the muddy middle order; the vcf-wholeboard champion is the natural Rapfi-yardstick + promotion-ESCALATE candidate (Jason's call). Full verdict + standings in [_archive/research-board-v1-v6-verdicts.md](../_archive/research-board-v1-v6-verdicts.md) § "v5 FINAL". Peaks at `sweep_runs/derby_v5/_peaks/<lane>/peak.pt`; H2H at `sweep_runs/derby_v5/round_robin.json`.
 
+## [2026-05-25] Δelo Derby v4 | exact-VCF mate-teacher wins; anchored elo ≠ H2H elo *(restored 2026-07-04 from the rotated v1–v6 verdicts before archive deletion — this journal's only gap)*
+
+Anchored peaks: vcf 1784 / control 1760 / signal 1738 / wholeboard 1718 — but the
+**H2H round-robin inverted the middle**: vcf +31, control LAST (−29 vs +6/−8 for the
+others); control's #2 anchored peak was **overtrain inflation**. Durable method
+lesson: **don't trust an early anchored lead before lanes have equal compute** —
+the verdict is always the post-race H2H. Side datapoint: Rapfi at 9×9 freestyle
+played to ~draw-parity (100ms 50% / 500ms 55% / 1000ms 45%; caveat — Rapfi's ~2625
+is a 15×15 rating), later superseded by the stronger yardsticks (43W-3L-74D,
+20-straight). Carry-forward: the exact VCF mate-teacher, base for v5.
+
 ## [2026-05-24] Δelo Derby v3 | Gumbel cheap-sims generator dominates; fixed-step trainer co-equal with wave (structural wins); called as-is for new contenders
 
 Jason: "come up with more training ideas by learning from those who came before." We mined the surveyed engines (KataGo/KataGomo, Gumbel AlphaZero, Leela) and raced the imports as a unified Derby v3 against the v1/v2 carryovers and a c0 control, on the production multiprocess recipe with the new Δelo/hr hill-climb scheduler.
