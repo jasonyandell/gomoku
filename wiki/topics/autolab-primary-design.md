@@ -3,8 +3,11 @@
 > **Status: LIVE** *(2026-07-04)* — the **PRIMARY target design** for the autolab:
 > the 2026-06 vision completed by the 2026-07-04 design session (the deterministic
 > scheduler, the researcher packet, two new ledger walls, the invocation shape),
-> then hardened by an [adversarial review](autolab-design-adversarial-review.md)
-> whose accepted fixes are folded in below. Where this page and
+> hardened by an [adversarial review](autolab-design-adversarial-review.md), then
+> **unified the same day**: the scheduler collapsed to four rules (elo steers only
+> through decisions), the **TV** (§5) and **compounding lessons** (§6) designed in,
+> the worker designed (§7) — **the design is complete; nothing is left designed-
+> for-later** (implementation follows the build order below). Where this page and
 > [autolab-architecture.md](autolab-architecture.md) (the as-BUILT record of
 > P1–P7) disagree, **this page wins**. Per-piece built-state is marked inline.
 > Under the [Autolab hub](../autolab.md).
@@ -17,9 +20,11 @@
 > like an OS scheduler, not like an AI, decides which idea gets the next GPU
 > hour. Claude is woken only when a decision is actually due, handed a briefing
 > packet, and may only answer in a typed form: *propose an idea* or *park one*.
-> A chaos simulator proves the walls hold. And whether it ever produces a great
-> gomoku player doesn't matter — the product is what we learn and write down.
-> The lab is a stable factory for that.
+> Settled findings become one-line **lessons** the walls enforce — the lab never
+> silently re-argues a dead idea. A one-page **TV** shows what's cooking, what's
+> queued, and what got learned overnight. A chaos simulator proves the walls
+> hold. And whether it ever produces a great gomoku player doesn't matter — the
+> product is what we learn and write down. The lab is a stable factory for that.
 
 Every piece below is individually simple and exists to close a specific, named
 failure mode. The composition is what's new, not the parts.
@@ -52,7 +57,7 @@ completed it:
 | **Trainer** | guaranteed singleton; ≤1h slices; pick → `git archive` + per-SHA uv env → run → deliver → append | BUILT + LIVE-PROVEN 2026-06-19 |
 | **Arena** | mac-native gomocup: cheap H2H **gate** every slice + heavy anchor-pinned **panel** at coarse cadence | gate BUILT; panel DESIGN ([arena lane](autolab-arena-eval-lane.md), #84) |
 | **Researcher** | *resume-on-evidence* (never "waits"): evidence contract fires → packet in → typed intent out | walls BUILT ([contract](autolab-researcher-contract.md)); packet + live Claude are phase-1/2 work (§3) |
-| **Worker** | works GitHub issues | **phase-2+** — does not gate the cage |
+| **Worker** | works GitHub issues; merge SHA becomes a citable, trainable `commit` | DESIGNED (§7) — built last; does not gate the cage |
 
 **Correction 1 (2026-06-20):** "waits for results" is deleted — nothing sleeps
 holding a thread; a fresh invocation folds the ledger when an evidence contract
@@ -129,52 +134,57 @@ budget** — never evicted mid-contract, never granted more without a decision.
 "It might take 2 hours to reach a verdict rather than one — fine." The contract
 and the ladder quantum are the same object seen from two sides.
 
-**Δelo/Δt governs less than the slogan implies — deliberately.** Measured
-Δelo/Δt is exactly the signal that doesn't exist for young ideas (gate n =
-12–40 games; the panel is unbuilt). So the roles split three ways:
+**The whole policy is four rules** *(2026-07-04 unification pass — this
+replaces the earlier v0-cut + Δelo-bucket scheduler; see the
+[review addendum](autolab-design-adversarial-review.md))*:
 
-- the **scheduler** decides WHEN / HOW MUCH — pool split, ladder rung, age.
-  Coarse, humble, noise-free.
-- the **researcher** decides WHETHER — keep/park at contract boundaries, where
-  Δelo evidence is actually *read*, against a pre-stated falsifier.
-- **Δelo/Δt as a number** ranks only *production-pool* lanes and informs
-  *rung promotion* — the places where n supports even coarse buckets
-  {rising, flat, falling, unknown} (Wilson-gated; small n → `unknown` → fall
-  back to ladder + age). Until the panel (#84) exists, this input is nearly
-  decorative and the honest v0 scheduler is **ladder + age + contracts** — do
-  not pitch it as a bandit yet ([review](autolab-design-adversarial-review.md) A6).
+1. **Quantum:** a running slice finishes; nothing preempts mid-slice
+   (clean-exit rule).
+2. **Share:** if a runnable exploration item exists **and** exploration's share
+   of the last **M** GPU-hours (from result-row `wall_s`; M fixed) is below the
+   target **T** (default ⅓) → run the **oldest** admitted exploration item.
+   FIFO by admission seq — age *is* the order, so no separate aging mechanism.
+   The bounded window makes catch-up bursts structurally impossible (subsumes
+   review A1's bounded credit).
+3. **Idle task:** otherwise, run the champion continuation.
+4. **Admission:** at most **K** immature lanes in flight; a new proposal must
+   pass the contract lint (unknown evidence kinds / budget keys / kinds with no
+   live producer are rejected loudly — A11), the **lessons wall** (§6), and
+   **SMOKE** — which is an *admission check* (does it run, seconds, no GPU
+   hour), not a queue item. Then it queues FIFO.
 
-**Review-forced details** (each closes a named attack): the deficit counter
-carries **bounded credit** (≈ a few quanta) so an empty exploration queue never
-banks a champion-starving catch-up burst (A1); every contract carries a
-**decision deadline** — an overdue decision auto-parks via the dumb decider and
-escalates `needs_jason`, so a stuck decision can't leak a WIP slot forever
-(A2); contracts are **linted at admission** — an evidence kind with no live
-producer (e.g. `panel` before #84) is rejected loudly, the Y4 strict-keys rule
-generalized (A11); aging uses **coarse hour-buckets** and the pick records its
-clock input (A12).
+Every contract carries a **decision deadline**: overdue → the dumb decider
+auto-parks + `needs_jason` escalation, so a stuck decision can't leak a WIP
+slot (A2; auto-park is reversible by a correction row). The clock is an
+explicit input — `pick(fold, now)` — and the result row records it (A12).
 
-**The v0 minimal cut (A7).** At today's scale (one GPU, a handful of concurrent
-ideas) most of the machinery above is scale-insurance. v0 is:
+**Where did Δelo/Δt go? Into the decisions — the derby lives there, not in
+queue math.** The scheduler never reads a performance number. Measured Δelo/Δt
+steers spend through exactly one channel: **keep/park at contract boundaries**
+— production lanes run `continuous` until a decision parks them; exploratory
+forks are born BLOCKED until a decision frees them. That is the *same* lever
+system humans and the researcher use, so there is one steering channel total,
+and it is honest at small n (a judgment call against a pre-stated falsifier,
+not a queue ranked by noise). This resolves review A6 permanently rather than
+deferring it: elo never enters the pick function, panel or no panel. The
+**maturity ladder** likewise stops being a priority class and becomes pure
+**budget vocabulary** — SCOUT/PILOT/ADJUDICATE name contract sizes, and rung
+promotion is a researcher decision, not a queue effect.
 
-1. champion continuation as the idle task;
-2. exploration-first whenever a runnable exploration item exists *and*
-   exploration's trailing share < its target (default ⅓), measured over
-   result-row `wall_s`;
-3. within exploration: ladder rung, then FIFO + age;
-4. the verdict-guarantee + decision deadline from the contracts already built.
+What this consciously gives up: proportional ranking *among* production lanes.
+With one GPU and one champion lineage per era that case is empty; if two
+production lanes ever contend, FIFO alternates them — accepted. The policy
+remains **the single pick policy** behind the existing `priority_fn` seam
+(`actionable()` discipline — never a second one).
 
-Deficit sophistication, per-rung weights, and Δelo-ranked production wait for
-their named triggers (queue contention; the panel). The policy stays behind the
-existing `priority_fn` seam and remains **the single pick policy**
-(`actionable()` discipline — never a second one). One free consequence of
-determinism worth building: the queue is **forecastable** — "when will my idea
-reach its verdict" is computable at propose time and belongs in the packet as a
-**schedule projection** (recomputed each fold, labeled an estimate, never a
-promise — A3).
+Determinism's free gift: with FIFO + share the queue is trivially
+**forecastable** — "when does my idea reach its verdict" ≈ queue position ×
+quantum ÷ T, recomputed each fold. The **schedule projection** goes in the
+packet and on [the TV](#5--the-tv-the-dashboard-is-a-third-window-on-the-fold)
+(an estimate, never a promise — A3).
 
-The operator keeps an override: a **human-only** correction row that bumps a
-rung — audit-visible, outside the LLM's reach.
+The operator keeps an override: a **human-only** correction row that reorders
+or re-budgets a lane — audit-visible, outside the LLM's reach.
 
 ## §3 — The researcher: packet in, typed intent out — walls BUILT; packet is phase-1 work
 
@@ -199,12 +209,15 @@ Contents, in priority order — this is "set Claude up for success":
 2. **The refuted trail** — what was tried, what killed it, evidence refs —
    **bounded** (top-K recent + per-thread summary; the wiki carries the long
    tail — A8), or the researcher re-proposes its greatest misses forever.
-3. **The scoreboard** — per-lane rung, budget spent/remaining, Δelo bucket, and
-   the schedule projection (§2).
-4. **Immutable citations** — HF *revision + digest* (never the moving
+3. **The standing lessons** — every active `lesson` row (§6), one line each:
+   the cross-thread half of "react to your own past." The refuted trail is
+   *this thread's* memory; the lessons are *the lab's*.
+4. **The scoreboard** — per-lane rung, budget spent/remaining, last verdict,
+   and the schedule projection (§2).
+5. **Immutable citations** — HF *revision + digest* (never the moving
    `champion` tag), wiki *commit + path* (never "current wiki"), telemetry
    snapshot refs. Blessed 2026-07-04.
-5. **The wiki doorway** — cross-thread synthesis stays **prose → wiki,
+6. **The wiki doorway** — cross-thread synthesis stays **prose → wiki,
    executable → ledger**; the packet links the pages, it doesn't inline them.
 
 **The invocation shape IS the cage for a real model.** `validate_intent` walls
@@ -229,36 +242,140 @@ operating points + the Elo anchor-pin rule are a **protected instrument** —
 a researcher may be measured by the yardstick, never move it. The panel is
 also what upgrades the scheduler's Δelo input from decorative to real (§2).
 
+## §5 — The TV: the dashboard is a third window on the fold — DESIGN
+
+There is **one fold and three windows onto it**: the worker's (`pick`), the
+researcher's (the packet), and the human's (**the TV**). The dashboard is not a
+new subsystem — it is `board(state, now, since_seq) → Board`, a pure projection
+over the same fold the machines act on, so **watching the TV is watching the
+truth** (no second bookkeeping to drift). Refresh = re-fold; zero state; any
+renderer (terminal `autolab board`, an auto-refreshing web page riding the
+existing `gomoku-web` FastAPI, a phone) draws the same `Board` object.
+
+The panels answer Jason's actual questions:
+
+| "Ooh —" | Panel | Contents |
+|---|---|---|
+| what's cooking? | **NOW** | the running slice: lane, rung, elapsed vs cap, PID-alive, per-era champion + HF rev |
+| what's queued? | **ON DECK** | runnable items in true pick order (the board calls the same `pick`), each with its schedule projection; the admission queue below |
+| what needs a brain? | **THE DESK** | decisions due / in-flight; `needs_jason` floats to the top |
+| how's everyone doing? | **SCOREBOARD** | per-lane: rung, budget spent/left, last gate verdict, review policy, thread link |
+| what got learned overnight? | **OVERNIGHT** | everything since seq N: slices done, verdicts, decisions **with rationales**, lessons filed (§6, linked to their wiki pages), champions crowned, escalations |
+| is it healthy? | **VITALS** | daemon locks, last-append age, `health.scan` alerts, GPU tenant status |
+
+**OVERNIGHT is free because the ledger is append-only**: "since I last looked"
+is just `seq > watermark` — the watermark is the viewer's (a query param / a
+client cookie), never lab state. The same panel doubles as the **conversion
+audit** the researcher contract wanted (repeated failures with no lesson,
+lessons never consulted, decisions without evidence refs) — the auditor is a
+TV panel, not a role.
+
+## §6 — Lessons compound: the lab must never re-argue a settled question — DESIGN
+
+The knowledge loop, end to end. Split by the doctrine's existing rule —
+**executable → ledger, prose → wiki** — and consumed deterministically, which
+is what earns the ledger half its place:
+
+- **A `lesson` row** (new row type; appended only via `compile_intent` from an
+  ADJUDICATE-tier decision, or by Jason):
+  `{id, scope: [tags], claim, status: supported|refuted|retired,
+  evidence_refs, wiki: commit+path}`. One line, machine-checkable. Corrections
+  retire or supersede a lesson like any other row — a lesson is a standing
+  *verdict*, not scripture.
+- **The prose lives in the wiki** — the run's narrative, the why, the caveats —
+  and the lesson row **cites the wiki page at a commit**. The wiki stays the
+  compounding synthesis layer; the ledger carries only the one-liner a
+  deterministic check can consume.
+- **The lessons wall (admission-time, the deterministic consumer).** Every
+  proposal declares `scope` tags (hypothesis-class labels — e.g.
+  `white-domination`). `validate_intent` **rejects** a proposal whose scope
+  intersects a `refuted` lesson — *unless* the intent explicitly carries
+  `challenges: <lesson-id>` with a rationale. Silent re-proposal of a dead idea
+  is impossible; **deliberate re-litigation is loud, cited, and allowed** —
+  that's science, and the escape hatch is what keeps the wall from fossilizing
+  a wrong lesson.
+- **The packet always carries the active lessons** (they're one-liners, bounded
+  by nature) — so the researcher tags its proposals *knowing* the standing
+  verdicts, and reacts to its own past instead of repeating it.
+
+Honest limit: the wall is as good as the tagging — a mistagged proposal slips
+past. Mitigations, all cheap: the packet shows the lesson list at propose time;
+the TV's OVERNIGHT/audit panel surfaces proposals with no scope tags and
+lessons that never matched anything; and the reviewer *trigger* (a decision
+that smells of self-confirmation) escalates to Jason. The wall converts the
+failure from *silent and systemic* to *visible and case-by-case* — that is the
+standard the whole cage holds itself to.
+
+## §7 — The worker lane: designed now, built last
+
+No hand-waving left: the worker is the existing `gh` issue flow
+(`gh_worktree.py` / ready-queue labels) run as a lane. The researcher may emit
+a `propose-work` intent (compiled to a `worker` experiment row + a GitHub
+issue); a worker invocation claims the issue, implements in an isolated
+worktree, lands via the normal merge gate, and the **merge commit SHA is the
+result row** — which makes the new code a *citable, trainable `commit`* for a
+follow-up training proposal. That closes the last loop: research → code →
+training → evidence, all through the one ledger. Authority boundary unchanged:
+the worker **cannot declare scientific success** (only the arena produces
+measurements) and cannot touch protected-instrument code paths. It is built
+last because nothing else depends on it — not because it is undesigned.
+
 ## The decisions of record (blessed 2026-07-04)
 
-1. **Scheduler**: deterministic, derby-style, as §2. Researcher-priority is OUT.
+1. **Scheduler**: deterministic, as §2. Researcher-priority is OUT.
 2. **Evidence cites immutable identities** — HF revision + digest, git
    commit/path; only the gate moves the champion tag, and the tag-move lands
    AFTER the verdict commit or is idempotent (§1 Wall B; #83).
 3. **"Gomocup" = gate + panel, split** (§4; #84).
 4. **"Waits" = resume-on-evidence** — nothing sleeps holding a thread.
-5. **Worker lane is phase-2+** — does not gate the cage.
+5. **Worker lane is designed (§7), built last** — does not gate the cage.
 
-## Phase-1 finish line (cage-readiness), in order
+Added by the same-day unification pass (Jason's directive: *no parts of the
+design left for future us — implementation will follow design*):
 
-The finish line is **traces you can trust**, not walls complete:
+6. **The scheduler never reads a performance number** — the derby lives in
+   keep/park decisions; four rules total; the ladder is budget vocabulary, not
+   a priority class; SMOKE is an admission check, not a queue item.
+7. **The TV is a design piece** (§5) — one fold, three windows; the auditor is
+   a TV panel, not a role.
+8. **Lessons are facts** (§6) — `lesson` rows consumed by an admission wall
+   with a loud `challenges:` escape; prose compounds in the wiki; the packet
+   always carries the standing lessons.
+
+## The build order (the design is complete; implementation is staged)
+
+Nothing below is designed-later — every item is specified above or in its
+linked page. The order optimizes for **traces you can trust, then eyes, then
+the animal**:
 
 1. **The two ledger walls** (§1) + the torn-tail **truncate** fix
    ([DR rows 7–8](autolab-dr-tabletop.md)) — so a trace is never a lie about
-   what happened.
-2. **Scheduler v0** (§2 minimal cut) — so GPU allocation is replayable and
-   Claude-independent.
-3. **Packet v0** (§3) — thread memory, refuted trail, immutable refs,
-   schedule projection.
-4. **The invocation shape** (§3) — OS-permissions wall + the doctrine
-   paragraph stating it plainly.
+   what happened. Lands with its sim invariants (no multi-row transaction;
+   kill-anywhere → obligations unchanged).
+2. **The TV** (§5) — `board()` over the existing fold + a terminal and web
+   renderer. Cheap, and it is the best debugging instrument for everything
+   after it.
+3. **The scheduler** (§2, four rules) — replaces the priority-desc pick;
+   `actionable()` keeps asserting single-pick-policy agreement.
+4. **The packet + lessons** (§3 + §6) — `dossier_plan`/`hydrate`, the `lesson`
+   row, the admission lessons-wall, scope tags. Same-hash-after-death purity
+   proof; each wall falsified RED-when-off.
+5. **The invocation shape** (§3) — OS-permissions wall + the doctrine
+   paragraph stating it plainly; the A9 control-plane/data invariant asserted.
+6. **The live Claude `decide=`** — phase 2 begins: real experiments, real
+   traces; the wiki's lab pages start compounding (§6 prose half).
+7. **The panel** (#84, [arena lane](autolab-arena-eval-lane.md)) — the
+   absolute-ish yardstick; upgrades what decisions (not the scheduler) see.
+8. **The worker lane** (§7) — closes research → code → training.
 
-Then phase 2: plug the live Claude `decide=` in and let real traces drive
-everything else. **Deferred until traces justify** (the contract's own
-discipline): the panel build (#84), worker lane, scouts/reviewer-as-role/
-auditor, the research-lesson system. The standing caution: the cage is already
-more certified than the animal is real — after this list, resist further
-wall-building until real decision traces exist.
+**Rejected, with reasons — not deferred** (the review's committee-attack,
+A7's spirit): *scouts* and *reviewer-as-a-role* (one bounded researcher + the
+protected arena **is** the independent check; the reviewer *trigger* on
+self-confirmation escalates to Jason); *auditor-as-a-role* (it's the TV's
+OVERNIGHT/audit panel, §5); *a separate research-lesson subsystem* (unified
+into §6's lesson rows + wiki prose). The standing caution survives: the cage
+is more certified than the animal is real — past this list, new walls need a
+real trace pointing at them.
 
 ## Cross-refs
 

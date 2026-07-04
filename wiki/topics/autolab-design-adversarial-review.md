@@ -17,6 +17,21 @@ is ladder + age + contracts; don't market a bandit you can't measure).
 House rule this page serves (memory: `feedback-challenge-ideas`): a design is
 banked with its strongest counter-arguments attached, not as a sales page.
 
+> **Same-day addendum (2026-07-04, the unification pass).** Jason's directive —
+> *no parts of the design left for future us* — pushed the design past several
+> dispositions below, always by **unifying rather than adding**:
+> **A1** (bounded credit) is now structural — the share is computed over a
+> bounded window M, so there is no credit to bound. **A6** (Δelo honesty) is
+> resolved permanently, not scoped: the scheduler **never** reads a performance
+> number; the derby lives in keep/park decisions — one steering channel. **A7**
+> (v0 cut with named triggers) is superseded: the simple form is **the** form
+> (four rules); deficit counters, rung-priorities and Δelo-ranked pools are
+> deleted, not deferred — the ladder is budget vocabulary only, SMOKE moved to
+> admission. **A8**'s bound gains a second layer: cross-thread memory rides
+> one-line `lesson` rows (design §6), which are bounded by nature. The
+> **auditor residual** below is closed: it is the TV's OVERNIGHT/audit panel
+> (design §5). All per [autolab-primary-design.md](autolab-primary-design.md).
+
 ## The attacks
 
 | # | Attack | Verdict | Disposition |

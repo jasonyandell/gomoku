@@ -6,6 +6,35 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Autolab primary design UNIFIED — complete, TV + lessons designed in
+
+Jason's directive: *refine/simplify/unify; no parts of the design left for
+future us — implementation will follow design.* Same-day pass over
+[topics/autolab-primary-design.md](topics/autolab-primary-design.md):
+
+- **Scheduler collapsed to four rules** (quantum · bounded-window share ·
+  champion-as-idle-task · admission). Deleted, not deferred: deficit counters,
+  rung-as-priority, Δelo-ranked pools, aging-as-mechanism (FIFO by age IS the
+  order), SMOKE-as-queue-item (now an admission check). **The scheduler never
+  reads a performance number** — the derby lives in keep/park decisions; the
+  ladder is budget vocabulary.
+- **NEW §5 The TV**: dashboard = a third window on the one fold (worker/pick ·
+  researcher/packet · human/TV); panels NOW / ON DECK / THE DESK / SCOREBOARD /
+  OVERNIGHT / VITALS; overnight diff = `seq > watermark`, free from
+  append-only; the auditor role is a TV panel.
+- **NEW §6 Lessons compound**: `lesson` rows (executable one-liners, ledger) +
+  wiki prose (cited at commit+path) + the **admission lessons-wall** (scope-tag
+  intersection with `refuted` lessons rejects, `challenges:<id>` re-litigates
+  loudly) + lessons always in the packet.
+- **NEW §7 Worker**: designed now (merge SHA = citable trainable commit),
+  built last.
+- Finish line → an 8-step **build order**; scouts/reviewer-as-role/
+  auditor-as-role/separate-lesson-subsystem **rejected with reasons**.
+- Blast radius: [review page](topics/autolab-design-adversarial-review.md)
+  same-day addendum (A1/A6/A7/A8 dispositions superseded by unification);
+  [researcher-contract](topics/autolab-researcher-contract.md) deferred-list
+  resolved; [hub](autolab.md) re-blurbed.
+
 ## [2026-07-04] Autolab PRIMARY DESIGN banked + adversarial review (design session)
 
 The fresh-eyes design session (Jason + Claude, working from the 2026-07-04

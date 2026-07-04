@@ -11,8 +11,12 @@ WHEN* (`research.decision_due`), the **typed-intent wall** (`DecisionIntent` →
 decider return the identical type), and the **continuation policy** (exploratory
 forks born BLOCKED, so judgment precedes the next GPU hour). *The wall is built, so
 a Claude `decide=` is now safe to plug in — wiring the **live Claude trigger** is
-the one remaining #61 agent-lane task.* **Deferred**: the `research-lesson` system,
-the scouts/auditor roles. *(**Corrected 2026-07-04**: the dossier was deferred here
+the one remaining #61 agent-lane task.* **Deferred**: ~~the `research-lesson` system,
+the scouts/auditor roles~~ *(resolved 2026-07-04 — lessons are **designed in**
+as `lesson` rows + an admission wall,
+[primary design §6](autolab-primary-design.md); scouts/reviewer-as-role are
+**rejected** and the auditor is the TV's audit panel, primary design §5/build
+order)*. *(**Corrected 2026-07-04**: the dossier was deferred here
 as "presentation, not safety" — that ranking is **reversed**. A vague briefing is
 the one-model-guesses-one-way mess generator; the packet is the researcher's entire
 sensory input and is **cage-readiness** — see

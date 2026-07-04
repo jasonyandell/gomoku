@@ -66,7 +66,12 @@ Three lanes fold onto one ledger spine; a fourth (worker) does the GPU work.
   the researcher packet promoted to cage-readiness, two ledger walls
   (facts-not-commands; champion-tag-as-projection), the invocation shape — and
   immediately [adversarially reviewed](topics/autolab-design-adversarial-review.md)
-  (12 attacks; v0 minimal cut + Δelo-honesty were the big outcomes).
+  (12 attacks). A same-day **unification pass** then made the design COMPLETE:
+  the scheduler collapsed to four rules (elo steers only through keep/park
+  decisions), **the TV** (dashboard = a third window on the fold) and
+  **compounding lessons** (`lesson` rows + admission wall + wiki prose)
+  designed in, the worker designed; scouts/reviewer-as-role/auditor-as-role
+  **rejected, not deferred**.
 - **Now (DORMANT):** the loop is stopped; the primary design is the relight
   plan. The live-status source of truth for the racing it drove is the
   [Derby hub](derby.md) + [Ops hub](ops.md).
@@ -75,7 +80,7 @@ Three lanes fold onto one ledger spine; a fourth (worker) does the GPU work.
 
 | Page | Role |
 |---|---|
-| [autolab-primary-design.md](topics/autolab-primary-design.md) | **The PRIMARY design (start here)** — the 2026-07-04 target design: OS-style deterministic scheduler, the researcher packet, the two ledger walls, the invocation shape. Wins over any page it disagrees with. |
+| [autolab-primary-design.md](topics/autolab-primary-design.md) | **The PRIMARY design (start here)** — the 2026-07-04 target design, COMPLETE (nothing designed-for-later): the four-rule deterministic scheduler, the two ledger walls, the researcher packet, **the TV**, **compounding lessons**, the invocation shape, the worker. Wins over any page it disagrees with. |
 | [autolab-design-adversarial-review.md](topics/autolab-design-adversarial-review.md) | **The red-team of the primary design** — 12 attacks, verdicts, what got fixed vs. scoped (A1–A12). |
 | [autolab-doctrine.md](topics/autolab-doctrine.md) | **The why** — the thesis that decides whether a change belongs (hard walls around a sandbox). |
 | [autolab-architecture.md](topics/autolab-architecture.md) | **The what as BUILT** — the ledger-spine record of P1–P7 (steered by the primary design where they differ). |
