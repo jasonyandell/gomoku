@@ -27,7 +27,8 @@ frontier went quiet late May while work moved to 15×15 + VCT-science.
 |---|---|---|
 | [ops/gpu-queue.md](ops/gpu-queue.md) | Order GPU-serial work (the two-queue scheduler doctrine — cited by the `gomoku-research-lab` skill) | **doctrine LIVE**, listed lanes closed |
 | [ops/best-cells.md](ops/best-cells.md) | Look up the current best cell per reference point (the bests registry) | **LIVE registry**, last promote 2026-05-23 (9×9 perf paused) |
-| [ops/experiment-ledger.md](ops/experiment-ledger.md) | The **Training-Quality Promotion Gate** + receipt schema — the rule you follow to promote | **gate LIVE**, receipts historical |
+| [ops/promotion-gate.md](ops/promotion-gate.md) | The **Training-Quality Promotion Gate** — the rule a behavior-changing perf receipt must satisfy to `promote` | **LIVE doctrine** (extracted 2026-07-04) |
+| [ops/experiment-ledger.md](ops/experiment-ledger.md) | Receipt schema + the perf receipts — live intake for new receipts (dated era headers) | **intake LIVE**, May campaign frozen-in-place |
 | [ops/test-ledger.md](ops/test-ledger.md) | The **Standard Gates** (`uv run pytest -q`, CPU smoke) before promotion | **gates LIVE**, rows a May-22 snapshot |
 | [ops/baselines.md](ops/baselines.md) | The perf **benchmark cookbook** — reusable command surfaces + dated baseline rows | **LIVE commands**, last row 2026-05-23 |
 | [ops/research-board.md](ops/research-board.md) | The Δelo Derby verdict board (recipe-race lever findings) | lever findings durable; **"current" frozen at v9 (05-27)** — needs a June/15×15 refresh |
@@ -43,7 +44,7 @@ frontier went quiet late May while work moved to 15×15 + VCT-science.
 ## The operating model (how these fit together)
 
 *(Historical operating model — the autonomous derby is **stopped**; the gate/promotion doctrine below is retained for the next loop.)* Run work through the **[Derby](derby.md)**: propose a lane → run a GPU slice →
-gate it. The gate is the `experiment-ledger` TQ rule + the `test-ledger` Standard
+gate it. The gate is the `promotion-gate` TQ rule + the `test-ledger` Standard
 Gates; promotion updates `best-cells`; the derby verdicts live on
 `research-board`. The doctrine pages ([research-lab-charter](topics/research-lab-charter.md),
 [research-lab-session-runbook](topics/research-lab-session-runbook.md)) live in

@@ -41,7 +41,7 @@ The perf lab spent a cycle maximizing generation throughput. Its headline R-TRAI
 
 That number is real and reproducible. The two levers it stacks (a fp16 worker eval forward, and a lowered `sgd_per_position` to free MPS for the workers) are independently verified, and they compose multiplicatively almost exactly as predicted — that result has its own page, [m5-max-fp16-and-throughput-regimes.md](m5-max-fp16-and-throughput-regimes.md) (Finding 3). The perf lab did its job: it found a real lever and measured it honestly *for what it measured*.
 
-What it measured was **generation throughput in a 120-second window**. It was correctly filed `needs_repeat` under the [Training-Quality Promotion Gate](../ops/experiment-ledger.md#training-quality-promotion-gate) — the lab does not certify training-behavior knobs for production, it surfaces them. The handoff to a real run was the next step. That's the run this page is about.
+What it measured was **generation throughput in a 120-second window**. It was correctly filed `needs_repeat` under the [Training-Quality Promotion Gate](../ops/promotion-gate.md#training-quality-promotion-gate) — the lab does not certify training-behavior knobs for production, it surfaces them. The handoff to a real run was the next step. That's the run this page is about.
 
 ## What the real run did
 

@@ -5,6 +5,27 @@ consistent heading so future sessions can scan recent changes with simple tools.
 
 Older eras: [2026-05 archive](_archive/log-2026-05.md), [log-2026-06](_archive/log-2026-06.md) (rotated out 2026-07-04).
 
+## [2026-07-04] Extracted the TQ Promotion Gate out of the experiment-ledger into its own live page
+
+Per the standing curation verdict (live doctrine trapped inside frozen
+evidence): the **Training-Quality Promotion Gate** — the rule a behavior-changing
+perf receipt must satisfy to `promote`, cited by 10+ pages — is now its own page
+[ops/promotion-gate.md](ops/promotion-gate.md), banner **LIVE**, gate text moved
+verbatim (~1.4 KB, five criteria unchanged) with a dated provenance line. The
+[experiment-ledger.md](ops/experiment-ledger.md) gate section is now a 3-line
+pointer; its head was restructured to lead with a LIVE-intake preamble ("new
+receipts append at the bottom under dated era headers", per curation.md routing
+table) then a `## May 2026 campaign … ARCHIVED-IN-PLACE, frozen evidence` marker
+above the 44 receipts. "ARCHIVED-IN-PLACE" now sits in the first 10 lines
+(exempts the file from the lint's >60 KB rotation-smell warning) while staying
+honest — worded "campaign section archived-in-place; intake live", because the
+file *is* still the live receipt intake. Retargeted 8 gate-specific links across
+6 pages (ops.md ×2, ops/frontier.md ×2, ops/status.md, and the three
+`#training-quality-promotion-gate` anchor links in perf-bench-vs-real-training-cost,
+m5-max-fp16-and-throughput-regimes, wall-clock-to-elo-metric) from the ledger to
+the new page; left ~30 evidence/receipt links to the ledger untouched. Lint:
+**0 errors, 0 warnings** (rotation warning cleared).
+
 ## [2026-07-04] First Query-loop filing: white-VCT rail redux → idea-pile addendum
 
 First real use of the new [curation.md](curation.md) § Query rule. Jason

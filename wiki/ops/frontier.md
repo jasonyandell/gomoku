@@ -17,7 +17,7 @@ This page is the human-readable board. The frontier lab extension claims lanes f
 | Baseline receipts and artifact convention | completed | done | code | Done in run `20260522T054739Z`; repeat only when WL5 is idle if absolute MPS baseline numbers matter. |
 | M5 Max production self-play contour | completed | done | gpu | Done in run `20260522T054739Z`; promote native small 8w8g sims400 wave64 as throughput default. |
 | Core ML / ANE residency rail proof | blocked | blocked | gpu | Re-run only when `sudo -n true` passes; capture fresh Vision positive control plus CPU_ONLY negative and CPU_AND_NE cells. |
-| Training quality promotion gates | completed | done | cpu | Done; use `wiki/ops/experiment-ledger.md` gate for behavior-changing perf receipts. |
+| Training quality promotion gates | completed | done | cpu | Done; use the gate in `wiki/ops/promotion-gate.md` for behavior-changing perf receipts. |
 | Perf wiki control room curation | completed | done | wiki | Done; stale active-run claims trimmed after manual recovery. |
 | Outer self-play loop profiling | completed | done | cpu | Done in run `20260522T061713Z`; reject/no-op for post-search Python native pass. |
 | Production engine-overlap experiment | blocked-on-ane-residency | blocked | gpu | Do not launch until ANE proof or explicit CPU-only isolation candidate exists. |
@@ -43,4 +43,4 @@ This page is the human-readable board. The frontier lab extension claims lanes f
 
 ## Promotion Rule
 
-A lane advances only with a receipt: hypothesis, baseline command, candidate command or blocker, hardware/env, metrics, artifacts, confidence/noise caveat, decision (`promote`, `reject`, `blocked`, or `needs_repeat`), and next action. Behavior-changing perf changes must also satisfy the Training-Quality Promotion Gate in `wiki/ops/experiment-ledger.md`.
+A lane advances only with a receipt: hypothesis, baseline command, candidate command or blocker, hardware/env, metrics, artifacts, confidence/noise caveat, decision (`promote`, `reject`, `blocked`, or `needs_repeat`), and next action. Behavior-changing perf changes must also satisfy the Training-Quality Promotion Gate in `wiki/ops/promotion-gate.md`.

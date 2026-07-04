@@ -247,7 +247,7 @@ lane**; it is the implementation follow-up this page justifies.
 
 **A wall-clock-to-elo win with degraded validation CE is not a win.** This is
 not optional — it is what separated "real" from "gamed" in LF1, and it is the
-named [Training-Quality Promotion Gate](../ops/experiment-ledger.md#training-quality-promotion-gate)
+named [Training-Quality Promotion Gate](../ops/promotion-gate.md#training-quality-promotion-gate)
 the lab already runs behavior-borderline knobs through.
 
 - **Gate metric:** `val/policy_ce` evaluated against the named fixed archive
