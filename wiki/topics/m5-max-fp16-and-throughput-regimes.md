@@ -1,5 +1,10 @@
 # M5 Max self-play eval on MPS: bandwidth vs dispatch regimes (and the fp16-on-MPS reversal)
 
+> **Status: LIVE (2026-05-23).** Canonical owner of the fp16-on-MPS reversal
+> finding. **Caution:** Finding 3's throughput compound is a *generation* win — in
+> a real training run that same recipe runs away; read its cautionary epilogue,
+> [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md).
+
 *Findings from the gomoku AlphaZero perf lab on 2026-05-23. Hardware: MacBook Pro Mac17,6, Apple M5 Max, 48 GB, macOS 26.4.1. PyTorch 2.11.0 with `Conv2d + BatchNorm2d` fused for inference. Workload: ResNet-style policy/value network, MCTS-driven self-play in this repo's `gomoku` module.*
 
 This page documents three findings about PyTorch-on-MPS eval throughput on Apple silicon that surprised us, contradict prevailing folk wisdom, and (as far as we've been able to find) are not in Apple's published docs. Numbers are reproducible from the receipts in this repo; commands inline.
@@ -195,6 +200,7 @@ The session narrative is in [`wiki/ops/perf-log.md`](../ops/perf-log.md) under t
 
 ## Cross-refs
 
+- [perf-bench-vs-real-training-cost.md](perf-bench-vs-real-training-cost.md) — **the cautionary epilogue to Finding 3.** The +152% throughput compound this page measured honestly as a *generation* win became an unbounded per-epoch runaway in a real training run once the replay buffer filled. Read it before treating any throughput compound here as a training-speed claim.
 - [research-lab-charter.md](research-lab-charter.md) — the lab's mission, autonomy boundaries, and stop-gates triage.
 - [m5-max-as-mainframe.md](m5-max-as-mainframe.md) — parent philosophy: treat the chip as a knowable mainframe and tune it specifically.
 - [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — what was already optimized in our MCTS before this cycle (saves reviewers from re-suggesting known-done work).

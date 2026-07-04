@@ -1,5 +1,9 @@
 # Batched eval arena — bulk matches at self-play speed (`gomoku/arena.py`, #105)
 
+> **Status: LIVE (2026-07-01).** Current core eval infrastructure — the default
+> eval path for the derby gate, `eval_worker.py`, and in-trainer eval, each with a
+> byte-identical legacy escape hatch.
+
 **One-line:** bulk evals were slow because `play_match_pickers` plays games one
 at a time and every model move runs MCTS over a single-game list — batch-size-1
 MPS forwards, ~10^5 sequential dispatches per 40-game eval. The arena plays ALL
@@ -157,3 +161,17 @@ the serial path (one seed-draw per pick vs tie-break-only), so pooled vs
 serial results differ game-by-game while both stay seed-deterministic and
 statistically equivalent — switch the derby gate between rounds, same rule
 as the #106 arena swap.
+
+## Cross-refs
+
+- [mega-vct-solver.md](mega-vct-solver.md) — the `solve_vct_mega_bb` / `mega_vct_bb`
+  GPU solver the batched VCT finisher (#109) calls once per round over all
+  to-move boards; its contract + lane/budget numbers.
+- [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — the gen-side counterpart. The
+  arena reuses the same `run_batched_mcts_waves` wave-batched search documented
+  there; this page is the eval-side application of that machinery.
+- [eval-suite.md](eval-suite.md) — the eval harness / baseline battery the arena
+  now backs (derby gate, `eval_worker`, in-trainer eval).
+- [rapfi-pool.md](rapfi-pool.md) — the warm `RapfiPool` the arena fans
+  engine-side games across for external/Gomocup opponents.
+- [m5-mainframe.md](../m5-mainframe.md) — parent perf hub.

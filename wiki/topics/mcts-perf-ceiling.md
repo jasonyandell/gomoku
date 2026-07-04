@@ -1,5 +1,10 @@
 # MCTS Perf Ceiling
 
+> **Status: LIVE (2026-05-20 → 2026-07-03).** Canonical gen-time perf synthesis.
+> Read settled-verdict-first: the current regime is the "2026-07
+> oracle-dominated regime" sections below; the earlier sections are accurate
+> pre-oracle history (flagged where superseded).
+
 Synthesis page on where gen-time wins are and aren't in `gomoku/mcts.py`. The
 goal is to stop re-discovering, every few sessions, that "porting v2 storage
 from some upstream AZ codebase" is a no-op for us.
@@ -86,6 +91,16 @@ it's ~20%. Verified byte-for-byte against the sequential reference, see
 `tests/test_mcts.py::test_wave_bfs_matches_sequential_byte_for_byte`.
 
 ## Where the next 2× lived (and what remains)
+
+> **SUPERSEDED for the current regime (2026-07):** this whole "next 2× lived"
+> roadmap (batched `state.apply`, C `_init_node`, further native-search passes,
+> heavier evaluator) is the *pre-oracle* leverage order. In the 2026-07
+> oracle-dominated regime the MCTS engine is ~0.6% of gen wall at sims=100 and
+> the VCT solver is ~90%+ of 13×13 gen wall — so none of the items below are the
+> live next win. They are preserved as the accurate pre-oracle analysis; act on
+> the "2026-07 oracle-dominated regime" sections far below instead. (Item #2,
+> engine-isolation across Apple Silicon, was separately refuted — see the ANE
+> pages.)
 
 Before the native engine pass, the rough leverage order was:
 

@@ -1,5 +1,9 @@
 # Bit-Packed Replay Buffer (Post-WL5 Task)
 
+> **Status: PARTIALLY LANDED (2026-06-12).** Scoping doc; the bit-packed *planes*
+> subset of Option A shipped opt-in — see the STATUS banner below for what's live
+> vs still scoped.
+
 Scoping doc for shrinking per-position storage in the replay buffer so we
 can hold many more games at the same RAM footprint. Captured during WL5
 monitoring (2026-05-21).
@@ -254,11 +258,12 @@ refactor.
   for the next run" #3 lists `careful replay size/age` as a
   scale-substitute. Wider buffer reduces the need for EMA + past-mix
   workarounds.
-- [wl2-scale-emulation-design.md](wl2-scale-emulation-design.md) — EMA
+- [wl2-scale-emulation-design.md](../_archive/topics/wl2-scale-emulation-design.md) — EMA
   and past-checkpoint mix were introduced because the buffer was
   narrow. A 16× wider buffer might let us simplify back.
 - [ane-int8-inference.md](ane-int8-inference.md) — independent
   post-WL5 task; do that first since it pays off in cycle time
   immediately.
-- [project-gomoku-perf-ceiling.md](../../) — current MPS INT_MAX
-  ceiling that forced 1.5M position cap originally.
+- [mcts-perf-ceiling.md](mcts-perf-ceiling.md) — MCTS/MPS perf ceiling context;
+  the MPSGraph INT_MAX limit that forced the 1.5M-position cap originally (see
+  "Move buffer off MPS to CPU" in the refactor surface above).
