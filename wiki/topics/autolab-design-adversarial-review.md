@@ -31,6 +31,23 @@ banked with its strongest counter-arguments attached, not as a sales page.
 > one-line `lesson` rows (design §6), which are bounded by nature. The
 > **auditor residual** below is closed: it is the TV's OVERNIGHT/audit panel
 > (design §5). All per [autolab-primary-design.md](autolab-primary-design.md).
+>
+> **Third pass (same day — the routing slip + MCP shape) adds two attacks:**
+> **A13 — the slip becomes a workflow engine.** Itineraries invite branches,
+> loops, conditions; six months later the slip is a DSL and comprehensibility
+> is gone. *Disposition: walled in the design* — slips are linear · finite ·
+> end at `decide`; leg vocabulary is a protected instrument; researchers
+> author contracts, never raw slips (an LLM writing itineraries = an LLM
+> writing the control plane, the retired-priority hole again); the idle task
+> is the only infinite route and lives in the scheduler, not a slip.
+> **A14 — the MCP server is a new trusted surface.** A bug in the server is a
+> bug holding the pen. *Disposition: HELD* — the server adds **no new
+> authority**: it wraps the same `validate_intent`/`compile_intent` the sim
+> already certifies, runs as the substrate user, and its schema is the
+> `DecisionIntent` type; it is *more* testable than the stdout-parsing shape
+> it replaces (pytest drives the functions directly). Watch item: the server
+> must stay a thin wrapper — logic that creeps into it escapes the sim's
+> certification.
 
 ## The attacks
 

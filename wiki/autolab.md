@@ -1,13 +1,14 @@
 # The Autolab — the self-driving lab
 
 The machine that runs the research loop **unattended**: one out-of-git **ledger
-spine** (a durable log, not in-process state) read by four loops —
+spine** — *the tape* — read by four loops —
 **trainer · arena · researcher · worker** — under launchd supervision. The
 doctrine in one sentence: **hard walls around a sandbox** — deterministic *WHEN*
 (pluggable triggers, never load-bearing), intelligent *WHAT* (a model proposes
-meaning; the substrate writes the rows). It is the *autopilot* the
-[Derby](derby.md) always wanted: the Δelo/Δt engine that keeps racing while
-you sleep.
+meaning; the substrate writes the rows). It keeps trying things and writing
+down what it learns while you sleep — and **the wiki is the product**; the
+player is a byproduct. It is **its own method**, peer of the
+[Derby](derby.md) and the ad-hoc lab (see *Three methods, one wiki* below).
 
 > **Status: DORMANT (built + proven live 2026-06-19; then stopped).**
 > Went **LIVE 2026-06-19** (epic #53, #64) — ran **6 real 9×9 slices** then a
@@ -71,7 +72,11 @@ Three lanes fold onto one ledger spine; a fourth (worker) does the GPU work.
   decisions), **the TV** (dashboard = a third window on the fold) and
   **compounding lessons** (`lesson` rows + admission wall + wiki prose)
   designed in, the worker designed; scouts/reviewer-as-role/auditor-as-role
-  **rejected, not deferred**.
+  **rejected, not deferred**. A third pass the same day made the lab
+  **standalone** (peer of the derby, not its heir), named **the cast**
+  (ledger = the tape; wiki = the product), replaced followups/eval_kind/
+  mechanical-WHEN with the **routing slip**, and made the researcher I/O
+  **two MCP tools** behind the guardrail.
 - **Now (DORMANT):** the loop is stopped; the primary design is the relight
   plan. The live-status source of truth for the racing it drove is the
   [Derby hub](derby.md) + [Ops hub](ops.md).
@@ -90,11 +95,16 @@ Three lanes fold onto one ledger spine; a fourth (worker) does the GPU work.
 | [autolab-dr-tabletop.md](topics/autolab-dr-tabletop.md) | **Survive weeks unattended** — the power-pull failure-mode map + what the sim certifies. |
 | [cockpit-vs-autopilot.md](topics/cockpit-vs-autopilot.md) | **The operating lens** — when to build more autonomy vs. more control. |
 
-## Relationship to the Derby
+## Three methods, one wiki (the peer framing, 2026-07-04)
 
-The **[Derby](derby.md)** is the *charter* (race recipes in time-capped slices,
-score by Δelo/Δt, three roles, Reviewer gate). The **autolab is the machine that
-runs that charter unattended** — the autopilot. The Derby hub keeps the racing,
-scoring, and role pages; this hub owns the self-driving substrate. Live ops
-surfaces (GPU queue, bests registry, promotion gate) live on the
-**[Ops hub](ops.md)**.
+The **[Derby](derby.md)** was a method — race recipes in time-capped slices,
+score by Δelo/Δt; learned a lot. **Ad-hoc research-lab sessions**
+([research-lab-charter](topics/research-lab-charter.md)) were a method —
+learned a lot. **The autolab is a method** — we keep learning. None is built
+on another; they are peer ways of trying things and learning, and **the wiki
+is where all three compound**. (The autolab *did* run the derby's charter
+unattended in June 2026 — a historical fact, not an identity; its design
+stands alone in [autolab-primary-design.md](topics/autolab-primary-design.md).)
+The Derby hub keeps the racing, scoring, and role pages; this hub owns the
+self-driving substrate. Live ops surfaces (GPU queue, bests registry,
+promotion gate) live on the **[Ops hub](ops.md)**.

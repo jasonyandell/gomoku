@@ -6,6 +6,35 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Autolab design pass 3 — standalone, the cast, the routing slip, MCP I/O
+
+Third same-day pass on [topics/autolab-primary-design.md](topics/autolab-primary-design.md)
+(Jason: "it can get simpler still"):
+
+- **Standalone framing**: derby / ad-hoc lab / autolab are **peer methods**,
+  none built on another; the wiki is where all three compound. The
+  [hub](autolab.md)'s "autopilot the Derby always wanted" identity replaced
+  with a *Three methods, one wiki* section.
+- **The cast**: ledger = **the tape** (Turing framing), wiki = **the product**;
+  vision table → a read/write matrix proving zero coupling ("nobody reads
+  anybody; everybody reads the tape").
+- **The routing slip** (Wall A as data, EIP pattern): admission compiles the
+  evidence contract → a slip `[train…, gate|panel, decide]`; result at leg N
+  opens leg N+1; `pick(role)` = oldest open leg naming me. **Collapses four
+  mechanisms**: flywheel followups, the #84 `eval_kind` discriminator (= leg
+  name), mechanical `decision_due` (= decide leg open), and "how is the arena
+  fed". Walls: linear/finite/ends-at-decide, protected leg vocabulary,
+  researchers author contracts never raw slips, idle task = scheduler rule.
+- **Researcher I/O = two MCP tools** (`autolab_packet`/`autolab_submit`) —
+  replaces the push-shaped stdin/stdout sketch (Claude Code pulls; the old
+  shape was inside-out). The MCP server IS the guardrail: only append path,
+  substrate-owned perms, rejects return as fixable tool results. Protected
+  surfaces get tools; sandbox surfaces (wiki/repo) get ordinary git.
+- [Review page](topics/autolab-design-adversarial-review.md): +A13
+  (slip-as-workflow-engine → walled) and +A14 (MCP as trusted surface → HELD,
+  thin-wrapper watch item). Decisions of record 9–12 added; build order items
+  1 & 5 updated.
+
 ## [2026-07-04] Autolab primary design UNIFIED — complete, TV + lessons designed in
 
 Jason's directive: *refine/simplify/unify; no parts of the design left for

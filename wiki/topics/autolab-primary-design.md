@@ -4,27 +4,32 @@
 > the 2026-06 vision completed by the 2026-07-04 design session (the deterministic
 > scheduler, the researcher packet, two new ledger walls, the invocation shape),
 > hardened by an [adversarial review](autolab-design-adversarial-review.md), then
-> **unified the same day**: the scheduler collapsed to four rules (elo steers only
-> through decisions), the **TV** (§5) and **compounding lessons** (§6) designed in,
-> the worker designed (§7) — **the design is complete; nothing is left designed-
-> for-later** (implementation follows the build order below). Where this page and
+> **unified the same day in two further passes**: (i) the scheduler collapsed to
+> four rules (elo steers only through decisions), the **TV** (§5), **compounding
+> lessons** (§6) and the worker (§7) designed in; (ii) **standalone framing** (the
+> autolab is its own method; the ledger is the tape, the cast reads/writes it),
+> the **routing slip** (§1 — coupling → zero) and the **two-tool MCP researcher
+> I/O** (§3). **The design is complete; nothing is left designed-for-later**
+> (implementation follows the build order below). Where this page and
 > [autolab-architecture.md](autolab-architecture.md) (the as-BUILT record of
 > P1–P7) disagree, **this page wins**. Per-piece built-state is marked inline.
 > Under the [Autolab hub](../autolab.md).
 
 ## The one-breath version (tell your friends)
 
-> A laptop runs a research lab on itself. Everything the lab knows lives in one
-> append-only file. Dumb, deterministic loops — a trainer and a referee — read
-> that file, do the next right thing, and append what happened. A scheduler built
-> like an OS scheduler, not like an AI, decides which idea gets the next GPU
-> hour. Claude is woken only when a decision is actually due, handed a briefing
-> packet, and may only answer in a typed form: *propose an idea* or *park one*.
-> Settled findings become one-line **lessons** the walls enforce — the lab never
-> silently re-argues a dead idea. A one-page **TV** shows what's cooking, what's
-> queued, and what got learned overnight. A chaos simulator proves the walls
-> hold. And whether it ever produces a great gomoku player doesn't matter — the
-> product is what we learn and write down. The lab is a stable factory for that.
+> A laptop runs a research lab on itself. Everything the lab coordinates through
+> lives on **one long append-only tape** — a file. Dumb, deterministic loops — a
+> trainer and a referee — read the tape, do the next right thing, and append what
+> happened; each experiment carries a **routing slip** saying whose turn is next,
+> so no piece knows any other piece exists. A scheduler built like an OS
+> scheduler, not like an AI, decides which idea gets the next GPU hour. Claude is
+> woken only when a decision is actually due, handed a briefing packet, and may
+> only answer in a typed form: *propose an idea* or *park one*. Settled findings
+> become one-line **lessons** the walls enforce — the lab never silently
+> re-argues a dead idea. A one-page **TV** shows what's cooking, what's queued,
+> and what got learned overnight. A chaos simulator proves the walls hold. And
+> whether it ever produces a great gomoku player doesn't matter — **the wiki is
+> the product**: what we learn, written down. The lab is a stable factory for that.
 
 Every piece below is individually simple and exists to close a specific, named
 failure mode. The composition is what's new, not the parts.
@@ -45,19 +50,28 @@ Phase 1 finishes the cage; phase 2 plugs a live Claude in and refines from
 deterministically, on pinned code that cannot conflict with the code under
 development.
 
-## The vision, restated (2026-06 original + the 2026-07-04 corrections)
+**The autolab stands on its own** *(2026-07-04)*. The [Derby](../derby.md) was
+a method — learned a lot. Ad-hoc research-lab sessions were a method — learned
+a lot. The autolab is a method — we keep learning. None is built on another;
+they are peer ways of trying things, and **the wiki is where all of them
+compound**. Derby vocabulary in earlier autolab pages is lineage, not identity.
 
-The six pieces, from Jason's original spec — with the two corrections that
-completed it:
+## The cast (and the read/write matrix — zero coupling, visibly)
 
-| Piece | One line | State |
-|---|---|---|
-| **Ledger** | append-only flatfile outside git, corrected like financial transactions; every loop folds the whole file | BUILT (`gomoku/lab/ledger.py`) — two wall-rules to add (§1) |
-| **Models → HF** | slimmed weights per slice + a champion tag; buffers stay local | BUILT — tag becomes a *projection* (§1, rule 2) |
-| **Trainer** | guaranteed singleton; ≤1h slices; pick → `git archive` + per-SHA uv env → run → deliver → append | BUILT + LIVE-PROVEN 2026-06-19 |
-| **Arena** | mac-native gomocup: cheap H2H **gate** every slice + heavy anchor-pinned **panel** at coarse cadence | gate BUILT; panel DESIGN ([arena lane](autolab-arena-eval-lane.md), #84) |
-| **Researcher** | *resume-on-evidence* (never "waits"): evidence contract fires → packet in → typed intent out | walls BUILT ([contract](autolab-researcher-contract.md)); packet + live Claude are phase-1/2 work (§3) |
-| **Worker** | works GitHub issues; merge SHA becomes a citable, trainable `commit` | DESIGNED (§7) — built last; does not gate the cage |
+Ledger, models, trainer, arena, researcher, worker — the original cast — plus
+the **wiki**, which outranks them all. The ledger is **the tape** of the
+Turing machine; the loops are heads. The coupling claim is checkable in one
+column: **nobody reads anybody — everybody reads the tape.**
+
+| Character | Job | Reads → Writes | State |
+|---|---|---|---|
+| **The ledger — the tape** | one long append-only JSONL file outside git, corrected like financial transactions; the only coordination surface | — | BUILT (`gomoku/lab/ledger.py`) — walls + slip to add (§1) |
+| **The wiki — the product** | where learning compounds; the lab's actual deliverable (*we learn, we write it down*) | everyone reads · researcher writes | LIVE (you're in it) |
+| **Models** | the artifacts: slim per-slice weights on HF + a `champion` tag (a projection, §1 Wall B); buffers stay local | — | BUILT |
+| **Trainer** | guaranteed singleton; ≤1h slice of a pinned commit in a per-SHA uv env | tape → tape + HF | BUILT + LIVE-PROVEN 2026-06-19 |
+| **Arena** | the protected instrument: cheap H2H **gate** + anchor-pinned **panel**; fed by the slip (§4) | tape + HF → tape (+ tag projection) | gate BUILT · panel DESIGNED (#84) |
+| **Researcher** | *resume-on-evidence*: packet in → typed intent out, via **two MCP tools** (§3); prose → wiki | tape + wiki (via packet) → tape (via the guardrail) + wiki (via git) | walls BUILT · packet/MCP to build |
+| **Worker** | implements `implement` legs; merge SHA = a citable, trainable `commit` (§7) | tape + issues → tape + repo | DESIGNED — built last |
 
 **Correction 1 (2026-06-20):** "waits for results" is deleted — nothing sleeps
 holding a thread; a fresh invocation folds the ledger when an evidence contract
@@ -103,6 +117,37 @@ Both walls land as sim invariants, falsified RED-when-off: *no multi-row
 transaction exists*; *kill between any two appends → derived obligations
 unchanged or a prefix*.
 
+**The routing slip — Wall A as data** *(2026-07-04, third pass)*. Wall A says
+the fold derives obligations from facts; the routing slip makes the derivation
+**declarative data instead of code convention** (the classic EIP pattern: the
+itinerary travels with the message). At admission, the substrate **compiles
+the evidence contract into a slip** stamped on the experiment row — e.g.
+`route: [train, train, gate, decide]` — a `result` at leg N opens leg N+1, and
+`pick(role)` is simply *the oldest open leg naming me* (under §2's share rule).
+Nothing invokes anything: the trainer never knows the arena exists; post-
+training never calls an eval; a dumb cadence tick folds the tape and asks
+"whose turn?" — control = **data (the slip) + cadence (the tick)**, and
+[doctrine §5](autolab-doctrine.md) already guarantees the tick is
+interchangeable with any other trigger. Exceptions re-route: terminal failure,
+budget/deadline exhaustion, or a park re-routes the slip **to `decide`** (or
+terminates it) via a correction row — the financial-journal move, unchanged.
+
+Four existing mechanisms collapse into the slip: the trainer's **flywheel
+followups** (gone — the slip names the next station), the **`eval_kind`
+discriminator** #84 was designing (it's the leg name, `gate` vs `panel`), the
+**mechanical half of `decision_due`** (the `decide` leg is open), and **"how is
+the arena fed"** (§4 — by the slip). One mechanism, four jobs.
+
+The slip's walls (this is an itinerary, **not a workflow engine**):
+**linear · finite · always ends at `decide`** — no branches, no loops
+(branching lives in *decisions*: a decision emits a new proposal with a new
+slip); the **leg vocabulary** `{train, gate, panel, implement, decide}` is a
+**protected instrument**; and researchers **author contracts, never raw
+slips** — an LLM writing itineraries would be an LLM writing the control
+plane, the same hole as the retired priority field. The only infinite route in
+the lab is the champion **idle task**, and that is a scheduler rule (§2.3),
+never a slip.
+
 ## §2 — The scheduler: an OS scheduler, not an AI — DESIGN (v0 cut below)
 
 "I want the trainer to be deterministic, like an OS thread scheduler" (Jason,
@@ -140,9 +185,10 @@ replaces the earlier v0-cut + Δelo-bucket scheduler; see the
 
 1. **Quantum:** a running slice finishes; nothing preempts mid-slice
    (clean-exit rule).
-2. **Share:** if a runnable exploration item exists **and** exploration's share
-   of the last **M** GPU-hours (from result-row `wall_s`; M fixed) is below the
-   target **T** (default ⅓) → run the **oldest** admitted exploration item.
+2. **Share:** if a runnable exploration item exists — an open slip leg naming
+   this role (§1) — **and** exploration's share of the last **M** GPU-hours
+   (from result-row `wall_s`; M fixed) is below the target **T** (default ⅓) →
+   run the **oldest** admitted exploration item.
    FIFO by admission seq — age *is* the order, so no separate aging mechanism.
    The bounded window makes catch-up bursts structurally impossible (subsumes
    review A1's bounded credit).
@@ -158,8 +204,8 @@ auto-parks + `needs_jason` escalation, so a stuck decision can't leak a WIP
 slot (A2; auto-park is reversible by a correction row). The clock is an
 explicit input — `pick(fold, now)` — and the result row records it (A12).
 
-**Where did Δelo/Δt go? Into the decisions — the derby lives there, not in
-queue math.** The scheduler never reads a performance number. Measured Δelo/Δt
+**Where did Δelo/Δt go? Into the decisions, not the queue math.** The
+scheduler never reads a performance number. Measured Δelo/Δt
 steers spend through exactly one channel: **keep/park at contract boundaries**
 — production lanes run `continuous` until a decision parks them; exploratory
 forks are born BLOCKED until a decision frees them. That is the *same* lever
@@ -220,24 +266,43 @@ Contents, in priority order — this is "set Claude up for success":
 6. **The wiki doorway** — cross-thread synthesis stays **prose → wiki,
    executable → ledger**; the packet links the pages, it doesn't inline them.
 
-**The invocation shape IS the cage for a real model.** `validate_intent` walls
-off a well-behaved callable; an agentic Claude with tools could simply call
-`ledger.append`. The practical wall is the invocation: the researcher is handed
-a hydrated packet and **returns a typed `DecisionIntent`; it never holds a
-ledger-append tool** — only the substrate compiles intents to rows. Enforce it
-with the OS, the same way flock is the mutex: the phase-2 researcher process
-runs **without write access to `AUTOLAB_HOME`** (packet read in, intent on
-stdout). The repo/wiki stay writable — they are sandbox by design; the
-corresponding wall is that **daemons never execute archived-commit code for
-control-plane functions** (fold/pick/gate run from the lab's own install;
-archived commits are data — A9, verify + sim-assert).
+**The invocation shape IS the cage for a real model — and it is two MCP
+tools** *(2026-07-04, third pass — replaces the earlier push-shaped
+packet-on-stdin/intent-on-stdout sketch, which fought Claude Code's grain: an
+agent with tools **pulls**; fighting that is how the integration goes
+inside-out)*:
+
+- **`autolab_packet()`** → the hydrated `DecisionPacket` for the due thread
+  (or the list of due threads). The context comes *to* the researcher.
+- **`autolab_submit(intent)`** → runs `validate_intent` → `compile_intent` →
+  append, and returns **accept or reject with reasons as the tool result** — a
+  refused intent becomes a fixable round-trip *in-session* instead of a failed
+  invocation. Deadline-overdue still auto-parks (§2.4), so a session that
+  never submits can't wedge a thread.
+
+**The MCP server IS the guardrail script**: it is the only ledger-append path
+the researcher has, it runs as the substrate (it owns the `AUTOLAB_HOME`
+permissions — the researcher process still has no write access; the kernel is
+the wall, the same way flock is the mutex), and its tool schema *is* the
+`DecisionIntent` type — one schema, enforced at the boundary, tested by
+calling the server functions directly in pytest while the sim keeps certifying
+validate/compile. The split generalizes: **protected surfaces get tools;
+sandbox surfaces get ordinary hands** — the wiki and repo stay plain files/git
+(making Claude learn a bespoke wiki API would be the same inside-out mistake
+in the other direction). The corresponding wall is unchanged: **daemons never
+execute archived-commit code for control-plane functions** (fold/pick/gate run
+from the lab's own install; archived commits are data — A9, verify +
+sim-assert).
 
 ## §4 — The arena: gate + panel, protected instrument — gate BUILT, panel DESIGN
 
 Unchanged from the [arena lane design](autolab-arena-eval-lane.md), blessed
 2026-07-04: the cheap H2H **gate** vs the champion every slice (built, crowns
 via PROMOTE/REVERT/AMBIGUOUS) and the heavy **panel** vs a version-pinned
-anchor set at coarse cadence (`eval_kind`, #84). Panel composition + anchor
+anchor set at coarse cadence (#84). **How the arena is fed** — the question the
+original vision left open — is answered by the slip (§1): a `gate` or `panel`
+leg opens and `pick('arena')` sees it; nothing invokes the arena, and the
+`eval_kind` discriminator #84 was going to add **is just the leg name**. Panel composition + anchor
 operating points + the Elo anchor-pin rule are a **protected instrument** —
 a researcher may be measured by the yardstick, never move it. The panel is
 also what upgrades the scheduler's Δelo input from decorative to real (§2).
@@ -310,8 +375,8 @@ standard the whole cage holds itself to.
 
 No hand-waving left: the worker is the existing `gh` issue flow
 (`gh_worktree.py` / ready-queue labels) run as a lane. The researcher may emit
-a `propose-work` intent (compiled to a `worker` experiment row + a GitHub
-issue); a worker invocation claims the issue, implements in an isolated
+a `propose-work` intent (compiled to a slip with an **`implement` leg** + a
+GitHub issue); a worker invocation claims the issue, implements in an isolated
 worktree, lands via the normal merge gate, and the **merge commit SHA is the
 result row** — which makes the new code a *citable, trainable `commit`* for a
 follow-up training proposal. That closes the last loop: research → code →
@@ -333,7 +398,7 @@ last because nothing else depends on it — not because it is undesigned.
 Added by the same-day unification pass (Jason's directive: *no parts of the
 design left for future us — implementation will follow design*):
 
-6. **The scheduler never reads a performance number** — the derby lives in
+6. **The scheduler never reads a performance number** — exploitation lives in
    keep/park decisions; four rules total; the ladder is budget vocabulary, not
    a priority class; SMOKE is an admission check, not a queue item.
 7. **The TV is a design piece** (§5) — one fold, three windows; the auditor is
@@ -342,16 +407,33 @@ design left for future us — implementation will follow design*):
    with a loud `challenges:` escape; prose compounds in the wiki; the packet
    always carries the standing lessons.
 
+Added by the third pass (same day — standalone framing, the cast, the slip,
+the MCP shape):
+
+9. **The autolab stands on its own** — derby / ad-hoc lab / autolab are peer
+   methods; the wiki is where all of them compound; the ledger is the tape.
+10. **The routing slip** (§1) — contracts compile to slips at admission;
+    linear · finite · ends at `decide`; leg vocabulary
+    `{train, gate, panel, implement, decide}` is a protected instrument;
+    researchers author contracts, **never raw slips**; the idle task is the
+    only infinite route and it is a scheduler rule, not a slip.
+11. **Researcher I/O = two MCP tools** (§3) — `autolab_packet` /
+    `autolab_submit`; the MCP server is the guardrail and the only
+    ledger-append path; protected surfaces get tools, sandbox surfaces get
+    ordinary hands (wiki/repo via git).
+12. **The wiki is the product** — the player is a byproduct.
+
 ## The build order (the design is complete; implementation is staged)
 
 Nothing below is designed-later — every item is specified above or in its
 linked page. The order optimizes for **traces you can trust, then eyes, then
 the animal**:
 
-1. **The two ledger walls** (§1) + the torn-tail **truncate** fix
-   ([DR rows 7–8](autolab-dr-tabletop.md)) — so a trace is never a lie about
-   what happened. Lands with its sim invariants (no multi-row transaction;
-   kill-anywhere → obligations unchanged).
+1. **The two ledger walls + the routing slip** (§1) + the torn-tail
+   **truncate** fix ([DR rows 7–8](autolab-dr-tabletop.md)) — so a trace is
+   never a lie about what happened, and the slip is in place for everything
+   downstream. Lands with its sim invariants (no multi-row transaction;
+   kill-anywhere → obligations unchanged; slips linear/finite/end-at-decide).
 2. **The TV** (§5) — `board()` over the existing fold + a terminal and web
    renderer. Cheap, and it is the best debugging instrument for everything
    after it.
@@ -360,8 +442,10 @@ the animal**:
 4. **The packet + lessons** (§3 + §6) — `dossier_plan`/`hydrate`, the `lesson`
    row, the admission lessons-wall, scope tags. Same-hash-after-death purity
    proof; each wall falsified RED-when-off.
-5. **The invocation shape** (§3) — OS-permissions wall + the doctrine
-   paragraph stating it plainly; the A9 control-plane/data invariant asserted.
+5. **The MCP guardrail** (§3) — the two-tool server (`autolab_packet` /
+   `autolab_submit`) + the OS-permissions wall + the doctrine paragraph
+   stating the invocation shape plainly; the A9 control-plane/data invariant
+   asserted.
 6. **The live Claude `decide=`** — phase 2 begins: real experiments, real
    traces; the wiki's lab pages start compounding (§6 prose half).
 7. **The panel** (#84, [arena lane](autolab-arena-eval-lane.md)) — the
