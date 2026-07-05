@@ -18,7 +18,11 @@ at-least-once + spawn-row retry counter + dead-letter; deadline auto-parker
 deleted); one **predecessor-link** primitive replaces `challenges`;
 human-only best-effort **nice**; and an explicit **Known unknowns** section
 (A17 ledger lockdown, A21 prose/intent seam, A22 park's heap, A26, the
-design-iteration-in-the-wiki methodology itself).
+design-iteration-in-the-wiki methodology itself). Late addendum: a
+**Before building** section — manual tabletop exercise (domain: **perf
+research** — experiments take a smoke, not an hour), **clean slate** (no
+existing ledger is used or migrated — supersedes A20's era-cut), and a
+schema-registry-shaped migration note for eventually.
 
 ## [2026-07-04] Autolab red-team, pass 5 — ten new attacks on the reframe
 

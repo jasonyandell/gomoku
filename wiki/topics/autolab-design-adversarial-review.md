@@ -118,8 +118,11 @@ minus the auto-free.
 > — carries challenges, thread memory, and lesson supersession.
 > **A17 & A21** — accepted as **known unknowns** (detection-now/prevention-
 > unsolved; push-before-cite as the 80%). **A22** — open (park's background
-> heap; leading candidate: parks file `open`-status lessons). **A16, A20,
-> A24, A25** — accepted as proposed.
+> heap; leading candidate: parks file `open`-status lessons). **A20** — superseded by
+> something simpler: **clean slate** — existing ledgers are never used or
+> migrated (mined for ideas at most); the lab starts fresh, so there is no
+> coexistence window to design. Schema-registry-style migration is a noted
+> eventual need, not a priority. **A16, A24, A25** — accepted as proposed.
 >
 > **A26 — the branch graveyard** *(new, raised by Jason in adjudication)*:
 > every dead-lettered or parked item can orphan a pushed branch; at lab pace

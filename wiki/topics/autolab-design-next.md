@@ -155,6 +155,26 @@ items with mounting attempts, branches belonging to dead items. Append-only
 makes the overnight diff free (`seq > watermark`; the watermark belongs to
 the viewer). Panels are implementation, not design.
 
+## Before building — the tabletop, and the clean slate
+
+**The tabletop.** Before any code, run the design **by hand**: get it out of
+heads and simulate it ourselves, step by step — a scratch ledger, real rows,
+us playing every character (proposer, admission, scheduler, trainer, arena,
+researcher, the board). The domain for the exercise: **perf research**. It's
+the perfect first tenant — perf experiments don't take an hour-long GPU
+slice, they take a smoke, so the whole loop (propose → admit → slip → steps
+→ closed → verdict → lesson) gets exercised at conversation speed, and every
+vague row schema gets caught by the act of having to write it down.
+
+**Clean slate.** Any and all existing ledgers are **not to be used or
+migrated** — mined for ideas at most. When the lab starts, it starts on a
+fresh ledger. (This supersedes A20's era-cut: no coexistence window at all.)
+
+**Migration, eventually.** Once real ledgers accumulate across design
+versions, we'll want a migration plan — schema-registry-shaped (versioned
+row schemas + declared compatibility rules, à la Kafka's schema registry).
+Noted, not a priority.
+
 ## Known unknowns
 
 The honest list — gaps acknowledged without a blessed solution, each with
