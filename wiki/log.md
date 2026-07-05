@@ -6,6 +6,17 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Autolab red-team, pass 5 — ten new attacks on the reframe
+
+Three independent adversarial agents (concurrency / ops-reality / semantics)
+attacked the reframed design; deduped to **A16–A25 (6 BROKE · 3 BENT · 1
+HELD)** on [topics/autolab-design-adversarial-review.md](topics/autolab-design-adversarial-review.md).
+Headliner: **A18 — dossier issuance is a lease with no auto-release** (the
+doctrine's own rejected lease-manager, reinvented minus the auto-free);
+also the vacuous kernel-wall (A17), the missing migration story (A20),
+push-before-cite (A21), and the lesson-less settlement paths (A22).
+Dispositions are PROPOSED — not yet folded into the design page.
+
 ## [2026-07-04] Autolab design pass 5 — the reframe (ledger · al · dossier)
 
 Fifth same-day pass on [topics/autolab-primary-design.md](topics/autolab-primary-design.md)
