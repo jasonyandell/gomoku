@@ -6,6 +6,24 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-05] Autolab design v3 — the Petri execution model
+
+From-the-top rewrite as [topics/autolab-design-v3.md](topics/autolab-design-v3.md)
+(v2 = design-next, superseded same day; v1 = primary-design, still
+design-of-record until a vN is blessed). The model (Jason + Opus noodle,
+refined in session): **per-experiment ledgers L[slip_id]** minted with a
+worktree (kills the global-ledger concurrency class), a deterministic
+**Applicator** as sole canon mutator (L always lands — I7; code lands only
+on a base CAS, --no-ff), and the completing insight: **A is not terminal —
+a single serialized curator C smelts every landed L into wiki prose + a
+lesson** (I8: every mint terminates at Curated; a failed apply is ore, not
+waste — resolves A22's heap, gives lessons complete coverage, keeps A21
+dead). Scheduler = the U-arbiter; admission = R_mint's guard (Wslot supply
+IS the cap K); worktree-as-linear-token makes git the liveness detector
+(Reconcile via `git worktree list`, no spawn rows). Known unknowns updated
+(A17 in-flight L, code-CAS cost at velocity, branch GC, C batching, the
+versioned-page methodology).
+
 ## [2026-07-05] Autolab pass-6 working draft + adjudication banked
 
 A16–A25 adjudicated in conversation (+ new **A26**, the branch graveyard);

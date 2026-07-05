@@ -1,13 +1,12 @@
 # The Autolab — design walk-through (working draft)
 
-> **Status: WORKING DRAFT** *(2026-07-05)* — the pass-6 candidate, written for
-> Jason's walk-through after the pass-5 red-team
-> ([A16–A26](autolab-design-adversarial-review.md)) and the adjudication
-> conversation of 2026-07-04/05. **Not yet design-of-record** —
-> [autolab-primary-design.md](autolab-primary-design.md) holds that title
-> until this page is blessed and folded in. Everything here that differs from
-> that page is a settled-in-conversation adjudication; open questions live in
-> **Known unknowns** at the bottom.
+> **Status: SUPERSEDED** *(same day, 2026-07-05)* — this was v2; the
+> walk-through draft is now **[autolab-design-v3.md](autolab-design-v3.md)**
+> (the Petri execution model: per-experiment ledgers, the Applicator, the
+> curator). Kept for the adjudication trail of the pass-5 red-team
+> ([A16–A26](autolab-design-adversarial-review.md)).
+> [autolab-primary-design.md](autolab-primary-design.md) (v1) remains
+> design-of-record until a vN is blessed.
 
 ## One breath
 
