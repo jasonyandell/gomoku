@@ -6,6 +6,23 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Autolab design pass 4 — the porcelain + the clean rewrite
+
+- **The `autolab` porcelain**: git-shaped one-stop tool — porcelain verbs
+  (`propose · park · challenge · submit · result · lesson · packet · board ·
+  log · up · down · status`) are the **only door to the tape**; `gomoku/lab/`
+  is plumbing (you stay out of `.git/`; you use git). Verb set = protected
+  instrument. The MCP proxy exposes a *subset* of verbs — "Claude doesn't
+  know the ledger, it knows the tool."
+- **Generalized wall**: researchers author **nothing raw, ever** — not rows,
+  not slips, not priorities; contracts and intents only.
+- **[topics/autolab-primary-design.md](topics/autolab-primary-design.md)
+  rewritten clean from the top** (Jason: "we don't need to fight the past") —
+  25.6 KB of working notes → 7.8 KB single read; no archaeology, no inline
+  review refs (the [review page](topics/autolab-design-adversarial-review.md)
+  is sole custodian of the attack record, +A15 porcelain-kitchen-sink).
+  Working-notes version: `git show c0681dc:wiki/topics/autolab-primary-design.md`.
+
 ## [2026-07-04] Autolab design pass 3 — standalone, the cast, the routing slip, MCP I/O
 
 Third same-day pass on [topics/autolab-primary-design.md](topics/autolab-primary-design.md)

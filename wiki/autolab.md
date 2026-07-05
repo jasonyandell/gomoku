@@ -76,7 +76,11 @@ Three lanes fold onto one ledger spine; a fourth (worker) does the GPU work.
   **standalone** (peer of the derby, not its heir), named **the cast**
   (ledger = the tape; wiki = the product), replaced followups/eval_kind/
   mechanical-WHEN with the **routing slip**, and made the researcher I/O
-  **two MCP tools** behind the guardrail.
+  **two MCP tools** behind the guardrail. A fourth pass added the
+  **`autolab` porcelain** (git-shaped: one small tool is the only door to
+  the tape; researchers author **nothing raw, ever**) and rewrote the design
+  page **clean from the top** (25.6 KB of working notes → one clean read;
+  notes recoverable via `git show c0681dc`).
 - **Now (DORMANT):** the loop is stopped; the primary design is the relight
   plan. The live-status source of truth for the racing it drove is the
   [Derby hub](derby.md) + [Ops hub](ops.md).

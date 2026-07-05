@@ -48,6 +48,17 @@ banked with its strongest counter-arguments attached, not as a sales page.
 > it replaces (pytest drives the functions directly). Watch item: the server
 > must stay a thin wrapper — logic that creeps into it escapes the sim's
 > certification.
+>
+> **Fourth pass (the porcelain + the clean rewrite) adds one attack:**
+> **A15 — the porcelain becomes a kitchen sink.** One-stop CLIs accrete verbs
+> until the "one small tool" is a sprawling app and the semantic surface is as
+> wide as the raw file was. *Disposition: walled* — the verb set is a
+> **protected instrument** (small, semantic; a new verb is a gated,
+> human-visible change, same as a new slip leg); plumbing stays in
+> `gomoku/lab/`, and the MCP proxy exposes a *subset* of verbs, never a
+> superset. The rewrite also moved this page to sole custody of the attack
+> record — the design page (`git show c0681dc:…` for the last inline-ref
+> version) now states the design without archaeology.
 
 ## The attacks
 
