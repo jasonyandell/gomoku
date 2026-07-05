@@ -102,6 +102,32 @@ minus the auto-free.
 | **A24** | **Correction semantics are defined only by metaphor.** The correction entry is the design's universal escape hatch (exceptions, human override, auto-park reversal) with no target rule, no precedence rule, and no reconciliation analog — a fold that drops a correction is *undetectable*, the false confidence the financial metaphor smuggles in. | **BENT** | Minimal rule: a correction **cites the seq it corrects**; the fold applies corrections in ledger order; a human correction yields only to a later human correction. The board surfaces dangling and conflicting corrections — the reconciliation analog. |
 | **A25** | **The singular dossier serializes all verdicts.** Decide arrivals are bursty by construction (slice-quantum lockstep); 4 slips hit decide in an hour → the youngest waits 4 × (poll + session); deadlines declared at admission model GPU, never decide-queue depth → healthy slips auto-park from pure congestion, and each park manufactures more decide work (metastable). | **HELD** (at this scale) | Deadlines are days; decide throughput is ~hours even in a burst, and A18/A19's defer-to-live-lease removes the cascade sting. Watch instrument: parks/week vs decide-queue depth — if congestion parks appear, allow concurrent claims on *distinct* slips (the mechanism already supports it). |
 
+> **Adjudication addendum (2026-07-05, Jason + Claude walk-through).** The
+> proposed dispositions above were adjudicated in conversation; the settled
+> state lives on [autolab-design-next.md](autolab-design-next.md) (the pass-6
+> working draft). Deltas from the proposals: **A18** — better than the lease:
+> the dossier is a **projection** (no issuance row, no release); the
+> *decision* is the one binding, idempotent write (first wins), and a
+> **spawn row** (a fact, not a claim) feeds the retry counter → dead-letter
+> queue. **A19** — `decide` is **deleted from the step vocabulary**; slips
+> are all-mechanical, closed slips land in the researcher's queue as a
+> projection; the deadline auto-parker is **deleted** (DLQ-on-retry-
+> exhaustion is the only unclog). Priority returns as human-only best-effort
+> **nice**. **A23** — generalized past the proposal: no `challenges`
+> vocabulary at all; one primitive — an optional **predecessor link** by id
+> — carries challenges, thread memory, and lesson supersession.
+> **A17 & A21** — accepted as **known unknowns** (detection-now/prevention-
+> unsolved; push-before-cite as the 80%). **A22** — open (park's background
+> heap; leading candidate: parks file `open`-status lessons). **A16, A20,
+> A24, A25** — accepted as proposed.
+>
+> **A26 — the branch graveyard** *(new, raised by Jason in adjudication)*:
+> every dead-lettered or parked item can orphan a pushed branch; at lab pace
+> that is a graveyard within weeks, and it compounds A21's residual
+> (pushed-never-merged prose). *Disposition: contained, not solved* — lab
+> branches are namespaced (`al/<item-id>`) so the board derives "branches of
+> dead items" from the fold; sweeping stays a manual, human-visible chore.
+
 **Pass-5 residuals:** the board watermark's home (a viewer dotfile — cosmetic);
 researcher sessions spending the interactive Claude budget (an aggravator of
 A18's spawn path, not independent); the scheduler/auto-parker/trigger absent

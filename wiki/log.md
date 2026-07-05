@@ -6,6 +6,20 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-05] Autolab pass-6 working draft + adjudication banked
+
+A16–A25 adjudicated in conversation (+ new **A26**, the branch graveyard);
+settled state written as a clean walk-through page,
+[topics/autolab-design-next.md](topics/autolab-design-next.md) (**WORKING
+DRAFT** — primary-design stays design-of-record until blessed). Headlines:
+dossier is a **projection** (no lease); `decide` **deleted** from the step
+vocabulary (closed slips land in a researcher queue projection;
+at-least-once + spawn-row retry counter + dead-letter; deadline auto-parker
+deleted); one **predecessor-link** primitive replaces `challenges`;
+human-only best-effort **nice**; and an explicit **Known unknowns** section
+(A17 ledger lockdown, A21 prose/intent seam, A22 park's heap, A26, the
+design-iteration-in-the-wiki methodology itself).
+
 ## [2026-07-04] Autolab red-team, pass 5 — ten new attacks on the reframe
 
 Three independent adversarial agents (concurrency / ops-reality / semantics)
