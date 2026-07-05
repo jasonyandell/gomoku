@@ -6,6 +6,30 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-04] Autolab design pass 5 — the reframe (ledger · al · dossier)
+
+Fifth same-day pass on [topics/autolab-primary-design.md](topics/autolab-primary-design.md)
+(Jason's one-breath review: "it's not done getting simpler"). Page-edit, not
+ingestion — rewritten in place; pre-reframe version:
+`git show 7bb410c:wiki/topics/autolab-primary-design.md`.
+
+- **The names**: *tape* → **ledger** (finance semantics — corrections are new
+  entries, balances derived never stored); the tool is **`al`** (autolab = the
+  method, `al` = the util); *packet* → **dossier**; *TV* → **the board**
+  (observability; panels are implementation, not design).
+- **The slip says *what happens*, not whose turn** — executors derived from a
+  closed step vocabulary (today `{train, gate, decide}`; `panel`/`implement`
+  join with their producers). Slip **id** = the join key of the whole ledger.
+  One slip per proposal; re-routes correct it; a challenge is a new slip.
+- **Claude doesn't wake; it gets spawned**: a trigger runs `al dossier`
+  (at most one briefing; empty = clean exit), dossier-issuance is itself a
+  ledger entry `{slip id, dossier hash, evidence-cutoff seq}`, session gets
+  the dossier in its prompt. Researcher write path collapsed to **one MCP
+  tool** (thin shim over `al`, exposing `propose`/`park` only).
+- **Verbs 12 → 9** (`propose · park · result · dossier · board · log ·
+  status · up · down`): `challenge` = `propose --challenges <slip-id>`;
+  `lesson` rides the decide-time intent; `submit`/`packet` folded away.
+
 ## [2026-07-04] Autolab design pass 4 — the porcelain + the clean rewrite
 
 - **The `autolab` porcelain**: git-shaped one-stop tool — porcelain verbs
