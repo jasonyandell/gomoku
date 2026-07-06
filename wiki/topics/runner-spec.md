@@ -289,8 +289,11 @@ Everything below the line is domain; the seam is exactly here.
   what, forever.
 - **Pin before submit:** SHAs referenced in argv must stay reachable, or
   env materialization fails later, against the box.
-- **Cold-SHA env builds burn lane time** at the head of an item; warm
-  the uv cache during authoring, or accept the cost at laptop scale.
+- **Cold-SHA env builds are small by construction:** dependency wheels
+  are cache-shared across SHAs; the per-SHA delta is building the
+  top-level package alone (ccache makes native recompiles near-free),
+  and re-running a SHA is fully warm. Only the first-ever run fills the
+  dep cache.
 - **Anomaly policy:** `wedged` → the lane self-quarantines; dead-letter
   the human. A frontier that never advances is the one vital sign that
   matters — watch it.

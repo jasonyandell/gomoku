@@ -238,9 +238,11 @@ at a mint gate — where human eyes go.
 2. **Conflict re-lands cost a full lane.** Textual conflict → recorded-
    not-landed → a fresh mint resolves, revalidates, re-spends GPU.
 3. **Everything shares one lane.** A landing waits behind a training
-   slice; a cold uv build burns lane time at the head of an item.
-   Accepted at laptop scale — total order kills whole classes of races,
-   and the GPU was the bottleneck anyway.
+   slice; a fresh SHA costs seconds at the head of an item (the per-SHA
+   delta is the top-level package alone — a few thousand lines of
+   Python plus one ccache-able native compile; dep wheels are
+   cache-shared across SHAs). Accepted at laptop scale — total order
+   kills whole classes of races, and the GPU was the bottleneck anyway.
 4. **`crashed` means unknown** — possibly completed; the ctx/
    done-markers disambiguate, retries are new run_ids, runs tolerate
    re-execution.
