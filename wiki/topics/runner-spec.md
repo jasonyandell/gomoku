@@ -1,299 +1,302 @@
-# The runner — substrate spec v0.1 (a spool, five formats, a wrapper)
+# The runner — spec v0.2 (one queue, one lane, an append-only log)
 
-> **Status: DRAFT v0.1** *(2026-07-05)* — the brutally-simplified substrate
-> beneath the autolab. v0.1 adds the **spool**: the queue and the semaphore
-> both live on the server side of the call, per the "mundane job spool"
-> reframe (Jason + Fable session). v0's busy-signal design is superseded —
-> `contended` is now an anomaly, not a normal outcome. Not an autolab
-> document: the autolab ([design v5](autolab-design-v5.md)) is the first
-> caller. Working name: **the runner** — deliberately boring; the pattern
-> is `at(1)`/`lpd`/sendmail-spool, nothing newer than 1983.
+> **Status: DRAFT v0.2** *(2026-07-05)* — simplified per the "throw work
+> at it and it runs, eventually" mandate (Jason + Fable session). One
+> queue, no tags, no priorities; the spool is replaced by an append-only
+> log that is both the queue and the history; multi-step **composite
+> items** replace resource routing. Working name: **the runner** —
+> deliberately boring; the pattern is a batch spool, nothing newer
+> than 1983.
 >
-> The test this page must pass: the normative core (§2–§9) never mentions
-> the domain. If it can't, the library thesis is false.
+> The test this page must pass: the normative core (§2–§9) never
+> mentions the domain. If it can't, the library thesis is false.
 
 ## 1. One breath
 
-A library — not a framework — that runs queued work one-at-a-time per
-resource, durably. You submit a fully-specified command with a time box
-and an opaque payload; you get a ticket. A dumb dispatcher drains the
-spool in strict FIFO order per resource tag. Later you check your ticket:
-exactly one sentinel says how it ended, and your payload comes back
-verbatim — **a courtesy, never interpreted**. All state is the
-filesystem; every participant can be killed at any instruction and the
-system stays decidable. The caller owns policy and meaning; the runner
-owns order, exclusion, and witness. **Continuations are data, never
-callbacks: the runner never calls, never imports, never interprets caller
-code.**
+A library — not a framework — with one job: **work you submit runs,
+eventually.** You append a fully-specified item to a durable log and get
+a ticket. A dumb dispatcher executes items **one at a time, in log
+order** — each item a sequence of steps sharing a working directory,
+each step time-boxed. Later you check your ticket: exactly one sentinel
+says how it ended, and your opaque payload comes back verbatim — a
+courtesy, never interpreted. All state is the log plus the filesystem;
+every participant can be killed at any instruction and the system stays
+decidable. The caller owns policy and meaning; the runner owns order,
+exclusion, and witness. **Continuations are data, never callbacks: the
+runner never calls, never imports, never interprets caller code.**
 
 ## 2. Assumptions (explicit, load-bearing)
 
 - **Single host, single POSIX filesystem.** Atomicity primitives:
-  `mkdir`, `link`, `rename`, `flock`. Local mtimes suffice for grace
-  windows.
+  append-under-flock, `mkdir`, `link`, `flock`.
 - **Crashy but non-adversarial processes** (same uid; tamper-prevention
   out of scope).
-- **No sandbox.** The child runs with full process authority. Named
+- **No sandbox.** Steps run with full process authority. Named
   limitation, not an oversight.
-- **Runs are re-runnable.** The caller must tolerate re-executing a run
-  whose first attempt may in fact have completed (B1, §11).
+- **Items are re-runnable.** The caller must tolerate re-execution of
+  work whose first attempt may in fact have completed (B1, §10).
 
 ## 3. The store
 
 ```
 <root>/
+  queue.log                   THE append-only log: every submit and
+                              cancel record, forever — queue AND history
   locks/
+    queue.lock                serializes appends to queue.log
     dispatch.lock             single-dispatcher guard
-    <tag>.lock                one per resource tag
-  spool/<tag>/
-    .seq                      monotonic counter file (guarded by .seq.lock)
-    <seq08>-<run_id>          one entry per queued run; empty marker file
+    exec.lock                 THE one lane; fd-inherited by children
   exhaust/<run_id>/
-    spec.json                 written by submit(); immutable
-    claimed                   spool entry, renamed here by dispatch()
     wrapper.pid               {pid, pid_start_time}; link-if-absent
-    child.pid                 {pid, pgid, pid_start_time}; link-if-absent
+    child.<n>.pid             per step; {pid, pgid, pid_start_time}
+    step.<n>.out.log          step n stdout+stderr, merged
     wrapper.log               wrapper's own stderr
-    out.log                   child stdout+stderr, merged
     exit.json                 THE sentinel; exactly one writer ever
-    ctx/                      child cwd — scratch, outputs, the
-                              continuation channel between stages
+    ctx/                      shared cwd for ALL steps — scratch,
+                              outputs, and the pipe between steps
 ```
 
 `run_id`: caller-supplied, `[a-z0-9-]{1,64}`. Uniqueness is the caller's
-promise; `mkdir exhaust/<run_id>` is the kernel-enforced check.
+promise; the fold takes the **first** submit record per run_id and
+ignores the rest — duplicate submission is harmless by construction.
 
-## 4. Format 1 — `spec.json`
+## 4. Format 1 — the log records
+
+One JSON object per line, appended under `flock(queue.lock)` + fsync.
+Two kinds, closed vocabulary:
 
 ```jsonc
-{
-  "schema": 1,
-  "run_id": "…",              // must equal the directory name
-  "argv": ["uvx", "--from", "git+file:///…/repo@<sha>", "cmd", "…"],
-  "env": {"EXAMPLE": "1"},    // strings only; see env rule
-  "box_s": 3600,              // wall-clock budget, includes env build
-  "kill_grace_s": 30,         // TERM → KILL gap
-  "resource": "gpu",          // ONE tag, or null = run immediately,
-                              // unqueued, concurrently
-  "continuation": { },        // OPAQUE; ≤ 64 KiB; returned verbatim at
-                              // harvest as a courtesy; never read
-  "note": "free text"         // human breadcrumb, optional
-}
+{"kind": "submit", "schema": 1,
+ "run_id": "…",
+ "steps": [                    // a COMPOSITE: run in order, stop at
+   {"argv": ["…"],             // the first step that fails its exit
+    "env": {"K": "v"},         // or its box; all steps share ctx/
+    "box_s": 3600,
+    "kill_grace_s": 30}
+ ],
+ "continuation": { },          // OPAQUE; ≤ 64 KiB; returned verbatim
+ "note": "free text"}          // at harvest as a courtesy; never read
+
+{"kind": "cancel", "schema": 1, "run_id": "…"}
 ```
 
-**Env rule:** the child's environment is `spec.env` ∪ a fixed minimal
+**Env rule:** each step's environment is its `env` ∪ a fixed minimal
 base `{PATH, HOME, TMPDIR, UV_CACHE_DIR}` — *nothing else is inherited*.
-Pass secrets by reference (child looks them up); the runner does not
-solve secrets.
+Pass secrets by reference; the runner does not solve secrets.
 
 **Argv rule:** exec'd verbatim. "uv-compatible, SHA-pinned" is the
 *caller's* convention; the runner does not know git or uv exist.
 
-## 5. Format 2 — the spool, and the dispatcher contract
+**Steps rule:** steps communicate **through `ctx/`** — step N writes,
+step N+1 reads its cwd. The runner never parameterizes an argv from a
+prior step's output; that convention belongs to the caller's scripts.
 
-**Enqueue** (inside `submit()`, after `spec.json` exists): under
-`flock(spool/<tag>/.seq.lock)`, read-increment-write `.seq`, create the
-empty entry `spool/<tag>/<seq08>-<run_id>`. Runs with `resource: null`
-skip the spool — submit spawns their wrapper immediately.
+## 5. Format 2 — the queue, and the dispatcher contract
 
-**Dispatch** (`dispatch(root)`, kicked by cron or by anything; cadence is
-never load-bearing for safety):
+**The queue is a fold over the log.** An item's state is derived, never
+stored: *submitted* = first submit record for its run_id; *canceled* = a
+cancel record exists and no execution began; *done* = `exit.json`
+exists. **The frontier** = the oldest submit record, in log order, that
+is neither done nor canceled.
+
+**Dispatch** (`dispatch(root)`, kicked by cron, by a fresh submit, by
+anything; cadence is never load-bearing for safety):
 
 ```
-D1  flock(locks/dispatch.lock, NB); held elsewhere → return (single
-    instance; the lock rides the pass)
-D2  for each tag with spool entries, oldest sequence first:
-      a. probe locks/<tag>.lock — held → skip tag (a straggling
-         grandchild holding the fd also lands here; conservative)
-      b. rename spool/<tag>/<seq>-<id> → exhaust/<id>/claimed
-         (atomic; loser of a race with cancel() skips the entry)
-      c. spawn the wrapper, detached
-      d. wait ≤ 5s for wrapper.pid or exit.json to appear, then move on
-         (the wrapper takes the tag lock BEFORE writing wrapper.pid, so
-         observing wrapper.pid means the tag is truly occupied — this
-         closes the double-launch race window)
-D3  exit; the dispatch lock releases with the process
+D1  flock(locks/dispatch.lock, NB); held elsewhere → return
+D2  probe locks/exec.lock — held → return (something is running, or an
+    orphaned child still owns the lane; conservative either way)
+D3  settle the settleable (see §8): link canceled / crashed sentinels
+D4  frontier item exists → spawn its wrapper, detached; return
+    (spawn is idempotent: a wrapper that finds exec.lock held or
+     wrapper.pid present exits silently; dispatch simply tries again
+     next kick — a dead spawn costs nothing and loses nothing)
 ```
 
-**The spool is dumb forever — constitutional.** Strict FIFO per tag. No
-priority field, no reordering, no deadlines, ever. A FIFO server makes no
-decisions: order is fully determined by what callers enqueued and when,
-so *policy cannot live here*. Callers wanting scheduling power keep their
-own queue and enqueue just-in-time (spool depth ≈ 1); callers that don't
-care batch-enqueue and accept arrival order. The day this section grows a
-`priority` field, the runner has become a framework and this page has
-failed.
-
-**Cancel** (`cancel(run_id)`): queue-only. Atomically rename the spool
-entry aside and link `exit.json{canceled}`. If the entry is gone
-(claimed, running, done) → `TooLate`; killing running work is the
-caller's affair — it owns the process table.
+**The queue is dumb forever — constitutional.** Strict FIFO by log
+order. No priority field, no reordering, no deadlines, no tags, ever.
+One queue; one lane. A FIFO server makes no decisions: order is fully
+determined by what callers appended and when, so *policy cannot live
+here*. Callers wanting scheduling power enqueue just-in-time (queue
+depth ≈ 1); callers that don't care batch-append and accept arrival
+order. Serialization of *anything* — a GPU, a repo, a wiki — is the same
+mechanism: it all goes through the one lane, in order. The day this
+section grows a second queue, the runner has become a framework and this
+page has failed.
 
 ## 6. Format 3 — the wrapper contract
 
-`submit()` (null-resource) or `dispatch()` spawns one detached wrapper
-per run (double-fork, `setsid`, stdio → `wrapper.log`). Small, dumb,
-hardened — the durable witness:
+One detached wrapper per item attempt (double-fork, `setsid`, stdio →
+`wrapper.log`). Small, dumb, hardened — the durable witness:
 
 ```
-W1  read spec.json
-W2  if resource: open locks/<tag>.lock; flock(LOCK_EX|LOCK_NB)
-      on failure → exit.json{contended}; exit   (anomaly — see §5 D2d)
-W3  write wrapper.pid                (link-if-absent; loser exits)
-W4  spawn child: new pgid; cwd=ctx/; env per §4; stdout+stderr→out.log;
-      the child INHERITS THE LOCK FD (not close-on-exec)
-W5  write child.pid
-W6  wait for child exit, racing the box:
-      at box_s:           SIGTERM to the child's process group
-      at +kill_grace_s:   SIGKILL to the group
-      still unreapable after +60s → exit.json{wedged}; exit
-W7  exit.json{completed | killed_box, exit_code, …}; exit
+W1  read the item (frontier submit record)
+W2  open locks/exec.lock; flock(LOCK_EX|LOCK_NB)
+      on failure → exit silently (the lane is busy; dispatch retries)
+W3  mkdir exhaust/<run_id> if absent; write wrapper.pid
+      (link-if-absent; loser exits silently)
+W4  for each step n, in order:
+      spawn child: new pgid; cwd=ctx/; env per §4;
+        stdout+stderr → step.<n>.out.log;
+        the child INHERITS THE exec.lock FD (not close-on-exec)
+      write child.<n>.pid
+      wait for child exit, racing the step's box:
+        at box_s:           SIGTERM to the child's process group
+        at +kill_grace_s:   SIGKILL to the group
+        still unreapable after +60s → exit.json{wedged, step: n}; exit
+      nonzero exit → stop; killed by box → stop
+W5  link exit.json{outcome, steps: [results…]}; exit
 ```
 
 **The lock rides the fd (W4).** `flock` belongs to the open file
-description, so the lock's lifetime is *the child's*, not the wrapper's:
-a murdered wrapper cannot leak the resource while its orphaned child
-still computes, and an unkillable (wedged) child **keeps the lock** — the
-poisoned resource quarantines itself at the kernel, with no policy code.
-Conservative failure mode: a straggling grandchild that inherited the fd
-holds the lock too long. Exclusion errs toward exclusion.
+description, so the lane's lifetime is *the running child's*, not the
+wrapper's: a murdered wrapper cannot leak the lane while its orphaned
+child still computes, and an unkillable (wedged) child **keeps the
+lane** — a poisoned machine quarantines itself at the kernel, with no
+policy code. Conservative failure mode: a straggling grandchild that
+inherited the fd holds the lane too long. Exclusion errs toward
+exclusion.
 
 ## 7. Format 4 — `exit.json`, the sentinel
 
 ```jsonc
-{
-  "schema": 1,
-  "run_id": "…",
-  "outcome": "completed" | "killed_box" | "canceled" | "contended"
-           | "wedged" | "crashed" | "stillborn",
-  "exit_code": 0,             // null unless the child was reaped
-  "signal": null,
-  "started_at": "…", "ended_at": "…", "box_used_s": 812.4,
-  "written_by": "wrapper" | "harvest" | "cancel"
-}
+{"schema": 1, "run_id": "…",
+ "outcome": "completed"        // every step exited 0
+          | "failed"           // a step exited nonzero  {step, exit_code}
+          | "killed_box"       // a step overran its box {step}
+          | "wedged"           // a step would not die   {step}
+          | "crashed"          // wrapper died mid-item; see B1
+          | "canceled",
+ "steps": [ {"exit_code": 0, "signal": null, "box_used_s": 812.4}, … ],
+ "started_at": "…", "ended_at": "…",
+ "written_by": "wrapper" | "harvest" | "dispatch"}
 ```
 
 **Exactly-one-writer mechanics:** write `exit.json.tmp.<pid>` in full,
-then `link(tmp, "exit.json")` — `EEXIST` means you lost; delete your tmp.
-`rename` clobbers; `link` is the first-wins primitive. Immutable forever
-after.
+then `link(tmp, "exit.json")` — `EEXIST` means you lost; delete your
+tmp. `rename` clobbers; `link` is the first-wins primitive. Immutable
+forever after.
 
 ## 8. Format 5 — the status decision procedure
 
-A **total function** of the directory; no in-process state anywhere.
-`alive(pidfile)` ⇔ pid exists **and** its start-time matches the recorded
-one (defeats pid reuse). `age` = now − mtime(`claimed` if present, else
-`spec.json`) — the clock restarts at claim.
+A **total function** of (log, exhaust); no in-process state anywhere.
+`alive(pidfile)` ⇔ pid exists **and** its start-time matches the
+recorded one (defeats pid reuse).
 
 ```
+no submit record                               → ABSENT
 exit.json valid                                → DONE(outcome)
 else wrapper.pid ∧ wrapper alive               → RUNNING
-else wrapper.pid ∧ child.pid ∧ child alive     → ORPHANED
-else wrapper.pid (all dead)                    → harvest links
-                                                 exit.json{crashed}   → DONE
-else spool entry present                       → QUEUED   (no timeout —
-                                                 queued is a happy state)
-else age > 120s                                → harvest links
-                                                 exit.json{stillborn} → DONE
-else                                           → LAUNCHING
+else any child.<n>.pid alive                   → ORPHANED
+else wrapper.pid (all dead)                    → settle: link
+                                                 exit.json{crashed} → DONE
+else cancel record present                     → settle: link
+                                                 exit.json{canceled} → DONE
+else                                           → QUEUED
 ```
 
-**ORPHANED** is deliberate: wrapper dead, child computing, box no longer
-enforced. The runner *reports* and refuses to decide — killing versus
+There is no LAUNCHING and no stillborn: **an item is either in the log
+or it isn't.** A wrapper that dies before `wrapper.pid` left nothing
+behind; the item is simply still QUEUED and dispatch spawns another
+wrapper next kick. Half-born states died with the log.
+
+**ORPHANED** is deliberate: wrapper dead, a child computing, box no
+longer enforced — but the lane is still held (the fd), so nothing else
+starts. The runner *reports* and refuses to decide — killing versus
 waiting is caller policy (on some hosts, killing mid-GPU-compile wedges
-the machine; the runner cannot know that; the caller does). An orphaned
-run reaches DONE only after its child dies, naturally or by caller order.
+the machine; the runner cannot know that; the caller does).
 
-## 9. The library API — the whole surface
+## 9. The surface — a CLI, because bash is simpler
+
+A uv-runnable CLI over six verbs (the library functions underneath are
+the same six):
 
 ```
-submit(root, spec)  → Ticket | AlreadyExists    (idempotent: mkdir is
-                                                 the commit point)
-status(root, id)    → QUEUED|LAUNCHING|RUNNING|ORPHANED|DONE(outcome)|ABSENT
-harvest(root)       → settle every settleable dir (crashed/stillborn),
-                      then return ALL DONE runs (id, outcome, spec —
-                      continuation returned verbatim, as a courtesy).
-                      Caller dedups against its own ledger; the watermark
-                      belongs to the viewer.
-dispatch(root)      → one drain pass per §5; safe to kick anytime
-cancel(root, id)    → Canceled | TooLate        (queue-only)
-probe(root, tag)    → {free|held, queue_depth}  (board food)
+runner submit  [spec.json|-]   → run_id          (append + kick dispatch)
+runner status  <run_id>        → QUEUED|RUNNING|ORPHANED|DONE(outcome)|ABSENT
+runner harvest                 → JSON lines: every DONE item (id,
+                                 outcome, steps, continuation — verbatim,
+                                 as a courtesy). Caller dedups; the
+                                 watermark belongs to the viewer.
+runner dispatch                → one pass per §5; safe to kick anytime
+runner cancel  <run_id>        → appended; effective unless running
+runner queue                   → frontier, depth, lane state (board food)
 ```
 
 No priorities. No retries. No GC. No push — completion notification is
-polling (`harvest`); at most a future mailbox-file drop; **never**
-execution of caller code. Anything resembling policy that appears here
-means the page has failed.
+polling; **never** execution of caller code. Anything resembling policy
+that appears here means the page has failed.
 
-## 10. Failure enumeration (kill anything at any line)
+## 10. Claims and blemishes
+
+- **C1 — nothing is lost.** A submitted, uncanceled item reaches a
+  terminal, eventually: the log is durable (append + fsync), the
+  frontier is derived, dispatch is idempotent and respawns dead
+  attempts. This is the mission: *throw work at it; it runs.* Progress
+  needs dispatch cadence — cadence, never load-bearing for safety.
+- **C2 — single terminal.** At most one `exit.json` can ever exist per
+  item (link-if-absent); §8 is total.
+- **C3 — one lane.** At most one item executes at a time,
+  kernel-enforced, tied to the actual running child via fd inheritance;
+  survives every row of §11, erring toward exclusion.
+- **C4 — idempotent submit.** First submit record per run_id wins;
+  duplicates are ignored by the fold. At-least-once callers get
+  exactly-once semantics.
+- **C5 — statelessness.** All state is (log, exhaust); every participant
+  is killable at any instruction with §8 remaining total.
+- **C6 — FIFO by log order,** explicit and immutable — never mtime
+  vibes, never reordered.
+- **B1 — `crashed` may mask `completed`.** Wrapper death after the last
+  step exits but before W5 records `crashed` for work that finished —
+  the classic RPC exactly-once impossibility. Callers MUST read
+  `crashed` as "unknown — possibly completed"; `ctx/` remains for
+  forensics; a step-written done-marker in `ctx/` is the caller-side
+  disambiguator.
+- **B2 — ORPHANED items are unboxed** until settled; settling is caller
+  policy (§8). The box is a wrapper service, not a kernel one. The lane,
+  however, stays held — orphans block, they don't leak.
+- **Non-claims:** no concurrency, no fairness, no sandbox, no retention,
+  no multi-host, no content validation, no secret handling, no push.
+
+## 11. Failure enumeration (kill anything at any line)
 
 | killed at | observable state | settled by | outcome |
 |---|---|---|---|
-| submit, before mkdir | nothing | — | ABSENT; caller retries, idempotent |
-| submit, after mkdir before spec link | empty dir | harvest, after grace | stillborn |
-| submit, after spec before enqueue/spawn | spec only | harvest, after grace | stillborn |
-| dispatch, after claim before spawn | claimed, no wrapper | harvest, after grace | stillborn |
-| dispatch, mid-pass | dispatch.lock releases with it | next kick | unchanged; QUEUED persists |
-| wrapper, W2–W4 | wrapper.pid (or not), dead | harvest | crashed / stillborn |
-| wrapper, W5–W6 (child survives) | child alive, no babysitter | caller policy | ORPHANED → crashed/… |
-| child (any cause) | wrapper reaps | wrapper | completed / killed_box |
-| wrapper after child exit, before W7 | both dead, no sentinel | harvest | **crashed — see B1** |
-| cancel racing claim | one rename wins | — | canceled XOR proceeds |
+| submit, before append | nothing | — | ABSENT; caller retries, idempotent |
+| submit, after append | QUEUED | dispatch | runs eventually (C1) |
+| dispatch, any line | dispatch.lock releases with it | next kick | unchanged |
+| wrapper, before wrapper.pid | nothing durable | next kick | respawned; QUEUED throughout |
+| wrapper, mid-steps (children die too) | wrapper.pid, all dead | harvest/dispatch | crashed |
+| wrapper, mid-step (child survives) | child alive, lane held | caller policy | ORPHANED → crashed/… |
+| a step (any cause) | wrapper reaps | wrapper | failed / killed_box |
+| wrapper, after last step before W5 | all dead, no sentinel | harvest | **crashed — see B1** |
+| cancel racing execution | first-wins on exit.json | — | canceled XOR runs |
 | harvest / any caller loop | nothing — it holds no state | next kick | unchanged |
-
-## 11. Claims and blemishes
-
-- **C1 — single terminal.** At most one `exit.json` can ever exist
-  (link-if-absent); every run reaches one, given harvest/dispatch
-  cadence. Safety is structural; progress needs cadence — cadence, never
-  load-bearing for correctness.
-- **C2 — mutual exclusion per tag,** kernel-enforced, tied to the actual
-  resource user via fd inheritance; survives every row of §10, erring
-  toward exclusion.
-- **C3 — idempotent submit** from caller-deterministic run_ids;
-  at-least-once caller logic yields exactly-once execution attempts.
-- **C4 — statelessness.** All state is the store; every participant is
-  killable at any instruction with §8 remaining total.
-- **C5 — FIFO per tag.** For a given tag, launches occur in enqueue-
-  sequence order (canceled entries excepted). Order is explicit
-  (sequence numbers), never mtime vibes.
-- **B1 — `crashed` may mask `completed`.** Wrapper death in the gap
-  after child exit, before W7. Narrow, real, unfixable without a
-  transactional kernel — it is the classic RPC exactly-once
-  impossibility. Callers MUST read `crashed` as "unknown — possibly
-  completed"; `ctx/` remains for forensics; a child-written done-marker
-  in `ctx/` is the caller-side disambiguator.
-- **B2 — ORPHANED runs are unboxed** until settled; settling is caller
-  policy (§8). The box is a wrapper service, not a kernel one.
-- **Non-claims:** no fairness across tags, no sandbox, no retention, no
-  multi-host, no content validation, no secret handling, no push.
 
 ## 12. The first caller — notes across the seam
 
 Everything below the line is domain; the seam is exactly here.
 
-- **Enqueue discipline is the lab's scheduler.** The ⅓ exploration
-  share, nice-then-age, admission — all implemented as *what the lab
-  chooses to enqueue, and when*, keeping spool depth ≈ 1 per tag for
-  full control. The spool never learns any of it.
-- **One noun all the way down:** smoke, train, eval are runs; **apply is
-  a run holding tag `canon`; curate holds tag `wiki`** — every
-  serialization point in the lab is this same flock primitive.
-- **Sibling clients compose:** a champion-cranker is just another
-  mundane cron client that enqueues one slice when `probe(gpu)` shows an
-  empty queue — the lab never knows it exists.
-- **Pin before submit:** SHAs referenced in argv must stay reachable
-  (e.g. `refs/autolab/runs/<run_id>`), or env materialization fails later.
-- **Cold-SHA env builds count against the box** (and the tag lock, if
-  held). Pre-warm pattern: a `resource: null` run of
-  `uvx --from …@<sha> python -c pass` before the GPU stage.
-- **Anomaly policy:** `wedged` → quarantine the tag, dead-letter the
-  human. `contended` → investigate; it should never happen under a
-  single dispatcher.
+- **Enqueue discipline is the caller's scheduler.** Shares, niceness,
+  admission — all implemented as *what the caller chooses to append, and
+  when*, keeping queue depth ≈ 1 for full control.
+- **Composite items are the pipeline:** smoke → train → eval as one
+  item, piping through `ctx/`. Serialization of code landings and wiki
+  commits needs no special machinery — they're just items, totally
+  ordered with everything else.
+- **Sibling clients compose:** anything cron-shaped may append when
+  `runner queue` shows an empty frontier; the log records who asked for
+  what, forever.
+- **Pin before submit:** SHAs referenced in argv must stay reachable, or
+  env materialization fails later, against the box.
+- **Cold-SHA env builds burn lane time** at the head of an item; warm
+  the uv cache during authoring, or accept the cost at laptop scale.
+- **Anomaly policy:** `wedged` → the lane self-quarantines; dead-letter
+  the human. A frontier that never advances is the one vital sign that
+  matters — watch it.
 
 ## 13. Cross-refs
 
-[autolab design v5](autolab-design-v5.md) — the first client ·
-[v4](autolab-design-v4.md) (pre-substrate; superseded) ·
+[autolab design v6](autolab-design-v6.md) — the first client ·
 [red-team A1–A26](autolab-design-adversarial-review.md) ·
 [doctrine](autolab-doctrine.md).
