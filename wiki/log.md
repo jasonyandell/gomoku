@@ -6,6 +6,21 @@ consistent heading so future sessions can scan recent changes with simple tools.
 Older eras: May + June 2026 rotated out 2026-07-04, preserved in git history —
 recover with `git show ca76350:wiki/_archive/log-2026-05.md` (or `log-2026-06.md`).
 
+## [2026-07-05] Autolab design v7 — v3's gestalt on v6's substrate
+
+v4–v6 iterated the runner substrate ([topics/runner-spec.md](topics/runner-spec.md)
+— one queue, one lane, fd-inherited exec.lock, born-durable per-slip
+ledger repo, first-wins idempotency); the v6 review found two walls lost
+in the greedy simplification: **all policy in a Claude orchestrator**
+(doctrinal inversion — deterministic WHEN, intelligent WHAT) and **C
+committing to canon directly** (one-door broken, design issue 4).
+**[topics/autolab-design-v7.md](topics/autolab-design-v7.md)** restores
+them from the top: policy = `lab tick`, a flocked deterministic reducer
+(Claude only in R and C); ALL canon mutations — code apply AND wiki
+apply — are lane items through the same `--no-ff` + green-gate
+applicator; invariants marked STRUCTURAL vs CHECKED. v6 superseded,
+banner explains why.
+
 ## [2026-07-05] Autolab design v3 — the Petri execution model
 
 From-the-top rewrite as [topics/autolab-design-v3.md](topics/autolab-design-v3.md)

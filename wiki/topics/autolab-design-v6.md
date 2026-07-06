@@ -1,11 +1,13 @@
 # The Autolab — design v6
 
-> **Status: WORKING DRAFT v6** *(2026-07-05)* — the standalone statement
-> (Jason + Fable session). Supersedes prior walk-through drafts;
+> **Status: SUPERSEDED by [v7](autolab-design-v7.md)** *(same day,
+> 2026-07-05)* — v6 simplified too greedily and lost the gestalt: it put
+> all policy in a Claude orchestrator and let C commit to canon
+> directly. v7 restores v3's walls (deterministic flocked tick, one door
+> per store) on this page's substrate (the runner, the born-durable
+> ledger, first-wins idempotency). Kept for the trail.
 > [v1](autolab-primary-design.md) remains design-of-record until a vN is
-> blessed. Substrate: [the runner](runner-spec.md). Red-team record:
-> [A1–A26](autolab-design-adversarial-review.md) plus the 2026-07-05
-> session exchange (unfiled).
+> blessed.
 
 ## One breath
 
