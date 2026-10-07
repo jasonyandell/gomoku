@@ -147,6 +147,7 @@ class WaltConfig:
     horizon: int = 2                # plies expanded before rollouts (>=1)
     n_cand: int = 8                 # candidates at walt's nodes (top-M by net prior)
     vct_nodes: int = 50             # oracle budget (leaf + finisher)
+    rollout_cap: int = 0            # 0 = play out; >0 = value-head cutoff after this many rollout plies
     rollout_vct_every: int = 1      # VCT terminus check cadence inside rollouts (1 = both sides; 2 at an even horizon only ever checks walt — optimism bug)
     seed: int = 0
 
@@ -283,10 +284,11 @@ class WaltPlayer:
         wtm = np.repeat(np.array([n.mine for n in leaves]), reps)
         pay, ln, byv, sizes = walt_vec.rollouts(
             b[owner], h[owner], wtm, tp, kind=self.field.kind, evaluator=self.field.evaluator or self.cand_eval,
-            temperature=self.field.temperature, vct=self.vct, vct_every=self.cfg.rollout_vct_every)
+            temperature=self.field.temperature, vct=self.vct, vct_every=self.cfg.rollout_vct_every,
+            cap=self.cfg.rollout_cap, value_eval=self.cand_eval)
         sums = np.bincount(owner, weights=pay, minlength=len(leaves))
         for n, v in zip(leaves, sums):
-            n.value = int(v)
+            n.value = float(v)
         return {"rollouts": int(len(pay)), "leaf_vct_resolved": int((byv & (ln == 0)).sum()),
                 "rollout_vct_resolved": int(byv.sum()), "rollout_len_mean": float(ln.mean()),
                 "batch_max": int(max(sizes)), "batch_mean": float(np.mean(sizes)), "rollout_plies": len(sizes)}

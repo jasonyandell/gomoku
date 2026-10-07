@@ -72,7 +72,8 @@ def build(name, ev, vct, args, seed):
     if name.startswith("walt"):
         kind = "uniform" if name == "walt-uniform" else "net"
         cfg = WaltConfig(n_tapes=args.tapes, horizon=args.horizon, n_cand=args.cand,
-                         vct_nodes=args.vct_nodes, rollout_vct_every=args.rollout_vct_every, seed=seed)
+                         vct_nodes=args.vct_nodes, rollout_vct_every=args.rollout_vct_every, seed=seed,
+                         **({"rollout_cap": args.rollout_cap} if args.rollout_cap else {}))
         w = WaltPlayer(cfg, Field(kind, ev, temperature=args.field_temp), ev, vct, label=name)
         return w, w
     raise SystemExit(f"unknown player {name}")
@@ -91,6 +92,7 @@ def main():
     ap.add_argument("--cand", type=int, default=8)
     ap.add_argument("--vct-nodes", type=int, default=50)
     ap.add_argument("--rollout-vct-every", type=int, default=1)
+    ap.add_argument("--rollout-cap", type=int, default=0)
     ap.add_argument("--field-temp", type=float, default=1.0)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()

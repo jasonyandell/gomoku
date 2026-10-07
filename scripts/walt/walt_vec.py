@@ -111,15 +111,18 @@ def state_arrays(states) -> tuple[np.ndarray, np.ndarray]:
     return boards, hist
 
 
-def rollouts(boards, hist, walt_tm, tapes, *, kind, evaluator, temperature, vct, vct_every=1):
+def rollouts(boards, hist, walt_tm, tapes, *, kind, evaluator, temperature, vct, vct_every=1, cap=0, value_eval=None):
     """Lockstep rollouts. Both sides play the field (policy via tape + VCT finisher).
 
-    Returns (payoff (R,) int in {0,1,2} walt POV, length (R,), ended_by_vct (R,) bool, batch sizes list).
+    cap>0: after `cap` plies (and that ply's VCT check) the value head scores what's left:
+    payoff = 1 + v (walt to move) or 1 - v, i.e. expected points on the 0..2 scale.
+
+    Returns (payoff (R,) float in [0,2] walt POV, length (R,), ended_by_vct (R,) bool, batch sizes list).
     """
     R = len(boards)
     boards, hist = boards.copy(), hist.copy()
     walt_tm = walt_tm.copy()
-    pay = np.full(R, -1, np.int64)
+    pay = np.full(R, -1.0)
     length = np.zeros(R, np.int64)
     by_vct = np.zeros(R, bool)
     live = np.arange(R)
@@ -141,6 +144,12 @@ def rollouts(boards, hist, walt_tm, tapes, *, kind, evaluator, temperature, vct,
             live, b, h = live[keep], b[keep], h[keep]
             if not live.size:
                 break
+        if cap and ply >= cap:  # horizon cutoff: value head on the survivors
+            _, v = (value_eval or evaluator).evaluate_planes(planes(b, h))
+            v = np.asarray(v, np.float64)
+            pay[live] = np.where(walt_tm[live], 1.0 + v, 1.0 - v)
+            length[live] = ply
+            break
         p = field_probs(kind, evaluator, b, h, temperature)
         a = draw(p, tape_u(b, tapes[live]))
         r, c = np.divmod(a, N)
