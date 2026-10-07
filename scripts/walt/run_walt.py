@@ -14,7 +14,10 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from walt_gomoku import VCT, Field, WaltConfig, WaltPlayer  # noqa: E402
+if os.environ.get("WALT_IMPL", "1") == "2":  # vectorized, native-batch rollouts
+    from walt_gomoku2 import VCT, Field, WaltConfig, WaltPlayer  # noqa: E402
+else:
+    from walt_gomoku import VCT, Field, WaltConfig, WaltPlayer  # noqa: E402
 
 from gomoku.baselines import heuristic_player, lookahead_player  # noqa: E402
 from gomoku.eval import mcts_picker  # noqa: E402
