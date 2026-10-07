@@ -23,6 +23,7 @@ it cleanly. The largest by far is the **seek-VCT program** — it gets its own h
 | **swap2 opening protocol** (#72 — the "real" white fix) | Rebalances the GAME; white wins 27% in swap2 self-play vs ~0% empty-board; strength still ~parity | recorded — [swap2-opening-protocol.md](topics/swap2-opening-protocol.md) |
 | **Rapfi idx-2 distillation mine** ("Bruce Lee one-position") | Mine Rapfi at ~700 mv/s → pretrain → warm-start; one-hot harms, soft-target is the fix | recorded — [rapfi-idx2-distillation-mine.md](topics/rapfi-idx2-distillation-mine.md) |
 | **LeGomoku** — latent-space world model; can it make a better *search*? | Brainstorm only; "probably goes splat" is the honest prior (the Texas-42 wall), pre-stated bets on record; expected to grow child pages | proposed 2026-07-03 — [legomoku.md](topics/legomoku.md) |
+| **walt on gomoku** — texas-42 level-k sampler over field tapes, GPU VCT as exact terminal | DEAD-END: ties MCTS vs Rapfi; its 10-0 wins come only vs net-shaped opponents. The oracle detects opponent mistakes, walt amplifies that signal, and Rapfi makes none. Little genuine hidden information (0.7% flip from 50 to 2,000 nodes) | run 2026-10-07 — [walt-on-gomoku.md](topics/walt-on-gomoku.md) |
 
 ## Reference theory (external, for these experiments)
 
