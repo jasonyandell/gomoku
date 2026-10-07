@@ -49,6 +49,11 @@ def build(name, ev, vct, args, seed):
         return heuristic_player, None
     if name == "lookahead4":
         return lookahead_player(depth=4), None
+    if name.startswith("rapfi"):  # rapfi<ms>: native Rapfi-NNUE, single-thread, BOARD re-dump each move
+        from gomoku.external_engine import ExternalEngineConfig, ExternalEnginePlayer
+        ms = int(name[5:] or 50)
+        cmd = os.path.expanduser("~/.cache/gomocup/bin/run-rapfi")
+        return ExternalEnginePlayer(ExternalEngineConfig(cmd=cmd, timeout_ms=ms, label=name)), None
     if name.startswith("mcts"):  # mcts<sims>: the champion product (net + MCTS + cap50 finisher)
         sims = int(name[4:] or 200)
         return mcts_picker(ev, n_simulations=sims, vct_finish_nodes=50, fpu_reduction_c=0.45), None
