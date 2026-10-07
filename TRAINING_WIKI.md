@@ -5910,3 +5910,34 @@ Cluster = white-share re-collapse + plies→floor + vl<0.08 + white-pl rising = 
 **Artifacts (all preserved — evidence, do not clean).** Run data: `/Users/jason/data/sweep_runs/rails-v0/` (`checkpoints/` incl. `latest.pt` e5524 + `epoch5522–5524.pt` + `worker_weights.pt`; `_records/`). W&B: `gomoku/vraf0b6e` (finished, 5.45 h history). Launch worktree `gomoku-attacker-preserve` (processes now down — normal hygiene applies). Code merged to main: attacker-preserve (#116, commit 7ff311f). **Staged/open for Jason:** **#118** tail-subsample knob (branch `feat/tail-subsample-knob`, e409e37, UNMERGED, byte-identical-off proven, 35 tests green — the lever-1 fix); **#117** matured-net white-vs-Rapfi eval (open); lever-2 fairer-opening (swap2 / less-tilted opener) as the fallback if subsampling doesn't move white-share.
 
 **Driver's-seat note.** The single most useful discipline tonight was watch-and-recheck over declare: the e1096 white-share *recovery* looked like vindication and would have been mis-logged as "healthy" if trusted — 600 epochs later it reversed into the flip. Pre-stated death-tells (vl<0.08, plies→floor, white-share→0) caught it cleanly. "We try, we learn, we write it down."
+
+## 2026-10-07 — walt on gomoku (texas-42 level-k sampler + GPU VCT oracle): ties MCTS vs Rapfi; big wins only vs net-shaped opponents
+
+**Setup.** 9×9 freestyle, champion `107b` (`~/data/sound-world-107b/.../worker_weights.pt`) as the candidate prior, the field policy and the value head. Code: `scripts/walt/` (branch `feat/walt-gomoku`). The field is net@T1 plus the cap50 VCT finisher, sampled via the zobrist tickertape. 10 games per pairing on 4-move random paired openings, each pairing wall-capped. Evidence: `~/code/gomoku/sweep_logs/walt/`. Synthesis: [walt-on-gomoku](wiki/topics/walt-on-gomoku.md).
+
+**Results (W-L-D):**
+- **Phase 1** (K=32, H=2, M=8, ~3 s/move):
+  - walt vs heuristic 9-0-1, vs lookahead4 6-0-4, vs field 7-0-0 (stopped mid-match).
+  - MCTS200 vs the same three: 8-0-2, 5-0-5, 6-1-3. Net-argmax plus finisher: 9-0-1, 3-1-6, 5-0-5.
+- **Phase 2b** (cap 12, about 16K items/ply):
+  - vs lookahead4: samples K2048/H2 6-0-4 · depth K256/H4 7-0-3 · width K1024/M16 6-1-3 · MCTS1600 2-0-4 (6 games, capped).
+  - vs field: 10-0-0 · 9-1-0 · 10-0-0 · MCTS1600 3-0-4 (7 games).
+  - walt-depth vs MCTS1600 head-to-head: **4-0-1** (5 games), at 2.85 vs 5.5–6 s/move.
+- **Phase 3, Rapfi-NNUE single-thread:**
+
+  | Arm | Rapfi@50ms | Rapfi@1000ms |
+  |---|---|---|
+  | samples | 0-3-7 | 0-6-4 |
+  | depth | 1-6-3 | 0-6-4 |
+  | MCTS200 | 0-5-5 | 0-7-3 |
+  | MCTS1600 | 1-5-4 | 0-4-4 (8 games, capped) |
+
+  **No arm won a game as white.** All arms fall within the n≈20 noise (score 0.20–0.28).
+
+**Instrument findings.**
+- **Oracle batch knee:** about 16K boards at 264 ms (62K boards/s).
+- **More tapes:** K 32→4096 changes no decision on 6 test positions, so walt is bias-limited.
+- **Hidden mass:** 0.7% of positions flip from no-win at 50 nodes to win at 2,000; 0% flip from a clean no-win.
+- **The oracle goes quiet against Rapfi.** Leaves it resolves fall from 53% vs the field to 12% vs Rapfi@50 and 4% vs Rapfi@1000; finisher moves from 38% to 1.4% to 0%.
+- **Mechanism:** the oracle detects opponent mistakes and walt amplifies that signal. Against an opponent that never lets a VCT form, nothing is left to amplify.
+- **Bug caught in smoke:** `rollout_vct_every=2` at an even horizon only ever checked walt's side (an optimism bias, 0-2 → 4-0 after the fix).

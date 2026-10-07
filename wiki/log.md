@@ -418,3 +418,11 @@ knows"); gomoku's analog is search-fog, not hidden state — "probably goes spla
 record. Unfair advantages logged: VCT oracle as latent-geometry ground truth, 234k rails-v0 games on
 disk, the momentum-swing eval. First spike scoped: k-step latent unroll value-fidelity on contested
 positions. Second stated goal is the learning itself — a written-down splat is a win.
+
+## [2026-10-07] walt on gomoku: run and recorded as DEAD-END (lesson kept)
+
+New topic [topics/walt-on-gomoku.md](topics/walt-on-gomoku.md) and an Experiments hub row. The texas-42 walt algorithm (not mk5's) was transplanted onto 9×9, with the GPU mega-VCT solver as its exact terminal and rollouts batched to the solver's native ~16K-board size.
+- **Verdict:** ties MCTS against Rapfi-NNUE. It looks strong only against opponents shaped like its own model.
+- **Mechanism:** the oracle detects opponent mistakes and walt amplifies that signal.
+- **Hidden-information framing (logical uncertainty about where the VCT is) measured:** 0.7% flip from 50 to 2,000 nodes.
+- **Evidence:** TRAINING_WIKI 2026-10-07 and `~/code/gomoku/sweep_logs/walt/`.
