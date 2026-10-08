@@ -2,8 +2,71 @@
 
 **DEAD-END (lesson kept)** *(2026-10-07)* — as a *player*, walt ties MCTS with the same net
 against a real engine. Its big wins came only against opponents shaped like its own model.
+As a *sense* (part 2), walt's count is informative and complementary to the net
+(+0.05 AUC, replicated). As an actuator it barely moves play.
 
-## Verdict (2026-10-07)
+## Part 2 verdict: walt as a sense, not a brain (2026-10-07, same day)
+
+Jason's reframe: *"walt is more of a sense than a brain — it detects more than it
+investigates."* A Fable advisor distilled walt's essence to **a coverage count**: the share of
+sampled worlds that one commitment survives. The stack has averages (value, PUCT) and exact
+answers (oracle), but no coverage statistic. Tested on defense (`scripts/walt/exp_b_coverage.py`,
+bets pre-committed in `scripts/walt/BETS_sense.md`).
+
+**Detector setup.**
+- The **defender** is the eventual loser of a 9×9 Rapfi@50 game, to move N plies before the
+  winner's first cap50 VCT.
+- For each top-16 candidate c, **pressure** = the share of 32 field worlds (the attacker's next
+  stone o₁ ~ net@T1, tickertape) in which the attacker has a VCT:
+  - **null-move version:** the attacker moves twice in a row;
+  - **escape version:** the defender, *seeing* o₁, has no safe reply among its top-12. This is
+    walt's semantics: future choices condition on the revealed card.
+- **Judge:** Rapfi@50 plays both sides from after c.
+
+**Results** (replication: 2,369 fresh games, 600 positions × top-8 judged, 247 positions where
+the choice matters):
+
+| Question | Answer |
+|---|---|
+| Is the sense informative? (Jason's bet) | **Yes.** Grouped-CV AUC for flagging a losing move: net signals 0.793 → net + pressure **0.845 ± 0.010**. The first sample gave 0.763 → 0.831 (n = 59). |
+| Is it the *sampling* (sense) or the oracle (brain)? | **Standalone, sampling wins.** Within-position ranking for the null version: 32 worlds 0.705 vs 1 world 0.617 vs the net's single best line 0.610. The count over the ensemble beats following the most likely line by ~0.09 AUC, and it sharpens monotonically with W (1/4/8/32 = 0.63/0.72/0.76/0.79 on the first sample). |
+| What does it add on top of the net? | **Mostly the investigation.** The escape version adds +0.048 but is flat in W (argmax 0.839, W32 0.841). The null version adds +0.018, and only +0.006 of that comes from sampling. |
+| Does it change play? (actuator) | **Barely.** MCTS × (1 − p_null)² loses 0.735 vs MCTS + veto 0.745 (paired 44 saved / 30 lost, p ≈ 0.1). Escape pressure changes only 0.3% of choices. Pure walt (min p) is worse (0.762). |
+| White defense | Still loses ~78% under Rapfi. The sense doesn't fix the chronic gap. |
+
+**Reading.** The sense is real: counting outcomes over sampled futures detects losing moves far
+better than investigating the single most likely line. But in an AlphaZero stack **the net
+already is a sense**, a learned detector distilled from millions of games. walt's ensemble
+mostly rediscovers what the net knows. The new part is the exact escape search, which the net
+can't do.
+- **Plausible why walt works in card games:** there's no comparable learned detector for the
+  hidden deal, so the count *is* the sense. Gomoku's hidden information is logical (where the
+  VCT is), and a trained value head already covers most of it.
+- **This is a hypothesis about walt's home games, not a measurement there.**
+
+**Side findings.**
+- **The 50-node oracle is a *lagging* detector.** Under Rapfi, positions 1–5 plies before the
+  first cap50 VCT are lost ~99% regardless of move, and 7–11 plies back ~93% are all-lost.
+  9×9 Rapfi games are decided ≥15 plies before our oracle sees the forced win.
+- **The knife-edge, measured.** Pre-onset, 37–81% of the net's top-16 candidates hand the
+  attacker an immediate VCT.
+- **Saturated readings can still rank.** The null-move sense looked useless on an absolute scale
+  (mean 0.98 near onset) but ranks moves within a position well. The detector reads the test,
+  and a ranking survives that.
+
+Bets (`BETS_sense.md`):
+- **Jason, "the detector is useful": CONFIRMED.**
+- Claude:
+  - pressure informative, AUC ≥ 0.65: confirmed;
+  - standalone beats the best net signal by +0.03: refuted (the value head is better on absolute
+    AUC);
+  - replication ≥ +0.03 combined: confirmed (+0.052);
+  - actuator ≥ 5 points: refuted (−1.0, n.s.);
+  - pure walt worse: confirmed.
+- Advisor, agreement with Rapfi +0.04: near miss (+0.034 null, +0.001 escape).
+- E-A (odds-map information test) wasn't run separately: the detector test supersedes it.
+
+## Verdict, part 1: walt as a player (2026-10-07)
 
 texas-42 walt (level-k best response over sampled hidden deals, played from trick 1) was moved
 onto perfect-information 9×9 freestyle, with the GPU mega-VCT oracle as its exact terminal.
@@ -79,6 +142,13 @@ Bets were stated before results (session 2026-10-07):
 
 ## What would still be worth trying (not run)
 
+- **Train on the escape-pressure label.** It's information the net lacks (+0.05 AUC). Distilling
+  it into an aux head risks repeating #103 (sensor, no actuator). The actuator result above says
+  the gain at move time is small.
+- **Test the hypothesis in walt's home games.** Does walt's count beat a *learned* detector of
+  the hidden deal (e.g. an E[Q]-style net) in texas-42? If a strong learned sense makes walt
+  redundant there too, the gomoku lesson generalizes.
+
 - **walt as an exploit finder.** Point it at a frozen net as the field to map *where* that net
   leaves VCTs open. It's a diagnostic, not a player.
 - **Adaptive sampling** (texas-42's racing, paired sign-test elimination). It's moot here because
@@ -86,6 +156,8 @@ Bets were stated before results (session 2026-10-07):
 
 ## Evidence
 
+- Part 2: `~/code/gomoku/sweep_logs/walt_sense/` (Rapfi game shards `rapfi9*/`, `expB_back135/`
+  (degenerate near-onset run), `expB/` (first detector read), `expB_rep/` (replication); `*.log`).
 - `~/code/gomoku/sweep_logs/walt/` (gitignored evidence: phase1, phase2_bench, phase2b, phase3 JSONL; per-move walt diagnostics).
 - [TRAINING_WIKI.md](../../TRAINING_WIKI.md) 2026-10-07.
 - Branch `feat/walt-gomoku`.

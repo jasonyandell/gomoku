@@ -426,3 +426,12 @@ New topic [topics/walt-on-gomoku.md](topics/walt-on-gomoku.md) and an Experiment
 - **Mechanism:** the oracle detects opponent mistakes and walt amplifies that signal.
 - **Hidden-information framing (logical uncertainty about where the VCT is) measured:** 0.7% flip from 50 to 2,000 nodes.
 - **Evidence:** TRAINING_WIKI 2026-10-07 and `~/code/gomoku/sweep_logs/walt/`.
+
+## [2026-10-07] walt on gomoku, part 2: walt as a sense
+
+[topics/walt-on-gomoku.md](topics/walt-on-gomoku.md) gained § Part 2, following Jason's "sense, not brain" reframe and a Fable-advisor design pass.
+- **The coverage count is informative and complementary:** +0.05 AUC over the net for flagging losing defensive moves, replicated on fresh Rapfi games.
+- **The sampled ensemble beats single-line investigation** standalone.
+- **On top of the net, the gain is mostly the deterministic escape search,** and the actuator effect is small (−1 point loss, n.s.).
+- **Side finding:** the cap50 oracle lags Rapfi by ≥15 plies on 9×9.
+- **Evidence:** TRAINING_WIKI 2026-10-07 (part 2).

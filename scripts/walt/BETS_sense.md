@@ -1,0 +1,40 @@
+# walt-as-a-sense — pre-stated bets (2026-10-07, written before any E-B/E-A result)
+
+Setup: 9x9 Rapfi@50 vs Rapfi@50 decisive games. Defender = eventual loser, to move 1/3/5 plies
+before the winner's first proven VCT. Champion 107b supplies prior, MCTS200 and the field
+(net@T1). All choosers are restricted to the non-vetoed top-16 (the veto is the existing stack).
+Judge: Rapfi@50 plays both sides from after the chosen move. Primary metric: defender loss rate.
+
+**E-B coverage defense** — pressure(c) = share of 32 field worlds (o1 ~ net@T1, tickertape) in
+which the attacker has a VCT after (c, o1) under a null move.
+
+- B-1 (Claude): most of these positions are already lost under a strong judge (the knife-edge,
+  ~80% of alternatives lose pre-onset). Loss rates are high for every chooser: 0.6–0.85 at
+  back=1, lower at back=5.
+- B-2 (Claude): mcts*(1-p)^2 beats mcts+veto by ≥5 points absolute with a paired-discordance
+  sign test p<0.05 → **25%**.
+- B-3 (advisor): +pressure raises top-1 agreement with Rapfi's move by ≥+0.04 over MCTS200.
+  Caveat: at back=1 Rapfi's actual move is the move that allowed the VCT, so agreement is a
+  weak target there.
+- B-4 (Claude): pure walt (min p) is worse than mcts+veto. Coverage alone ignores what the net
+  knows about non-VCT danger.
+- Kill: mcts*(1-p)^2 within ±2 points of mcts+veto → coverage adds nothing to the stack's
+  defense. walt has had its fair shake on the defense side.
+
+**E-B′ detector test** (added before results). For a subset (≤300 positions × top-8 candidates),
+Rapfi@50 judges EVERY candidate, giving a per-move holdable/lost label. AUC for predicting a lost
+move from: walt pressure p(c) · net prior · MCTS200 visit share · net value after c (defender POV).
+- **Jason:** the detector is useful (pressure is informative); agnostic on chooser performance.
+  If true, walt's essence in its home games may be detection, not solving.
+- Claude: pressure AUC ≥ 0.70 and ≥ +0.03 over the best net signal → **40%**. Pressure is
+  informative in absolute terms (AUC ≥ 0.65) → **75%**.
+
+**E-B′ first read (2026-10-07, 400 positions, 7–17 plies before onset, 59 choice-matters positions).**
+Grouped-CV logistic AUC on the choice-matters positions: net 0.763 → net + p_escape 0.826, net + both 0.831.
+Within-position ranking: p_null 0.788 > prior 0.768 > MCTS 0.733 > value 0.709. Thin sample.
+- **Replication bet (Claude, stated before running):** on FRESH games (new collector seed), 15–25
+  plies before onset, net + pressure beats net alone by ≥ +0.03 grouped-CV AUC → **60%**.
+  Kill: the gain is < +0.01, or flips sign.
+
+**E-A information test** (after E-B) — advisor prediction: walt odds AUC ≈ net value AUC
+(within 0.03). Kill if the gap is < 0.03.
