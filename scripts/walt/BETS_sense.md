@@ -21,5 +21,13 @@ which the attacker has a VCT after (c, o1) under a null move.
 - Kill: mcts*(1-p)^2 within ±2 points of mcts+veto → coverage adds nothing to the stack's
   defense. walt has had its fair shake on the defense side.
 
+**E-B′ detector test** (added before results). For a subset (≤300 positions × top-8 candidates),
+Rapfi@50 judges EVERY candidate, giving a per-move holdable/lost label. AUC for predicting a lost
+move from: walt pressure p(c) · net prior · MCTS200 visit share · net value after c (defender POV).
+- **Jason:** the detector is useful (pressure is informative); agnostic on chooser performance.
+  If true, walt's essence in its home games may be detection, not solving.
+- Claude: pressure AUC ≥ 0.70 and ≥ +0.03 over the best net signal → **40%**. Pressure is
+  informative in absolute terms (AUC ≥ 0.65) → **75%**.
+
 **E-A information test** (after E-B) — advisor prediction: walt odds AUC ≈ net value AUC
 (within 0.03). Kill if the gap is < 0.03.

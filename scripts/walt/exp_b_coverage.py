@@ -235,6 +235,119 @@ def stage_judge(args):
     report(rows)
 
 
+def _judge_jobs(rows, jobs, pool_size, judge_ms):
+    """Rapfi plays both sides from after the defender's move m; returns {job: lost(0/1)}."""
+    from gomoku.rapfi_pool import RapfiPool
+    out = {}
+    with RapfiPool(size=pool_size, timeout_ms=judge_ms, board_size=N) as pool:
+        def play(job):
+            i, m = job
+            s = replay(rows[i]["moves"])[-1].apply(int(m))
+            dnext = False  # attacker moves next
+            if s.is_terminal()[0]:
+                return job, 0
+            rng = np.random.default_rng(i)
+            for _ in range(N * N):
+                s = s.apply(pool.pick(s, rng))
+                done, v = s.is_terminal()
+                if done:
+                    return job, ((0 if dnext else 1) if v == -1.0 else 0)
+                dnext = not dnext
+            return job, 0
+        t = time.perf_counter()
+        with ThreadPoolExecutor(pool_size) as exe:
+            for k, (job, lost) in enumerate(exe.map(play, jobs)):
+                out[job] = lost
+                if (k + 1) % 400 == 0:
+                    print(f"  {k+1}/{len(jobs)} {time.perf_counter()-t:.0f}s", flush=True)
+    return out
+
+
+def stage_detect(args):
+    """Detector test: judge EVERY top-k candidate; AUC of each signal for predicting a lost move."""
+    rows = json.load(open(os.path.join(args.work, "positions.json")))
+    z = np.load(os.path.join(args.work, "sense.npz"))
+    cands = z["cands"]
+    P = min(args.detect_positions, len(rows)); K = args.detect_cand
+    ev = load_net()
+    after = [replay(rows[i]["moves"])[-1].apply(int(cands[i, j])) for i in range(P) for j in range(K)]
+    _, v = ev(after)
+    vdef = -np.asarray(v, np.float64).reshape(P, K)  # value after c, defender POV
+    jobs = [(i, int(cands[i, j])) for i in range(P) for j in range(K)]
+    print(f"detect playouts: {len(jobs)}", flush=True)
+    res = _judge_jobs(rows, jobs, args.pool, args.judge_ms)
+    lost = np.array([res[j] for j in jobs]).reshape(P, K)
+    np.savez(os.path.join(args.work, "detect.npz"), lost=lost, vdef=vdef)
+    detect_report(args.work)
+
+
+def rankdata(a):
+    """Average ranks (1-based), ties share the mean rank."""
+    a = np.asarray(a, float)
+    order = a.argsort(kind="mergesort")
+    r = np.empty(len(a)); r[order] = np.arange(1, len(a) + 1)
+    _, inv, cnt = np.unique(a, return_inverse=True, return_counts=True)
+    sums = np.bincount(inv, weights=r)
+    return (sums / cnt)[inv]
+
+
+def _logit_fit_predict(Xtr, ytr, Xte, iters=2000, lr=0.5, l2=1e-3):
+    mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-9
+    A, B = (Xtr - mu) / sd, (Xte - mu) / sd
+    A = np.c_[A, np.ones(len(A))]; B = np.c_[B, np.ones(len(B))]
+    w = np.zeros(A.shape[1])
+    for _ in range(iters):
+        p = 1 / (1 + np.exp(-A @ w))
+        w -= lr * (A.T @ (p - ytr) / len(A) + l2 * w)
+    return B @ w
+
+
+def _grouped_cv_auc(X, y, groups, k=5):
+    ug = np.unique(groups)
+    fold = {g: i % k for i, g in enumerate(np.random.default_rng(0).permutation(ug))}
+    f = np.array([fold[g] for g in groups])
+    aucs = [_auc(_logit_fit_predict(X[f != i], y[f != i], X[f == i]), y[f == i]) for i in range(k)]
+    return float(np.nanmean(aucs)), float(np.nanstd(aucs))
+
+
+def _auc(score, y):
+    y = np.asarray(y, bool); s = np.asarray(score, float)
+    npos, nneg = int(y.sum()), int((~y).sum())
+    if not npos or not nneg:
+        return float("nan")
+    r = rankdata(s)
+    return float((r[y].sum() - npos * (npos + 1) / 2) / (npos * nneg))
+
+
+def detect_report(work):
+    z = np.load(os.path.join(work, "sense.npz")); d = np.load(os.path.join(work, "detect.npz"))
+    lost, vdef = d["lost"], d["vdef"]
+    P, K = lost.shape
+    cands = z["cands"][:P, :K]
+    sig = {
+        "walt pressure": z["pressure"][:P, :K],
+        "-net prior": -np.take_along_axis(z["prior"][:P], cands, 1),
+        "-MCTS200 visits": -np.take_along_axis(z["visits"][:P], cands, 1),
+        "-net value after c": -vdef,
+    }
+    y = lost.ravel().astype(bool)
+    mixed = (lost.min(1) == 0) & (lost.max(1) == 1)
+    print(f"\n== DETECTOR: predicting a lost candidate (Rapfi judge), {P} positions x top-{K} ==")
+    print(f"lost rate {y.mean():.3f}; positions where the choice matters (some hold, some lose): {mixed.mean():.1%}")
+    for k, s in sig.items():
+        wp = np.nanmean([_auc(s[i], lost[i]) for i in np.flatnonzero(mixed)]) if mixed.any() else float("nan")
+        print(f"{k:>20}: AUC all {_auc(s.ravel(), y):.3f} | mixed pooled {_auc(s[mixed].ravel(), lost[mixed].ravel()):.3f}"
+              f" | within-position {wp:.3f}")
+    if mixed.sum() >= 10:
+        groups = np.repeat(np.flatnonzero(mixed), K)
+        X_net = np.stack([sig[k][mixed].ravel() for k in ("-net prior", "-MCTS200 visits", "-net value after c")], 1)
+        X_all = np.concatenate([X_net, sig["walt pressure"][mixed].ravel()[:, None]], 1)
+        yy = lost[mixed].ravel().astype(float)
+        for name, X in (("net signals", X_net), ("net + pressure", X_all)):
+            m, s = _grouped_cv_auc(X, yy, groups)
+            print(f"  5-fold (grouped by position) logistic AUC, {name:>14}: {m:.3f} ± {s:.3f}")
+
+
 def report(rows):
     names = list(rows[0]["lost"])
     base = "mcts+veto"
@@ -252,7 +365,7 @@ def report(rows):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("stage", choices=["positions", "sense", "choose", "judge", "report"])
+    ap.add_argument("stage", choices=["positions", "sense", "choose", "judge", "report", "detect", "detect_report"])
     ap.add_argument("--games", default="sweep_logs/walt_sense/rapfi9")
     ap.add_argument("--work", default="sweep_logs/walt_sense/expB")
     ap.add_argument("--max-positions", type=int, default=1500)
@@ -264,8 +377,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--pool", type=int, default=16)
     ap.add_argument("--judge-ms", type=int, default=50)
+    ap.add_argument("--detect-positions", type=int, default=300)
+    ap.add_argument("--detect-cand", type=int, default=8)
     args = ap.parse_args()
-    if args.stage == "report":
+    if args.stage == "detect_report":
+        detect_report(args.work)
+    elif args.stage == "report":
         report(json.load(open(os.path.join(args.work, "judged.json"))))
     else:
         globals()[f"stage_{args.stage}"](args)
