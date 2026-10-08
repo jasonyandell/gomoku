@@ -29,5 +29,12 @@ move from: walt pressure p(c) · net prior · MCTS200 visit share · net value a
 - Claude: pressure AUC ≥ 0.70 and ≥ +0.03 over the best net signal → **40%**. Pressure is
   informative in absolute terms (AUC ≥ 0.65) → **75%**.
 
+**E-B′ first read (2026-10-07, 400 positions, 7–17 plies before onset, 59 choice-matters positions).**
+Grouped-CV logistic AUC on the choice-matters positions: net 0.763 → net + p_escape 0.826, net + both 0.831.
+Within-position ranking: p_null 0.788 > prior 0.768 > MCTS 0.733 > value 0.709. Thin sample.
+- **Replication bet (Claude, stated before running):** on FRESH games (new collector seed), 15–25
+  plies before onset, net + pressure beats net alone by ≥ +0.03 grouped-CV AUC → **60%**.
+  Kill: the gain is < +0.01, or flips sign.
+
 **E-A information test** (after E-B) — advisor prediction: walt odds AUC ≈ net value AUC
 (within 0.03). Kill if the gap is < 0.03.

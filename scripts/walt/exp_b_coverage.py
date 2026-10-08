@@ -99,7 +99,7 @@ def stage_positions(args):
         onset = next((p for p in range(plies) if p % 2 == winner and win_at[(gi, p)]), None)
         if onset is None:
             continue
-        for back in (1, 3, 5):
+        for back in args.backs:
             p = onset - back
             if p < 6 or win_at.get((gi, p), False):
                 continue
@@ -111,7 +111,7 @@ def stage_positions(args):
     os.makedirs(args.work, exist_ok=True)
     json.dump(rows, open(os.path.join(args.work, "positions.json"), "w"))
     print(f"positions: {len(rows)}  (back=1/3/5: "
-          f"{sum(r['back']==1 for r in rows)}/{sum(r['back']==3 for r in rows)}/{sum(r['back']==5 for r in rows)}; "
+          f"{ {b: sum(r['back']==b for r in rows) for b in args.backs} }; "
           f"defender black {sum(r['defender_black'] for r in rows)})", flush=True)
 
 
@@ -167,11 +167,61 @@ def stage_sense(args):
           f"null-solve hitcap {nul_cap.mean():.2%}", flush=True)
 
 
+def stage_sense2(args):
+    """pressure2(c): share of worlds o1 ~ field in which the defender, now SEEING o1, has no
+    escape among its top-k replies (every d leaves the attacker a VCT). walt semantics: the
+    present action covers all worlds; the future reply conditions on the revealed card."""
+    import walt_vec as wv
+    rows = json.load(open(os.path.join(args.work, "positions.json")))
+    z = dict(np.load(os.path.join(args.work, "sense.npz")))
+    ev = load_net(); solve = solver()
+    cands, veto = z["cands"], z["veto"]
+    P, M = cands.shape; W, Kd = args.worlds, args.escape_k
+    t0 = time.perf_counter()
+    pressure2 = np.ones((P, M))
+    todo = [(i, j) for i in range(P) for j in range(M) if not veto[i, j]]
+    states = {i: replay(rows[i]["moves"])[-1] for i in {i for i, _ in todo}}
+    tapes = np.random.default_rng(args.seed).integers(1, 2**62, W).astype(np.uint64)
+    CH = 512  # (i,j) pairs per chunk -> CH*W*Kd boards (~196K) per escape solve
+    for c0 in range(0, len(todo), CH):
+        chunk = todo[c0:c0 + CH]
+        after = [states[i].apply(int(cands[i, j])) for i, j in chunk]
+        ab, ah = wv.state_arrays(after)
+        probs = wv.field_probs("net", ev, ab, ah, args.temp)
+        rep = np.repeat(np.arange(len(chunk)), W)
+        o1 = wv.draw(probs[rep], wv.tape_u(ab[rep], np.tile(tapes, len(chunk))))
+        s2 = [after[k].apply(int(a)) for k, a in zip(rep, o1)]          # defender to move, sees o1
+        dead = np.array([s.is_terminal()[0] for s in s2])                 # attacker made five
+        logits, _ = ev(s2)
+        lm = np.stack([s.legal_mask() for s in s2])
+        z2 = np.where(lm, logits, -np.inf)
+        dk = np.argsort(-z2, axis=1)[:, :Kd]
+        s3 = [s2[w].apply(int(d)) if lm[w, d] else s2[w] for w in range(len(s2)) for d in dk[w]]
+        def_five = np.array([s.is_terminal()[0] and s.move_count > s2[k // Kd].move_count
+                             for k, s in enumerate(s3)]).reshape(-1, Kd)  # defender completes five -> safe
+        b3 = np.stack([s.board for s in s3]).astype(bool)
+        att_win, _ = big_solve(solve, b3, 50)
+        att_win = att_win.reshape(-1, Kd) & ~def_five
+        illegal = ~np.take_along_axis(lm, dk, 1)
+        att_win |= illegal                                                 # padding never counts as an escape
+        lost_world = dead | att_win.all(1)
+        p2 = lost_world.reshape(len(chunk), W).mean(1)
+        for (i, j), v in zip(chunk, p2):
+            pressure2[i, j] = v
+        print(f"  {c0+len(chunk)}/{len(todo)} pairs, {time.perf_counter()-t0:.0f}s", flush=True)
+    z["pressure2"] = pressure2
+    np.savez(os.path.join(args.work, "sense.npz"), **z)
+    q = pressure2[~veto]
+    print(f"sense2: {len(todo)} non-vetoed (pos,cand) x {W} worlds x {Kd} escapes in {time.perf_counter()-t0:.0f}s; "
+          f"pressure2 on non-vetoed: mean {q.mean():.3f}, ==1 {np.mean(q==1):.2f}, ==0 {np.mean(q==0):.2f}, "
+          f"in (0,1) {np.mean((q>0)&(q<1)):.2f}", flush=True)
+
+
 # ------------------------------------------------------------------ choose
 def stage_choose(args):
     rows = json.load(open(os.path.join(args.work, "positions.json")))
     z = np.load(os.path.join(args.work, "sense.npz"))
-    prior, cands, veto, pr, visits = z["prior"], z["cands"], z["veto"], z["pressure"], z["visits"]
+    prior, cands, veto, pr, visits = z["prior"], z["cands"], z["veto"], z[args.pkey], z["visits"]
     P, M = cands.shape
     pc = np.take_along_axis(prior, cands, 1)
     vc = np.take_along_axis(visits, cands, 1)
@@ -325,7 +375,8 @@ def detect_report(work):
     P, K = lost.shape
     cands = z["cands"][:P, :K]
     sig = {
-        "walt pressure": z["pressure"][:P, :K],
+        "walt pressure (null-move)": z["pressure"][:P, :K],
+        "walt pressure2 (escape)": z["pressure2"][:P, :K] if "pressure2" in z else z["pressure"][:P, :K],
         "-net prior": -np.take_along_axis(z["prior"][:P], cands, 1),
         "-MCTS200 visits": -np.take_along_axis(z["visits"][:P], cands, 1),
         "-net value after c": -vdef,
@@ -334,6 +385,12 @@ def detect_report(work):
     mixed = (lost.min(1) == 0) & (lost.max(1) == 1)
     print(f"\n== DETECTOR: predicting a lost candidate (Rapfi judge), {P} positions x top-{K} ==")
     print(f"lost rate {y.mean():.3f}; positions where the choice matters (some hold, some lose): {mixed.mean():.1%}")
+    rows = json.load(open(os.path.join(work, "positions.json")))[:P]
+    backs = np.array([r["back"] for r in rows])
+    for b in sorted(set(backs)):
+        sel = backs == b
+        print(f"   back {b:>2}: n={sel.sum():>3} lost-rate {lost[sel].mean():.2f} all-lost {np.mean(lost[sel].min(1)==1):.2f} "
+              f"mixed {mixed[sel].mean():.2f} all-hold {np.mean(lost[sel].max(1)==0):.2f}")
     for k, s in sig.items():
         wp = np.nanmean([_auc(s[i], lost[i]) for i in np.flatnonzero(mixed)]) if mixed.any() else float("nan")
         print(f"{k:>20}: AUC all {_auc(s.ravel(), y):.3f} | mixed pooled {_auc(s[mixed].ravel(), lost[mixed].ravel()):.3f}"
@@ -341,9 +398,13 @@ def detect_report(work):
     if mixed.sum() >= 10:
         groups = np.repeat(np.flatnonzero(mixed), K)
         X_net = np.stack([sig[k][mixed].ravel() for k in ("-net prior", "-MCTS200 visits", "-net value after c")], 1)
-        X_all = np.concatenate([X_net, sig["walt pressure"][mixed].ravel()[:, None]], 1)
+        pn = sig["walt pressure (null-move)"][mixed].ravel()[:, None]
+        pe = sig["walt pressure2 (escape)"][mixed].ravel()[:, None]
         yy = lost[mixed].ravel().astype(float)
-        for name, X in (("net signals", X_net), ("net + pressure", X_all)):
+        print(f"  mixed positions: {mixed.sum()}  (candidates {mixed.sum()*K})")
+        for name, X in (("net signals", X_net), ("net + p_null", np.c_[X_net, pn]),
+                        ("net + p_escape", np.c_[X_net, pe]), ("net + both", np.c_[X_net, pn, pe]),
+                        ("p_null alone", pn), ("p_escape alone", pe)):
             m, s = _grouped_cv_auc(X, yy, groups)
             print(f"  5-fold (grouped by position) logistic AUC, {name:>14}: {m:.3f} ± {s:.3f}")
 
@@ -354,21 +415,22 @@ def report(rows):
     print(f"\n== defender loss rate under Rapfi@judge (n={len(rows)}) ==")
     for k in names:
         L = np.array([r["lost"][k] for r in rows])
-        by = {b: L[[r["back"] == b for r in rows]].mean() for b in (1, 3, 5)}
+        by = {b: L[[r["back"] == b for r in rows]].mean() for b in sorted({r["back"] for r in rows})}
         col = {c: L[[r["defender_black"] == c for r in rows]].mean() for c in (True, False)}
         # paired vs base: discordant counts (McNemar)
         B = np.array([r["lost"][base] for r in rows])
         better, worse = int(((B == 1) & (L == 0)).sum()), int(((B == 0) & (L == 1)).sum())
-        print(f"{k:>15}: loss {L.mean():.3f}  back1/3/5 {by[1]:.2f}/{by[3]:.2f}/{by[5]:.2f}  "
+        print(f"{k:>15}: loss {L.mean():.3f}  by-back { {b: round(x, 2) for b, x in by.items()} }  "
               f"def-black {col[True]:.2f} def-white {col[False]:.2f}  vs {base}: saved {better} / lost {worse}")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("stage", choices=["positions", "sense", "choose", "judge", "report", "detect", "detect_report"])
+    ap.add_argument("stage", choices=["positions", "sense", "sense2", "choose", "judge", "report", "detect", "detect_report"])
     ap.add_argument("--games", default="sweep_logs/walt_sense/rapfi9")
     ap.add_argument("--work", default="sweep_logs/walt_sense/expB")
     ap.add_argument("--max-positions", type=int, default=1500)
+    ap.add_argument("--backs", type=int, nargs="+", default=[1, 3, 5])
     ap.add_argument("--cand", type=int, default=16)
     ap.add_argument("--worlds", type=int, default=32)
     ap.add_argument("--temp", type=float, default=1.0)
@@ -379,6 +441,8 @@ def main():
     ap.add_argument("--judge-ms", type=int, default=50)
     ap.add_argument("--detect-positions", type=int, default=300)
     ap.add_argument("--detect-cand", type=int, default=8)
+    ap.add_argument("--escape-k", type=int, default=12)
+    ap.add_argument("--pkey", default="pressure2")
     args = ap.parse_args()
     if args.stage == "detect_report":
         detect_report(args.work)
