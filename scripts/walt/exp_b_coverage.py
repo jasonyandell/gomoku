@@ -179,6 +179,7 @@ def stage_sense2(args):
     P, M = cands.shape; W, Kd = args.worlds, args.escape_k
     t0 = time.perf_counter()
     pressure2 = np.ones((P, M))
+    pnull = np.ones((P, M))
     todo = [(i, j) for i in range(P) for j in range(M) if not veto[i, j]]
     states = {i: replay(rows[i]["moves"])[-1] for i in {i for i, _ in todo}}
     tapes = np.random.default_rng(args.seed).integers(1, 2**62, W).astype(np.uint64)
@@ -189,8 +190,13 @@ def stage_sense2(args):
         ab, ah = wv.state_arrays(after)
         probs = wv.field_probs("net", ev, ab, ah, args.temp)
         rep = np.repeat(np.arange(len(chunk)), W)
-        o1 = wv.draw(probs[rep], wv.tape_u(ab[rep], np.tile(tapes, len(chunk))))
+        if args.argmax:  # BRAIN control: one deterministic world, the net's single best reply
+            o1 = probs[rep].argmax(1)
+        else:            # SENSE: W sampled worlds (tickertape)
+            o1 = wv.draw(probs[rep], wv.tape_u(ab[rep], np.tile(tapes, len(chunk))))
         s2 = [after[k].apply(int(a)) for k, a in zip(rep, o1)]          # defender to move, sees o1
+        bnull = np.stack([s.board[::-1] for s in s2]).astype(bool)      # attacker to move again
+        nwin, _ = big_solve(solve, bnull, 50)
         dead = np.array([s.is_terminal()[0] for s in s2])                 # attacker made five
         logits, _ = ev(s2)
         lm = np.stack([s.legal_mask() for s in s2])
@@ -206,10 +212,14 @@ def stage_sense2(args):
         att_win |= illegal                                                 # padding never counts as an escape
         lost_world = dead | att_win.all(1)
         p2 = lost_world.reshape(len(chunk), W).mean(1)
-        for (i, j), v in zip(chunk, p2):
+        pn = (dead | nwin).reshape(len(chunk), W).mean(1)
+        for (i, j), v, u in zip(chunk, p2, pn):
             pressure2[i, j] = v
+            pnull[i, j] = u
         print(f"  {c0+len(chunk)}/{len(todo)} pairs, {time.perf_counter()-t0:.0f}s", flush=True)
-    z["pressure2"] = pressure2
+    z["pressure2" + args.tag] = pressure2
+    if args.tag:
+        z["pnull" + args.tag] = pnull
     np.savez(os.path.join(args.work, "sense.npz"), **z)
     q = pressure2[~veto]
     print(f"sense2: {len(todo)} non-vetoed (pos,cand) x {W} worlds x {Kd} escapes in {time.perf_counter()-t0:.0f}s; "
@@ -381,6 +391,8 @@ def detect_report(work):
         "-MCTS200 visits": -np.take_along_axis(z["visits"][:P], cands, 1),
         "-net value after c": -vdef,
     }
+    for key in sorted(k for k in z.files if (k.startswith("pressure2_") or k.startswith("pnull_"))):
+        sig[key] = z[key][:P, :K]
     y = lost.ravel().astype(bool)
     mixed = (lost.min(1) == 0) & (lost.max(1) == 1)
     print(f"\n== DETECTOR: predicting a lost candidate (Rapfi judge), {P} positions x top-{K} ==")
@@ -404,7 +416,9 @@ def detect_report(work):
         print(f"  mixed positions: {mixed.sum()}  (candidates {mixed.sum()*K})")
         for name, X in (("net signals", X_net), ("net + p_null", np.c_[X_net, pn]),
                         ("net + p_escape", np.c_[X_net, pe]), ("net + both", np.c_[X_net, pn, pe]),
-                        ("p_null alone", pn), ("p_escape alone", pe)):
+                        ("p_null alone", pn), ("p_escape alone", pe)) + tuple(
+                            (f"net + {k}", np.c_[X_net, sig[k][mixed].ravel()[:, None]])
+                            for k in sig if k.startswith(("pressure2_", "pnull_"))):
             m, s = _grouped_cv_auc(X, yy, groups)
             print(f"  5-fold (grouped by position) logistic AUC, {name:>14}: {m:.3f} ± {s:.3f}")
 
@@ -443,6 +457,8 @@ def main():
     ap.add_argument("--detect-cand", type=int, default=8)
     ap.add_argument("--escape-k", type=int, default=12)
     ap.add_argument("--pkey", default="pressure2")
+    ap.add_argument("--tag", default="", help="suffix for sense2 output keys (variants side by side)")
+    ap.add_argument("--argmax", action="store_true", help="sense2 BRAIN control: one world = net's best reply")
     args = ap.parse_args()
     if args.stage == "detect_report":
         detect_report(args.work)

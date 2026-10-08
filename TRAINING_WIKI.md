@@ -5941,3 +5941,35 @@ Cluster = white-share re-collapse + plies→floor + vl<0.08 + white-pl rising = 
 - **The oracle goes quiet against Rapfi.** Leaves it resolves fall from 53% vs the field to 12% vs Rapfi@50 and 4% vs Rapfi@1000; finisher moves from 38% to 1.4% to 0%.
 - **Mechanism:** the oracle detects opponent mistakes and walt amplifies that signal. Against an opponent that never lets a VCT form, nothing is left to amplify.
 - **Bug caught in smoke:** `rollout_vct_every=2` at an even horizon only ever checked walt's side (an optimism bias, 0-2 → 4-0 after the fix).
+
+## 2026-10-07 (part 2) — walt as a SENSE: coverage pressure is informative (+0.05 AUC over the net, replicated), but barely an actuator
+
+**Setup.** `scripts/walt/exp_b_coverage.py` (branch `feat/walt-sense`). Bets were pre-committed in `scripts/walt/BETS_sense.md`, with commit timestamps before each result.
+- **Games:** 9×9 Rapfi@50 vs Rapfi@50 via `collect_rapfi.py`, 16 engines × 10 min: 2,393 decisive games (seed 12345) plus 2,369 fresh decisive games (seed 777).
+- **Positions:** the eventual loser to move, N plies before the winner's first cap50 VCT.
+- **Pressure** per top-16 candidate c, over W=32 field worlds (o₁ ~ net@T1 via tickertape):
+  - null-move version: the attacker moves twice;
+  - escape version: the defender, seeing o₁, has no safe reply among its top-12.
+- **Judge:** Rapfi@50 plays both sides from after c. Champion `107b` supplies the prior, MCTS200 and the field.
+
+**Results.**
+- **Near onset (1/3/5 plies back):** every move loses (0.99+). The cap50 oracle lags Rapfi's search by ≥15 plies on 9×9; 80.6% of top-16 candidates are vetoed. *(Archived as `expB_back135`.)*
+- **Detector, first read** (7–17 plies back, 400 positions × top-8, 59 choice-matters positions): grouped-CV AUC net 0.763 → net + both pressures 0.831.
+- **Detector, replication** (fresh games, 15–25 plies back, 600 × 8, 247 choice-matters positions): net 0.793 ± 0.034 → net + p_escape 0.841 ± 0.012 → net + both **0.845 ± 0.010**.
+- **Sense vs brain:** null-pressure within-position AUC is 0.705 at W=32, 0.617 at W=1 and 0.610 for the argmax line (first sample: W 1/4/8/32 = 0.63/0.72/0.76/0.79). Escape pressure is flat in W (argmax ≈ W32).
+- **Actuator** (1,500 fresh positions):
+
+  | Chooser | Loss rate |
+  |---|---|
+  | MCTS + veto | 0.745 |
+  | **MCTS × (1 − p_null)²** | **0.735** (paired 44 saved / 30 lost, p ≈ 0.1) |
+  | prior × (1 − p)² | 0.745 |
+  | pure walt (min p) | 0.762 |
+
+  Escape pressure changes only 0.3% of MCTS choices. White defenders lose ~0.78 regardless.
+
+**Verdict.**
+- **Jason's bet, "the detector is useful": CONFIRMED.**
+- The sampled count beats single-line investigation standalone.
+- On top of the net, the added information is mostly the deterministic escape search: the net already *is* a learned sense.
+- Synthesis: [walt-on-gomoku](wiki/topics/walt-on-gomoku.md) § Part 2.
